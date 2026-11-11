@@ -53,6 +53,7 @@ import { oauthConnect } from '../computer/oauth-consent.js';
 import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.js';
 import type { Frame, Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
+import { sleep } from '../../runtime/sleep.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'hover' | 'drag'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: ScrollDirection; accept_dialog?: boolean; gone?: boolean; seconds?: number } & StepExtras;
 type WebArgs = {
@@ -1191,7 +1192,7 @@ async function withNetworkRetry<T>(run: () => Promise<T>): Promise<T> {
     try { return await run(); }
     catch (error) {
       if (attempt >= 3 || !(error instanceof Error) || !/ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_IO_SUSPENDED/.test(error.message)) throw error;
-      await new Promise(resolve => setTimeout(resolve, 1_500 * (attempt + 1)));
+      await sleep(1_500 * (attempt + 1));
     }
   }
 }

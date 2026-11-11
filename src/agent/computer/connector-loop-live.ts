@@ -12,6 +12,7 @@ import { liveDriver, WORKER } from './connector-runner-live.js';
 import { memoryPressure } from './connector-resource-pressure.js';
 import { microTab } from './connector-micro-agent.js';
 import { atomicWriteFile } from '../../session/store/files.js';
+import { sleep } from '../../runtime/sleep.js';
 
 export const loopDir = (): string => join(homedir(), '.clikcode');
 export const loopLogPath = (): string => join(loopDir(), 'connector-loop.log');
@@ -42,7 +43,7 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
   return {
     pid: process.pid,
     now: Date.now,
-    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    sleep,
     stopRequested: extra.stopRequested,
     log: line => { void append(line).catch(quiet('agent/computer/connector-loop-live')); },
     async next(n, exclude) {

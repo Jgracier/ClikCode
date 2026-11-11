@@ -2,6 +2,7 @@
 import { turnCancelledError } from './cancellation.js';
 import type { HarnessErrorKind } from './model-client.js';
 import type { OwnModelStart } from '../gateway/own-models.js';
+import { sleep } from '../runtime/sleep.js';
 
 /** A model step that failed before saying anything is retried for as long as this much waiting in
  * total, then the failure is the answer. Time, not a count: a short blip costs one quick retry, a
@@ -89,10 +90,5 @@ export function retryDelaySeconds(attempt: number, retryAfter?: number, random: 
 
 /** Waits, unless the turn is cancelled first. */
 export function pause(seconds: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) { reject(turnCancelledError()); return; }
-    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, seconds * 1000);
-    const onAbort = (): void => { clearTimeout(timer); reject(turnCancelledError()); };
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
+  return sleep(seconds * 1000, signal, turnCancelledError);
 }

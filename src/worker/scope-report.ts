@@ -8,6 +8,7 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { cgroupFacts, isKept, killCgroup, realReaders, type CgroupFacts, type CgroupReaders } from './cgroup-inspect.js';
 import { COMMAND_GROUP } from './command-groups.js';
+import { sleep } from '../runtime/sleep.js';
 
 export type ScopeKind = 'worker' | 'browser-host' | 'other';
 
@@ -91,7 +92,7 @@ export async function scanSlice(sliceDir: string, options: ScanOptions = {}): Pr
   });
   const startedAt = options.now ?? Date.now();
   const first = take(startedAt);
-  await (options.pause ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 1_000))))();
+  await (options.pause ?? (() => sleep(1_000)))();
   const endedAt = options.now !== undefined ? options.now + 1_000 : Date.now();
   const second = take(endedAt);
   const percent = (before: CgroupFacts, after: CgroupFacts): number | undefined =>

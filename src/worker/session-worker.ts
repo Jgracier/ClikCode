@@ -59,6 +59,7 @@ import { reconcileAgents } from '../agent/agent-registry.js';
 import { createShutdown } from './worker-shutdown.js';
 import { createOutOfTurnRelay } from './out-of-turn.js';
 import { createResourceNoteDelivery } from './resource-note-delivery.js';
+import { sleep } from '../runtime/sleep.js';
 
 /** This conversation for this worker, or undefined when another worker has
  * it. A scripted turn running in-process (worker/scripted-send.ts) is waited
@@ -85,7 +86,7 @@ export async function ownConversation(
     if (Date.now() >= deadline) {
       throw new Error(`the conversation ${sessionId} is still held by a ${taken.holder.kind} (pid ${taken.holder.pid}) after ${Math.round(maxWaitMs / 1000)}s; the worker did not start`);
     }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    await sleep(250);
   }
 }
 

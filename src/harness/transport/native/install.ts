@@ -42,6 +42,7 @@ import { resolveBinaryPath } from './binary.js';
 import { addToProcessPath, expandInstallDir, managedNpmPrefix, npmPrefixBinDir } from './install-locations.js';
 import { harnessInstallRoute, manualInstallCommand, type HarnessInstallRoute, type InstallSpec } from './install-route.js';
 import { pidIsAlive } from '../../../session/store/locks.js';
+import { sleep } from '../../../runtime/sleep.js';
 
 /** Who is shown an install happening. `start` when it begins (or begins
  * waiting on another process's install), `done` when the harness is there,
@@ -439,7 +440,7 @@ export async function withInstallLock<T>(
     if (Date.now() - waitStarted > (options.maxWaitMs ?? LOCK_MAX_WAIT_MS)) {
       throw new Error(`another ClikCode install of ${key} is still running (pid ${holder?.pid ?? 'unknown'}); try again once it finishes`);
     }
-    await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? LOCK_POLL_MS));
+    await sleep(options.pollMs ?? LOCK_POLL_MS);
   }
   try { return await work(); } finally { await rm(lock, { recursive: true, force: true }).catch(quiet('harness/transport/native/install')); }
 }

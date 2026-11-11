@@ -37,6 +37,7 @@ import { footprintsFile, preferencesFile, serversDir } from './paths.js';
 import { ensureRuntime, noRuntimeReason, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
 import { pidIsAlive } from '../session/store/locks.js';
 import { shrinkNotice, shrinkSteps, stopNotice } from './memory-steps.js';
+import { sleep } from '../runtime/sleep.js';
 
 
 export interface LocalModelProgress {
@@ -239,7 +240,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     const deadline = Date.now() + 60_000;
     while (pidIsAlive(leaving.supervisorPid) && Date.now() < deadline) {
       progress({ stage: 'start', message: `waiting for the previous ${label} to finish stopping…` });
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
     }
   }
   // Another model's server that nobody holds is only outliving its last

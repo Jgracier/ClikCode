@@ -8,6 +8,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { sleep } from '../../runtime/sleep.js';
 
 export const DESKTOP_SERVICE_LABEL = 'com.clikcode.cua-driver';
 
@@ -67,6 +68,6 @@ export async function ensureDesktopDriverService(binary: string, platform: NodeJ
       await writeFile(plist, desktopServicePlist(program), { mode: 0o600 });
       await run('launchctl', ['bootstrap', domain, plist]);
     }
-    for (let waited = 0; waited < 8_000 && !existsSync(daemonSocket()); waited += 250) await new Promise((resolve) => setTimeout(resolve, 250));
+    for (let waited = 0; waited < 8_000 && !existsSync(daemonSocket()); waited += 250) await sleep(250);
   } catch { /* cua falls back to starting its own daemon */ }
 }

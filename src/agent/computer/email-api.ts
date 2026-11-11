@@ -12,6 +12,7 @@ import { claimMessage, isClaimed } from './email-consumed.js';
 import { vendorOf } from './parking.js';
 import { profileEmail } from './profiles.js';
 import { readNamedSecret, saveNamedSecret, deleteNamedSecret, namedSecretNames, savedLoginsForSite, CredentialError } from './credential-vault.js';
+import { sleep } from '../../runtime/sleep.js';
 
 export const EMAIL_TOKEN_SECRET = 'email/gmail';
 export const EMAIL_CLIENT_SECRET = 'email/google-client';
@@ -295,7 +296,7 @@ export async function waitForEmail(stateDir: string, query: { address?: string; 
       if (!query.consume || await claimMessage(stateDir, mail.id)) return mail;
     }
     if (Date.now() >= deadline) throw new Error(`No email matched ${query.site ? `an email for ${vendorOf(query.site)}` : q} within ${Math.round((query.timeoutMs ?? 90_000) / 1000)} seconds.`);
-    await new Promise(resolve => setTimeout(resolve, query.pollMs ?? 3_000));
+    await sleep(query.pollMs ?? 3_000);
   }
 }
 

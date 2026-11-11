@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { normalizeHost, saveRecipe, type Recipe, type RecipeStep } from './signup-recipes.js';
 import { selectorsOf } from './keygrab-scope.js';
+import { sleep } from '../../runtime/sleep.js';
 
 const same = (a: RecipeStep, b: RecipeStep): boolean => a.do === b.do && a.target === b.target && a.text === b.text;
 const label = (s: RecipeStep): string => `${s.do}${s.target ? ` "${s.target}"` : ''}${s.text ? ` "${s.text}"` : ''}${s.key ? ` ${s.key}` : ''}`;
@@ -140,7 +141,7 @@ export async function dryRunRecipe(recipe: Pick<Recipe, 'host' | 'steps' | 'keyP
   if (err) return { ...report, ok: false, steps: recipe.steps.map((s, index) => ({ index: index + 1, step: label(s), status: 'not-checked' as const, ...(index === 0 ? { note: `could not open ${opened}: ${err}` } : {}) })) };
   let view = await port.look();
   // A page still drawing itself shows nothing yet: look again a few times before judging it.
-  const settle = async (): Promise<void> => { for (let n = 0; n < 4 && recipe.steps[0] && !targetOnPage(recipe.steps[0], view); n++) { await new Promise(r => setTimeout(r, port.settleMs ?? 1_500)); view = await port.look(); } };
+  const settle = async (): Promise<void> => { for (let n = 0; n < 4 && recipe.steps[0] && !targetOnPage(recipe.steps[0], view); n++) { await sleep(port.settleMs ?? 1_500); view = await port.look(); } };
   await settle();
   if (recipe.steps[0] && !targetOnPage(recipe.steps[0], view) && port.login) {
     if (await port.login().catch(() => false)) { await port.open(opened); view = await port.look(); await settle(); }

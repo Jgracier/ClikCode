@@ -12,6 +12,7 @@ import { computerPage } from './browser.js';
 import { LiveView } from './handoff-live.js';
 import { handoffPage } from './handoff-page.js';
 import { acceptWebSocket, type LiteSocket } from './ws-lite.js';
+import { sleep } from '../../runtime/sleep.js';
 
 const IDLE_LIMIT = 10 * 60_000;
 
@@ -115,7 +116,7 @@ export async function runTailnetHandoff(input: {
     const last = current;
     current = undefined;
     // Give the "done" message a moment to leave before the socket goes.
-    await new Promise(resolve => setTimeout(resolve, 60));
+    await sleep(60);
     last?.socket.close(1000);
     await last?.view.stop();
     server.close();

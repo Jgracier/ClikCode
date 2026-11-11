@@ -11,6 +11,7 @@ import { keyShaped } from './secret-finder.js';
 import { detectBlocker } from './signup-recipes.js';
 import { allAtOnce, broadestOption, revealedOptions, selectorsOf } from './keygrab-scope.js';
 import { exploreForKeys, menuOpeners } from './keygrab-explore.js';
+import { sleep as sleepFor } from '../../runtime/sleep.js';
 
 export interface KeyControl { name: string; leaf?: boolean; href?: string; /** Inside the page footer (social and legal links live there, not sign-in). */ footer?: boolean; /** Inside a navigation or side bar. */ nav?: boolean; /** Opens a menu (aria-haspopup or aria-expanded). */ menu?: boolean; /** Found inside an iframe (same-origin or not). */ frame?: boolean }
 /** What the page shows right now. `fields` are the visible text-like boxes (by label or placeholder), passwords included. */
@@ -162,7 +163,7 @@ class Halt extends Error { constructor(readonly stop: StopInfo) { super(stop.mes
 
 export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Promise<KeygrabResult> {
   const now = options.now ?? Date.now;
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const sleep = options.sleep ?? sleepFor;
   const maxSteps = options.maxSteps ?? 60, maxMs = options.maxMs ?? 240_000;
   const began = now();
   let steps = 0;

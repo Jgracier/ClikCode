@@ -31,6 +31,7 @@ import { runInPty, SIGN_IN_COLUMNS, SIGN_IN_ROWS } from './pty.js';
 import { Screen, type ScreenState } from './screen.js';
 import { completeLoginUrl, extractLoginUrl } from './url.js';
 import { stripAnsi } from '../../tui/render/width.js';
+import { sleep } from '../../runtime/sleep.js';
 
 export interface LoginLink { url: string; code?: string }
 
@@ -593,7 +594,7 @@ export async function runVendorSignIn(input: {
       for (const key of keys.match(/\u001b\[[A-D]|[\r\u0003\u0004]|[^\r\u0003\u0004\u001b]+|\u001b/g) ?? []) {
         if (exited) return;
         write(key);
-        await new Promise((resolve) => setTimeout(resolve, KEY_GAP_MS));
+        await sleep(KEY_GAP_MS);
       }
     } finally { answering = false; }
   };
@@ -622,7 +623,7 @@ export async function runVendorSignIn(input: {
     void answer(async () => {
       // Signed in already: what the vendor asks next (Cline's model pick
       // after its browser sign-in) is its own setup, never put to the user.
-      if (await landed()) { await new Promise((resolve) => setTimeout(resolve, timings.graceMs)); return undefined; }
+      if (await landed()) { await sleep(timings.graceMs); return undefined; }
       if (prompt.kind === 'input') return `${await ui.ask(prompt.prompt, prompt.secret, prompt.optional)}\r`;
       const choices = prompt.searchable ? [...prompt.choices, SEARCH_CHOICE] : prompt.choices;
       const index = await ui.choose(prompt.title, choices, prompt.selected);

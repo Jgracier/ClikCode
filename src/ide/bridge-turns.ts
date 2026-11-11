@@ -23,6 +23,7 @@ import { offerResumeIn } from '../tui/pickers/resume-in.js';
 import { messageOf, TurnFailed, WorkerRetiring } from './bridge-support.js';
 import { createSlashHost } from './bridge-slash-host.js';
 import type { BridgeHost } from './bridge-host.js';
+import { sleep } from '../runtime/sleep.js';
 
 const RETIRING_RETRY_MS = [150, 300, 600, 1_200, 2_400] as const;
 
@@ -210,7 +211,7 @@ export class BridgeTurns {
       } catch (error) {
         if (error instanceof WorkerRetiring && attempt < RETIRING_RETRY_MS.length) {
           this.host.link.detach();
-          await new Promise<void>((resolve) => { setTimeout(resolve, RETIRING_RETRY_MS[attempt]); });
+          await sleep(RETIRING_RETRY_MS[attempt]);
           current = await this.host.link.workerFor(targetId);
           continue;
         }

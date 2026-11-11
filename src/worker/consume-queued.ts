@@ -7,6 +7,7 @@ import { readState as readStateFile } from '../session/state/read.js';
 import { writeState as writeStateFile } from '../session/state/write.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
 import type { HarnessState } from '../session/model.js';
+import { sleep } from '../runtime/sleep.js';
 
 export interface QueueStateIo {
   readState: (sessionId: string) => Promise<HarnessState>;
@@ -30,7 +31,7 @@ export async function consumeQueuedTurn(
       return 'consumed';
     } catch (error) {
       lastError = error;
-      if (attempt < attempts) await new Promise((resolveWait) => setTimeout(resolveWait, backoffMs * attempt));
+      if (attempt < attempts) await sleep(backoffMs * attempt);
     }
   }
   throw lastError;

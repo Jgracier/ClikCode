@@ -14,6 +14,7 @@ import { scopeOf } from './fs-helpers.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 import { sandboxCommand, sandboxDenialHint, sandboxMissingNotice } from '../sandbox.js';
 import { describeShellChanges, shellChangesSince, snapshotBeforeShell, type ShellChanges, type ShellSnapshot } from '../shell-changes.js';
+import { sleep } from '../../runtime/sleep.js';
 
 interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string; sandbox?: boolean }
 
@@ -346,7 +347,7 @@ async function settle(shell: BackgroundShell, waitMs: number, signal?: AbortSign
   let seen = shell.unread.length;
   let changedAt: number | undefined;
   while (Date.now() < deadline && shell.status === 'running' && !signal?.aborted) {
-    await new Promise((resolve) => setTimeout(resolve, INPUT_POLL_MS));
+    await sleep(INPUT_POLL_MS);
     const now = shell.unread.length;
     if (now !== seen) { seen = now; changedAt = Date.now(); continue; }
     if (changedAt !== undefined && Date.now() - changedAt >= INPUT_QUIET_MS) return;

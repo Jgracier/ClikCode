@@ -8,6 +8,7 @@ import { scrubSecrets } from './secret-scrubber.js';
 import { IDENTITY_WALL, paymentWall } from './keygrab.js';
 import { BACKOFF_HOURS } from './keygrab-park.js';
 import { detectBlocker } from './signup-recipes.js';
+import { sleep as sleepFor } from '../../runtime/sleep.js';
 
 export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'vendor-contact' | 'decision' | 'retire' | 'worker-setup';
 /** `reasonCode` says what the wall is, set by whoever read the page (keygrab, humanStepFor, qualify); a step ClikDeploy sent without one
@@ -207,7 +208,7 @@ const say = (text: string): string => scrubSecrets(text);
 /** Runs one vendor from the result of its latest onboarding step until it is finished, handed on, or out of budget. */
 export async function runVendor(first: OnboardResult, client: DeployClient, driver: BrowserDriver, options: RunnerOptions, gate: <T>(job: () => Promise<T>) => Promise<T>): Promise<VendorOutcome> {
   const now = options.now ?? Date.now;
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const sleep = options.sleep ?? sleepFor;
   const maxSteps = options.maxSteps ?? 12, maxMs = options.maxMs ?? 300_000;
   const began = now();
   const id = first.id;

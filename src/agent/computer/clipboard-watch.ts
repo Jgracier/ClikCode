@@ -4,6 +4,7 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page } from 'playwright-core';
 import { compactToken, MAX_KEY_LENGTH } from './secret-finder.js';
+import { sleep } from '../../runtime/sleep.js';
 
 type Hooked = { __clikcodeCopied?: string | null; navigator: { clipboard?: { writeText(text: string): Promise<void>; write?(items: unknown[]): Promise<void> } }; document: { getSelection(): { toString(): string } | null; addEventListener(type: string, listener: () => void, capture: boolean): void; execCommand?(command: string, ...rest: unknown[]): boolean } };
 
@@ -130,7 +131,7 @@ export async function copyWithSiteButton(page: Page, waitMs = 3_000): Promise<{ 
     await chosen.button.click({ timeout: 3_000 });
   } catch { return undefined; }
   for (let waited = 0; waited < waitMs; waited += 250) {
-    await new Promise(resolve => setTimeout(resolve, 250));
+    await sleep(250);
     const found = plausibleCopy(await page.evaluate(() => (globalThis as unknown as Hooked).__clikcodeCopied).catch(quiet('agent/computer/clipboard-watch')));
     if (found) {
       await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; }).catch(quiet('agent/computer/clipboard-watch'));

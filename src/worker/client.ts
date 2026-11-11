@@ -18,6 +18,7 @@ import { pidIsAlive } from '../session/store/locks.js';
 import { ensureSessionOnDisk } from '../session/blank.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 import { withSavedConversation } from './saved-conversation.js';
+import { sleep } from '../runtime/sleep.js';
 
 const SPAWN_TIMEOUT_MS = 5_000;
 const HANDOFF_START_TIMEOUT_MS = 30_000;
@@ -29,10 +30,6 @@ const HANDOFF_START_TIMEOUT_MS = 30_000;
 const SPAWN_POLL_MS = 250;
 /** How often a retiring worker's socket is tried while waiting for it to let go. */
 const RELEASE_POLL_MS = 10;
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
-}
 
 /** The real spawn target: the same binary currently running, invoked with
  * clikcode's own hidden `session-worker <id>` subcommand (cli/register.ts)
@@ -179,7 +176,7 @@ async function socketReleased(record: WorkerRuntimeRecord): Promise<boolean> {
   const deadline = Date.now() + RETIRE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (!await workerIsReachable(record.socketPath, 200)) return true;
-    await delay(RELEASE_POLL_MS);
+    await sleep(RELEASE_POLL_MS);
   }
   return false;
 }

@@ -16,6 +16,7 @@ import { runCli } from './run-cli.js';
 import { cliReadsArgsJsonFromStdin } from './cli-stdin-support.js';
 import { namedSecretNames, readNamedSecret } from './credential-vault.js';
 import { scrubSecrets } from './secret-scrubber.js';
+import { sleep } from '../../runtime/sleep.js';
 
 /** `connectionValues`: for the two ClikDeploy connection destinations, the per-account values a connector's base URL needs
  * ({app_id: "WJUQDEJ3SG"}); sent to ClikDeploy's connect route as `baseUrlVariables`. Not secrets. */
@@ -387,7 +388,7 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
     let result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
     // An empty or non-JSON reply (a 502 while the proxy restarts) is retried once; the CLI cannot say more than its own words.
     if (!result.missing && template.verify === 'connection' && emptyReply(result)) {
-      await new Promise(resolve => setTimeout(resolve, options.retryDelayMs ?? SEND_RETRY_DELAY_MS));
+      await sleep(options.retryDelayMs ?? SEND_RETRY_DELAY_MS);
       result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
     }
     if (result.missing) { out.push({ label, ok: false, message: `The ${program} command is not installed on this computer.` }); continue; }
