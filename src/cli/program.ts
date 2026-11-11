@@ -74,7 +74,8 @@ Terminal environment:
                               the composer is redrawn. Unset: full-screen everywhere (the alternate screen; the conversation
                               is written into your scrollback when ClikCode ends or is suspended).
   CLIKCODE_MOUSE=1            Ask the terminal for mouse reporting (wheel and its own selection). Unset: none, so the
-                              terminal's selection and copy work; PageUp, PageDown, Home, End and the arrows scroll.
+                              terminal's selection and copy work; a swipe or wheel, PageUp, PageDown, Home and End scroll,
+                              and the arrow keys recall past prompts (ClikDeploy's phone app gets wheel reports only).
   CLIKCODE_ASCII=1|0          Force ASCII rules, box drawing and spinner on or off. Unset: on when the locale
                               (LC_ALL, LC_CTYPE, LANG) is not UTF-8 or TERM=linux.
   CLIKCODE_TUI=classic        Line-oriented output instead of the live terminal UI.

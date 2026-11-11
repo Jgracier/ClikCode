@@ -1,6 +1,7 @@
 /** An approval waits for y or n; reading the conversation above it does not answer it. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TerminalHarnessPrompter } from './prompter.js';
+import { SWIPE_BURST_MS } from './swipe-arrows.js';
 
 const realTty = process.stdout.isTTY;
 const realWrite = process.stdout.write.bind(process.stdout);
@@ -31,6 +32,8 @@ describe('scroll keys while an approval is pending', () => {
       const after = rl.alternateScrollback;
       vi.advanceTimersByTime(1000);
       key('\u001b[A');
+      // A lone arrow is held for the burst window before it counts as a key (swipe-arrows.ts); either way it scrolls here.
+      vi.advanceTimersByTime(SWIPE_BURST_MS + 40);
       expect(rl.alternateScrollback).toBeGreaterThan(after);
       key('\u0001');
       expect(rl.alternateScrollback).toBeGreaterThan(after);

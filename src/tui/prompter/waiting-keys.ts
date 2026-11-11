@@ -5,10 +5,18 @@ import { approvalKey } from './approvals.js';
 import { waitingEnterAction, waitingInputAction } from '../input-decoder.js';
 import { SWIPE_ROWS } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
+import type { ArrowSource } from '../swipe-arrows.js';
 
 export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
   const turn = this.turn;
   if (!turn) return;
+  // Up/Down: a swipe or a key press (swipe-arrows.ts). A held arrow goes to the turn it was typed into, or nowhere. A sub-agent's
+  // full view is its own screen (its arrows step between siblings) and takes its keys as they come.
+  if (!this.subView && this.swipeArrows.route(key, (arrow, source) => { if (this.turn === turn) waitingKey.call(this, turn, arrow, source); })) return;
+  waitingKey.call(this, turn, key, 'key');
+}
+
+function waitingKey(this: TerminalHarnessPrompter, turn: NonNullable<TerminalHarnessPrompter['turn']>, key: string, source: ArrowSource): void {
   // The terminal can lose cells during a mobile resize or a remote redraw.
   // Rebuild the whole viewport from our retained state, including the live
   // answer and any approval, without changing the turn or the draft.
@@ -36,6 +44,11 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
   // An approval does not stop the reading either: what the call is about is often a few rows up. Scrolling keys never answer
   // it; the 400 ms guard and the answer keys are approvalKey's, below.
   if (this.handleScrollKey(key)) return;
+  // A swipe's arrows scroll and do nothing else: not an approval's or a question's choice, not the draft's cursor.
+  if (source === 'swipe') {
+    this.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS);
+    return;
+  }
   // A plain approval (no list, no text being typed to it) has no use for the arrows and Home/End, so they scroll.
   if (this.pendingApproval && !this.pendingApproval.question && !this.tellingInstead) {
     if (key === '\u001b[A' || key === '\u001b[B') {
