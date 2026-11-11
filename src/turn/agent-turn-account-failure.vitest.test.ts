@@ -89,8 +89,9 @@ describe('a Gateway turn refused for the account', () => {
     const activity: string[] = [];
     return {
       activity,
+      // A window's observer, not a worker's: no `signIn` to hand the sign-in to.
       observer: new Proxy({ activity: (line: string) => { activity.push(line); } } as Record<string, unknown>, {
-        get: (target, key) => target[key as string] ?? (() => undefined),
+        get: (target, key) => key === 'signIn' ? undefined : target[key as string] ?? (() => undefined),
       }) as never,
     };
   };

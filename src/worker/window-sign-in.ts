@@ -1,4 +1,5 @@
-/** A sign-in the worker asked a window to run (`sign-in-request`), the same
+/** A sign-in the worker asked a window to run (`sign-in-request`: a vendor's
+ * login, or the Gateway's), the same
  * in every kind of window -- a terminal's turn view, the editor's panel
  * (local, or on a remote machine): run once however often it is asked, on
  * the window's own sign-in screen, and answered unless taken down.
@@ -11,6 +12,7 @@ import { signInOutcomeSaid, withSignIn } from '../commands/account.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import type { HarnessPrompter } from '../harness/prompter.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
+import { gatewaySignInHere } from '../gateway/sign-in-for-turn.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import type { ClientCommand, WorkerEvent } from './protocol.js';
 
@@ -22,7 +24,10 @@ export class WindowSignIns {
   /** Each running here, by request id: its withdraw. */
   private readonly open = new Map<string, () => void>();
 
-  constructor(private readonly login: typeof loginNativeHarness = loginNativeHarness) {}
+  constructor(
+    private readonly login: typeof loginNativeHarness = loginNativeHarness,
+    private readonly gateway: typeof gatewaySignInHere = gatewaySignInHere,
+  ) {}
 
   /** Runs the request on `prompter`'s sign-in screen, unless it already
    * runs here, and gives the worker that asked its `answer`. `around` wraps
@@ -52,6 +57,7 @@ export class WindowSignIns {
       } : {}),
     };
     void around(() => withSignIn(shown, event.name, async () => {
+      if (event.kind === 'gateway') { await this.gateway(screen); return; }
       const harness = localHarnessForCommand(event.command);
       if (!harness) throw new Error(`unknown harness ${event.command}`);
       await this.login({ ...harness, loginArgv: event.argv }, event.environment);
