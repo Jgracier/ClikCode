@@ -133,10 +133,8 @@ async function pickMachine(prompter: HarnessPrompter, current: string, links: Ma
   for (;;) {
     const machines = await readMachines();
     const tailnet = readTailnet(machines);
+    // Opens at once: Tailscale's machines are added when it answers (`refresh` holds tailnet.landed).
     const list = machineList(current, machines, links, tailnet, machineActions);
-    // Tailscale answers locally in milliseconds: its machines are in the list
-    // as it opens, rather than a row appearing under the cursor.
-    await Promise.race([tailnet.landed, new Promise((resolve) => { setTimeout(resolve, 1500).unref?.(); })]);
     let acted: { machine: RemoteMachine; action: string } | undefined;
     const picked = await chooseOption(prompter, 'Move this chat to', list.rows(), async (value, action) => {
       const machine = machines.find((item) => item.id === value);

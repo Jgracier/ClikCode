@@ -67,7 +67,7 @@ const STDERR_KEEP = 16_000;
 /** A machine that does not answer is tried quickly at first (a blip) and then ever less: 30 s, doubling to 10 minutes. One that was
  * off for a week was tried 523 times, each a 10 s ssh timeout. It is tried at once, whatever the pause, on a user action (`wake()`,
  * `reconnect()`: a list shows it) and when this machine's own network changes (NETWORK_POLL_MS). */
-const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 120_000, 240_000, 480_000, 600_000];
+export const BACKOFF_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 120_000, 240_000, 480_000, 600_000];
 /** How often the network is looked at while a long pause runs: a new address (Wi-Fi joined, a VPN up) is a reason to try now. */
 const NETWORK_POLL_MS = 30_000;
 

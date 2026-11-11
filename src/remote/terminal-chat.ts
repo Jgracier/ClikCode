@@ -33,7 +33,7 @@ import { readState } from '../session/state/read.js';
 import { sendModeOf } from '../turn/send-mode.js';
 import { remoteRowValue } from './board-rows.js';
 import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
-import { needsUpdate, reachWindowMachine, reconnectWindowMachine, tapWindowMachine, type LinkTap, type LinkTapHandlers } from './connection.js';
+import { BACKOFF_MS, needsUpdate, reachWindowMachine, reconnectWindowMachine, tapWindowMachine, type LinkTap, type LinkTapHandlers } from './connection.js';
 import { sshArgv } from './ssh.js';
 import { failureText } from '../harness/protocol/stderr-line.js';
 import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js';
@@ -322,8 +322,9 @@ export function outdatedNotice(machine: Pick<RemoteMachine, 'name' | 'updates' |
  * nothing (back to the one it was opened from), or the window closing (/exit). */
 export type RemoteChatEnd = string | { exit: true } | undefined;
 
-/** The pauses before each reconnect after a drop (the board's, connection.ts, is the same shape). */
-export const REJOIN_PAUSES_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000, 30_000];
+/** The pauses before each reconnect of a chat's own ssh after a drop: the start of the one reconnect
+ * schedule (connection.ts BACKOFF_MS), given up after its first five, half a minute apart at the end. */
+export const REJOIN_PAUSES_MS: readonly number[] = BACKOFF_MS.slice(0, 5);
 
 /** How long opening a chat waits for the window's connection to its machine. */
 const REACH_MS = 20_000;

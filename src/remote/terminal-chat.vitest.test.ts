@@ -843,3 +843,8 @@ describe('the terminal\'s own commands in a chat on another machine', () => {
     expect(bridges[0]!.requests.filter((request) => request.type === 'send')).toEqual([]);
   }, 20_000);
 });
+
+it('a chat\'s own ssh reconnects on the start of the one reconnect schedule', async () => {
+  const [{ REJOIN_PAUSES_MS }, { BACKOFF_MS }] = await Promise.all([import('./terminal-chat.js'), import('./connection.js')]);
+  expect(REJOIN_PAUSES_MS).toEqual(BACKOFF_MS.slice(0, REJOIN_PAUSES_MS.length));
+});
