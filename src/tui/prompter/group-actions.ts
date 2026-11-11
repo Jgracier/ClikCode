@@ -9,6 +9,7 @@ import { quiet } from '../../runtime/lifecycle-log.js';
  * was tapped, so it stays on the same screen row. */
 import { parseTag, type RowTag } from '../render/row-tags.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
+import { scrollBody } from './history-window.js';
 
 /** What a toggle asks of the rewritten transcript. */
 export type GroupAnchor = {
@@ -44,8 +45,7 @@ function linesOf(p: TerminalHarnessPrompter, group: string, item: string): numbe
 
 /** The screen row a transcript line is on now (negative: above the screen). */
 export function screenRowOfLine(p: TerminalHarnessPrompter, line: number): number {
-  const length = p.alternateTranscript.length + p.viewExtra.rows.length + p.scrollWindow.rowsBelow;
-  return line - p.alternateTrimmed - (length - p.alternateAbove - p.alternateScrollback);
+  return line - p.alternateTrimmed - (scrollBody(p) - p.alternateAbove - p.alternateScrollback);
 }
 
 /** Whether nothing but blank rows follows the group's last row in the transcript. */

@@ -5,7 +5,7 @@ import { takeTerminalKeys } from '../input-decoder.js';
 import { SWIPE_ROWS } from '../modes.js';
 import type { ArrowSource } from '../swipe-arrows.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
-import { jumpTo } from './history-window.js';
+import { holdTop, jumpTo } from './history-window.js';
 
 /** /search: show `session` at one mention, its words highlighted and
  * `focus.status` under it. The view moves to the mention on the frame
@@ -74,7 +74,6 @@ export function jumpToMention(this: TerminalHarnessPrompter, above: number): voi
   const to = nextStart === undefined ? this.alternateTranscript.length : Math.min(this.alternateTranscript.length, nextStart - this.alternateTrimmed);
   const found = focus.words[0] ? rowOfOccurrence(this.alternateTranscript.slice(from, to), focus.words[0], focus.occurrence) : undefined;
   const row = from + (found ?? 0);
-  const first = Math.max(0, row - 3);
-  this.alternateScrollback = Math.max(0, this.alternateTranscript.length + this.scrollWindow.rowsBelow - above - first);
+  holdTop(this, above, Math.max(0, row - 3));
   focus.jumped = true;
 }
