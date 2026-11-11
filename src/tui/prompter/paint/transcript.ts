@@ -244,7 +244,7 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
   const settled = settleSeam(p, finished, session, persistedMessages, conversationInner);
   seam.materializedPendingTurn = settled.materializedPendingTurn;
   const kit: Kit = { finished, emit, userRows, noticeRows, messageRows, standaloneActivity, savedTools, turnTools, renderBlocks, renderLive };
-  p.scrollWindow.source = { messages: persistedMessages, inner: conversationInner };
+  p.scrollWindow.source = { messages: persistedMessages, inner: conversationInner, conversation: session.id };
   writeMessages(p, kit, persistedMessages, settled.firstUnwritten, settled.liveAssistant);
   // Where the rows of the answer still streaming begin: everything before is a persisted message (the dump writes those from the list).
   p.scrollWindow.liveFrom = p.alternateTrimmed + p.alternateTranscript.length + p.pendingFinished.length + finished.length;
