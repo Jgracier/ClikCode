@@ -137,6 +137,9 @@ export class LanguageServer {
   static async start(language: LanguageSpec, root: string): Promise<LanguageServer> {
     const server = await findServer(language);
     const child = spawnPortable(server.binary, server.args, { cwd: root, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    // Until it answers initialize it is in no pool map; the exit hook still kills it.
+    spawning.add(child);
+    child.once('exit', () => spawning.delete(child));
     const folders = [{ uri: fileUri(root), name: path.basename(root) || root }];
     const connection = new LspConnection(child, server.command, folders);
     const instance = new LanguageServer(language, root, server.command, connection, child);
@@ -164,7 +167,7 @@ export class LanguageServer {
     } catch (error) {
       terminatePortable(child, 'SIGKILL');
       throw error;
-    }
+    } finally { spawning.delete(child); }
     connection.notify('initialized', {});
     return instance;
   }
@@ -262,20 +265,49 @@ export class LanguageServer {
   kill(): void { terminatePortable(this.child, 'SIGKILL'); }
 }
 
-/** More than this many at once, the least recently used one is stopped. */
+/** More than this many at once -- starting ones included -- the least
+ * recently used one is stopped. */
 const MAX_SERVERS = 6;
+/** A server nobody has asked anything for this long is stopped: a language
+ * server holds hundreds of MB, and the next query simply starts it again. */
+let idleMs = 10 * 60_000;
 const servers = new Map<string, Promise<LanguageServer>>();
 /** The same servers once started: what a synchronous caller can reach. */
 const settled = new Map<string, LanguageServer>();
+/** Children spawned and not yet initialized: in no map above until then. */
+const spawning = new Set<import('node:child_process').ChildProcess>();
+const idleTimers = new Map<LanguageServer, ReturnType<typeof setTimeout>>();
 let exitHookInstalled = false;
 
-/** `exit` handlers must be synchronous: whatever is still running is killed. */
+/** `exit` handlers must be synchronous: whatever is still running, or still
+ * starting, is killed. */
 function killAllNow(): void {
   for (const server of settled.values()) server.kill();
+  for (const child of spawning) terminatePortable(child, 'SIGKILL');
 }
 
 function key(language: LanguageSpec, root: string): string {
   return `${language.id}\0${root}`;
+}
+
+/** Takes the server out of the pool; the caller shuts it down. */
+function retire(id: string, server: LanguageServer): void {
+  if (settled.get(id) === server) { settled.delete(id); servers.delete(id); }
+  clearTimeout(idleTimers.get(server));
+  idleTimers.delete(server);
+}
+
+/** Stops the server once it has gone `idleMs` without a request. */
+function watchIdle(id: string, server: LanguageServer): void {
+  clearTimeout(idleTimers.get(server));
+  const timer = setTimeout(() => {
+    if (settled.get(id) !== server) return void idleTimers.delete(server);
+    if (Date.now() - server.lastUsed < idleMs) return watchIdle(id, server);
+    retire(id, server);
+    void server.shutdown().catch(quiet('agent/lsp/servers'));
+  }, Math.max(0, server.lastUsed + idleMs - Date.now()));
+  timer.unref?.();
+  idleTimers.set(server, timer);
 }
 
 /** The running server for this file's language and root, started on first
@@ -285,23 +317,28 @@ export async function serverFor(file: string, fallbackRoot: string): Promise<Lan
   if (!language) throw new ServerMissingError(`No language server is known for ${path.extname(file) || 'files without an extension'}; supported: ${LANGUAGES.map((entry) => entry.label).join(', ')}.`);
   const root = await workspaceRoot(file, language, fallbackRoot);
   const id = key(language, root);
-  const existing = servers.get(id);
-  if (existing) {
-    const server = await existing.catch(quiet('agent/lsp/servers'));
-    if (server?.running) { server.lastUsed = Date.now(); return server; }
-    if (servers.get(id) === existing) { servers.delete(id); settled.delete(id); }
-  }
-  if (!exitHookInstalled) { exitHookInstalled = true; process.once('exit', killAllNow); }
-  await evictIfFull();
-  const starting = LanguageServer.start(language, root);
-  servers.set(id, starting);
-  try {
-    const server = await starting;
-    settled.set(id, server);
-    return server;
-  } catch (error) {
-    if (servers.get(id) === starting) servers.delete(id);
-    throw error;
+  for (;;) {
+    const existing = servers.get(id);
+    if (existing) {
+      const server = await existing.catch(quiet('agent/lsp/servers'));
+      if (server?.running) { server.lastUsed = Date.now(); return server; }
+      if (servers.get(id) === existing) { servers.delete(id); settled.delete(id); }
+      continue;
+    }
+    if (!exitHookInstalled) { exitHookInstalled = true; process.once('exit', killAllNow); }
+    if (servers.size >= MAX_SERVERS) { await makeRoom(); continue; }
+    // Nothing awaited since the checks above: this start holds its place in the cap.
+    const starting = LanguageServer.start(language, root);
+    servers.set(id, starting);
+    try {
+      const server = await starting;
+      settled.set(id, server);
+      watchIdle(id, server);
+      return server;
+    } catch (error) {
+      if (servers.get(id) === starting) servers.delete(id);
+      throw error;
+    }
   }
 }
 
@@ -315,12 +352,21 @@ export async function runningServerFor(file: string, fallbackRoot: string): Prom
   return server?.running ? server : undefined;
 }
 
-async function evictIfFull(): Promise<void> {
-  if (settled.size < MAX_SERVERS) return;
-  const [id, oldest] = [...settled.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0]!;
-  settled.delete(id);
-  servers.delete(id);
-  await oldest.shutdown();
+/** Stops the least recently used server while the pool is full. When every
+ * place is held by a server still starting, waits for one to finish. The
+ * caller looks again afterwards: another start may have taken the place. */
+async function makeRoom(): Promise<void> {
+  while (servers.size >= MAX_SERVERS) {
+    const oldest = [...settled.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0];
+    if (oldest) {
+      retire(...oldest);
+      await oldest[1].shutdown();
+      continue;
+    }
+    await Promise.race([...servers.values()].map((pending) => pending.then(() => undefined, () => undefined)));
+    // The starter's own continuation records it as settled (or drops it).
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 /** Stops every server this process started. The worker calls it on shutdown. */
@@ -328,5 +374,14 @@ export async function shutdownLanguageServers(): Promise<void> {
   const all = await Promise.all([...servers.values()].map((pending) => pending.catch(quiet('agent/lsp/servers'))));
   servers.clear();
   settled.clear();
+  for (const timer of idleTimers.values()) clearTimeout(timer);
+  idleTimers.clear();
   await Promise.all(all.map((server) => server?.shutdown()));
 }
+
+/** For tests: the idle limit, the pool's size, and the exit hook. */
+export const languageServerPoolForTests = {
+  setIdleMs(ms: number): void { idleMs = ms; },
+  size: (): number => servers.size,
+  killAllNow,
+};
