@@ -2,8 +2,7 @@
 import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { atomicWriteFile } from '../../session/store/files.js';
-import { swallowed } from '../../runtime/lifecycle-log.js';
+import { objectOrEmpty, updateJsonFile } from '../../session/store/json-file.js';
 
 export function computerSettingsPath(stateDir: string): string {
   return path.join(stateDir, 'computer', 'settings.json');
@@ -21,11 +20,7 @@ export function computerEnabledSync(stateDir: string): boolean {
 }
 
 async function writeSettings(stateDir: string, change: Record<string, boolean>): Promise<void> {
-  const file = computerSettingsPath(stateDir);
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  let current: Record<string, unknown> = {};
-  try { current = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>; } catch (error) { /* none yet */ swallowed('agent/computer/settings', error); }
-  await atomicWriteFile(file, `${JSON.stringify({ ...current, ...change })}\n`);
+  await updateJsonFile(computerSettingsPath(stateDir), objectOrEmpty, (current) => ({ ...current, ...change }));
 }
 
 export async function setComputerEnabled(stateDir: string, enabled: boolean): Promise<void> {

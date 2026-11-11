@@ -3,7 +3,7 @@
  * withSignInScreen -- the CLI's, the VS Code panel's -- or, with none, plain
  * stdin/stdout (`clikcode accounts login` from a shell). */
 
-import { lifecycle, quiet, swallowed } from '../../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../../runtime/lifecycle-log.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createInterface } from 'node:readline/promises';
 import { runVendorSignIn, SEARCH_CHOICE, type SignInScreen, type SignInUi } from '../../../gateway/login/vendor-sign-in.js';
@@ -221,6 +221,20 @@ function providerOfVariable(variable: string, providers: Readonly<Record<AiKeyPr
   return (Object.keys(providers) as AiKeyProviderId[]).find((id) => `${id.toUpperCase().replace(/-/g, '_')}_API_KEY` === variable);
 }
 
+/** Adds `set` to a vendor's own settings file. One ClikCode cannot read
+ * (damaged, or JSON with comments) is never rewritten: that would lose it. */
+export async function mergeVendorSettings(vendor: string, path: string, set: Readonly<Record<string, unknown>>): Promise<void> {
+  let settings: Record<string, unknown> = {};
+  const raw = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
+  if (raw !== undefined) {
+    try { settings = JSON.parse(raw) as Record<string, unknown>; } catch {
+      throw new Error(`${vendor}'s settings file ${path} is not plain JSON, so ClikCode left it alone. Fix or remove it, then paste the key again.`);
+    }
+  }
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify({ ...settings, ...set }, null, 2)}\n`, 'utf8');
+}
+
 /** A pasted key, stored: by the vendor's own command where it has one
  * (Codex's `login --with-api-key`, piped, never an argument), else saved in
  * the account's profile as its variable, plus any setting the vendor needs
@@ -238,11 +252,7 @@ async function storeKey(
   if (!profile) throw new Error(`${harness.displayName} keeps a pasted key in an account of its own -- add one from /account`);
   await writeProfileKey(profile, found.variable, key);
   if (harness.apiKeySettings) {
-    const path = expandAuthPath(harness.apiKeySettings.path, env);
-    let settings: Record<string, unknown> = {};
-    try { settings = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; } catch (error) { /* none yet */ swallowed('harness/transport/native/login', error); }
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify({ ...settings, ...harness.apiKeySettings.set }, null, 2)}\n`, 'utf8');
+    await mergeVendorSettings(harness.displayName, expandAuthPath(harness.apiKeySettings.path, env), harness.apiKeySettings.set);
   }
 }
 
