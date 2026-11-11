@@ -48,6 +48,16 @@ describe('inline frame writer', () => {
     expect(writes).toHaveLength(1);
   });
 
+  it('leaves a visible caret alone while a key changes a row: no hide and show around each frame', () => {
+    frame('');
+    for (const text of ['a', 'ab', 'abc']) {
+      const bytes = frame(text);
+      expect(bytes).toContain(text);
+      expect(bytes).not.toContain('?25l');
+      expect(bytes).not.toContain('?25h');
+    }
+  });
+
   it('writes nothing for an unchanged frame', () => {
     frame('hi');
     expect(frame('hi')).toBe('');
