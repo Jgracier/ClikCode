@@ -17,7 +17,7 @@ import { settleWindow } from './history-window.js';
 import { anchoredScrollback } from './group-actions.js';
 
 /** More rows than this in one frame and the caret is hidden for it. */
-export const BULK_ROWS = 8;
+const BULK_ROWS = 8;
 
 /** A row as the terminal may be given it: only SGR escapes, one line, no hyperlink left open, and
  * never the last column. The one place a row is made safe. */

@@ -90,3 +90,17 @@ describe('Ctrl+L in a list', () => {
     await expect(picked).resolves.toBe('low');
   });
 });
+
+describe('opening on a named row', () => {
+  const host = { paint: vi.fn(), clearFrame: () => {}, setSelecting: () => {}, select: async () => undefined };
+
+  it('finds an object value rebuilt with the same fields, and not one that differs', async () => {
+    const rows = [{ label: 'A', value: { id: 'a', kind: 'x' } }, { label: 'B', value: { id: 'b', kind: 'x' } }];
+    const picked = runOptionPicker(host, 'Rows', rows, undefined, { startAt: { id: 'b', kind: 'x' } });
+    pressKey('\r');
+    await expect(picked).resolves.toEqual({ id: 'b', kind: 'x' });
+    const other = runOptionPicker(host, 'Rows', rows, undefined, { startAt: { id: 'b', kind: 'y' } });
+    pressKey('\r');
+    await expect(other).resolves.toEqual({ id: 'a', kind: 'x' });
+  });
+});

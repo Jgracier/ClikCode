@@ -27,7 +27,7 @@ export const FOOTER_CHROME_ROWS = 3;
 /** The composer always has a row. */
 export const MIN_COMPOSER_ROWS = 1;
 /** One composer row plus three fixed footer rows. */
-export const FIXED_FOOTER_ROWS = MIN_COMPOSER_ROWS + FOOTER_CHROME_ROWS;
+const FIXED_FOOTER_ROWS = MIN_COMPOSER_ROWS + FOOTER_CHROME_ROWS;
 
 /** Whether the status band has the room for its blank row. The band is two
  * rows while a turn runs (a blank above the status) and two blank rows at

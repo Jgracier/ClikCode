@@ -35,7 +35,7 @@ import { safeRow } from './frame-flush.js';
 import { RowSums } from './row-sums.js';
 
 /** The longest one frame spends rendering older messages. A batch is a few messages, so it overshoots by about one of them. */
-export const WINDOW_FRAME_BUDGET_MS = 6;
+const WINDOW_FRAME_BUDGET_MS = 6;
 
 /** Messages in one batch, at most (a batch also stops once it has about a screen of rows). */
 const BATCH_MESSAGES = 40;
@@ -281,7 +281,7 @@ function toLive(p: TerminalHarnessPrompter, anchor: Anchor | undefined): void {
 }
 
 /** Where in the conversation the view's first row is: the message, and how many rows into it. */
-export function placeOfTop(p: TerminalHarnessPrompter, above: number): Anchor | undefined {
+function placeOfTop(p: TerminalHarnessPrompter, above: number): Anchor | undefined {
   const h = p.scrollWindow;
   if (!h.source) return undefined;
   const top = p.alternateTrimmed + topIndex(p, above);
@@ -362,7 +362,8 @@ export function settleWindow(p: TerminalHarnessPrompter, above: number): void {
       if (!timeLeft()) { h.more = true; break; }
     }
   } else if (p.alternateScrollback > 4 * near && W.length > 0) {
-    cutBelow(p, above, near);
+    // Attached and far from the end: the end is let go.
+    dropBelow(p, above, near);
   }
   if (h.detached) cutBelowDetached(p, above, near);
   trimFront(p, above, near);
@@ -399,11 +400,6 @@ function dropBelow(p: TerminalHarnessPrompter, above: number, keep: number): boo
   h.rowsBelow = h.rowsBetween(cut, total);
   holdTop(p, above, top);
   return true;
-}
-
-/** Attached and far from the end: the end is let go. */
-function cutBelow(p: TerminalHarnessPrompter, above: number, near: number): void {
-  dropBelow(p, above, near);
 }
 
 /** Detached with more rows below the view than needed. */

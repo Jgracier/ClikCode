@@ -15,7 +15,7 @@ import { liveAgentRows, spacedLiveGroup } from '../../render/live-agents.js';
 import { waitingSpinnerGlyph } from '../../../harness/protocol/activity-view.js';
 
 
-export type FooterInput = {
+type FooterInput = {
   inner: number; rowWidth: number; width: number; prompt: string; options: readonly PickerOption<string>[]; selected: number;
   palette: PaletteLayout | undefined; session: HarnessSession; targetHeight: number;
   bands: ReturnType<typeof frameBands>;

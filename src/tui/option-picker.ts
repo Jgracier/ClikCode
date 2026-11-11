@@ -97,6 +97,15 @@ export function nextInlineChoice<C extends { value: string }>(choices: readonly 
   return choices[(from + step + choices.length) % choices.length]!;
 }
 
+/** Two object values with the same fields, compared one level deep: a value rebuilt for the list (`{ id, kind }`) still names
+ * the row it was. */
+function sameFields(left: unknown, right: unknown): boolean {
+  if (typeof left !== 'object' || typeof right !== 'object' || !left || !right) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length
+    && keys.every((key) => Object.is((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]));
+}
+
 export function runOptionPicker<T>(
   host: OptionPickerHost,
   title: string,
@@ -112,8 +121,7 @@ export function runOptionPicker<T>(
     let filterTimer: ReturnType<typeof setTimeout> | undefined;
     let filterRevision = 0;
     let filtering = false;
-    const same = (left: T, right: T): boolean => Object.is(left, right)
-      || (typeof left === 'object' && typeof right === 'object' && JSON.stringify(left) === JSON.stringify(right));
+    const same = (left: T, right: T): boolean => Object.is(left, right) || sameFields(left, right);
     // Without a row named, the one marked "· current" -- every picker that
     // sets something marks the value in force -- so Enter on opening keeps
     // it rather than changing it to whatever happens to be listed first.

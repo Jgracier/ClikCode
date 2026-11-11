@@ -6,7 +6,7 @@ import { sendScriptedTurn } from '../../../worker/scripted-send.js';
 import { emitHarnessOutput } from '../../../harness/output.js';
 
 /** What one slash command did, for a caller that must follow it. */
-export interface HeadlessSlashContext {
+interface HeadlessSlashContext {
   id: string; state: HarnessState; session: HarnessSession;
   /** Canonical registry name (aliases already resolved). */
   head: string; args: string; words: string[];
