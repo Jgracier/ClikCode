@@ -41,3 +41,8 @@ describe('the public command surface', () => {
     await expect(program().parseAsync(['node', 'clikcode', 'finetune', 'data.jsonl', '--base', 'x', '--cloud', '--rank', '8'])).rejects.toThrow('--rank is for this computer only');
   });
 });
+
+it('the program says what it is once, in the entry (index.ts): the base program leaves it unsaid', async () => {
+  const { buildBaseProgram } = await import('./program.js');
+  expect(buildBaseProgram().description()).toBe('');
+});
