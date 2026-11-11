@@ -169,8 +169,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--check', 'Read the log for what is wrong -- failing commands, failed tools, swallowed errors, slow writes -- over the last day')
     .option('--last <count>', 'With --latency: how many turns (default 20)')
     .action(async (options) => (await import('../commands/logs.js')).showLogs(options));
-  program.command('permissions [mode]').description('Choose Ask, Bypass, or Auto approval behavior for the active chat')
-    .action((mode?: string) => later(() => import('../tui/pickers/permissions.js'), 'aiPermissions')(mode));
+  program.command('permissions [mode]').description('Choose Ask, Bypass, or Auto approval: the default for new chats, or one chat\'s with --chat')
+    .option('--chat <chat>', 'The chat to change: its id or the start of it, its name, or last')
+    .action((mode: string | undefined, options: { chat?: string }) => later(() => import('../tui/pickers/permissions.js'), 'aiPermissions')(mode, options));
   const accounts = program.command('accounts').alias('account').description('Manage local provider accounts');
   accounts.command('list').alias('ls').description('List local accounts and the usage left on each')
     .option('--models', 'Include each account\'s model list').action(async (options: { models?: boolean }) => {
