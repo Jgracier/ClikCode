@@ -76,7 +76,7 @@ describe('reading back', () => {
   it('Esc read back over an approval returns to the live end and answers nothing; the next Esc denies it', async () => {
     const { rl } = turnScrolledBack();
     try {
-      let answer: boolean | 'always' | undefined;
+      let answer: unknown;
       void rl.approval('Run make?', 'make clean').then((value) => { answer = value; });
       vi.advanceTimersByTime(1000);
       const key = (k: string): void => (rl as unknown as { onWaitingKey(k: string): void }).onWaitingKey(k);
