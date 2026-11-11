@@ -66,6 +66,25 @@ describe('swipe and arrow keys', () => {
     } finally { rl.close(); }
   });
 
+  it('a swipe while browsing /search mentions scrolls the conversation; Up pressed as a key steps to the previous mention', async () => {
+    const rl = new TerminalHarnessPrompter();
+    const scroll = vi.spyOn(rl, 'scrollTranscript').mockImplementation(() => true);
+    try {
+      let action: string | undefined;
+      void rl.mentionKey().then((value) => { action = value; });
+      stdin.emit('data', Buffer.from(`${UP}${UP}${UP}`));
+      vi.advanceTimersByTime(SWIPE_BURST_MS + 40);
+      await Promise.resolve();
+      expect(action).toBeUndefined();
+      expect(scroll).toHaveBeenCalledTimes(3);
+      vi.advanceTimersByTime(1000);
+      stdin.emit('data', Buffer.from(UP));
+      vi.advanceTimersByTime(SWIPE_BURST_MS + 40);
+      await Promise.resolve();
+      expect(action).toBe('previous');
+    } finally { rl.close(); }
+  });
+
   it('a swipe split across reads (60 arrows a second) is still a swipe, and so is its slow momentum tail', () => {
     const { rl, send, press, shown, scroll } = session();
     try {

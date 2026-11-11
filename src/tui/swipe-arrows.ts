@@ -15,7 +15,8 @@
  *     key press lands SWIPE_BURST_MS later); any other key lets a held arrow go first, so the order of keys is kept.
  *   - Inline mode: the client scrolls its own scrollback and sends no arrows for it; this gate is off.
  *
- * Consumers: the resting composer (prompt-input.ts) and the waiting band (waiting-keys.ts). Pickers read arrows as they always did. */
+ * Consumers: the resting composer (prompt-input.ts), the waiting band (waiting-keys.ts) and /search browsing (mention.ts). Pickers
+ * read arrows as they always did. */
 import { wheelWanted } from './modes.js';
 import { inlineHistoryMode } from './inline.js';
 
