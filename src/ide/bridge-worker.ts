@@ -89,6 +89,10 @@ export class WorkerLink {
         this.workerTurnRunning = true;
         this.stopped = false;
         return;
+      case 'sign-in-pending':
+        // The panel shows this conversation: it runs the sign-in unless a window already does.
+        client.send({ type: 'sign-in-claim', id: event.id });
+        return;
       case 'sign-in-request':
         // The worker has no terminal; the editor has one. The worker retries
         // the turn once this answers.

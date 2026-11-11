@@ -92,6 +92,13 @@ export type ClientCommand =
   /** The vendor sign-in a `sign-in-request` asked for has finished, on the
    * client's own terminal; `error` when it failed. */
   | { type: 'sign-in-response'; id: string; error?: string }
+  /** This window shows the conversation a `sign-in-pending` names and will run
+   * it. The first claim of a sign-in no window runs is answered with its
+   * `sign-in-request`; any other is ignored. */
+  | { type: 'sign-in-claim'; id: string }
+  /** The window running a sign-in no longer shows its conversation: taken
+   * down unanswered, for a window that does (or this one on its return). */
+  | { type: 'sign-in-release'; id: string }
   /** The client changed what the conversation runs on (account, provider,
    * model, effort, route) outside a turn -- a slash command, a sign-in. The
    * worker re-reads state and sends every window a snapshot, so the others
@@ -256,9 +263,14 @@ export type WorkerEvent =
    * it again to the worker that replaces this one; no `turn-error` or `waiting-stop` follows. */
   | { type: 'submit-rejected'; message: string; retry?: true }
   /** A turn needs the vendor signed in. The worker has no terminal to run a
-   * sign-in on, so the client runs it on its own and answers with
-   * `sign-in-response`; the worker then retries the turn. */
+   * sign-in on, so ONE client runs it on its own and answers with
+   * `sign-in-response`; the worker then retries the turn. Sent only to the
+   * window that runs it: the turn's sender, or the first to claim it. */
   | { type: 'sign-in-request'; id: string; command: string; argv: readonly string[]; environment: Record<string, string>; name: string }
+  /** To every window attached: the conversation waits on a sign-in. A window
+   * showing it claims it (`sign-in-claim`); one showing another keeps the id,
+   * to claim it when it opens this conversation. `request-closed` ends it. */
+  | { type: 'sign-in-pending'; id: string; name: string }
   /** `said`: the turn's own note already carries the failure's line. */
   | { type: 'turn-error'; message: string; said?: true }
   /** A cancelled turn that produced nothing worth keeping is discarded

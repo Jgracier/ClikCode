@@ -219,6 +219,8 @@ export function createCommandHandler(ctx: WorkerContext) {
     }
     if (command.type === 'computer-tool') { runComputerTool(socket, command, connection); return; }
     if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
+    if (command.type === 'sign-in-claim') { observer.claimSignIn(command.id, socket); return; }
+    if (command.type === 'sign-in-release') { observer.releaseSignIn(command.id, socket); return; }
     if (command.type === 'refresh') {
       // What the window changed may be a turn parked for the reset.
       void ctx.resumeWaiter.check();

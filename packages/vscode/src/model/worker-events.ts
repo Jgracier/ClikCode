@@ -173,7 +173,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       if (!model.running) return model;
       return { ...endTurn(withNote(model, { kind: 'notice', level: 'info', text: 'Stopped' })), ...NO_TRANSIENT };
     default:
-      // suspend/resume, sign-in-request (the bridge handles it), restore-draft
+      // suspend/resume, sign-in-pending and sign-in-request (the bridge handles them), restore-draft
       // (arrives separately) and anything a newer worker says.
       return model;
   }

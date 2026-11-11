@@ -37,6 +37,20 @@ describe('sign-in scope', () => {
     } finally { rl.close(); }
   });
 
+  it('the link is drawn in the band only: never a transcript row, while shown or after', () => {
+    const rl = window();
+    try {
+      const screen = rl.signInScreen('Claude Code');
+      screen.show({ url: LINK } as never);
+      rl.flushPaint();
+      expect(rl.alternateTranscript.join('\n')).not.toContain('oauth/authorize');
+      screen.stop();
+      rl.render(session('A'));
+      expect(rl.alternateTranscript.join('\n')).not.toContain('oauth/authorize');
+      expect(rl.signInLines).toEqual([]);
+    } finally { rl.close(); }
+  });
+
   it('a sign-in asked in the conversation on screen stays when it is drawn again', () => {
     const rl = window();
     try {
