@@ -19,11 +19,10 @@
  *   shutdown removed a record, so a killed worker's stayed for ever.
  *
  * It does not touch anything it did not make: vendor profiles, chat history,
- * and downloaded models are the user's. A sweep runs shortly after a worker
- * starts and every six hours; a marker keeps workers that start together from
- * all sweeping. */
-import { readdirSync, readlinkSync } from 'node:fs';
-import { lstat, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+ * and downloaded models are the user's. A sweep runs in the guardian worker
+ * (guardian.ts) shortly after it takes the role and every six hours; a marker
+ * keeps a sweep from running twice within the hour. */
+import { lstat, readdir, readlink, rm, utimes, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -41,21 +40,25 @@ const FIRST_SWEEP_DELAY_MS = 60_000;
 /** Every path under `root` that a live process has open or as its working
  * directory; undefined where /proc cannot say (macOS, Windows). Processes of
  * other users are not visible, which errs toward removing -- only ever
- * something already three days old. */
-export function pathsInUse(root: string): string[] | undefined {
+ * something already three days old. Read asynchronously: a machine with
+ * thousands of processes and open files held the worker's event loop for
+ * the whole scan. */
+export async function pathsInUse(root: string): Promise<string[] | undefined> {
   let pids: string[];
-  try { pids = readdirSync('/proc').filter((name) => /^\d+$/.test(name)); } catch { return undefined; }
+  try { pids = (await readdir('/proc')).filter((name) => /^\d+$/.test(name)); } catch { return undefined; }
   const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
   const found = new Set<string>();
-  const check = (link: string): void => {
+  const check = async (link: string): Promise<void> => {
     try {
-      const target = readlinkSync(link);
+      const target = await readlink(link);
       if (target.startsWith(prefix)) found.add(target);
     } catch { /* fail-open-ok: the process exited, or is not ours to see */ }
   };
   for (const pid of pids) {
-    check(`/proc/${pid}/cwd`);
-    try { for (const fd of readdirSync(`/proc/${pid}/fd`)) check(`/proc/${pid}/fd/${fd}`); } catch { /* fail-open-ok: same */ }
+    await check(`/proc/${pid}/cwd`);
+    let fds: string[] = [];
+    try { fds = await readdir(`/proc/${pid}/fd`); } catch { /* fail-open-ok: same */ }
+    await Promise.all(fds.map((fd) => check(`/proc/${pid}/fd/${fd}`)));
   }
   return [...found];
 }
@@ -77,7 +80,7 @@ async function ageMs(path: string, now: number): Promise<number | undefined> {
 interface SweepOptions {
   now?: number;
   /** Test seam: what is in use under a root. */
-  used?: (root: string) => string[] | undefined;
+  used?: (root: string) => string[] | undefined | Promise<string[] | undefined>;
   /** Sweep even if one ran within the hour. */
   force?: boolean;
 }
@@ -99,7 +102,7 @@ export async function sweepState(options: SweepOptions = {}): Promise<{ ran: boo
   };
 
   const tmpRoot = join(home, 't');
-  const used = (options.used ?? pathsInUse)(tmpRoot);
+  const used = await (options.used ?? pathsInUse)(tmpRoot);
   const maxAge = used ? TMP_MAX_AGE_MS : TMP_MAX_AGE_BLIND_MS;
   for (const conversation of await directories(tmpRoot)) {
     const dir = join(tmpRoot, conversation);

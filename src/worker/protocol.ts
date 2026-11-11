@@ -118,7 +118,10 @@ export type ClientCommand =
    * conversation ready for its first turn -- its route's MCP servers, and on
    * a vendor route the vendor started and the thread loaded, up to the prompt
    * (turn/vendor-warm.ts). Sent for a chat that just moved here. */
-  | { type: 'warm'; token: string };
+  | { type: 'warm'; token: string }
+  /** With the worker's token, from the guardian worker (guardian.ts): a memory
+   * note for this conversation's agent, delivered as the worker's own guard's was. */
+  | { type: 'resource-note'; token: string; note: string };
 
 /** The `shutdown` reason of a worker whose chat moved to another machine
  * (worker/client.ts retireMovedWorker): a window that hears it does not

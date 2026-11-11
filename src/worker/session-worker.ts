@@ -41,11 +41,12 @@ import { startDiskWatch } from './disk-watch.js';
 import { startIoGuard } from './io-guard.js';
 import { startIdleServices } from './idle-services.js';
 import { startStateSweep } from './state-sweep.js';
+import { sendResourceNote, startGuardian } from './guardian.js';
 import { startStuckWatchdog } from './stuck-watchdog.js';
 import { LiveSettings } from '../turn/live-settings.js';
 import { sessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { CONVERSATION_HANDOFF_REASON, conversationHandoffRequested, generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold, type WorkerRuntimeRecord } from './registry.js';
+import { CONVERSATION_HANDOFF_REASON, conversationHandoffRequested, watchHandoffRequest, generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold, type WorkerRuntimeRecord } from './registry.js';
 import { persistentWorkRunning } from '../turn/vendor-process.js';
 import type { ConnectionState, WorkerContext } from './worker-context.js';
 import { createWorkerIo } from './worker-io.js';
@@ -64,6 +65,8 @@ import { createResourceNoteDelivery } from './resource-note-delivery.js';
  * out: its conversation comes to a worker the moment it ends. */
 /** A command is in a group of its own within this long of starting. */
 const COMMAND_SWEEP_MS = 1_000;
+/** A handoff request the file watch did not report is seen within this long. */
+const HANDOFF_CHECK_MS = 10_000;
 
 /** How long a starting worker waits for a scripted turn or command that holds
  * its conversation before it gives up (such a turn can run for minutes). */
@@ -111,8 +114,6 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   if (process.platform === 'linux' && process.env.CLIKCODE_OWN_SCOPE !== '0') installSystemdRunShim();
   // Temp files on disk, not in RAM-backed /tmp, for everything the agent runs.
   useConversationTmp(sessionId);
-  // What ClikCode leaves under its own state directory is removed when old (worker/state-sweep.ts).
-  startStateSweep();
   const socketPath = socketPathFor(sessionId);
   // A worker that still answers at the path keeps the conversation, even
   // without a hold (its owner file lost or judged stale). Anything else at
@@ -203,8 +204,10 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   // It requests the shared conversation lease; finish work already running,
   // then release it so that machine's waiting worker can take over. Attached
   // windows do not pin the chat to this host.
+  // The request is a file: watched, so an idle worker lets go at once where the filesystem says it
+  // changed, and looked at every HANDOFF_CHECK_MS where it does not (a home shared over the network).
   let checkingHandoff = false;
-  setInterval(() => {
+  const checkHandoff = (): void => {
     if (checkingHandoff) return;
     checkingHandoff = true;
     void (async () => {
@@ -212,7 +215,9 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
       if (ctx.idle.retireBlocker() || await persistentWorkRunning(sessionId)) return;
       await ctx.shutdown(CONVERSATION_HANDOFF_REASON);
     })().catch(quiet('worker/session-worker')).finally(() => { checkingHandoff = false; });
-  }, 1_000).unref();
+  };
+  setInterval(checkHandoff, HANDOFF_CHECK_MS).unref();
+  watchHandoffRequest(sessionId, checkHandoff);
   // A loop of its own that never yields would keep this worker -- and what it
   // holds -- forever: a thread ends it (worker/stuck-watchdog.ts).
   startStuckWatchdog(sessionId);
@@ -226,10 +231,22 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
     // exactly a command (worker/command-groups.ts).
     const commands = placement?.divided ? createCommandSweep(placement.scopeDir) : undefined;
     if (commands) setInterval(() => { try { commands.sweep(); } catch { /* fail-open-ok: next sweep */ } }, COMMAND_SWEEP_MS).unref();
-    startResourceGuard({
-      sessionId,
-      ...(placement?.divided ? { sliceDir: placement.sliceDir, remembered: { scopeDir: placement.scopeDir, labels: commands!.labels } } : {}),
-      deliver: deliverNote,
+    // The machine-wide guards run in one worker on the machine (worker/guardian.ts): the memory
+    // guard, which tells each conversation its own note, and the state sweep.
+    startGuardian({
+      guard: () => {
+        const stopResources = startResourceGuard({
+          sessionId,
+          ...(placement?.divided ? { sliceDir: placement.sliceDir, remembered: { scopeDir: placement.scopeDir, labels: commands!.labels } } : {}),
+          deliver: (note, worker) => {
+            if (worker === process.pid) deliverNote(note);
+            else void sendResourceNote(worker, note).catch(quiet('worker/session-worker'));
+          },
+        });
+        // What ClikCode leaves under its own state directory is removed when old (worker/state-sweep.ts).
+        const stopSweep = startStateSweep();
+        return () => { stopResources(); stopSweep(); };
+      },
     });
     if (commands && placement?.scopeDir) startIoGuard({ sessionId, scopeDir: placement.scopeDir, labels: commands.labels, deliver: deliverNote });
     startDiskWatch({ sessionId, paths: [stateDirectory(), session.workspace], deliver: deliverNote });

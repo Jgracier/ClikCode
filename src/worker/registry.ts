@@ -9,7 +9,7 @@
  */
 import { quiet } from '../runtime/lifecycle-log.js';
 import { createHash, randomBytes } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { statSync, watch } from 'node:fs';
 import { link, mkdir, readdir, readFile, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { hostname, tmpdir } from 'node:os';
@@ -272,6 +272,24 @@ export async function conversationHandoffRequested(sessionId: string, workerHost
     return typeof request.toHost === 'string' && request.toHost !== workerHost
       && typeof request.at === 'number' && Date.now() - request.at < HANDOFF_FRESH_MS;
   } catch { return false; }
+}
+
+/** Calls `changed` when this conversation's handoff file is written, where
+ * the filesystem reports it (not every shared filesystem does: the caller
+ * also looks on a timer). The directory is watched: the file is not there
+ * until a request writes it. Returns what stops the watch. */
+export function watchHandoffRequest(sessionId: string, changed: () => void): () => void {
+  const name = `${sessionKey(sessionId)}.handoff`;
+  try {
+    const watcher = watch(workersDirectory(), { persistent: false }, (_event, file) => {
+      if (file === null || String(file) === name) changed();
+    });
+    watcher.on('error', () => watcher.close());
+    return () => watcher.close();
+  } catch {
+    // fail-open-ok: no watch here; the caller's timer still sees the request
+    return () => undefined;
+  }
 }
 
 function parseOwner(raw: string): ConversationOwner | undefined {

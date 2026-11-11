@@ -246,6 +246,53 @@ async function createLock(lockPath: string, mine: string): Promise<boolean> {
   }
 }
 
+/** A lock held for as long as its holder wants it, not around one section
+ * (withFileLock): a role one process on the machine takes, such as the
+ * worker that runs the machine-wide guards (worker/guardian.ts). */
+export interface Lease {
+  /** Still this process's: not judged stale and taken over. */
+  held(): Promise<boolean>;
+  release(): Promise<void>;
+}
+
+/** Takes `lockPath` as a lease when it is free or stale, or returns undefined
+ * when a live holder has it. Held, it is refreshed every heartbeatMs with no
+ * maxHoldMs, so it is judged by the same rule as any lock (lockLooksStale):
+ * a holder that dies or stops refreshing loses it. */
+export async function tryLease(lockPath: string): Promise<Lease | undefined> {
+  await ensurePrivateDirectory(dirname(lockPath));
+  const pidns = pidNamespace();
+  const owner: LockOwner = { pid: process.pid, host: hostname(), nonce: randomBytes(12).toString('hex'), at: new Date().toISOString(), ...(pidns ? { pidns } : {}) };
+  const mine = JSON.stringify(owner);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (await createLock(lockPath, mine)) return leaseOf(lockPath, mine);
+    const raw = await readFile(lockPath, 'utf8').catch(quiet('session/store/locks'));
+    if (raw === undefined) continue; // Released between the two calls.
+    if (!await lockLooksStale(lockPath, raw)) return undefined;
+    await breakStaleLock(lockPath, raw, (current) => lockLooksStale(lockPath, current));
+  }
+  return undefined;
+}
+
+function leaseOf(lockPath: string, mine: string): Lease {
+  const held = async (): Promise<boolean> => (await readFile(lockPath, 'utf8').catch(quiet('session/store/locks'))) === mine;
+  const heartbeat = setInterval(() => {
+    void held().then((still) => {
+      if (!still) { clearInterval(heartbeat); return undefined; }
+      const now = new Date();
+      return utimes(lockPath, now, now);
+    }).catch(quiet('session/store/locks'));
+  }, LOCK_TUNING.heartbeatMs);
+  heartbeat.unref();
+  return {
+    held,
+    release: async () => {
+      clearInterval(heartbeat);
+      if (await held()) await unlink(lockPath).catch(quiet('session/store/locks'));
+    },
+  };
+}
+
 /** A waiter's place in line for a fair lock: a file named by when it
  * arrived, holding its owner like the lock does, so a dead or stalled
  * waiter's place is judged exactly as a dead or stalled holder is. */

@@ -21,11 +21,13 @@ import { sendEvent, windowReadsSaved } from './broadcast-observer.js';
 import { MOVED_REASON, type ClientCommand } from './protocol.js';
 import { createAgentsCommand } from './worker-agents.js';
 import { createLiveCommands } from './worker-live-commands.js';
+import { createResourceNoteDelivery } from './resource-note-delivery.js';
 import type { ConnectionState, WorkerContext } from './worker-context.js';
 
 export function createCommandHandler(ctx: WorkerContext) {
   const { observer, sessionId, config, token } = ctx;
   const { currentSessionAndAccount } = ctx.io;
+  const deliverResourceNote = createResourceNoteDelivery(ctx);
   const live = createLiveCommands(ctx);
   const agentsCommand = createAgentsCommand(ctx);
 
@@ -129,6 +131,12 @@ export function createCommandHandler(ctx: WorkerContext) {
   return Object.assign(async (socket: Socket, command: ClientCommand, connection: ConnectionState): Promise<void> => {
     if (command.type === 'attach') { await handleAttach(socket, command, connection); return; }
     if (command.type === 'retire' && command.token !== undefined) { await handleRetire(socket, command.token, command.reason === 'moved'); return; }
+    if (command.type === 'resource-note') {
+      if (command.token !== token) { sendEvent(socket, { type: 'attach-rejected', reason: 'stale or invalid token' }); socket.end(); return; }
+      deliverResourceNote(command.note);
+      socket.end();
+      return;
+    }
     if (command.type === 'warm') {
       if (command.token !== token) { sendEvent(socket, { type: 'attach-rejected', reason: 'stale or invalid token' }); socket.end(); return; }
       warm();
