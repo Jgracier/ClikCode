@@ -5,7 +5,7 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import { slowWaitGate } from '../../harness/protocol/slow-wait-gate.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { randomUUID } from 'node:crypto';
-import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
+import { inspectNativeHarnessForPicker } from '../../harness/transport/native/inspect.js';
 import { discoverNativeSessions, lastSeenNativeSessions } from '../../session/discovery/cli-listing.js';
 import { nativeTranscriptReader, FS_SESSION_DISCOVERY } from '../../session/discovery/registry.js';
 import { saveDiscoveryCache } from '../../session/discovery/cache.js';
@@ -105,7 +105,7 @@ async function discoverAdoptableSessions(
   const files = (async () => (await Promise.all(Object.entries(FS_SESSION_DISCOVERY).map(async ([command, discover]) => {
     const harness = localHarnessForCommand(command);
     if (!harness) return [];
-    const inspection = await inspectNativeHarness(harness, 500);
+    const inspection = await inspectNativeHarnessForPicker(harness);
     if (!inspection.installed) return [];
     return (await Promise.all(discoveryProfiles(harness).map(async (account) => {
       // Every folder, not just this one: a chat started in the vendor's own

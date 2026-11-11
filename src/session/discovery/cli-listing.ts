@@ -2,7 +2,7 @@
  * prints -- a table for some, structured output for others. */
 
 import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
-import { freshListing, lastSeenListing, rememberListing } from './cache.js';
+import { freshListing, lastSeenListing, rememberListing, withCacheLock } from './cache.js';
 import { harnessBinaryIdentity } from '../../harness/transport/native/version-memo.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { DiscoveredNativeSession } from './discovered-session.js';
@@ -166,23 +166,30 @@ export async function discoverNativeSessions(
   const folder = listedFolder(harness, workspace);
   const fresh = await freshListing(harness.command, folder, profile, Date.now(), build);
   if (fresh) return fresh;
-  try {
-    const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, undefined, workspace);
-    const format = harness.session.discoverFormat ?? 'json';
-    const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
-    await rememberListing(harness.command, folder, profile, found, Date.now(), build);
-    return found;
-  } catch {
-    // fail-open-ok: passive discovery must not break the picker when an
-    // optional vendor command fails. A failure is not evidence that there is
-    // nothing here, so the last answer stands in for it -- but it is written
-    // down again, for the same lifetime as an answer: unremembered, a CLI
-    // that fails or times out (every one of them, on a machine at load 250)
-    // was spawned again at every board open in every window.
-    const last = await lastSeenListing(harness.command, folder, profile);
-    await rememberListing(harness.command, folder, profile, last, Date.now(), build);
-    return last;
-  }
+  const discoverArgv = harness.session.discoverArgv;
+  // One window asks the CLI when the answer expires; the others wait for it and read its answer,
+  // instead of every open board spawning the same listing at the same moment.
+  return withCacheLock(`listing-${harness.command}`, async () => {
+    const answered = await freshListing(harness.command, folder, profile, Date.now(), build);
+    if (answered) return answered;
+    try {
+      const raw = await captureNativeHarnessOutput(harness, discoverArgv, environment, undefined, workspace);
+      const format = harness.session?.discoverFormat ?? 'json';
+      const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
+      await rememberListing(harness.command, folder, profile, found, Date.now(), build);
+      return found;
+    } catch {
+      // fail-open-ok: passive discovery must not break the picker when an
+      // optional vendor command fails. A failure is not evidence that there is
+      // nothing here, so the last answer stands in for it -- but it is written
+      // down again, for the same lifetime as an answer: unremembered, a CLI
+      // that fails or times out (every one of them, on a machine at load 250)
+      // was spawned again at every board open in every window.
+      const last = await lastSeenListing(harness.command, folder, profile);
+      await rememberListing(harness.command, folder, profile, last, Date.now(), build);
+      return last;
+    }
+  });
 }
 
 /** What this harness's listing returned last time, without running it: the

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  EMPTY_LISTING_TTL_MS, SEEN_LISTING_TTL_MS, freshListing, lastSeenListing, rememberListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache,
+  EMPTY_LISTING_TTL_MS, SEEN_LISTING_TTL_MS, discoveryCacheChanged, freshListing, lastSeenListing, loadDiscoveryCache, rememberListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache,
 } from './cache.js';
 import { discoverNativeSessions } from './cli-listing.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -79,6 +79,28 @@ describe('the empty-listing memo', () => {
     // And its own answer does not drop this one when it writes.
     await other.rememberListing('opencode', '/work', undefined, []);
     expect(await freshListing('hermes', '/work', undefined)).toEqual([{ nativeId: 'h1' }]);
+  });
+
+  it('keeps every answer when windows remember theirs at the same moment', async () => {
+    vi.resetModules();
+    const other = await import('./cache.js');
+    await Promise.all(Array.from({ length: 6 }, (_, index) => (index % 2 ? other : { rememberListing }).rememberListing(`cli-${index}`, '/work', undefined, [{ nativeId: `n${index}` }])));
+    for (let index = 0; index < 6; index += 1) expect(await freshListing(`cli-${index}`, '/work', undefined)).toEqual([{ nativeId: `n${index}` }]);
+  });
+
+  it('drops the least recently changed directories past its size, not the ones whose names sort first', async () => {
+    const cache = await loadDiscoveryCache();
+    for (let index = 0; index < 401; index += 1) cache.directories[`/z/${String(index).padStart(3, '0')}`] = { mtimeMs: 1_000 + index, files: {} };
+    // Sorts first by name, changed last.
+    cache.directories['/a/project'] = { mtimeMs: 10_000, files: {} };
+    discoveryCacheChanged();
+    await saveDiscoveryCache();
+    resetNativeSessionDiscoveryCache();
+    const kept = Object.keys((await loadDiscoveryCache()).directories);
+    expect(kept).toContain('/a/project');
+    expect(kept).not.toContain('/z/000');
+    expect(kept).not.toContain('/z/001');
+    expect(kept).toContain('/z/400');
   });
 
   it('survives a restart, which is the point of writing it down', async () => {
@@ -177,6 +199,18 @@ describe('a vendor CLI listing', () => {
     expect(await discoverNativeSessions(harness, {}, home)).toEqual([
       { nativeId: '20261001_3', title: 'Fix the parser', updatedAt: '2026-10-01T03:03:15Z', workspace: '/elsewhere' },
     ]);
+  });
+
+  it('is asked once when several windows find it expired at the same moment', async () => {
+    const log = join(home, 'asked.log');
+    const harness = await fakeCli('slow-fake', '[]');
+    await writeFile(join(home, 'bin', 'slow-fake'), `#!/bin/sh\necho asked >> ${log}\nsleep 0.3\necho '[{"id":"s1"}]'\n`);
+    // Another window: its own module instance, so only the file lock stands between them.
+    vi.resetModules();
+    const other = await import('./cli-listing.js');
+    const answers = await Promise.all([discoverNativeSessions(harness, {}, home), other.discoverNativeSessions(harness, {}, home), discoverNativeSessions(harness, {}, home)]);
+    for (const answer of answers) expect(answer).toEqual([{ nativeId: 's1' }]);
+    expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
 
   it('asks a listing that covers every folder once, not once per folder', async () => {

@@ -3,7 +3,10 @@
 
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { jsonMemo } from '../store/json-memo.js';
+import { withFileLock } from '../store/locks.js';
+import { stateDirectory } from '../store/paths.js';
 import type { DiscoveredNativeSession } from './discovered-session.js';
 
 /** What discovery learned about one vendor file. Everything here comes from
@@ -93,8 +96,9 @@ export async function saveDiscoveryCache(): Promise<void> {
   const data = await memo.load();
   const entries = Object.entries(data.directories);
   if (entries.length > DISCOVERY_CACHE_MAX_DIRECTORIES) {
-    // Date-named vendor directories sort oldest first; drop those.
-    data.directories = Object.fromEntries(entries.sort(([left], [right]) => right.localeCompare(left)).slice(0, DISCOVERY_CACHE_MAX_DIRECTORIES));
+    // The least recently changed go. By name only date-named vendor directories sort by age; a
+    // project folder's name says nothing, and one in use could be dropped for a stale one.
+    data.directories = Object.fromEntries(entries.sort(([, left], [, right]) => right.mtimeMs - left.mtimeMs).slice(0, DISCOVERY_CACHE_MAX_DIRECTORIES));
   }
   await memo.save();
 }
@@ -144,10 +148,23 @@ function listingLifetime(entry: CachedListing): number {
 export async function rememberListing(
   command: string, workspace: string | undefined, profile: string | undefined, sessions: readonly DiscoveredNativeSession[], now = Date.now(), build?: string,
 ): Promise<void> {
-  const file = await readListings();
-  file.seen[listingKey(command, workspace, profile)] = { at: now, sessions: [...sessions], ...(build ? { build } : {}) };
-  const newest = Object.entries(file.seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN);
-  await listings.write({ v: 1, seen: Object.fromEntries(newest) });
+  // Under a lock: two windows remembering at once each read the file without the other's answer,
+  // and the last write dropped the first.
+  await withCacheLock('native-listings.json', async () => {
+    const file = await readListings();
+    file.seen[listingKey(command, workspace, profile)] = { at: now, sessions: [...sessions], ...(build ? { build } : {}) };
+    const newest = Object.entries(file.seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN);
+    await listings.write({ v: 1, seen: Object.fromEntries(newest) });
+  });
+}
+
+/** `run` under a lock beside the discovery caches (cache/<name>.lock), shared
+ * by every ClikCode process. Without a state directory (a test that never
+ * relocated it) there is nothing shared to lock. */
+export function withCacheLock<T>(name: string, run: () => Promise<T>): Promise<T> {
+  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return run();
+  const directory = stateDirectory();
+  return directory ? withFileLock(join(directory, 'cache', `${name.replace(/[^A-Za-z0-9_.-]/g, '_')}.lock`), run) : run();
 }
 
 /** The last answer, when it is recent enough to skip the CLI and came from
