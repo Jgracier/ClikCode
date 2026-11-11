@@ -76,6 +76,9 @@ export function ptyCommand(
   return platform === 'darwin' ? { file: '/bin/sh', argv: ['-c', DARWIN_PIPE, 'sh', ...argv] } : { file: 'script', argv };
 }
 
+/** How long script(1) gets to end on SIGTERM before SIGKILL (see stop). */
+const STOP_KILL_MS = 250;
+
 interface PtyResult {
   /** False when this platform has no `script` (Windows); the caller runs the
    * vendor on plain pipes instead. */
@@ -121,11 +124,21 @@ export async function runInPty(input: {
     child.stderr?.on('data', read);
     // A ClikCode told to stop takes the vendor with it, rather than leaving
     // a login waiting on a browser nobody will open.
-    const stop = (): void => { killProcessTreePortable(child, 'SIGTERM', group); };
+    // util-linux script(1) passes SIGTERM on to the vendor at once, then
+    // waits 2s of its own before exiting (measured on 2.41.3, a vendor that
+    // exited on the signal included); SIGKILL to script after a moment ends
+    // that wait, and its pty hangs up whatever of the vendor is left.
+    let kill: NodeJS.Timeout | undefined;
+    const stop = (): void => {
+      killProcessTreePortable(child, 'SIGTERM', group);
+      kill ??= setTimeout(() => killProcessTreePortable(child, 'SIGKILL', group), STOP_KILL_MS);
+      kill.unref();
+    };
     input.signal?.addEventListener('abort', stop, { once: true });
     process.once('SIGTERM', stop);
     if (process.platform !== 'win32') process.once('SIGHUP', stop);
     const cleanup = (): void => {
+      if (kill) clearTimeout(kill);
       input.signal?.removeEventListener('abort', stop);
       process.off('SIGTERM', stop);
       if (process.platform !== 'win32') process.off('SIGHUP', stop);
