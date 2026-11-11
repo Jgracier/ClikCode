@@ -411,9 +411,55 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
   const nativeStatus = harness.statusArgv
     ? (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim()
     : await authEvidencePresent(harness, environment) ? 'signed in' : 'not signed in';
+  // Keep the account registry in step with the explicit check. Before this,
+  // `accounts status` showed the vendor's current answer but left `ready` /
+  // `needs_login` untouched, so a CLI could report a valid login while
+  // ClikCode continued to reject the account (or prompt again).
+  const signedIn = nativeStatusSignedIn(nativeStatus);
+  if (signedIn !== undefined) {
+    account.status = signedIn ? 'ready' : 'needs_login';
+    if (signedIn) {
+      account.signedInAt ??= new Date().toISOString();
+      delete account.neverSignedIn;
+      // Cursor (and similar) status JSON names the signed-in email. Without
+      // this, a re-used account slot can keep showing the previous label while
+      // usage and status come from someone else.
+      const email = statusEmail(nativeStatus);
+      if (email) account.label = nameAccount(state.accounts, harness, email, account.id);
+    } else {
+      delete account.signedInAt;
+      delete account.neverSignedIn;
+    }
+    await writeState(state);
+  }
   // An explicit check of one account: ask the harness now.
   const usage = await accountUsageLabel(account, state, { network: true });
   emitResult({ account: { ...accountView(account), usage }, nativeStatus, credentialBoundary: 'local-only' });
+}
+
+/** Interpret only explicit authentication signals; arbitrary successful
+ * output (for example, an account's usage report) must remain indeterminate. */
+export function nativeStatusSignedIn(nativeStatus: string): boolean | undefined {
+  try {
+    const parsed = JSON.parse(nativeStatus) as { loggedIn?: unknown; isAuthenticated?: unknown };
+    if (parsed.loggedIn === true || parsed.isAuthenticated === true) return true;
+    if (parsed.loggedIn === false || parsed.isAuthenticated === false) return false;
+  } catch { /* fail-open-ok: non-JSON output is checked by the explicit text rules below */ }
+  const normalized = nativeStatus.toLowerCase();
+  if (/\b(not logged in|not signed in|signed out|logged out|unauthenticated|login required)\b/.test(normalized)) return false;
+  if (/\b(logged in|signed in|authenticated)\b/.test(normalized)) return true;
+  return undefined;
+}
+
+/** Email from a vendor status JSON body (`userInfo.email`), when present. */
+export function statusEmail(nativeStatus: string): string | undefined {
+  try {
+    const parsed = JSON.parse(nativeStatus) as { userInfo?: { email?: unknown }; email?: unknown };
+    const email = parsed.userInfo?.email ?? parsed.email;
+    return typeof email === 'string' && email.includes('@') ? email.trim() : undefined;
+  } catch {
+    return undefined; // fail-open-ok: human-readable status has no structured email
+  }
 }
 
 export async function aiAccountLogout(labelOrId: string): Promise<void> {
@@ -476,13 +522,8 @@ export async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, envir
     loginStatusCache.set(cacheKey, { at: Date.now(), needsLogin: true });
     return true;
   }
-  let needsLogin = false;
-  try {
-    const parsed = JSON.parse(stdout) as { loggedIn?: unknown; isAuthenticated?: unknown };
-    if (parsed && typeof parsed === 'object') {
-      if (parsed.loggedIn === false || parsed.isAuthenticated === false) needsLogin = true;
-    }
-  } catch { /* fail-open-ok: not JSON; exit 0 with no verified false-signal means treat as logged in */ }
+  const signedIn = nativeStatusSignedIn(stdout);
+  const needsLogin = signedIn === false;
   loginStatusCache.set(cacheKey, { at: Date.now(), needsLogin });
   return needsLogin;
 }

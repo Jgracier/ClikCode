@@ -88,13 +88,13 @@ describe('Cursor plan usage', () => {
     const spent = cursorQuotaReading({ billingCycleEnd: '1793508407644', planUsage: { autoPercentUsed: 100, apiPercentUsed: 0, totalPercentUsed: 50 } });
     expect(spent?.label).toBe('Auto 0% left · API 100% left');
   });
-  // A Free account with no bonus: 0% used, yet its turns answer "Upgrade
-  // your plan to continue" (2026-10-06).
-  it('a Free plan with no bonus left is spent at 0%; a paid plan is not', () => {
+  // Free + remainingBonus:false still reports real Auto left (2026-11-11 live
+  // accounts). Do not force those to spent; trust autoPercentUsed.
+  it('reads Auto from autoPercentUsed on Free plans, even with no remaining bonus', () => {
     const none = { billingCycleEnd: '1793651420000', planUsage: { remainingBonus: false, autoPercentUsed: 0, apiPercentUsed: 0, totalPercentUsed: 0 } };
-    expect(cursorQuotaReading(none, 'Free')?.label).toBe('Auto 0% left');
+    expect(cursorQuotaReading(none, 'Free')?.label).toBe('Auto 100% left');
+    expect(cursorQuotaReading({ ...none, planUsage: { ...none.planUsage, autoPercentUsed: 23 } }, 'Free')?.label).toBe('Auto 77% left');
     expect(cursorQuotaReading(none, 'Pro')?.label).toBe('Auto 100% left · API 100% left');
-    expect(cursorQuotaReading({ ...none, planUsage: { ...none.planUsage, remainingBonus: true } }, 'Free')?.label).toBe('Auto 100% left');
   });
   it('has nothing to say without plan usage', () => {
     expect(cursorQuotaReading({ displayMessage: 'x' })).toBeUndefined();
