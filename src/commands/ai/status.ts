@@ -4,6 +4,7 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { emitResult } from '../../cli/structured-output.js';
+import { isJsonDefaultMode } from '../../cli/output-mode.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
 import { CLIKCODE_USER_AGENT } from '../../version.js';
@@ -24,18 +25,41 @@ export async function aiModelsList(): Promise<void> {
   });
 }
 
-export async function aiUsage(): Promise<void> {
+/** `clikcode usage`: what `/usage all` shows -- per provider, its accounts' allowances and totals, then
+ * the last seven days -- not every recorded call. JSON: the per-provider totals (raw records and the
+ * per-day rollups they are folded into) and the days. A latency average over every call is not shown:
+ * a call's latency includes the time a turn waited on the user. */
+export async function aiUsage(now: number = Date.now()): Promise<void> {
   const state = await readState({ transcripts: [] });
-  const totals = state.invocations.reduce(
-    (sum, invocation) => ({
-      calls: sum.calls + 1,
-      inputTokens: sum.inputTokens + (invocation.inputTokens ?? 0),
-      outputTokens: sum.outputTokens + (invocation.outputTokens ?? 0),
-      latencyMs: sum.latencyMs + invocation.latencyMs,
-    }),
-    { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0 },
-  );
-  emitResult({ ...totals, avgLatencyMs: totals.calls ? Math.round(totals.latencyMs / totals.calls) : 0, invocations: state.invocations });
+  const [{ usageDays, usageReportAll }, { invocationRollups, invocationTokenCount }, { localHarnessForProvider }] = await Promise.all([
+    import('../../tui/slash/usage-report.js'), import('../../session/state/invocations.js'), import('../../runtime/lazy-bridge.js'),
+  ]);
+  const name = (provider: string): string => localHarnessForProvider(provider)?.displayName ?? provider;
+  if (!isJsonDefaultMode()) {
+    process.stdout.write(`${usageReportAll(state, { accountId: null }, { now, providerName: name }).text}\n`);
+    return;
+  }
+  type Totals = { provider: string; name: string; turns: number; maintenance: number; inputTokens: number; outputTokens: number; totalTokens: number; costUsd: number; unknownCostCalls: number };
+  const providers = new Map<string, Totals>();
+  const row = (provider: string): Totals => providers.get(provider) ?? providers.set(provider, { provider, name: name(provider), turns: 0, maintenance: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, unknownCostCalls: 0 }).get(provider)!;
+  for (const invocation of state.invocations) {
+    const totals = row(invocation.provider);
+    if (invocation.kind === 'maintenance') totals.maintenance += 1; else totals.turns += 1;
+    totals.inputTokens += invocation.inputTokens ?? 0;
+    totals.outputTokens += invocation.outputTokens ?? 0;
+    totals.totalTokens += invocationTokenCount(invocation);
+    if (invocation.costUsd === undefined) totals.unknownCostCalls += 1; else totals.costUsd += invocation.costUsd;
+  }
+  for (const rollup of invocationRollups(state)) {
+    const totals = row(rollup.provider);
+    totals.maintenance += rollup.maintenanceCalls ?? 0;
+    totals.turns += rollup.calls - (rollup.maintenanceCalls ?? 0);
+    totals.inputTokens += rollup.inputTokens;
+    totals.outputTokens += rollup.outputTokens;
+    totals.totalTokens += rollup.totalTokens ?? rollup.inputTokens + rollup.outputTokens;
+    totals.unknownCostCalls += rollup.calls; // folded records keep no cost
+  }
+  emitResult({ providers: [...providers.values()].sort((left, right) => left.name.localeCompare(right.name)), days: usageDays(state, now) });
 }
 
 /** Reports the separate ClikDeploy OAuth/API-key gateway identity, never a BYO provider login. */
