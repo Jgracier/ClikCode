@@ -408,9 +408,18 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
   const state = await readState({ transcripts: [] });
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
   if (!harness.statusArgv && !hasAuthEvidence(harness)) throw new Error(`${harness.displayName} does not publish a non-destructive account-status command`);
-  const nativeStatus = harness.statusArgv
-    ? (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim()
-    : await authEvidencePresent(harness, environment) ? 'signed in' : 'not signed in';
+  let nativeStatus: string;
+  if (harness.statusArgv) {
+    try {
+      nativeStatus = (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim();
+    } catch (error) {
+      // Codex (and similar) exit non-zero when signed out and put the reason
+      // on stderr; that text is the status answer.
+      nativeStatus = (error instanceof Error ? error.message : String(error)).trim();
+    }
+  } else {
+    nativeStatus = await authEvidencePresent(harness, environment) ? 'signed in' : 'not signed in';
+  }
   // Keep the account registry in step with the explicit check. Before this,
   // `accounts status` showed the vendor's current answer but left `ready` /
   // `needs_login` untouched, so a CLI could report a valid login while
@@ -441,12 +450,17 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
  * output (for example, an account's usage report) must remain indeterminate. */
 export function nativeStatusSignedIn(nativeStatus: string): boolean | undefined {
   try {
-    const parsed = JSON.parse(nativeStatus) as { loggedIn?: unknown; isAuthenticated?: unknown };
+    const parsed = JSON.parse(nativeStatus) as {
+      loggedIn?: unknown; isAuthenticated?: unknown; planName?: unknown; amountRemaining?: unknown;
+    };
     if (parsed.loggedIn === true || parsed.isAuthenticated === true) return true;
     if (parsed.loggedIn === false || parsed.isAuthenticated === false) return false;
+    // Auggie's `account status --json` is a credit report with no loggedIn
+    // field; receiving it at all means the account answered while signed in.
+    if (typeof parsed.planName === 'string' || 'amountRemaining' in parsed) return true;
   } catch { /* fail-open-ok: non-JSON output is checked by the explicit text rules below */ }
   const normalized = nativeStatus.toLowerCase();
-  if (/\b(not logged in|not signed in|signed out|logged out|unauthenticated|login required)\b/.test(normalized)) return false;
+  if (/\b(not(?: currently)? logged in|not signed in|signed out|logged out|unauthenticated|login required)\b/.test(normalized)) return false;
   if (/\b(logged in|signed in|authenticated)\b/.test(normalized)) return true;
   return undefined;
 }

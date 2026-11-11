@@ -19,4 +19,9 @@ describe('captureNativeHarnessOutput', () => {
   it('still honours an explicit clock', async () => {
     await expect(captureNativeHarnessOutput(node, ['-e', 'setInterval(() => {}, 1000)'], {}, 200)).rejects.toThrow(/timed out/);
   });
+
+  it('keeps stderr when stdout is empty (Codex login status)', async () => {
+    const out = await captureNativeHarnessOutput(node, ['-e', "console.error('Logged in using ChatGPT')"]);
+    expect(out.trim()).toBe('Logged in using ChatGPT');
+  });
 });
