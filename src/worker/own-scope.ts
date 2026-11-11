@@ -239,16 +239,10 @@ function lowerOwnPriority(sessionId: string): void {
 
 export const WORKER_PID_ENV = 'CLIKCODE_WORKER_PID';
 
-/** Args added so an agent's `systemd-run --user` stays in the agent slice and
- * carries this worker's pid. A call that names its own slice, or is not
- * `--user`, is returned unchanged. Placement only: no extra cap. */
-export function systemdRunArgs(argv: readonly string[], workerPid: number): string[] {
-  const namesSlice = argv.some((arg) => arg === '--slice' || arg.startsWith('--slice='));
-  if (!argv.includes('--user') || namesSlice) return [...argv];
-  return [`--slice=${AGENT_SLICE}`, `--setenv=${WORKER_PID_ENV}=${workerPid}`, ...argv];
-}
-
-/** A `systemd-run` ahead of the system one, for this worker's children only. */
+/** A `systemd-run` ahead of the system one, for this worker's children only:
+ * an agent's `systemd-run --user` stays in the agent slice and carries this
+ * worker's pid. A call that names its own slice, or is not `--user`, passes
+ * through unchanged. Placement only: no extra cap. */
 export function installSystemdRunShim(): void {
   const dir = join(stateDirectory(), 'bin');
   mkdirSync(dir, { recursive: true, mode: 0o700 });

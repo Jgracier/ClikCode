@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { adoptArgs, AGENT_SLICE, agentSliceDirectory, ceilingUpdate, installSystemdRunShim, scopeUnitName, sliceArgs, systemdRunArgs, userManagerLaunch, workerLimits, userManagerOwns } from './own-scope.js';
+import { adoptArgs, AGENT_SLICE, agentSliceDirectory, ceilingUpdate, installSystemdRunShim, scopeUnitName, sliceArgs, userManagerLaunch, workerLimits, userManagerOwns } from './own-scope.js';
 
 describe('own scope', () => {
   it('names a valid, per-process unit from any session id', () => {
@@ -64,19 +64,25 @@ describe('own scope', () => {
   });
 
   it('places an agent systemd-run in the agent slice without adding a cap', () => {
-    expect(systemdRunArgs(['--user', '--scope', '--quiet', 'vitest'], 9)).toEqual(['--slice=clikcode.slice', '--setenv=CLIKCODE_WORKER_PID=9', '--user', '--scope', '--quiet', 'vitest']);
-    expect(systemdRunArgs(['--user', '--slice=app.slice', 'true'], 9)).toEqual(['--user', '--slice=app.slice', 'true']);
-    expect(systemdRunArgs(['true'], 9)).toEqual(['true']);
     const home = mkdtempSync(join(tmpdir(), 'clikcode-shim-'));
-    const saved = { home: process.env.CLIKCODE_HOME, path: process.env.PATH };
+    const saved = { home: process.env.CLIKCODE_HOME, path: process.env.PATH, pid: process.env.CLIKCODE_WORKER_PID };
     process.env.CLIKCODE_HOME = home;
+    const restore = (name: string, value: string | undefined) => { if (value === undefined) delete process.env[name]; else process.env[name] = value; };
     try {
       installSystemdRunShim();
-      const ran = spawnSync(join(home, 'bin', 'systemd-run'), ['--user', '--scope', 'vitest'], { encoding: 'utf8', env: { ...process.env, SYSTEMD_RUN: 'echo', CLIKCODE_WORKER_PID: '9' } });
-      expect(ran.stdout.trim()).toBe('--slice=clikcode.slice --setenv=CLIKCODE_WORKER_PID=9 --user --scope vitest');
+      const run = (args: string[], pid = '9') => spawnSync(join(home, 'bin', 'systemd-run'), args, {
+        encoding: 'utf8', env: { ...process.env, SYSTEMD_RUN: 'echo', CLIKCODE_WORKER_PID: pid },
+      }).stdout.trim();
+      expect(run(['--user', '--scope', '--quiet', 'vitest'])).toBe('--slice=clikcode.slice --setenv=CLIKCODE_WORKER_PID=9 --user --scope --quiet vitest');
+      // Its own slice, a system call, or no worker: passed through as given.
+      expect(run(['--user', '--slice=app.slice', 'true'])).toBe('--user --slice=app.slice true');
+      expect(run(['--user', '--slice', 'app.slice', 'true'])).toBe('--user --slice app.slice true');
+      expect(run(['--scope', 'true'])).toBe('--scope true');
+      expect(run(['--user', 'true'], '')).toBe('--user true');
     } finally {
-      if (saved.home === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = saved.home;
-      if (saved.path === undefined) delete process.env.PATH; else process.env.PATH = saved.path;
+      restore('CLIKCODE_HOME', saved.home);
+      restore('PATH', saved.path);
+      restore('CLIKCODE_WORKER_PID', saved.pid);
       rmSync(home, { recursive: true, force: true });
     }
   });
