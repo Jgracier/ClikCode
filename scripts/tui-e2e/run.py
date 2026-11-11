@@ -3379,8 +3379,10 @@ def run(name, spec, entry, keep):
             if settled not in bytes(raw[before:]):
                 problems.append('after a resize: not the mouse modes, then a clear and home, before the redraw')
             mouse_reset = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006l\x1b[?1006h'
-            # The first size is drawn at once without a clear; the burst's one clear (and mouse reset) is its settled frame.
-            expected = 1
+            # The first size is drawn at once without a clear; a burst's one clear (and mouse reset) is its settled frame. Sizes further
+            # apart than the settle window (RESIZE_SETTLE_MS, 100 ms) are bursts of their own.
+            sizes = step[2] if len(step) > 2 else (63, 40, 32)
+            expected = 1 if gap < 0.1 else len(sizes)
             resets = raw[before:].count(mouse_reset)
             if resets != expected: problems.append(f'resize burst sent {resets} mouse resets, expected {expected}')
             clears = raw[before:].count(b'\x1b[2J')
