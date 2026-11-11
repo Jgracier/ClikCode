@@ -65,7 +65,7 @@ export async function readFootprints(machine: string, modelIds: readonly string[
   const result: Record<string, Footprint[]> = {};
   for (const modelId of modelIds) {
     let store: FootprintStore = {};
-    try { store = JSON.parse(await readFile(footprintsFile(modelId), 'utf8')) as FootprintStore; } catch { /* Never run here. */ }
+    try { store = JSON.parse(await readFile(footprintsFile(modelId), 'utf8')) as FootprintStore; } catch { /* fail-open-ok: Never run here. */ }
     const entries = Object.values(store[machine] ?? {}).filter((entry) => entry && typeof entry.anonBytes === 'number');
     if (entries.length) result[modelId] = entries;
   }

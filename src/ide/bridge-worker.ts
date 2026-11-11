@@ -76,7 +76,7 @@ export class WorkerLink {
     if (!worker) return;
     this.worker = undefined;
     this.workerTurnRunning = false;
-    try { worker.client.send({ type: 'detach' }); worker.client.close(); } catch { /* already gone */ }
+    try { worker.client.send({ type: 'detach' }); worker.client.close(); } catch { /* fail-open-ok: already gone */ }
   }
 
   onWorkerEvent(sessionId: string, client: WorkerClient, event: WorkerEvent): void {

@@ -48,12 +48,12 @@ export function createTurnInput(): NativeTurnInput {
     end: () => {
       if (ended) return;
       ended = true;
-      try { stream?.end(); } catch { /* the vendor already exited */ }
+      try { stream?.end(); } catch { /* fail-open-ok: the vendor already exited */ }
     },
     bind: (next) => {
       stream = next;
       // Closed before the vendor even started: close it on arrival.
-      if (ended && next) try { next.end(); } catch { /* already gone */ }
+      if (ended && next) try { next.end(); } catch { /* fail-open-ok: already gone */ }
     },
   };
   return input;
@@ -243,10 +243,10 @@ export async function captureNativeHarnessTurn(
       child.stdin.on('error', () => undefined);
       const input = options.input as BoundTurnInput | undefined;
       if (input) {
-        try { child.stdin.write(options.stdinText); } catch { /* reported through the child's exit */ }
+        try { child.stdin.write(options.stdinText); } catch { /* fail-open-ok: reported through the child's exit */ }
         input.bind(child.stdin);
       } else {
-        try { child.stdin.end(options.stdinText); } catch { /* reported through the child's exit */ }
+        try { child.stdin.end(options.stdinText); } catch { /* fail-open-ok: reported through the child's exit */ }
       }
     }
     const onInterrupt = () => { interrupted = true; forward('SIGINT'); later(1_000, 'SIGTERM'); later(3_000, 'SIGKILL'); };

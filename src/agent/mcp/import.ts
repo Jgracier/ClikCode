@@ -345,7 +345,7 @@ export async function importVendorMcpServers(
     const latestText = await readFile(configPath, 'utf8').catch(quiet('agent/mcp/import'));
     let latest: Record<string, unknown> = root;
     if (latestText?.trim() && latestText !== existingText) {
-      try { const parsed: unknown = JSON.parse(latestText); if (isRecord(parsed)) latest = parsed; } catch { /* keep the earlier read */ }
+      try { const parsed: unknown = JSON.parse(latestText); if (isRecord(parsed)) latest = parsed; } catch { /* fail-open-ok: keep the earlier read */ }
     }
     const latestServers = isRecord(latest[MCP_SERVERS_KEY]) ? latest[MCP_SERVERS_KEY] as Record<string, unknown> : {};
     const merged: Record<string, unknown> = { ...latestServers };

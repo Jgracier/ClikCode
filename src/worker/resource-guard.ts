@@ -2,7 +2,7 @@
  * accounting and stop operation; this controller only chooses and informs. */
 import { mkdirSync, readFileSync, rmSync, statfsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, swallowed } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { cgroupProbe, processProbe, type Inventory, type MemorySample, type Probe, type Unit } from './resource-probes.js';
 
@@ -109,7 +109,7 @@ export function startResourceGuard(options: ResourceGuardOptions): () => void {
     }
     if (budget.ratio < NUDGE_REARM_BELOW) {
       nudged = false;
-      try { rmSync(ineffectiveMarker(), { force: true }); } catch { /* fail-open-ok */ }
+      try { rmSync(ineffectiveMarker(), { force: true }); } catch (error) { swallowed('worker/resource-guard', error); }
     }
     if (budget.ratio < NUDGE_AT || Date.now() - lastStopAt() < STOP_INTERVAL_MS || pending) return;
     const inventory = await probe.inventory();
@@ -118,7 +118,7 @@ export function startResourceGuard(options: ResourceGuardOptions): () => void {
     const conversations = inventory.workers.length;
     if (action.kind === 'stop' && !ineffective()) {
       if (!await probe.stop(action.unit.target)) return;
-      try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(marker(), String(Date.now())); } catch { /* fail-open-ok */ }
+      try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(marker(), String(Date.now())); } catch (error) { swallowed('worker/resource-guard', error); }
       pending = { unit: action.unit, before: budget.used, at: Date.now() };
       lifecycle('resource.stop', { session: sessionId, kind: action.unit.kind, label: action.unit.label, held: action.unit.freeable, used: budget.used, limit: budget.limit });
       if (action.unit.owner !== undefined) deliver(stopNote(budget, conversations, action.unit) + ramTmpNote(), action.unit.owner);

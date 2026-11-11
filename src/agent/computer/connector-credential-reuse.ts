@@ -4,7 +4,7 @@ export function credentialNames(id: string, spec: { id?: string; auth?: { signin
   const names = available.includes(`${id}/key`) ? [`${id}/key`] : [];
   const url = spec.http?.baseUrl?.replace(/\{region\}/g, 'us-east-1');
   let aws = false;
-  try { const u = new URL(url ?? ''); aws = u.protocol === 'https:' && /(^|\.)amazonaws\.com(?:\.cn)?$/.test(u.hostname) && !u.username && !u.password; } catch { /* an incomplete definition cannot receive a family key */ }
+  try { const u = new URL(url ?? ''); aws = u.protocol === 'https:' && /(^|\.)amazonaws\.com(?:\.cn)?$/.test(u.hostname) && !u.username && !u.password; } catch { /* fail-open-ok: an incomplete definition cannot receive a family key */ }
   if (spec.id === id && id.startsWith('amazonaws-') && spec.auth?.signing?.scheme === 'aws-sigv4' && aws && available.includes('aws/clikdeploy-connector-key')) names.push('aws/clikdeploy-connector-key');
   return names;
 }

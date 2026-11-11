@@ -14,7 +14,7 @@ export async function loginScope(page: Page): Promise<LoginScope> {
       if (frame === page.mainFrame() || frame.isDetached()) continue;
       if (await frame.locator('input:visible').count()) return frame;
     }
-  } catch { /* A navigation can detach a frame mid-check: the page itself is the safe answer. */ }
+  } catch { /* fail-open-ok: A navigation can detach a frame mid-check: the page itself is the safe answer. */ }
   return page;
 }
 

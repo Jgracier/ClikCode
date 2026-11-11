@@ -49,7 +49,7 @@ export async function runTailnetHandoff(input: {
   let idle: NodeJS.Timeout | undefined;
   let expire!: (error: Error) => void;
   const expired = new Promise<never>((_, reject) => { expire = reject; });
-  expired.catch(() => undefined);
+  expired.catch(() => undefined); // fail-open-ok: only marks it handled; the race that awaits it takes the rejection
   const keepAlive = (): void => {
     clearTimeout(idle);
     idle = setTimeout(() => expire(new Error('The phone handoff expired after 10 idle minutes.')), IDLE_LIMIT);
@@ -104,7 +104,7 @@ export async function runTailnetHandoff(input: {
   });
 
   const stopped = new Promise<never>((_, reject) => { input.signal?.addEventListener('abort', () => reject(new Error('Handoff stopped.')), { once: true }); });
-  stopped.catch(() => undefined);
+  stopped.catch(() => undefined); // fail-open-ok: only marks it handled; the race that awaits it takes the rejection
   try {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, input.host, () => { server.off('error', reject); resolve(); }); });
     const port = (server.address() as AddressInfo).port;

@@ -30,7 +30,7 @@ export const globTool = defineTool<GlobArgs>({
       total++;
       if (matches.length >= 5000) continue;
       let mtimeMs = 0;
-      try { mtimeMs = (await fs.stat(file.absolute)).mtimeMs; } catch { /* raced with a delete */ }
+      try { mtimeMs = (await fs.stat(file.absolute)).mtimeMs; } catch { /* fail-open-ok: raced with a delete */ }
       matches.push({ file: file.absolute, mtimeMs });
     }
     if (!total) return { output: `No files match ${args.pattern}.` };

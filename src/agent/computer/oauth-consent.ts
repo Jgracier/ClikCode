@@ -456,7 +456,7 @@ interface StopDetail {
 /** The stop as data. */
 function stopDetail(page: Page, controls: readonly Control[], pageText: string, kind?: StopDetail['kind']): StopDetail {
   let url = '';
-  try { const u = new URL(page.url()); url = `${u.origin}${u.pathname}`; } catch { /* no address */ }
+  try { const u = new URL(page.url()); url = `${u.origin}${u.pathname}`; } catch { /* fail-open-ok: no address */ }
   const known = classifyStuck(pageText)?.kind;
   return {
     kind: kind ?? known ?? 'unknown', url, pageText: jsonErrorBody(pageText) ?? pageExcerpt(pageText),
@@ -490,7 +490,7 @@ async function driveConsent(connector: string, firstPage: Page, options: OAuthCo
   try {
     let redirectUri: string | undefined;
     let redirectHost: string | undefined;
-    try { const u = new URL(started.url).searchParams.get('redirect_uri'); if (u) { redirectUri = u; redirectHost = new URL(u).host; } } catch { /* not an address: no redirect to match */ }
+    try { const u = new URL(started.url).searchParams.get('redirect_uri'); if (u) { redirectUri = u; redirectHost = new URL(u).host; } } catch { /* fail-open-ok: not an address: no redirect to match */ }
     const open = async (): Promise<void> => {
       try { await page.goto(started.url, { waitUntil: 'domcontentloaded', timeout: 30_000 }); }
       catch (error) { throw new ConsentStop(`The authorization URL did not open (${scrubSecrets(error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, 160)}).`); }

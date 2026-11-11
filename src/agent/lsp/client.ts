@@ -3,6 +3,7 @@
  * listeners, and the few server-to-client requests a server blocks on
  * answered with neutral defaults. */
 import type { ChildProcess } from 'node:child_process';
+import { swallowed } from '../../runtime/lifecycle-log.js';
 
 interface JsonRpcMessage {
   jsonrpc: '2.0';
@@ -122,7 +123,7 @@ export class LspConnection {
     }
     if (message.method) {
       for (const listener of this.listeners) {
-        try { listener(message.method, message.params); } catch { /* a listener fault must not stop the stream */ }
+        try { listener(message.method, message.params); } catch (error) { /* a listener fault must not stop the stream */ swallowed('agent/lsp/client', error); }
       }
       return;
     }

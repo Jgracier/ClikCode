@@ -133,7 +133,7 @@ export async function removeSqliteSession(spec: SqliteCarrySpec, nativeId: strin
     }
     db.exec('COMMIT');
   } catch (error) {
-    try { db.exec('ROLLBACK'); } catch { /* transaction never opened */ }
+    try { db.exec('ROLLBACK'); } catch { /* fail-open-ok: transaction never opened */ }
     throw error;
   } finally { db.close(); }
 }

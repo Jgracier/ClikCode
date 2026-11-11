@@ -1,6 +1,6 @@
 /** Shell execution. Every command runs in its own process group so a timeout
  * or a cancelled turn takes the whole tree down, not just the shell. */
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { createWriteStream, existsSync, type WriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -106,7 +106,7 @@ function killTree(child: BackgroundShell['child'], detached: boolean): void {
   killProcessTreePortable(child, 'SIGTERM', detached);
   const timer = setTimeout(() => {
     if (detached && process.platform !== 'win32' && child.pid) {
-      try { process.kill(-child.pid, 'SIGKILL'); return; } catch { /* group already gone */ }
+      try { process.kill(-child.pid, 'SIGKILL'); return; } catch { /* fail-open-ok: group already gone */ }
     }
     killProcessTreePortable(child, 'SIGKILL', detached);
   }, KILL_GRACE_MS);
@@ -261,7 +261,7 @@ function runForeground(invocation: { file: string; args: string[] }, invocationC
     let pending: Promise<void> = Promise.resolve();
     const onData = (chunk: string): void => {
       pending = pending.then(() => output.push(chunk)).catch(quiet('agent/tools/bash'));
-      try { ctx.emitOutput?.(chunk); } catch { /* a UI fault must not break the command */ }
+      try { ctx.emitOutput?.(chunk); } catch (error) { /* a UI fault must not break the command */ swallowed('agent/tools/bash', error); }
     };
     const timer = setTimeout(() => { timedOut = true; killTree(child, detached); }, timeoutMs);
     const abort = (): void => killTree(child, detached);

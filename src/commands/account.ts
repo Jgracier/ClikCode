@@ -482,7 +482,7 @@ export async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, envir
     if (parsed && typeof parsed === 'object') {
       if (parsed.loggedIn === false || parsed.isAuthenticated === false) needsLogin = true;
     }
-  } catch { /* not JSON; exit 0 with no verified false-signal means treat as logged in */ }
+  } catch { /* fail-open-ok: not JSON; exit 0 with no verified false-signal means treat as logged in */ }
   loginStatusCache.set(cacheKey, { at: Date.now(), needsLogin });
   return needsLogin;
 }

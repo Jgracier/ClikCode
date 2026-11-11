@@ -196,7 +196,7 @@ export function completedArguments(raw: string): Record<string, unknown> {
     try {
       const value: unknown = JSON.parse(`${text.slice(0, end)}}`);
       if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
-    } catch { /* an earlier field boundary may still parse */ }
+    } catch { /* fail-open-ok: an earlier field boundary may still parse */ }
   }
   return {};
 }
@@ -512,7 +512,7 @@ export class OpenAIModelClient implements ModelClient {
     let code: string | undefined;
     let retryAfter = parseRetryAfter(response.headers.get('retry-after'));
     let raw = '';
-    try { raw = await response.text(); } catch { /* the status line is the message */ }
+    try { raw = await response.text(); } catch { /* fail-open-ok: the status line is the message */ }
     try {
       const body = JSON.parse(raw) as { error?: unknown; message?: unknown; code?: unknown };
       const nested = body.error && typeof body.error === 'object' ? body.error as { message?: unknown; code?: unknown; type?: unknown; retry_after?: unknown } : undefined;

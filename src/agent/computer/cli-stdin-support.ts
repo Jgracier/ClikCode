@@ -25,7 +25,7 @@ function resolveOnPath(command: string): string | undefined {
   for (const entry of (process.env.PATH ?? '').split(path.delimiter)) {
     if (!entry) continue;
     const candidate = path.join(entry, command);
-    try { fs.accessSync(candidate, fs.constants.X_OK); if (fs.statSync(candidate).isFile()) return candidate; } catch { /* not here */ }
+    try { fs.accessSync(candidate, fs.constants.X_OK); if (fs.statSync(candidate).isFile()) return candidate; } catch { /* fail-open-ok: not here */ }
   }
   return undefined;
 }
@@ -37,7 +37,7 @@ export async function cliReadsArgsJsonFromStdin(command: string, signal?: AbortS
   const found = resolveOnPath(command);
   if (!found) return false;
   let key = found;
-  try { key = `${found}:${fs.statSync(found).mtimeMs}`; } catch { /* use the path alone */ }
+  try { key = `${found}:${fs.statSync(found).mtimeMs}`; } catch { /* fail-open-ok: use the path alone */ }
   const known = cache.get(key);
   if (known !== undefined) return known;
   const result = await runCli(command, ['--version'], { signal, timeoutMs: 15_000, maxChars: 2_000 });

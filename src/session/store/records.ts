@@ -6,7 +6,7 @@
  * chat it refers into is deleted (transcripts.ts says why). Listing and the
  * per-process caches of both formats are here too. */
 
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chatLogId, resetChatLogCache, type PendingTurn, type TranscriptMessage } from './chat-log.js';
@@ -269,7 +269,7 @@ export async function listStoredSessionIds(): Promise<string[]> {
     try {
       const parsed = JSON.parse(await readFile(path, 'utf8')) as SessionFile;
       if (typeof parsed.id === 'string') ids.add(parsed.id);
-    } catch { /* unreadable files cannot reference anything */ }
+    } catch (error) { /* unreadable files cannot reference anything */ swallowed('session/store/records', error); }
   }
   return [...ids];
 }

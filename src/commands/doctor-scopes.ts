@@ -11,7 +11,7 @@ function agentSliceFor(uid: number): string {
 export async function aiDoctorScopes(options: { reap?: boolean }): Promise<void> {
   if (process.platform !== 'linux') { process.stdout.write('Scopes are a Linux (systemd) feature; nothing to list here.\n'); return; }
   const names = new Map<string, string>();
-  try { for (const session of (await readState({ transcripts: [] })).sessions) if (session.name) names.set(session.id, session.name); } catch { /* names are a nicety */ }
+  try { for (const session of (await readState({ transcripts: [] })).sessions) if (session.name) names.set(session.id, session.name); } catch { /* fail-open-ok: names are a nicety */ }
   const rows = await scanSlice(agentSliceFor(process.getuid?.() ?? 0), { names });
   process.stdout.write(`${renderScopeReport(rows)}\n`);
   const targets = reapTargets(rows);

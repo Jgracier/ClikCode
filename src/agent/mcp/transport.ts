@@ -9,7 +9,7 @@
  * client would never run, and the part of the protocol a tool-calling client
  * needs is three requests and two notifications.
  */
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { JsonRpcPeer } from '../../harness/transport/jsonrpc-peer.js';
 import { spawnPortable } from '../../harness/transport/spawn.js';
 import type { McpServerSpec } from './config.js';
@@ -355,7 +355,7 @@ class HttpTransport implements McpTransport {
       for await (const event of readSseEvents(body)) {
         if (event.event === 'endpoint') { onEndpoint?.(event.data.trim()); continue; }
         if (event.event !== 'message') continue;
-        try { this.dispatchAll(JSON.parse(event.data)); } catch { /* one bad event must not end the stream */ }
+        try { this.dispatchAll(JSON.parse(event.data)); } catch (error) { /* one bad event must not end the stream */ swallowed('agent/mcp/transport', error); }
       }
     } catch (error) {
       if (!this.isClosed) this.lastError = error instanceof Error ? error.message : String(error);
@@ -372,7 +372,7 @@ class HttpTransport implements McpTransport {
     const hasId = message.id !== undefined && message.id !== null;
     if (typeof message.method === 'string') {
       if (!hasId) {
-        try { this.handlers.onNotification?.(message.method, message.params ?? {}); } catch { /* a handler bug must not kill the transport */ }
+        try { this.handlers.onNotification?.(message.method, message.params ?? {}); } catch (error) { /* a handler bug must not kill the transport */ swallowed('agent/mcp/transport', error); }
         return;
       }
       const answered = answerServerRequest(message.method);

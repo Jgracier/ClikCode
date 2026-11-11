@@ -84,7 +84,7 @@ export function runShellCommand(command: string, cwd: string, signal?: AbortSign
       killProcessTreePortable(child, 'SIGTERM', detached);
       const timer = setTimeout(() => {
         if (detached && process.platform !== 'win32' && child.pid) {
-          try { process.kill(-child.pid, 'SIGKILL'); return; } catch { /* group already gone */ }
+          try { process.kill(-child.pid, 'SIGKILL'); return; } catch { /* fail-open-ok: group already gone */ }
         }
         killProcessTreePortable(child, 'SIGKILL', detached);
       }, SHELL_KILL_GRACE_MS);

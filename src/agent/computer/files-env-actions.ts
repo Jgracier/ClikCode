@@ -38,7 +38,7 @@ export async function runPermissions(page: Page, args: EnvArgs): Promise<string>
 
 /** Everything not allowed yet is denied before the page is opened, so no permission bubble can block it. */
 export async function denyPermissionsFor(page: Page, url: string): Promise<void> {
-  try { await denyByDefault(page, permissionOrigin(url));  } catch { /* not a website address */ }
+  try { await denyByDefault(page, permissionOrigin(url));  } catch { /* fail-open-ok: not a website address */ }
 }
 
 export async function runViewport(page: Page, args: DeviceArgs): Promise<string> {

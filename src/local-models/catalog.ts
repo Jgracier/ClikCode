@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { catalogModels } from './catalog-source.js';
 import { discoveredModelsFile, tunedModelsFile } from './paths.js';
 import type { CatalogModel } from './shared/index.js';
+import { swallowed } from '../runtime/lifecycle-log.js';
 
 export type { CatalogFile, CatalogModel, KvGeometry } from './shared/index.js';
 
@@ -19,7 +20,7 @@ try {
     // A split model's parts are each pinned like a single file, all at the model's revision.
     && ((model as { weightParts?: CatalogModel['weights'][] }).weightParts ?? []).every((part) => part.sha256?.match(/^[0-9a-f]{64}$/)
       && part.revision === model.weights.revision && part.repo === model.weights.repo && part.sizeBytes > 0));
-} catch { /* A first run has no cache. */ }
+} catch (error) { /* A first run has no cache. */ swallowed('local-models/catalog', error); }
 /** Models fine-tuned on this computer (tuned.ts). Read on every call, so one registered while ClikCode runs is found without a restart. */
 export const TUNED_ID_PREFIX = 'tuned:';
 export const TUNED_REPO_PREFIX = 'clikcode-tuned/';

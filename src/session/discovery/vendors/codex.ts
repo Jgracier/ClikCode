@@ -50,7 +50,7 @@ function parseCodexSessionHead(prefix: string, fileName: string): CachedSessionF
         const id = /"(?:session_id|id)"\s*:\s*"([^"\\]+)"/.exec(line)?.[1];
         const cwd = /"cwd"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(line)?.[1];
         if (id) facts.id = id;
-        if (cwd) { try { facts.cwd = JSON.parse(cwd) as string; } catch { /* leave cwd unknown */ } }
+        if (cwd) { try { facts.cwd = JSON.parse(cwd) as string; } catch { /* fail-open-ok: leave cwd unknown */ } }
       }
       continue;
     }

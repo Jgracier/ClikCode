@@ -7,6 +7,7 @@ import type { ChildProcess } from 'node:child_process';
 import { killProcessTreePortable } from './spawn.js';
 import { forwardParentSignals } from './parent-signals.js';
 import { LineBuffer } from '../protocol/json-lines.js';
+import { swallowed } from '../../runtime/lifecycle-log.js';
 
 type JsonRpcMessage = Record<string, any>;
 
@@ -126,7 +127,7 @@ export function jsonRpcErrorDetail(data: unknown): { reason?: string; statusCode
     const said = [parsed.detail, parsed.message, parsed.error].find((value): value is string => typeof value === 'string' && value.trim().length > 0);
     if (said) reason = said.replace(/\s+/g, ' ').trim();
     if (status === undefined && typeof parsed.status === 'number') status = parsed.status;
-  } catch { /* not JSON: the text is the reason */ }
+  } catch { /* fail-open-ok: not JSON: the text is the reason */ }
   return { reason, ...(status !== undefined && status >= 400 && status < 600 ? { statusCode: status } : {}) };
 }
 
@@ -327,7 +328,7 @@ export class JsonRpcPeer {
       }
       if (this.exited) return;
       // Stdio servers treat EOF as the polite request to leave.
-      try { this.child.stdin?.end(); } catch { /* already gone */ }
+      try { this.child.stdin?.end(); } catch { /* fail-open-ok: already gone */ }
       if (!timedOut) await Promise.race([exit, grace]);
     } finally {
       if (graceTimer) clearTimeout(graceTimer);
@@ -418,7 +419,7 @@ export class JsonRpcPeer {
     if (typeof message.method === 'string') {
       if (hasId) this.handleServerRequest(message.method, message.params ?? {}, message.id);
       else {
-        try { this.options.onNotification?.(message.method, message.params ?? {}); } catch { /* a renderer bug must not kill the transport */ }
+        try { this.options.onNotification?.(message.method, message.params ?? {}); } catch (error) { /* a renderer bug must not kill the transport */ swallowed('harness/transport/jsonrpc-peer', error); }
       }
       return;
     }

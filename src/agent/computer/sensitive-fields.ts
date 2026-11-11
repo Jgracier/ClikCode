@@ -131,7 +131,7 @@ export async function pageSecrets(page: Page): Promise<PageSecret[]> {
   for (const frame of frames) {
     if (frame.isDetached()) continue;
     try { for (const found of await frame.evaluate(pageSecretsInPage)) if (!out.has(found.value)) out.set(found.value, found.label); }
-    catch { /* a frame that is navigating or cross-origin cannot be read */ }
+    catch { /* fail-open-ok: a frame that is navigating or cross-origin cannot be read */ }
   }
   return [...out].map(([value, label]) => ({ value, label }));
 }

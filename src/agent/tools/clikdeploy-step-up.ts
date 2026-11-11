@@ -33,7 +33,7 @@ function responseError(value: unknown): string | undefined {
   const content = Array.isArray(result.content) ? result.content : [];
   const text = content.filter((item): item is { text: string } => Boolean(item && typeof item === 'object' && typeof (item as Json).text === 'string')).map(item => item.text).join('\n');
   let data: Json | undefined;
-  try { data = JSON.parse(text) as Json; } catch { /* plain text */ }
+  try { data = JSON.parse(text) as Json; } catch { /* fail-open-ok: plain text */ }
   if (result.isError === true || data?.error === true) return `${String(data?.code ?? '')} ${String(data?.message ?? data?.detail ?? text)}`.trim();
   return undefined;
 }

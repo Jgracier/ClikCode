@@ -281,7 +281,7 @@ async function macPressure(): Promise<{ availableBytes?: number; critical: boole
   try {
     const { stdout } = await execFileAsync('sysctl', ['-n', 'kern.memorystatus_level', 'kern.memorystatus_vm_pressure_level'], { encoding: 'utf8', timeout: 5_000 });
     [level, pressure] = stdout.trim().split(/\s+/).map(Number);
-  } catch { /* older macOS: use vm_stat below */ }
+  } catch { /* fail-open-ok: older macOS: use vm_stat below */ }
   if (Number.isFinite(level) && level >= 0 && level <= 100) return { availableBytes: totalmem() * level / 100, critical: pressure === 4 };
   try {
     const { stdout } = await execFileAsync('vm_stat', [], { encoding: 'utf8', timeout: 5_000 });

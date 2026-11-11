@@ -726,7 +726,7 @@ export async function approvedFile(ctx: ToolContext | undefined, name: string | 
   for (const profile of await listProfiles(ctx.stateDir)) {
     const value = profile.custom?.[name]?.value;
     if (value) {
-      try { if ((await fs.stat(value)).isFile()) return value; } catch { /* reported below */ }
+      try { if ((await fs.stat(value)).isFile()) return value; } catch { /* fail-open-ok: reported below */ }
       throw new Error(`The file saved as ${name} is not on this computer: ${path.basename(value)}.`);
     }
   }

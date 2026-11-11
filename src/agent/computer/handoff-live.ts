@@ -353,7 +353,7 @@ export class LiveView {
       const result = await this.cdp!.send('Runtime.evaluate', { expression: READ_VIEW, returnByValue: true }) as { result?: { value?: PageView } };
       const value = result.result?.value;
       if (value && Number.isFinite(value.scale) && Number.isFinite(value.x) && Number.isFinite(value.y)) return value;
-    } catch { /* the page is changing: the last good view is the best there is */ }
+    } catch { /* fail-open-ok: the page is changing: the last good view is the best there is */ }
     return this.lastView;
   }
 
@@ -426,7 +426,7 @@ export class LiveView {
       if (text === this.lastFields) return;
       this.lastFields = text;
       this.send({ t: 'fields', f: fields });
-    } catch { /* the page is changing */ }
+    } catch { /* fail-open-ok: the page is changing */ }
   }
 
   /** The fields inside frames (a sign-in box or a CAPTCHA's answer line, often from another site), placed on the phone's screen like the page's own.
@@ -445,7 +445,7 @@ export class LiveView {
         const list = JSON.parse(await frame.evaluate(FIELDS_SCRIPT) as string) as Array<{ i: number; x: number; y: number; w: number; h: number; d: Record<string, unknown> }>;
         const n = known.push(frame) - 1;
         for (const field of list) out.push({ ...field, i: n * FRAME_IDS + field.i, x: Math.round((box.x + field.x - view.x) * view.scale * 10) / 10, y: Math.round((box.y + field.y - view.y) * view.scale * 10) / 10, w: Math.round(field.w * view.scale * 10) / 10, h: Math.round(field.h * view.scale * 10) / 10, d: { ...field.d, idx: n * FRAME_IDS + field.i } });
-      } catch { /* a frame that went away or is not ready */ }
+      } catch { /* fail-open-ok: a frame that went away or is not ready */ }
     }
     this.frames = known;
     return out;

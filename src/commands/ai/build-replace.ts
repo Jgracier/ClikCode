@@ -9,6 +9,7 @@ import { historyDump, REEXEC_TERMINAL_ENV, reexecHandover } from '../../tui/rest
 import { popReadModes } from '../../tui/modes.js';
 import { REEXEC_DRAFT_ENV, REEXEC_TYPED_ENV } from '../../session/ephemeral.js';
 import type { HarnessSession } from '../../session/model.js';
+import { swallowed } from '../../runtime/lifecycle-log.js';
 
 /** argv after the node binary: this CLI, and the chat to reopen. */
 export function relaunchArgv(entry: string, sessionId?: string): string[] {
@@ -50,7 +51,7 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
   // Inherited by the exec'd and the spawned process alike.
   if (input.draft && input.draft.id === sessionId) process.env[REEXEC_DRAFT_ENV] = JSON.stringify(input.draft);
   replacing = (async () => {
-    try { await input.release(); } catch { /* the new process is the point */ }
+    try { await input.release(); } catch (error) { /* the new process is the point */ swallowed('commands/ai/build-replace', error); }
     // Released now, so there is no going back. Locks release() took end on
     // their own: every lock wait is bounded (locks.ts).
     // Asked as late as the awaits allow: release() takes a while, and the keys typed meanwhile went into a composer that is about to go.
@@ -72,11 +73,11 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
       try {
         process.execve(process.execPath, [process.execPath, ...relaunchArgv(entry, sessionId)],
           { ...process.env, [REEXEC_TERMINAL_ENV]: reexecHandover() });
-      } catch { /* The existing child path restores the terminal on failure. */ }
+      } catch (error) { /* The existing child path restores the terminal on failure. */ swallowed('commands/ai/build-replace', error); }
     }
     // The copy started below writes the whole conversation when it ends; this one writes none, or it would be there twice.
     historyDump.suppressed = true;
-    try { input.closeUi(); } catch { /* the terminal is still handed over */ }
+    try { input.closeUi(); } catch (error) { /* the terminal is still handed over */ swallowed('commands/ai/build-replace', error); }
     // Nothing may await between this and the spawnSync.
     await fileLocksIdle();
     handOverTyped();

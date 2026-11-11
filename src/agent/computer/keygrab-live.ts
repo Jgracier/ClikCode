@@ -85,7 +85,7 @@ export async function lookAt(page: Page): Promise<KeyView> {
       for (const f of inside.fields) if (!fields.includes(f)) fields.push(f);
       if (inside.hasPassword) hasPassword = true;
       if (inside.text.trim()) text = `${text}\n${inside.text}`.slice(0, 8000);
-    } catch { /* a frame that went away or cannot be read is skipped */ }
+    } catch { /* fail-open-ok: a frame that went away or cannot be read is skipped */ }
   }
   return { url: page.url(), text, controls, fields, hasPassword, ...(seen.captchaFrame ? { captchaFrame: true } : {}) };
 }

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFile } from '../../session/store/files.js';
+import { swallowed } from '../../runtime/lifecycle-log.js';
 
 export function computerSettingsPath(stateDir: string): string {
   return path.join(stateDir, 'computer', 'settings.json');
@@ -23,7 +24,7 @@ async function writeSettings(stateDir: string, change: Record<string, boolean>):
   const file = computerSettingsPath(stateDir);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   let current: Record<string, unknown> = {};
-  try { current = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>; } catch { /* none yet */ }
+  try { current = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>; } catch (error) { /* none yet */ swallowed('agent/computer/settings', error); }
   await atomicWriteFile(file, `${JSON.stringify({ ...current, ...change })}\n`);
 }
 

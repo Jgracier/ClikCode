@@ -3,7 +3,7 @@
  *    was tried and what recorder journal to carry on with, so `clikcode connectors resume <id>` reattaches and goes on;
  *  - the back-off: after a captcha shows on a vendor the runner does not try that vendor again for six hours.
  * Nothing here holds a secret: addresses without queries, control names, short trails. */
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { JournalData } from './recipe-recorder.js';
@@ -36,7 +36,7 @@ export async function listParked(stateDir: string): Promise<ParkedRecord[]> {
   const names = await fs.readdir(dir(stateDir)).catch(() => [] as string[]);
   const out: ParkedRecord[] = [];
   for (const name of names) {
-    try { out.push(JSON.parse(await fs.readFile(path.join(dir(stateDir), name), 'utf8')) as ParkedRecord); } catch { /* skip a damaged record */ }
+    try { out.push(JSON.parse(await fs.readFile(path.join(dir(stateDir), name), 'utf8')) as ParkedRecord); } catch (error) { /* skip a damaged record */ swallowed('agent/computer/keygrab-park', error); }
   }
   return out.sort((a, b) => a.parkedAt.localeCompare(b.parkedAt));
 }

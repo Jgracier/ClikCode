@@ -29,7 +29,7 @@ interface CatalogShape extends CustomAcpCatalog {
  * the bundled CLI sits beside `harness-catalog.cjs`. */
 function catalogBundle(): CatalogShape {
   const require = createRequire(import.meta.url);
-  try { return require('../../dist/harness-catalog.cjs') as CatalogShape; } catch { /* bundled */ }
+  try { return require('../../dist/harness-catalog.cjs') as CatalogShape; } catch { /* fail-open-ok: bundled */ }
   return require('./harness-catalog.cjs') as CatalogShape;
 }
 
@@ -164,7 +164,7 @@ export function reloadCustomAcpHarnesses(catalog: CustomAcpCatalog): void {
   try { records = parseCustomAcpConfig(text); } catch { return; }
   const definitions: AiLocalHarnessDefinition[] = [];
   for (const record of records) {
-    try { definitions.push(catalog.customAcpHarness(record) as AiLocalHarnessDefinition); } catch { /* a row the add command would have refused */ }
+    try { definitions.push(catalog.customAcpHarness(record) as AiLocalHarnessDefinition); } catch { /* fail-open-ok: a row the add command would have refused */ }
   }
   catalog.registerCustomHarnesses(definitions);
   loadedSignature = signature;

@@ -564,7 +564,7 @@ export async function auggieUsageReading(environment: Environment): Promise<Usag
   const label = auggieUsageLabel(raw);
   if (label === undefined) return undefined;
   let plan: unknown;
-  try { plan = (JSON.parse(raw) as Json).planName; } catch { /* the label already parsed it */ }
+  try { plan = (JSON.parse(raw) as Json).planName; } catch { /* fail-open-ok: the label already parsed it */ }
   return { windows: [], label, ...(typeof plan === 'string' && plan ? { plan: { name: plan } } : {}) };
 }
 

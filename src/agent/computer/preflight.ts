@@ -55,7 +55,7 @@ export function classifyGoogleSignIn(url: string, controls: { emailBox: boolean 
 /** Gmail's inbox view, not a sign-in page. */
 export function classifyGmail(url: string, rendered: boolean): { readable: boolean; reason?: string } {
   let host = '';
-  try { host = new URL(url).hostname; } catch { /* no address */ }
+  try { host = new URL(url).hostname; } catch { /* fail-open-ok: no address */ }
   if (host === 'accounts.google.com') return { readable: false, reason: 'Gmail sent the browser to Google sign-in' };
   if (host !== 'mail.google.com') return { readable: false, reason: `Gmail did not open (the browser is on ${host || 'a blank page'})` };
   return rendered ? { readable: true } : { readable: false, reason: 'Gmail opened but its inbox did not render in time' };

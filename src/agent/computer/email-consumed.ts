@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { withFileLock } from '../../session/store/locks.js';
+import { swallowed } from '../../runtime/lifecycle-log.js';
 
 const KEEP_MS = 24 * 3_600_000;
 const file = (stateDir: string): string => path.join(stateDir, 'computer', 'email-consumed.json');
@@ -13,7 +14,7 @@ const locked = <T>(stateDir: string, work: () => Promise<T>): Promise<T> => with
 export async function claimMessage(stateDir: string, id: string): Promise<boolean> {
   return locked(stateDir, async () => {
     let record: Record<string, number> = {};
-    try { record = JSON.parse(await fs.readFile(file(stateDir), 'utf8')) as Record<string, number>; } catch { /* none yet */ }
+    try { record = JSON.parse(await fs.readFile(file(stateDir), 'utf8')) as Record<string, number>; } catch (error) { /* none yet */ swallowed('agent/computer/email-consumed', error); }
     const now = Date.now();
     for (const [key, at] of Object.entries(record)) if (now - at > KEEP_MS) delete record[key];
     if (record[id]) return false;

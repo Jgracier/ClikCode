@@ -178,7 +178,7 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
         const kind: StopInfo['kind'] = blocker === 'a captcha' ? 'captcha' : blocker === 'an SMS or authenticator code' ? 'mfa' : blocker === 'a payment page' ? 'payment' : 'unknown';
         const screenshot = await shoot(page, id, shotDir);
         let pageUrl = '';
-        try { pageUrl = page ? new URL(page.url()).origin + new URL(page.url()).pathname : ''; } catch { /* none */ }
+        try { pageUrl = page ? new URL(page.url()).origin + new URL(page.url()).pathname : ''; } catch { /* fail-open-ok: none */ }
         return { ok: false, stop: { kind, message: scrubSecrets(message).slice(0, 300), url: pageUrl, pageText: pageExcerpt(seen.text), controls: seen.controls, ...(screenshot ? { screenshot } : {}) } };
       };
       try {

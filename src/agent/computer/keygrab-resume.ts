@@ -46,7 +46,7 @@ export async function resumeKeygrab(options: ResumeOptions): Promise<ResumeResul
     const { exportJournal } = await import('./recipe-recorder.js');
     const { saveParked } = await import('./keygrab-park.js');
     const trail = [...record.trail, ...(pressed ? [pressed] : [])].slice(-40);
-    let url = seen.url; try { const u = new URL(seen.url); url = `${u.origin}${u.pathname}`; } catch { /* keep as is */ }
+    let url = seen.url; try { const u = new URL(seen.url); url = `${u.origin}${u.pathname}`; } catch { /* fail-open-ok: keep as is */ }
     const journal = exportJournal(`${options.stateDir}#connectors`);
     const next: ParkedRecord = { ...record, parkedAt: new Date().toISOString(), url, trail, controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 40), ...(journal ? { journal } : {}) };
     await browser.parkComputerPage(options.stateDir, 'connectors', markerFor(options.id));

@@ -66,7 +66,7 @@ export async function resolveBinaryPath(
       try {
         await access(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK);
         return candidate;
-      } catch { /* try next candidate */ }
+      } catch { /* fail-open-ok: try next candidate */ }
     }
   }
   return undefined;
