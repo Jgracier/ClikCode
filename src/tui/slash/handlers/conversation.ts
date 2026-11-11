@@ -22,7 +22,7 @@ import { conversationIdFor } from '../../../session/conversation-rows.js';
 import { slashControls, slashHelpText, terminalKeysHelp, type SlashHandlerKey } from '../registry.js';
 import { sessionTranscriptMessages } from '../../../turn/checkpoint.js';
 import { textTranscript } from '../../../turn/turn-activities.js';
-import { newConversationSession } from '../../../commands/ai/conversations.js';
+import { newConversation } from '../../../commands/ai/conversations.js';
 import { aiSessionClose, aiSessionLeave } from '../../../commands/ai/sessions.js';
 import { capabilitiesText } from '../capabilities-text.js';
 import { compactConversation } from '../compact.js';
@@ -64,12 +64,14 @@ export const conversationHandlers = {
     // A fresh conversation gives the same clean slate and keeps the previous
     // one resumable. Text after the command is the new conversation's first
     // turn, sent ON the new session -- it used to be dropped, leaving an orphan.
-    const created = newConversationSession(state, session);
-    state.sessions.push(created);
-    await writeState(state);
-    if (!args) emitHarnessOutput({ panel: 'conversation-reset', session: created });
-    else await sendSessionTurn(created.id, args);
-    return created.id;
+    // The same new chat every other way of starting one makes: the provider, harness, settings and the model this chat runs.
+    const id = await newConversation(session.id, { sameModel: true, lastSeen: session });
+    if (args) await sendSessionTurn(id, args);
+    else {
+      const created = (await readState({ transcripts: [] })).sessions.find((item) => item.id === id);
+      if (created) emitHarnessOutput({ panel: 'conversation-reset', session: created });
+    }
+    return id;
   },
   history: async ({ session }) => emitHarnessOutput({ panel: 'history', messages: textTranscript(sessionTranscriptMessages(session)) }),
   hindsight: async ({ session }) => {
