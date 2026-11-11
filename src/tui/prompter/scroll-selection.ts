@@ -5,6 +5,7 @@ import { copyToClipboard } from '../../session/attachments.js';
 import { logCursorEvent } from '../cursor-log.js';
 import { inKeyBatch, onKeyBatchEnd } from '../input-decoder.js';
 import { isMouseEvent, mouseWanted, wheelScrollRows } from '../modes.js';
+import { inlineHistoryMode } from '../inline.js';
 import { userError } from '../../harness/protocol/errors.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { followEnd, jumpForScroll, scrollReach } from './history-window.js';
@@ -15,6 +16,8 @@ import { SCROLL_DRAIN_MIN, SCROLL_DRAIN_MS, SELECTION_SCROLL_MS } from './state.
  * by itself once the reader lets go. Returns whether anything moved, so a
  * key that cannot scroll any further still means something to the caller. */
 export function scrollTranscript(this: TerminalHarnessPrompter, rows: number): boolean {
+  // Inline, the conversation is the terminal's own scrollback, scrolled by the terminal: there is no view here to move.
+  if (inlineHistoryMode()) return false;
   // Bounded by what the CURRENT screen can show -- see flushAlternateFrame.
   // Bounding it by the transcript's length instead let the offset run past
   // the end of what any frame would draw, and the rows a reader then had to

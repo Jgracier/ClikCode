@@ -44,7 +44,7 @@ import { showTransientNotice, clearTransientNotice, panel, panelKey } from './pr
 import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, openQuestionCall, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn, joinMark, joinThought, settleDecision, ofThisTurn, settleSavedStops } from './prompter/activity-state.js';
 import { editTurnDraft, echoDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, adoptSubmission, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
-import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, flushPaint, paintWaiting, waitingPalette, paintCurrent, redrawScreen, repairScreen } from './prompter/waiting-band.js';
+import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, flushPaint, paintWaiting, waitingPalette, paintCurrent, redrawScreen, repairNext, repairScreen } from './prompter/waiting-band.js';
 import { Composer } from './prompter/composer.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
 import { SwipeArrowGate } from './swipe-arrows.js';
@@ -795,6 +795,7 @@ const methods = {
   paintWaiting,
   paintCurrent,
   redrawScreen,
+  repairNext,
   repairScreen,
   renderFrame,
   flushFrame,
