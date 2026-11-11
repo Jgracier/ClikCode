@@ -70,6 +70,12 @@ export class IdePrompter implements HarnessPrompter {
     let card: { url?: string; code?: string; ask?: { prompt: string; secret?: boolean } } = {};
     const sendCard = (): void => this.channel.send({ type: 'sign-in-link', id, name, ...card });
     sendCard();
+    const stop = (): void => {
+      this.signInAnswers.delete(id);
+      if (!this.signIns.delete(id)) return;
+      this.channel.send({ type: 'sign-in-link', id, name, done: true });
+      this.channel.send({ type: 'busy' });
+    };
     return {
       signal: controller.signal,
       show: (link) => { card = { ...card, url: link.url, ...(link.code ? { code: link.code } : {}) }; sendCard(); },
@@ -96,12 +102,9 @@ export class IdePrompter implements HarnessPrompter {
         return '';
       },
       choose: (title, choices) => this.select(title, choices.map((choice, index) => ({ label: choice, value: index }))),
-      stop: () => {
-        this.signInAnswers.delete(id);
-        if (!this.signIns.delete(id)) return;
-        this.channel.send({ type: 'sign-in-link', id, name, done: true });
-        this.channel.send({ type: 'busy' });
-      },
+      stop,
+      // Taken down at once (the card goes), the vendor's login stopped by the abort.
+      withdraw: () => { controller.abort(); stop(); },
     };
   }
 

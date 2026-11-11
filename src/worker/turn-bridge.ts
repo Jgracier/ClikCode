@@ -381,7 +381,7 @@ async function driveWorkerTurn(
       /** Approvals and questions this window has open, closed by `request-closed`. */
       const openPrompts = new Map<string, AbortController>();
       /** Sign-ins this window runs for the worker. */
-      const signIns = new WindowSignIns((response) => client.send(response));
+      const signIns = new WindowSignIns();
       const onEvent = (event: WorkerEvent): void => {
         if (settled) return;
         switch (event.type) {
@@ -463,7 +463,7 @@ async function driveWorkerTurn(
           case 'sign-in-request':
             // The worker has no terminal; this window does. The vendor's own
             // sign-in runs here, and the worker retries the turn after.
-            signIns.run(event, rl);
+            signIns.run(event, rl, (response) => client.send(response));
             return;
           case 'restore-draft':
             rl.restoreDraft(event.text);
