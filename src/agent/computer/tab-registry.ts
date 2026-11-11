@@ -11,7 +11,7 @@
  * logged. A Chrome tab nobody recorded (opened before this existed) is treated as idle from the moment it was first seen. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { pidIsAlive } from '../../session/store/locks.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 
@@ -72,7 +72,7 @@ export async function readTabRecords(stateDir: string): Promise<TabRecord[]> {
     try {
       const record = JSON.parse(await fs.readFile(path.join(tabsDirectory(stateDir), name), 'utf8')) as TabRecord;
       if (typeof record.id === 'string' && Number.isFinite(record.lastUsedAt) && Number.isFinite(record.openedAt)) records.push(record);
-    } catch { /* being rewritten, or damaged: the next sweep sees it whole */ }
+    } catch (error) { /* being rewritten, or damaged: the next sweep sees it whole */ swallowed('agent/computer/tab-registry', error); }
   }
   return records;
 }
@@ -167,7 +167,7 @@ export async function allTabs(stateDir: string, deps: Pick<SweepDeps, 'now' | 'l
 
 function logName(view: TabRecord): { tab: string; owner: string; url: string } {
   let url = view.url ?? '';
-  try { const parsed = new URL(url); url = `${parsed.origin}${parsed.pathname}`; } catch { /* about:blank */ }
+  try { const parsed = new URL(url); url = `${parsed.origin}${parsed.pathname}`; } catch { /* fail-open-ok: about:blank */ }
   return { tab: view.tab ?? '(default)', owner: view.owner, url: url.slice(0, 120) };
 }
 

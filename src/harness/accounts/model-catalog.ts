@@ -2,7 +2,7 @@
  * itself -- its CLI, its config, or its own bundled table -- and cached only
  * for as long as what it was derived from stays the same. */
 
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
@@ -366,8 +366,9 @@ async function syncAccountModels(accountId: string, models: readonly string[]): 
     if (next.length === account.models.length && next.every((model, index) => model === account.models[index])) return;
     account.models = next;
     await writeState(state);
-  } catch {
+  } catch (error) {
     // Non-critical background sync
+    swallowed('harness/accounts/model-catalog', error);
   }
 }
 
@@ -520,7 +521,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
     try {
       const config = await readFile(join(profileRoot, 'config.toml'), 'utf8');
       d.configured = /^\s*model\s*=\s*["']([^"']+)["']/m.exec(config)?.[1]?.trim();
-    } catch { /* Codex will choose its own default when no config exists. */ }
+    } catch (error) { /* Codex will choose its own default when no config exists. */ swallowed('harness/accounts/model-catalog', error); }
     if (liveListed?.models.length) {
       // The running app-server's own `model/list`: the cache file is only the fallback below.
       liveListed.models.forEach((model) => d.models.add(model));
@@ -531,7 +532,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
         for (const model of cache.models ?? []) {
           if (typeof model.slug === 'string' && model.slug.trim() && model.visibility !== 'hide') d.models.add(model.slug.trim());
         }
-      } catch { /* The cache is optional and vendor-owned. */ }
+      } catch (error) { /* The cache is optional and vendor-owned. */ swallowed('harness/accounts/model-catalog', error); }
     }
   },
   'claude-table': async ({ harness, profileRoot, state: d }) => {
@@ -539,7 +540,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
     try {
       const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown };
       if (typeof settings.model === 'string' && settings.model.trim()) d.configured = settings.model.trim();
-    } catch { /* Claude will choose its own default when no setting exists. */ }
+    } catch (error) { /* Claude will choose its own default when no setting exists. */ swallowed('harness/accounts/model-catalog', error); }
     // The aliases and their names come from the installed Claude Code's own
     // table. If it cannot be read, the aliases alone are still right --
     // Claude Code resolves them to its latest per family itself -- and they
@@ -568,7 +569,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
     } else if (profileRoot) {
       try {
         for (const model of hermesCachedModels(await readFile(join(profileRoot, 'provider_models_cache.json'), 'utf8'))) d.models.add(model);
-      } catch { /* The cache is optional and only holds providers that have been fetched. */ }
+      } catch (error) { /* The cache is optional and only holds providers that have been fetched. */ swallowed('harness/accounts/model-catalog', error); }
     }
     try {
       if (!d.configured) {
@@ -577,7 +578,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
         const provider = typeof parsed.provider === 'string' ? parsed.provider.trim() : '';
         if (model) d.configured = provider ? `${provider}:${model}` : model;
       }
-    } catch { /* Keep account models. A missing config is not an empty catalog. */ }
+    } catch (error) { /* Keep account models. A missing config is not an empty catalog. */ swallowed('harness/accounts/model-catalog', error); }
   },
   'openclaw-inventory': async ({ harness, account, state: d }) => {
     const inventory = await discoverOpenClawModels(harness, account).catch(quiet('harness/accounts/model-catalog'));
@@ -698,7 +699,7 @@ async function nativeModelCatalogUncached(
       // A vendor whose list is not plain ids declares how to read it.
       if (harness.modelListFormat) await PRINTED_MODEL_LIST[harness.modelListFormat](context, printed);
       else addDiscoveredModels(printed);
-    } catch { /* Keep configured/account models and the custom-ID option available. */ }
+    } catch (error) { /* Keep configured/account models and the custom-ID option available. */ swallowed('harness/accounts/model-catalog', error); }
   }
   if (d.configured) models.add(d.configured);
   return {

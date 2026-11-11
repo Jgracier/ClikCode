@@ -75,9 +75,9 @@ async function reclaimOrphanChrome(stateDir: string): Promise<boolean> {
   try { pid = Number((await fs.readlink(path.join(profile, 'SingletonLock'))).match(/-(\d+)$/)?.[1]); } catch { return true; }
   if (!pid || !(await chromeIsOrphan(pid))) return false;
   lifecycle('browser.chrome.orphan_reclaimed', { pid });
-  try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+  try { process.kill(pid, 'SIGTERM'); } catch { /* fail-open-ok: already gone */ }
   for (let wait = 0; wait < 20 && pidIsAlive(pid); wait++) await sleep(250);
-  try { process.kill(pid, 'SIGKILL'); } catch { /* exited on SIGTERM */ }
+  try { process.kill(pid, 'SIGKILL'); } catch { /* fail-open-ok: exited on SIGTERM */ }
   await Promise.all(['SingletonLock', 'SingletonSocket', 'SingletonCookie'].map(name => fs.unlink(path.join(profile, name)).catch(quiet('agent/computer/browser'))));
   return true;
 }
@@ -360,7 +360,7 @@ export async function frontComputerPage(stateDir: string): Promise<Page> {
   const open = context.pages().filter(page => !page.isClosed());
   for (const page of open.reverse()) {
     try { if (await page.evaluate(() => (globalThis as unknown as { document: { visibilityState: string } }).document.visibilityState === 'visible')) return page; }
-    catch { /* a browser-internal tab cannot be inspected */ }
+    catch { /* fail-open-ok: a browser-internal tab cannot be inspected */ }
   }
   const page = open[0];
   if (!page) throw new Error('ClikCode browser has no open tab.');
@@ -464,7 +464,7 @@ export async function closeComputerBrowser(stateDir: string): Promise<void> {
       // Return once it has really exited: a caller that removes the profile next would race its last writes.
       for (let waited = 0; waited < 5_000 && pidIsAlive(record.pid!); waited += 100) await sleep(100);
     }
-  } catch { /* no ClikCode-owned browser */ }
+  } catch { /* fail-open-ok: no ClikCode-owned browser */ }
 }
 
 /** A tab for one check, not owned by any chat: the caller closes it. Starts the shared Chrome when it is not running. */

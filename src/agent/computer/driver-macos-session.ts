@@ -69,5 +69,5 @@ export async function ensureDesktopDriverService(binary: string, platform: NodeJ
       await run('launchctl', ['bootstrap', domain, plist]);
     }
     for (let waited = 0; waited < 8_000 && !existsSync(daemonSocket()); waited += 250) await sleep(250);
-  } catch { /* cua falls back to starting its own daemon */ }
+  } catch { /* fail-open-ok: cua falls back to starting its own daemon */ }
 }

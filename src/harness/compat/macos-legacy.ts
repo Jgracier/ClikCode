@@ -144,7 +144,7 @@ function findOnPath(name: string, path = process.env.PATH ?? ''): string | undef
   for (const directory of path.split(delimiter)) {
     if (!directory) continue;
     const candidate = join(directory, name);
-    try { accessSync(candidate, constants.X_OK); return realpathSync(candidate); } catch { /* not here, or not runnable */ }
+    try { accessSync(candidate, constants.X_OK); return realpathSync(candidate); } catch { /* fail-open-ok: not here, or not runnable */ }
   }
   return undefined;
 }

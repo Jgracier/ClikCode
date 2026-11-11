@@ -3,7 +3,7 @@
  * withSignInScreen -- the CLI's, the VS Code panel's -- or, with none, plain
  * stdin/stdout (`clikcode accounts login` from a shell). */
 
-import { lifecycle, quiet } from '../../../runtime/lifecycle-log.js';
+import { lifecycle, quiet, swallowed } from '../../../runtime/lifecycle-log.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createInterface } from 'node:readline/promises';
 import { runVendorSignIn, SEARCH_CHOICE, type SignInScreen, type SignInUi } from '../../../gateway/login/vendor-sign-in.js';
@@ -240,7 +240,7 @@ async function storeKey(
   if (harness.apiKeySettings) {
     const path = expandAuthPath(harness.apiKeySettings.path, env);
     let settings: Record<string, unknown> = {};
-    try { settings = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; } catch { /* none yet */ }
+    try { settings = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; } catch (error) { /* none yet */ swallowed('harness/transport/native/login', error); }
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, `${JSON.stringify({ ...settings, ...harness.apiKeySettings.set }, null, 2)}\n`, 'utf8');
   }

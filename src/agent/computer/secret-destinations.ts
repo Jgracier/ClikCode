@@ -9,7 +9,7 @@
  * user adds their own with one line (`clikcode computer destination add`), kept in
  * `computer/destinations.json`. The agent cannot add or change one, so what can ever
  * run is decided by the user, not by a page the agent happens to be reading. */
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runCli } from './run-cli.js';
@@ -122,7 +122,7 @@ const destinationsFile = (stateDir: string): string => path.join(stateDir, 'comp
 
 export async function loadDestinations(stateDir: string): Promise<Record<string, Template>> {
   let own: Record<string, Template> = {};
-  try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch { /* none added yet */ }
+  try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch (error) { /* none added yet */ swallowed('agent/computer/secret-destinations', error); }
   // A saved destination that connects a key through connect_connector is read back from ClikDeploy like the built-in ones: an older
   // saved copy of a built-in (written before `verify` existed) or a hand-made one must not fall through to a bare "delivered".
   const merged: Record<string, Template> = { ...DEFAULT_DESTINATIONS, ...own };
@@ -145,7 +145,7 @@ export async function addDestination(stateDir: string, name: string, template: T
   if (!template.run.length || !template.run[0]) throw new Error('A destination needs a command to run.');
   if (!carriesSecret(template)) throw new Error('A destination needs {{secret}} in its command (or its stdin), or the key is never sent.');
   let own: Record<string, Template> = {};
-  try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch { /* first one */ }
+  try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch (error) { /* first one */ swallowed('agent/computer/secret-destinations', error); }
   own[name] = template;
   await fs.mkdir(path.dirname(destinationsFile(stateDir)), { recursive: true, mode: 0o700 });
   await fs.writeFile(destinationsFile(stateDir), `${JSON.stringify(own, null, 2)}\n`, { mode: 0o600 });
@@ -277,7 +277,7 @@ const say = (text: string): string => {
       const inner = typeof parsed.data?.error === 'object' ? parsed.data.error.message : parsed.data?.error;
       const line = [parsed.message ?? failure ?? parsed.data?.message ?? inner, parsed.data?.appliedToWebProcess !== undefined ? `appliedToWebProcess=${parsed.data.appliedToWebProcess}` : '', parsed.data?.reloadReason].filter(Boolean).join(' · ');
       return line; // valid JSON that says nothing: nothing, not the last lines of the object (`} } }`)
-    } catch { /* not JSON: use the last lines */ }
+    } catch { /* fail-open-ok: not JSON: use the last lines */ }
   }
   return text.trim().split('\n').slice(-3).join(' ').slice(0, 300);
 };
@@ -286,10 +286,10 @@ const say = (text: string): string => {
 export function firstJsonObject<T>(text: string): T | undefined {
   for (let at = text.indexOf('{'); at >= 0; at = text.indexOf('{', at + 1)) {
     if (at > 0 && text[at - 1] !== '\n') continue; // a real object starts a line; braces inside a sentence do not
-    try { const value = JSON.parse(text.slice(at)) as unknown; if (value && typeof value === 'object') return value as T; } catch { /* try the next line start */ }
+    try { const value = JSON.parse(text.slice(at)) as unknown; if (value && typeof value === 'object') return value as T; } catch { /* fail-open-ok: try the next line start */ }
     // Output followed by more text: take up to the last closing brace.
     const end = text.lastIndexOf('}');
-    if (end > at) { try { const value = JSON.parse(text.slice(at, end + 1)) as unknown; if (value && typeof value === 'object') return value as T; } catch { /* keep looking */ } }
+    if (end > at) { try { const value = JSON.parse(text.slice(at, end + 1)) as unknown; if (value && typeof value === 'object') return value as T; } catch { /* fail-open-ok: keep looking */ } }
   }
   return undefined;
 }

@@ -7,6 +7,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { swallowed } from '../runtime/lifecycle-log.js';
 
 interface CanonicalAuthRecord {
   apiUrl: string;
@@ -47,8 +48,9 @@ function readAuthFrom({ authJsonPath, apiKeyPath }: { authJsonPath: string; apiK
         };
       }
     }
-  } catch {
+  } catch (error) {
     // fall through to key file read
+    swallowed('gateway/local-auth', error);
   }
 
   try {
@@ -62,8 +64,9 @@ function readAuthFrom({ authJsonPath, apiKeyPath }: { authJsonPath: string; apiK
         };
       }
     }
-  } catch {
+  } catch (error) {
     // ignore
+    swallowed('gateway/local-auth', error);
   }
 
   return null;

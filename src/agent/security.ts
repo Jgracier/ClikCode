@@ -53,7 +53,7 @@ export function realpathNearest(absolute: string): string {
         const link = fs.readlinkSync(current);
         current = path.resolve(path.dirname(current), link);
         continue;
-      } catch { /* not a symlink */ }
+      } catch { /* fail-open-ok: not a symlink */ }
       const parent = path.dirname(current);
       if (parent === current) return tail.length ? path.join(current, ...tail.reverse()) : current;
       tail.push(path.basename(current));

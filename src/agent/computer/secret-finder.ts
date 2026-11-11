@@ -136,7 +136,7 @@ export async function armFinder(page: Page, existing = false): Promise<Finder> {
       const body = await response.text();
       if (body.length > 500_000) return;
       walk(JSON.parse(body), undefined, responses);
-    } catch { /* a redirect or aborted request has no body to read */ }
+    } catch { /* fail-open-ok: a redirect or aborted request has no body to read */ }
   };
   page.on('response', listen);
   return {

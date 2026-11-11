@@ -175,7 +175,7 @@ async function killTree(pid: number): Promise<void> {
   }
   try { process.kill(pid, 'SIGTERM'); } catch { return; }
   for (let waited = 0; waited < 10_000 && pidIsAlive(pid); waited += 250) await sleep(250);
-  if (pidIsAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already gone. */ } }
+  if (pidIsAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* fail-open-ok: Already gone. */ } }
 }
 
 /** Holds `lock` (a lease, locks.ts) while `work` runs, waiting for it while another holder has it. The lease is created with its
@@ -571,7 +571,7 @@ export async function stopServer(modelId: string): Promise<void> {
       // stopped first and the supervisor then finds it gone.
       await killTree(record.serverPid);
     }
-    try { process.kill(record.supervisorPid, 'SIGTERM'); } catch { /* Gone already. */ }
+    try { process.kill(record.supervisorPid, 'SIGTERM'); } catch { /* fail-open-ok: Gone already. */ }
     for (let waited = 0; waited < 15_000 && pidIsAlive(record.supervisorPid); waited += 250) await sleep(250);
   }
   await sweepOrphan(modelId);

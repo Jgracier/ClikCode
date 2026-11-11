@@ -235,7 +235,7 @@ function sandboxAvailable(binary: string): boolean {
 function realOrSame(dir: string): string {
   const missing: string[] = [];
   for (let at = dir; ; at = path.dirname(at)) {
-    try { return path.join(realpathSync.native(at), ...missing.reverse()); } catch { /* go up */ }
+    try { return path.join(realpathSync.native(at), ...missing.reverse()); } catch { /* fail-open-ok: go up */ }
     if (path.dirname(at) === at) return dir;
     missing.push(path.basename(at));
   }

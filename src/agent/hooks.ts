@@ -204,7 +204,7 @@ function runHookCommand(command: string, payload: unknown, cwd: string, timeoutS
     let stderr = '';
     const signalGroup = (name: NodeJS.Signals): void => {
       // The group outlives its shell when the shell exits first; signal it directly.
-      if (detached && child.pid) { try { process.kill(-child.pid, name); return; } catch { /* group already gone */ } }
+      if (detached && child.pid) { try { process.kill(-child.pid, name); return; } catch { /* fail-open-ok: group already gone */ } }
       killProcessTreePortable(child, name, detached);
     };
     const killGroup = (): void => {

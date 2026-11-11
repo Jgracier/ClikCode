@@ -221,7 +221,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
   const executeCall = async (call: ModelToolCall): Promise<ToolRunResult> => {
     const tool: ToolDefinition | undefined = tools.find((candidate) => candidate.name === currentToolName(call.name));
     let label = call.name;
-    if (tool) { try { label = tool.label(call.args); } catch { /* invalid args: fall back to the name */ } }
+    if (tool) { try { label = tool.label(call.args); } catch { /* fail-open-ok: invalid args: fall back to the name */ } }
     const category = categoryForTool(tool, call.args && typeof call.args === 'object' ? call.args as Record<string, unknown> : undefined);
     // Already on screen as it was written, under this label: not again.
     if (rt.shownCalls.get(call.id) !== label) input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...category });

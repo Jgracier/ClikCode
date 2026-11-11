@@ -150,7 +150,7 @@ export function httpJson(port: number, method: 'GET' | 'POST', path: string, bod
       res.on('data', (chunk: Buffer) => { text += chunk.toString(); });
       res.on('end', () => {
         let json: unknown;
-        try { json = JSON.parse(text); } catch { /* Not JSON. */ }
+        try { json = JSON.parse(text); } catch { /* fail-open-ok: Not JSON. */ }
         resolve({ status: res.statusCode ?? 0, json, text });
       });
     });

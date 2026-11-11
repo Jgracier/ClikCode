@@ -203,7 +203,7 @@ export async function waitForState(page: Page, step: StepExtras & { target?: str
     const wanted = step.url?.trim();
     const matches = (url: string): boolean => {
       if (!wanted) return url !== started;
-      if (wanted.length > 2 && wanted.startsWith('/') && wanted.endsWith('/')) { try { return new RegExp(wanted.slice(1, -1)).test(url); } catch { /* not a pattern: read as text */ } }
+      if (wanted.length > 2 && wanted.startsWith('/') && wanted.endsWith('/')) { try { return new RegExp(wanted.slice(1, -1)).test(url); } catch { /* fail-open-ok: not a pattern: read as text */ } }
       return url.includes(wanted);
     };
     while (Date.now() < deadline) {

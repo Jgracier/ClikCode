@@ -197,7 +197,7 @@ async function firstRequest(path: string): Promise<string | undefined> {
       const content = entry.message?.content;
       const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map((block) => (block as { type?: string; text?: string })?.type === 'text' ? String((block as { text?: string }).text) : '').join('\n') : '';
       if (text.trim() && !isInjectedRequest(text)) { found = requestKey(text); break; }
-    } catch { /* a line cut by the window edge */ }
+    } catch { /* fail-open-ok: a line cut by the window edge */ }
   }
   firstKeys.set(path, found);
   return found;

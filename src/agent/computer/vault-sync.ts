@@ -24,7 +24,7 @@ export async function syncVault(stateDir: string, transport: Transport): Promise
   let reply: VaultSnapshot | undefined, last = '';
   for (let attempt = 0; attempt < 2 && !reply; attempt++) {
     last = await transport(JSON.stringify(mine));
-    try { const parsed = JSON.parse(last) as VaultSnapshot; if (parsed?.v === 1 && Array.isArray(parsed.secrets)) reply = parsed; } catch { /* not JSON */ }
+    try { const parsed = JSON.parse(last) as VaultSnapshot; if (parsed?.v === 1 && Array.isArray(parsed.secrets)) reply = parsed; } catch { /* fail-open-ok: not JSON */ }
   }
   if (!reply) throw new Error(`The other computer answered with something that is not a vault: ${last.replace(/\s+/g, ' ').slice(0, 160)}`);
   const received = await mergeVault(stateDir, reply);

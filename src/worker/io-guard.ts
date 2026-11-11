@@ -3,7 +3,7 @@
  * victims too, so it must never be used as the reason to kill a process. */
 import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, swallowed } from '../runtime/lifecycle-log.js';
 import { safeRecordFileName, stateDirectory } from '../session/store/paths.js';
 import { COMMAND_GROUP } from './command-groups.js';
 
@@ -94,7 +94,7 @@ function isPhysicalDevice(device: string): boolean {
   const cached = physicalDevices.get(device);
   if (cached !== undefined) return cached;
   let physical = false;
-  try { physical = !realpathSync(join('/sys/dev/block', device)).includes('/virtual/'); } catch { /* missing device */ }
+  try { physical = !realpathSync(join('/sys/dev/block', device)).includes('/virtual/'); } catch { /* fail-open-ok: missing device */ }
   physicalDevices.set(device, physical);
   return physical;
 }
@@ -139,7 +139,7 @@ function readReading(scopeDir: string, labels: ReadonlyMap<string, string>, now:
         if (stalled === undefined) continue;
         const stat = statSync(path);
         commands.push({ path, label: labels.get(name) || name, identity: `${stat.dev}:${stat.ino}`, counters, stalled });
-      } catch { /* a command exited during the sweep */ }
+      } catch { /* fail-open-ok: a command exited during the sweep */ }
     }
     return { pressure, machine, commands, at: now };
   } catch { return undefined; }
@@ -178,7 +178,7 @@ function warningDue(sessionId: string, kind: 'global' | 'owned', at: number): bo
   const last = fileTime(path);
   const cooldown = kind === 'global' ? GLOBAL_WARN_COOLDOWN_MS : OWNED_WARN_COOLDOWN_MS;
   if (last > 0 && at >= last && at - last < cooldown) return false;
-  try { mkdirSync(join(stateDirectory(), 'io-guard-warnings'), { recursive: true, mode: 0o700 }); writeFileSync(path, String(at), { mode: 0o600 }); } catch { /* fail-open-ok */ }
+  try { mkdirSync(join(stateDirectory(), 'io-guard-warnings'), { recursive: true, mode: 0o700 }); writeFileSync(path, String(at), { mode: 0o600 }); } catch (error) { swallowed('worker/io-guard', error); }
   return true;
 }
 
@@ -198,18 +198,18 @@ export function startIoGuard(options: IoGuardOptions): () => void {
     if (pending && current.at - pending.at >= SETTLE_MS) {
       const improved = current.pressure < CLEAR_PRESSURE || current.pressure <= pending.pressure / 2;
       lifecycle('io.effect', { session: options.sessionId, before: pending.pressure, after: current.pressure, improved });
-      if (!improved) { try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(ineffectivePath(), String(current.at)); } catch { /* fail-open-ok */ } }
+      if (!improved) { try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(ineffectivePath(), String(current.at)); } catch (error) { swallowed('worker/io-guard', error); } }
       pending = undefined;
     }
     if (current.pressure < CLEAR_PRESSURE) {
       clearSince ??= current.at;
       if (current.at - clearSince >= REARM_AFTER_CLEAR_MS) {
         for (const kind of ['global', 'owned'] as const) {
-          try { rmSync(warningPath(options.sessionId, kind), { force: true }); } catch { /* fail-open-ok */ }
+          try { rmSync(warningPath(options.sessionId, kind), { force: true }); } catch (error) { swallowed('worker/io-guard', error); }
         }
       }
       highSince = undefined;
-      try { rmSync(ineffectivePath(), { force: true }); } catch { /* fail-open-ok */ }
+      try { rmSync(ineffectivePath(), { force: true }); } catch (error) { swallowed('worker/io-guard', error); }
     } else clearSince = undefined;
     if (current.pressure >= STOP_PRESSURE) highSince ??= current.at;
     else highSince = undefined;
@@ -241,7 +241,7 @@ export function startIoGuard(options: IoGuardOptions): () => void {
       if (!readFileSync(join(candidate.command.path, 'cgroup.procs'), 'utf8').trim()) return;
     } catch { return; }
     if (identity !== candidate.command.identity || !stop(candidate.command.path)) return;
-    try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(lastStopPath(), String(current.at)); } catch { /* fail-open-ok */ }
+    try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(lastStopPath(), String(current.at)); } catch (error) { swallowed('worker/io-guard', error); }
     pending = { pressure: current.pressure, at: current.at };
     lifecycle('io.stop', { session: options.sessionId, label: candidate.command.label, pressure: current.pressure, bytesPerSecond: candidate.bytesPerSecond, machineShare: candidate.machineShare });
     options.deliver(ioStopNote(candidate, current.pressure));

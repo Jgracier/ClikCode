@@ -27,7 +27,7 @@ function hookCopy(): void {
         const item = items[0] as { getType?(type: string): Promise<{ text(): Promise<string> }> } | undefined;
         const blob = await item?.getType?.('text/plain');
         if (blob) w.__clikcodeCopied = await blob.text();
-      } catch { /* the page's own copy still goes ahead */ }
+      } catch { /* fail-open-ok: the page's own copy still goes ahead */ }
       return originalWrite(items);
     };
   }
@@ -97,7 +97,7 @@ export async function listenForCopies(page: Page): Promise<void> {
     await page.addInitScript(hookCopy);
     await page.evaluate(hookCopy);
     await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; });
-  } catch { /* a page that is navigating cannot be hooked; the other ways still work */ }
+  } catch { /* fail-open-ok: a page that is navigating cannot be hooked; the other ways still work */ }
 }
 
 /** What the page copied since `listenForCopies`, if it looks like a key. */
@@ -108,7 +108,7 @@ export async function copiedSince(page: Page): Promise<string | undefined> {
 /** The system clipboard as this page sees it, when the browser lets it be read. A last resort behind the
  * page's own copy: it is trusted only when it CHANGED across the click, so something already there is never taken. */
 export async function readClipboard(page: Page): Promise<string | undefined> {
-  try { await page.context().grantPermissions(['clipboard-read', 'clipboard-write']); } catch { /* not grantable here */ }
+  try { await page.context().grantPermissions(['clipboard-read', 'clipboard-write']); } catch { /* fail-open-ok: not grantable here */ }
   return page.evaluate(async () => {
     try { return await (globalThis as unknown as { navigator: { clipboard: { readText(): Promise<string> } } }).navigator.clipboard.readText(); } catch { return undefined; }
   }).catch(quiet('agent/computer/clipboard-watch'));

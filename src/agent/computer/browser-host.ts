@@ -61,7 +61,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     process.off('SIGTERM', stop);
     process.off('SIGINT', stop);
   } finally {
-    try { if (await fs.readFile(hostFile, 'utf8') === record) await fs.unlink(hostFile); } catch { /* already gone */ }
+    try { if (await fs.readFile(hostFile, 'utf8') === record) await fs.unlink(hostFile); } catch { /* fail-open-ok: already gone */ }
     await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser-host'));
     await context.close().catch(quiet('agent/computer/browser-host'));
   }

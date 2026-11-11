@@ -18,6 +18,7 @@ import { resolveBinaryPath } from '../transport/native/binary.js';
 import { killProcessTreePortable, spawnPortable } from '../transport/spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from '../transport/jsonrpc-peer.js';
 import { authEvidencePresent, hasAuthEvidence } from './auth-files.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 type Environment = Readonly<Record<string, string>>;
 
@@ -108,7 +109,7 @@ export async function probeVendor<T>(
   });
   const failed = new Promise<undefined>((resolve) => { child.once('error', () => resolve(undefined)); });
   try {
-    return await Promise.race([use(child, controller.signal).catch(() => undefined), deadline, failed]);
+    return await Promise.race([use(child, controller.signal).catch(quiet('harness/accounts/vendor-probe')), deadline, failed]);
   } finally {
     if (timer) clearTimeout(timer);
     controller.abort();
@@ -121,7 +122,7 @@ function stop(child: ChildProcess, detached: boolean): void {
   killProcessTreePortable(child, 'SIGTERM', detached);
   const pid = child.pid;
   if (!detached || !pid) return;
-  const kill = setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } }, 2_000);
+  const kill = setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* fail-open-ok: gone */ } }, 2_000);
   kill.unref();
 }
 

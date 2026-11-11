@@ -178,7 +178,7 @@ export class LiveTurnInputBroker {
         let taken = false;
         try { taken = await this.offer(this.port, submission); } finally { this.delivering = undefined; }
         if (taken) {
-          try { await ledger.delivered(submission); this.delivered.add(id); return { disposition: 'steered' as const, submission }; } catch { /* the turn is finishing: queued below */ }
+          try { await ledger.delivered(submission); this.delivered.add(id); return { disposition: 'steered' as const, submission }; } catch { /* fail-open-ok: the turn is finishing: queued below */ }
         }
       }
       await ledger.queue(submission, options.steer);

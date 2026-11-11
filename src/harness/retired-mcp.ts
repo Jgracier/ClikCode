@@ -54,7 +54,7 @@ export function launchesRetired(spec: unknown): boolean {
 }
 
 function readJson(text: string): unknown {
-  try { return JSON.parse(text); } catch { /* maybe a comment or a trailing comma */ }
+  try { return JSON.parse(text); } catch { /* fail-open-ok: maybe a comment or a trailing comma */ }
   try { return JSON.parse(stripJsonc(text)); } catch { return undefined; }
 }
 

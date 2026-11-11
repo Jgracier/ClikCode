@@ -1,5 +1,5 @@
 /** Local encrypted login vault. Only opaque item ids cross the model boundary. */
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -15,7 +15,7 @@ function vaultDir(stateDir: string): string { return path.join(stateDir, 'comput
 function keyFile(stateDir: string): string { return path.join(vaultDir(stateDir), 'vault.key'); }
 function siteOrigin(url: string): string {
   try { const value = new URL(url); if (value.protocol === 'https:' && !value.username && !value.password) return value.origin; }
-  catch { /* invalid URL */ }
+  catch { /* fail-open-ok: invalid URL */ }
   throw new CredentialError('Private credentials require an HTTPS website.');
 }
 /** Cloud providers sign users in on a regional host (us-east-2.signin.aws.amazon.com).
@@ -296,7 +296,7 @@ export async function saveNamedSecret(stateDir: string, name: string, value: str
   const key = await vaultKey(stateDir, true);
   // A second save of the same name is a rotation: the first date stays, and what was given before stays unless given again.
   let before: { value?: string; meta?: SecretMeta } = {};
-  try { before = JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as typeof before; } catch { /* a new secret */ }
+  try { before = JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as typeof before; } catch { /* fail-open-ok: a new secret */ }
   // A secret saved before records existed was made when its file was.
   if (before.value !== undefined && !before.meta) { const made = await fs.stat(file).then(info => info.mtime.toISOString(), () => undefined); if (made) before.meta = { createdAt: made }; }
   const now = new Date().toISOString();
@@ -316,7 +316,7 @@ export async function namedSecretInfo(stateDir: string): Promise<{ name: string;
   const out: { name: string; meta?: SecretMeta }[] = [];
   for (const file of files) {
     try { const { name, meta } = JSON.parse(open(key, `secret:${file.replace(/\.json$/, '')}`, await fs.readFile(path.join(dir, file), 'utf8'))) as { name: string; meta?: SecretMeta }; out.push({ name, ...(meta ? { meta } : {}) }); }
-    catch { /* an unreadable file is skipped, never shown */ }
+    catch (error) { /* an unreadable file is skipped, never shown */ swallowed('agent/computer/credential-vault', error); }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -326,9 +326,9 @@ export async function readNamedSecret(stateDir: string, name: string): Promise<s
     const key = await vaultKey(stateDir, false);
     return (JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as { value: string }).value;
   };
-  try { return await read(name); } catch { /* not under that spelling: try the saved one */ }
+  try { return await read(name); } catch { /* fail-open-ok: not under that spelling: try the saved one */ }
   const saved = await savedNameFor(stateDir, name);
-  if (saved) { try { return await read(saved); } catch { /* fall through to the plain error */ } }
+  if (saved) { try { return await read(saved); } catch { /* fail-open-ok: fall through to the plain error */ } }
   const near = await nearNames(stateDir, name);
   throw new CredentialError(`No secret named "${name}" is saved.${near.length ? ` Saved for that vendor: ${near.join(', ')}.` : ''}`);
 }
@@ -340,7 +340,7 @@ export async function namedSecretNames(stateDir: string): Promise<string[]> {
   const names: string[] = [];
   for (const file of files) {
     try { names.push((JSON.parse(open(key, `secret:${file.replace(/\.json$/, '')}`, await fs.readFile(path.join(dir, file), 'utf8'))) as { name: string }).name); }
-    catch { /* an unreadable file is skipped, never shown */ }
+    catch (error) { /* an unreadable file is skipped, never shown */ swallowed('agent/computer/credential-vault', error); }
   }
   return names.sort();
 }
@@ -373,7 +373,7 @@ export async function readVaultRecords<T>(stateDir: string, folder: string): Pro
     const id = file.replace(/\.json$/, '');
     if (!/^[0-9a-f-]{36}$/i.test(id) || file !== `${id}.json`) continue;
     try { out.push({ id, value: JSON.parse(open(key, `${folder}:${id}`, await fs.readFile(path.join(dir, file), 'utf8'))) as T }); }
-    catch { /* an unreadable record is skipped, never shown */ }
+    catch (error) { /* an unreadable record is skipped, never shown */ swallowed('agent/computer/credential-vault', error); }
   }
   return out;
 }
@@ -460,7 +460,7 @@ export async function snapshotVault(stateDir: string): Promise<VaultSnapshot> {
   const dir = path.join(vaultDir(stateDir), 'secrets');
   for (const file of key ? await fs.readdir(dir).catch(() => [] as string[]) : []) {
     try { secrets.push(JSON.parse(open(key!, `secret:${file.replace(/\.json$/, '')}`, await fs.readFile(path.join(dir, file), 'utf8'))) as VaultSnapshot['secrets'][number]); }
-    catch { /* an unreadable file is left out of the backup, as it is out of every list */ }
+    catch (error) { /* an unreadable file is left out of the backup, as it is out of every list */ swallowed('agent/computer/credential-vault', error); }
   }
   const records: VaultSnapshot['records'] = [];
   for (const entry of await fs.readdir(vaultDir(stateDir), { withFileTypes: true }).catch(() => [])) {

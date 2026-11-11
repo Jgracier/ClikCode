@@ -110,7 +110,7 @@ export async function* walkFiles(root: string, options: WalkOptions = {}): Async
     throwIfAborted(options.signal);
     let rules = inherited;
     if (options.honorGitignore !== false) {
-      try { rules = [...inherited, ...parseGitignore(await fs.readFile(path.join(dir, '.gitignore'), 'utf8'), relativeDir)]; } catch { /* none */ }
+      try { rules = [...inherited, ...parseGitignore(await fs.readFile(path.join(dir, '.gitignore'), 'utf8'), relativeDir)]; } catch { /* fail-open-ok: none */ }
     }
     let entries;
     try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }

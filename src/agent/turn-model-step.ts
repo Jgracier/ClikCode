@@ -107,7 +107,7 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
           const tool = tools.find((candidate) => candidate.name === currentToolName(call.name));
           const args = completedArguments(call.arguments);
           let label = call.name;
-          if (tool) { try { label = tool.label(args); } catch { /* not enough of the arguments yet: the name */ } }
+          if (tool) { try { label = tool.label(args); } catch { /* fail-open-ok: not enough of the arguments yet: the name */ } }
           if (rt.shownCalls.get(call.id) === label) return;
           rt.shownCalls.set(call.id, label);
           input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...categoryForTool(tool, args) });
@@ -350,7 +350,7 @@ export async function waitForModelStart(input: {
   // Counted in whole seconds, not against the clock: the wait is exactly what was asked, whatever the clock does.
   for (let waited = 0, tick = 0; waited < input.waitS; tick += 1) {
     if (tick % 5 === 0 && input.poll) {
-      try { start = await input.poll(); polledAt = now(); } catch { /* keep the last reading */ }
+      try { start = await input.poll(); polledAt = now(); } catch { /* fail-open-ok: keep the last reading */ }
     }
     input.onPhase(startingModelPhase(now() - input.since, start, now() - polledAt));
     const slice = Math.min(1, input.waitS - waited);

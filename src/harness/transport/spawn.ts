@@ -35,7 +35,7 @@ export function terminatePortable(child: ChildProcess, signal: NodeJS.Signals = 
 export function killProcessTreePortable(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM', detached = false): void {
   if (child.exitCode !== null || child.signalCode !== null) return;
   if (detached && process.platform !== 'win32' && child.pid) {
-    try { process.kill(-child.pid, signal); return; } catch { /* fall back to the direct child */ }
+    try { process.kill(-child.pid, signal); return; } catch { /* fail-open-ok: fall back to the direct child */ }
   }
   terminatePortable(child, signal);
 }

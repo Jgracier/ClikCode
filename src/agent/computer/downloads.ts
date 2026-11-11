@@ -114,7 +114,7 @@ export async function listDownloads(stateDir: string, chat: string | undefined):
       const file = path.join(dir, name);
       const info = await fs.stat(file);
       if (info.isFile()) files.push({ name, path: file, size: info.size, modified: info.mtime.toISOString(), at: info.mtimeMs });
-    } catch { /* removed meanwhile */ }
+    } catch { /* fail-open-ok: removed meanwhile */ }
   }
   return files.sort((a, b) => b.at - a.at).map(({ at: _at, ...file }) => file);
 }

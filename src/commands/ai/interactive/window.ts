@@ -166,13 +166,13 @@ function createUsageRefresher(config: Conf, terminal: TerminalHarnessPrompter | 
       void gatewayCreditLabel(config, { fresh: afterTurn }).then((label) => {
         const status = gatewayConversationUsageLabel(conversationCost(targetState, target.id), label);
         if (TERMINAL.active === terminal) terminal.usage(status);
-      }).catch(() => { /* Usage is optional provider metadata. */ });
+      }).catch(quiet('commands/ai/interactive/window'));
       return;
     }
     void nativeUsageReading(target, targetState).then((reading) => {
       // A turn parked for the reset says so instead of when it comes back.
       if (TERMINAL.active === terminal) terminal.usage(reading?.label, target.resumeAt ? resumeWaitLabel(target.resumeAt) : usageResetLabel(reading?.windows));
-    }).catch(() => { /* Usage is optional provider metadata. */ });
+    }).catch(quiet('commands/ai/interactive/window'));
   };
 }
 
@@ -265,7 +265,7 @@ function startBuildWatch(
       // otherwise an account that ran out showed its last "0% left" until
       // someone happened to open the picker, and read as spent for hours.
       return recheckRecoveredAccounts(latestState);
-    }).catch(() => { /* Usage is optional provider metadata. */ });
+    }).catch(quiet('commands/ai/interactive/window'));
     // How soon the status line shows a turn another terminal ran on this
     // account, or a window that reset.
   }, 15_000) : undefined;

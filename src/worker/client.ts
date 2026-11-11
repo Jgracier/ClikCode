@@ -4,7 +4,7 @@
  * either way, which is the whole point: a reconnect is never a special case
  * (see reseedTranscript in tui/prompter.ts for what that used to cost).
  */
-import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet, swallowed } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { userManagerLaunch } from './own-scope.js';
@@ -58,12 +58,12 @@ function launchWorker(sessionId: string, extra: readonly string[], signal: (exit
   // Its stderr goes to a file of the conversation's, so a worker that dies at startup says why
   // (spawnSessionWorker reads it); it is removed once the worker is up.
   const startLog = workerStartLogPath(sessionId);
-  try { mkdirSync(workersDirectory(), { recursive: true, mode: 0o700 }); } catch { /* the spawn says what is wrong */ }
+  try { mkdirSync(workersDirectory(), { recursive: true, mode: 0o700 }); } catch (error) { /* the spawn says what is wrong */ swallowed('worker/client', error); }
   const direct = (): void => {
     if (started) return;
     started = true;
     let errorFd: number | 'ignore' = 'ignore';
-    try { errorFd = openSync(startLog, 'w', 0o600); } catch { /* no log: the cause is lost, not the start */ }
+    try { errorFd = openSync(startLog, 'w', 0o600); } catch (error) { /* no log: the cause is lost, not the start */ swallowed('worker/client', error); }
     // fd 3: the worker writes to it once it is listening (registry.ts announceWorkerReady).
     const child = spawn(process.execPath, argv, {
       // windowsHide: a detached child on Windows otherwise opens a console
@@ -73,7 +73,7 @@ function launchWorker(sessionId: string, extra: readonly string[], signal: (exit
     });
     if (typeof errorFd === 'number') closeSync(errorFd);
     // A process that could not even start has nothing to write: its error is the cause.
-    child.on('error', (error) => { try { appendFileSync(startLog, `${error.message}\n`); } catch { /* the log below says nothing then */ } signal(); });
+    child.on('error', (error) => { try { appendFileSync(startLog, `${error.message}\n`); } catch (error) { /* the log below says nothing then */ swallowed('worker/client', error); } signal(); });
     // Exited before it said it was ready: looked at now, not at the deadline.
     child.on('exit', (code) => signal(code ?? undefined));
     readiness = child.stdio[3] as Readable | undefined;
@@ -102,7 +102,7 @@ function readStartLog(sessionId: string): string {
   try { return readFileSync(workerStartLogPath(sessionId), 'utf8'); } catch { return ''; }
 }
 function removeStartLog(sessionId: string): void {
-  try { unlinkSync(workerStartLogPath(sessionId)); } catch { /* already gone */ }
+  try { unlinkSync(workerStartLogPath(sessionId)); } catch { /* fail-open-ok: already gone */ }
 }
 
 /** Starts a fresh worker for a session and waits until its socket actually

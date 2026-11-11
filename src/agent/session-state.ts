@@ -4,6 +4,7 @@
 import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { killProcessTreePortable } from '../harness/transport/spawn.js';
+import { swallowed } from '../runtime/lifecycle-log.js';
 
 interface FileReadStamp { mtimeMs: number; size: number }
 
@@ -90,7 +91,7 @@ export function sessionState(stateDir: string, sessionId: string): HarnessSessio
 
 export function queueShellNotification(state: HarnessSessionState, notification: ShellNotification): void {
   state.notifications.push(notification);
-  try { state.onNotification?.(); } catch { /* a listener fault must not lose the notification */ }
+  try { state.onNotification?.(); } catch (error) { /* a listener fault must not lose the notification */ swallowed('agent/session-state', error); }
 }
 
 export function takeShellNotifications(state: HarnessSessionState): ShellNotification[] {

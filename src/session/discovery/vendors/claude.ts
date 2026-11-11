@@ -57,7 +57,7 @@ async function claudeSessionTitle(path: string): Promise<{ title?: string; gener
     try {
       const record = JSON.parse(line) as Record<string, unknown>;
       if (record.type === 'ai-title' && typeof record.aiTitle === 'string' && record.aiTitle.trim()) generated = record.aiTitle.trim();
-    } catch { /* a partial line at the window edge is not a record. */ }
+    } catch { /* fail-open-ok: a partial line at the window edge is not a record. */ }
   }
   const prefix = await readFilePrefix(path, 8_000).catch(() => '');
   // The first user message, for the title; and the first thing sent, whose

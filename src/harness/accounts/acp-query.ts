@@ -78,7 +78,7 @@ export async function queryAcp<T>(
     if (capabilities.sessionCapabilities?.delete && !peer.closed) {
       for (const id of created.keys()) {
         try { await peer.request('session/delete', { sessionId: id }, { timeoutMs: 1_000 }); created.delete(id); }
-        catch { /* local cleanup after shutdown, where supported */ }
+        catch { /* fail-open-ok: local cleanup after shutdown, where supported */ }
       }
     }
     await close();
@@ -101,7 +101,7 @@ const QUERY_TAG = 'CLIKCODE_ACP_QUERY';
  * daemon that was already up (the user's) never carries this query's tag. */
 async function stopEscaped(tag: string): Promise<void> {
   const signal = (pids: number[], name: NodeJS.Signals): void => {
-    for (const pid of pids) { try { process.kill(pid, name); } catch { /* gone already */ } }
+    for (const pid of pids) { try { process.kill(pid, name); } catch { /* fail-open-ok: gone already */ } }
   };
   const escaped = await processesWithEnvironment(QUERY_TAG, tag);
   if (!escaped.length) return;

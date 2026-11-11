@@ -28,7 +28,7 @@ export async function enableHttpAuth(page: Page, origin: string, credentials: Ht
     const tries = (state.attempts.get(event.requestId) ?? 0) + 1;
     state.attempts.set(event.requestId, tries);
     let sameOrigin = false;
-    try { sameOrigin = new URL(event.request.url).origin === origin; } catch { /* not a URL */ }
+    try { sameOrigin = new URL(event.request.url).origin === origin; } catch { /* fail-open-ok: not a URL */ }
     // Only the origin the agent named, only from the site itself (never a proxy), and once per request: a refused
     // password is not sent again in a loop.
     const provide = sameOrigin && event.authChallenge.source !== 'Proxy' && tries === 1;
