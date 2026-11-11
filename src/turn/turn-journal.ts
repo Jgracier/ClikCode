@@ -101,11 +101,8 @@ export class DurableTurnCheckpoint {
   /** Something on the session's index row changed since the last full write
    *  (touch): the debounced write must be a full one. */
   private rowDirty = false;
-  private saved = false;
   /** close(): the turn was settled from outside; nothing more is written. */
   private closed = false;
-  /** complete() has written the turn's final record. */
-  get finished(): boolean { return this.saved; }
   /** Also told every activity: the turn's record for /undo (session/turn-changes.ts). */
   private recorder: { add(event: HarnessActivityEvent): void } | undefined;
 
@@ -313,9 +310,6 @@ export class DurableTurnCheckpoint {
     // save it: a failed save is logged and retried by the next write, never
     // allowed to end the turn or hide the reply.
     await this.flush().catch((error: unknown) => this.persistFailed('complete', error));
-    // Straight after the write, in the same turn of the event loop: a snapshot sent from here on that
-    // holds the final record knows the turn is over (BroadcastObserver.liveSnapshot).
-    this.saved = true;
   }
 
   /** Where a save that failed is said to the person (the turn's own notes); set by startTurnCheckpoint. */

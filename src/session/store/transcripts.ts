@@ -345,6 +345,24 @@ export async function readSessionTranscript(id: string): Promise<SessionTranscri
   };
 }
 
+/** Where a history read or written by this process stands in its log
+ * (generation, and how many messages): what a snapshot names so a window reads
+ * exactly those messages. Undefined for one this process cannot place. */
+export function transcriptPosition(messages: readonly TranscriptMessage[]): { gen: string; end: number } | undefined {
+  const at = positions.get(messages);
+  return at && at.end === messages.length ? { ...at } : undefined;
+}
+
+/** The first `at.end` messages of the log of generation `at.gen`: exactly
+ * the history a snapshot named (transcriptPosition). Undefined when the log
+ * was rewritten since (a rewind, a fold): that history is gone, and the
+ * snapshot that described it with it. */
+export async function readTranscriptAt(id: string, at: { gen: string; end: number }): Promise<TranscriptMessage[] | undefined> {
+  const log = await openLog(id);
+  if (!log || log.gen !== at.gen || log.messages.length < at.end) return undefined;
+  return log.messages.slice(0, at.end) as TranscriptMessage[];
+}
+
 /** Just the running turn's journal, as readSessionTranscript would return it (not a copy: do not change it). */
 export async function readStoredPendingTurn(id: string): Promise<PendingTurn | undefined> {
   const log = await openLog(id);
