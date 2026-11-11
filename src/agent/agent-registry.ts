@@ -5,6 +5,7 @@
  * (reconcileAgents). One small JSON file per session. */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { pidIsAlive } from '../session/store/locks.js';
 import { finishAgentWorktree, type AgentWorktree } from './worktree.js';
 
 type AgentRecordStatus = 'running' | 'finished' | 'failed' | 'stopped' | 'interrupted';
@@ -65,17 +66,13 @@ export function agentRecordEnded(stateDir: string, sessionId: string, id: string
   update(stateDir, sessionId, id, (record) => ({ ...record, status, endedAt: Date.now(), ...(summary ? { summary } : {}) }));
 }
 
-const alive = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
-};
-
 /** Agents the record says were running under a worker that is gone: their
  * work is committed to the branch, they are marked interrupted, and what
  * the model should be told about each is returned. */
 export async function reconcileAgents(stateDir: string, sessionId: string): Promise<Array<{ id: string; label: string; report: string }>> {
   const reports: Array<{ id: string; label: string; report: string }> = [];
   for (const record of readAgentRecords(stateDir, sessionId)) {
-    if (record.status !== 'running' || record.pid === process.pid || alive(record.pid)) continue;
+    if (record.status !== 'running' || record.pid === process.pid || pidIsAlive(record.pid)) continue;
     let report = 'The worker that ran it ended before it finished.';
     if (record.worktree && existsSync(record.worktree.root)) {
       report += ` ${await finishAgentWorktree(record.worktree, `Agent (interrupted): ${record.label}`.slice(0, 200))}`;

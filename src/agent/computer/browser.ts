@@ -10,6 +10,7 @@ import { computerHostFile, computerProfile } from './browser-host.js';
 import { hostStatusFile, installingMessage, liveHostStatus, readHostStatus } from './browser-launch.js';
 import { BROWSER_HOST_UNIT, browserHostLaunch } from './browser-host-scope.js';
 import { sharedState } from './shared-state.js';
+import { pidIsAlive, tryLease } from '../../session/store/locks.js';
 import { watchDownloads } from './downloads.js';
 import { watchDialogs } from './page-dialogs.js';
 import { watchConsole } from './console-log.js';
@@ -42,8 +43,7 @@ export async function parentPid(pid: number): Promise<number> {
 export async function chromeIsHostChild(stateDir: string, chromePid: number): Promise<boolean> {
   try {
     const host = Number((JSON.parse(await fs.readFile(computerHostFile(stateDir), 'utf8')) as { pid?: unknown }).pid);
-    if (!Number.isInteger(host) || host < 2) return false;
-    process.kill(host, 0);
+    if (!Number.isInteger(host) || host < 2 || !pidIsAlive(host)) return false;
     return (await parentPid(chromePid)) === host;
   } catch { return false; }
 }
@@ -55,8 +55,7 @@ async function ownChromeAlive(stateDir: string): Promise<boolean> {
   try {
     const lock = await fs.readlink(path.join(computerProfile(stateDir), 'SingletonLock'));
     const pid = Number(lock.match(/-(\d+)$/)?.[1]);
-    if (!pid) return false;
-    process.kill(pid, 0);
+    if (!pidIsAlive(pid)) return false;
     return await chromeIsHostChild(stateDir, pid);
   } catch { return false; }
 }
@@ -77,10 +76,7 @@ async function reclaimOrphanChrome(stateDir: string): Promise<boolean> {
   if (!pid || !(await chromeIsOrphan(pid))) return false;
   lifecycle('browser.chrome.orphan_reclaimed', { pid });
   try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
-  for (let wait = 0; wait < 20; wait++) {
-    try { process.kill(pid, 0); } catch { break; }
-    await pause(250);
-  }
+  for (let wait = 0; wait < 20 && pidIsAlive(pid); wait++) await pause(250);
   try { process.kill(pid, 'SIGKILL'); } catch { /* exited on SIGTERM */ }
   await Promise.all(['SingletonLock', 'SingletonSocket', 'SingletonCookie'].map(name => fs.unlink(path.join(profile, name)).catch(quiet('agent/computer/browser'))));
   return true;
@@ -90,8 +86,7 @@ async function externalChromeRunning(stateDir: string): Promise<boolean> {
   try {
     const lock = await fs.readlink(path.join(computerProfile(stateDir), 'SingletonLock'));
     const pid = Number(lock.match(/-(\d+)$/)?.[1]);
-    if (!pid) return false;
-    process.kill(pid, 0);
+    if (!pidIsAlive(pid)) return false;
     return !(await chromeIsHostChild(stateDir, pid));
   } catch { return false; }
 }
@@ -99,22 +94,10 @@ async function externalChromeRunning(stateDir: string): Promise<boolean> {
 async function startHost(stateDir: string): Promise<Connected> {
   const dir = path.join(stateDir, 'computer');
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const lock = path.join(dir, 'host-start.lock');
-  let owned = false;
-  try {
-    const handle = await fs.open(lock, 'wx', 0o600);
-    await handle.close();
-    owned = true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    try {
-      if (Date.now() - (await fs.stat(lock)).mtimeMs > 30_000) {
-        await fs.unlink(lock);
-        return startHost(stateDir);
-      }
-    } catch { /* another worker already cleared the stale lock */ }
-  }
-  if (owned) {
+  // One worker starts the host; the others wait below for it to answer. A lease (locks.ts), not a bare file: a starter that
+  // dies mid-start loses it at once, and a live one keeps it however long Chromium takes to fetch.
+  const lease = await tryLease(path.join(dir, 'host-start.lock'));
+  if (lease) {
     try {
       const existing = await connect(stateDir);
       if (existing) return existing;
@@ -176,7 +159,7 @@ async function startHost(stateDir: string): Promise<Connected> {
       const last = await readHostStatus(stateDir);
       if (last?.state === 'failed' && last.text) throw new Error(last.text);
       throw new Error('ClikCode could not start its browser. Check that Chrome or Edge is installed and the desktop is available.');
-    } finally { await fs.unlink(lock).catch(quiet('agent/computer/browser')); }
+    } finally { await lease.release(); }
   }
   for (let attempt = 0; attempt < 110; attempt++) {
     const result = await connect(stateDir);
@@ -484,13 +467,9 @@ export async function closeComputerBrowser(stateDir: string): Promise<void> {
     if (Number.isSafeInteger(record.pid) && record.pid! > 1) {
       process.kill(record.pid!, 'SIGTERM');
       // Return once it has really exited: a caller that removes the profile next would race its last writes.
-      for (let waited = 0; waited < 5_000 && processAlive(record.pid!); waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
+      for (let waited = 0; waited < 5_000 && pidIsAlive(record.pid!); waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
     }
   } catch { /* no ClikCode-owned browser */ }
-}
-
-function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
 /** A tab for one check, not owned by any chat: the caller closes it. Starts the shared Chrome when it is not running. */

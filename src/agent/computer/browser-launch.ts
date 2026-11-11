@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { BrowserContext, BrowserType } from 'playwright-core';
+import { pidIsAlive } from '../../session/store/locks.js';
 
 /** Chrome first; Edge (same engine, preinstalled on Windows) when Chrome is not installed. */
 export const BROWSER_CHANNELS = ['chrome', 'msedge'] as const;
@@ -68,14 +69,10 @@ export async function readHostStatus(stateDir: string): Promise<HostStatus | und
   } catch { return undefined; }
 }
 
-export function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
-}
-
 /** The status of a host that is still working, or undefined. */
 export async function liveHostStatus(stateDir: string): Promise<HostStatus | undefined> {
   const status = await readHostStatus(stateDir);
-  return status && processAlive(status.pid) ? status : undefined;
+  return status && pidIsAlive(status.pid) ? status : undefined;
 }
 
 // ── fetching Chromium ───────────────────────────────────────────────────────

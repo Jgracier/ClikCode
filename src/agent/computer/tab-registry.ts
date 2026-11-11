@@ -12,6 +12,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
+import { pidIsAlive } from '../../session/store/locks.js';
 
 export interface TabRecord {
   /** The browser's own id for the page (CDP target id). */
@@ -139,10 +140,6 @@ export async function closeBrowserTarget(stateDir: string, id: string): Promise<
   catch { return false; }
 }
 
-export const processExists = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
-};
-
 /** Pages first seen without a record, by target id: how long a tab no one recorded has been there, for this process. */
 const firstSeen = new Map<string, number>();
 
@@ -197,7 +194,7 @@ export async function sweepTabs(stateDir: string, deps: SweepDeps = {}): Promise
   if (!views) return [];
   const live = new Set(views.map(view => view.id));
   const records = await readTabRecords(stateDir);
-  const plan = planTabClosures({ records: views, liveIds: live, now, limits: deps.limits ?? tabLimits(), alive: deps.alive ?? processExists });
+  const plan = planTabClosures({ records: views, liveIds: live, now, limits: deps.limits ?? tabLimits(), alive: deps.alive ?? pidIsAlive });
   for (const id of records.map(record => record.id)) if (!live.has(id)) await removeTabRecord(stateDir, id);
   for (const id of firstSeen.keys()) if (!live.has(id)) firstSeen.delete(id);
   // Chrome quits with its last window: leave the most recently used page.
