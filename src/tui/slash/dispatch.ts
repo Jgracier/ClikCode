@@ -44,7 +44,7 @@ import { emitHarnessOutput } from '../../harness/output.js';
 import { sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
 import { aiSessionCommand, lastAnswer, slashRouteTurn } from './handlers.js';
 import { copyToClipboard } from '../../session/attachments.js';
-import { parseSlashInput, routeSlashInput, type SlashHandlerKey, type SlashRoute } from './registry.js';
+import { parseSlashInput, routeSlashInput, type SlashAvailability, type SlashHandlerKey, type SlashRoute } from './registry.js';
 import { loginMcpServer, mcpServersText, mcpSignInUiFor } from '../../commands/mcp.js';
 import { forgetMcpOAuth } from '../../agent/mcp/oauth.js';
 import { stripAnsi } from '../render/width.js';
@@ -55,7 +55,7 @@ import { impliedHarnessCommand } from './infer-provider.js';
 import { capabilitiesText } from './capabilities-text.js';
 import { forkPoint, forkPointOptions, userMessageIndexes } from './fork-at.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
-import { compactConversation } from './compact.js';
+import { canCompact, compactConversation } from './compact.js';
 import { searchConversations } from '../../search/engine.js';
 import { searchResultsText } from '../../search/navigate.js';
 import { exportTranscript } from './export-transcript.js';
@@ -218,7 +218,9 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
   if (intercepted) return intercepted;
   // Availability is decided BEFORE any picker opens, so `/model` on a
   // harness without a model selector says so instead of offering a list.
-  const availability = route.entry.availability(session, harness, route.args);
+  // /compact: an agent that announced its own compaction command compacts, whatever its catalog says (compactConversation sends it).
+  const availability: SlashAvailability = route.entry.handlerKey === 'compact' && canCompact(id, session) ? { available: true }
+    : route.entry.availability(session, harness, route.args);
   // The one refusal worth turning into a question: the command needs a
   // provider and none is chosen. The command is queued on the chat the
   // picker produced (choosing a provider can branch it) rather than run on

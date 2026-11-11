@@ -48,7 +48,7 @@ export const SLASH_HANDLER_KEYS = [
 ] as const;
 export type SlashHandlerKey = typeof SLASH_HANDLER_KEYS[number];
 
-interface SlashAvailability {
+export interface SlashAvailability {
   available: boolean;
   reason?: string;
   /** What is MISSING, when supplying it would make the command available. A
@@ -68,8 +68,11 @@ interface SlashCommandEntry {
   description: string;
   group: SlashGroup;
   /** `args`, where known: a form of the command can need less (`/changes
-   * <path>` reads every conversation's records, not this harness's). */
-  availability(session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, args?: string): SlashAvailability;
+   * <path>` reads every conversation's records, not this harness's).
+   * `native`: the command names the agent advertised this session. */
+  availability(
+    session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, args?: string, native?: readonly string[],
+  ): SlashAvailability;
   handlerKey: SlashHandlerKey;
   /** `apply` means the ARGUMENT form of this command is a pure state write
    * that can run while a turn is streaming: no picker, no panel, nothing on
@@ -89,15 +92,19 @@ const localOnly = (session: HarnessSession | undefined): SlashAvailability => {
   if (!isClikCodeAgent(session)) return { available: true };
   return { available: false, reason: isGatewayService(session) ? GATEWAY_MANAGED : CLIKCODE_LOCAL_AGENT };
 };
-/** /compact relays only to a vendor's native compaction, where it has one. */
-/** Whether a vendor harness compacts its own conversation: it runs the slash
- * command itself, or its server has a compact operation. */
+/** /compact relays only to a vendor's native compaction, where it has one:
+ * it runs the slash command itself, its server has a compact operation, or
+ * the agent advertised its own compaction command (`compact`, Gemini's
+ * `compress`) this session -- the same cases compact.ts canCompact accepts. */
 const vendorCompacts = (harness: Pick<AiLocalHarnessDefinition, 'nativeSlashPassthrough' | 'nativeOperations'>): boolean =>
   Boolean(harness.nativeSlashPassthrough || harness.nativeOperations?.includes('compact'));
-const vendorCompaction = (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
+const vendorCompaction = (
+  session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, _args?: string, native: readonly string[] = [],
+): SlashAvailability => {
   if (isClikCodeAgent(session)) return { available: false, reason: AGENT_COMPACT_UNAVAILABLE };
   if (!harness) return { available: false, reason: 'Choose a provider before compacting.', needs: 'provider' };
-  return vendorCompacts(harness) ? { available: true } : { available: false, reason: `/compact is not available for ${harness.displayName}.` };
+  const advertised = native.some((name) => /^\/?(?:compact|compress)$/i.test(name));
+  return vendorCompacts(harness) || advertised ? { available: true } : { available: false, reason: `/compact is not available for ${harness.displayName}.` };
 };
 /** A command ClikCode's own agent implements and a vendor runs itself: relayed
  * to a vendor that takes slash commands, not available for one that does not. */
@@ -297,7 +304,7 @@ function slashRows(
   extras: SlashExtras, vendor: boolean,
 ): SlashPaletteEntry[] {
   const rows: SlashPaletteEntry[] = SLASH_COMMANDS.filter((item) => !extras.omit?.has(item.name)).map((item) => {
-    const state = item.availability(session, harness);
+    const state = item.availability(session, harness, undefined, extras.native?.map((command) => command.name));
     return {
       label: `/${item.name}`, value: `/${item.name}`, group: item.group,
       detail: state.available ? item.description : `unavailable · ${state.reason ?? item.description}`,

@@ -309,4 +309,10 @@ describe('commands ClikCode used to emulate on a vendor', () => {
     }
     expect(availability('compact', harness({ nativeOperations: ['compact'] }))).toEqual({ available: true });
   });
+
+  it('lists /compact as available for an agent that announced its own compaction command', () => {
+    const rows = slashPalette(session(), harness(), { native: [{ name: 'compress' }] });
+    expect(rows.find((row) => row.value === '/compact')?.detail).not.toMatch(/^unavailable/);
+    expect(slashPalette(session(), harness()).find((row) => row.value === '/compact')?.detail).toMatch(/^unavailable/);
+  });
 });
