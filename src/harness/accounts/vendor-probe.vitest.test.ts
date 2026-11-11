@@ -62,3 +62,59 @@ describe('usage probes in flight', () => {
     expect(calls).toBe(2);
   });
 });
+
+/** A fake vendor written in node, on PATH under `name` for one test. */
+async function fakeNodeVendor(name: string, source: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'fake-node-vendor-'));
+  const file = join(directory, name);
+  await writeFile(file, `#!${process.execPath}\n${source}\n`);
+  await chmod(file, 0o755);
+  return directory;
+}
+
+describe.skipIf(process.platform === 'win32')('JSON-RPC probe clients', () => {
+  it('Copilot: one request over Content-Length framing', async () => {
+    const { copilotUsageReading } = await import('./cli-usage-probes.js');
+    const directory = await fakeNodeVendor('copilot', `
+      let buffer = Buffer.alloc(0);
+      process.stdin.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        const end = buffer.indexOf('\\r\\n\\r\\n');
+        if (end < 0) return;
+        const length = Number(/Content-Length: (\\d+)/.exec(buffer.subarray(0, end).toString())[1]);
+        if (buffer.length < end + 4 + length) return;
+        const request = JSON.parse(buffer.subarray(end + 4, end + 4 + length).toString());
+        const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { quotaSnapshots: { chat: { entitlementRequests: 200, remainingPercentage: 75, isUnlimitedEntitlement: false } } } }));
+        process.stdout.write(Buffer.concat([Buffer.from('Content-Length: ' + body.length + '\\r\\n\\r\\n'), body]));
+      });
+    `);
+    const path = process.env.PATH;
+    process.env.PATH = `${directory}:${path}`;
+    try {
+      expect(await copilotUsageReading({})).toMatchObject({ windows: [{ name: 'chat', usedPct: 25 }], plan: { name: 'Copilot Free' } });
+    } finally { process.env.PATH = path; }
+  });
+
+  it('Codex: asks for rate limits as soon as initialize is answered and acknowledged', async () => {
+    const { NATIVE_USAGE_PROBES } = await import('./usage-probes.js');
+    const directory = await fakeNodeVendor('codex', `
+      let ready = false;
+      require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+        const message = JSON.parse(line);
+        if (message.method === 'initialize') process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + '\\n');
+        else if (message.method === 'initialized') ready = true;
+        else if (message.method === 'account/rateLimits/read') process.stdout.write(JSON.stringify(ready
+          ? { id: message.id, result: { rateLimits: { primary: { usedPercent: 40, windowDurationMins: 300 } } } }
+          : { id: message.id, error: { message: 'not initialized' } }) + '\\n');
+      });
+    `);
+    const path = process.env.PATH;
+    process.env.PATH = `${directory}:${path}`;
+    try {
+      const started = Date.now();
+      const reading = await NATIVE_USAGE_PROBES.codex!({ CODEX_HOME: directory });
+      expect(reading?.windows).toMatchObject([{ usedPct: 40 }]);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally { process.env.PATH = path; }
+  });
+});

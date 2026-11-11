@@ -40,6 +40,9 @@ export interface JsonRpcPeerOptions {
   label: string;
   /** ACP requires the `jsonrpc: "2.0"` member; Codex app-server omits it. */
   jsonrpcVersion?: boolean;
+  /** How messages are delimited: one per line (ACP, Codex app-server), or
+   * LSP-style `Content-Length` headers (the Copilot SDK server). */
+  framing?: 'lines' | 'content-length';
   /** True when the child was spawned `detached` on POSIX, so signals should
    * target its process group and take grandchildren down with it. */
   detached?: boolean;
@@ -154,6 +157,8 @@ export class JsonRpcPeer {
   private readonly pending = new Map<number, Pending>();
   private nextId = 1;
   private readonly lines = new LineBuffer();
+  /** Unparsed bytes under Content-Length framing. */
+  private frames = Buffer.alloc(0);
   private stderrTail = '';
   private stdoutNoise = '';
   private isClosed = false;
@@ -169,9 +174,11 @@ export class JsonRpcPeer {
   private groupReaped = false;
 
   constructor(private readonly child: ChildProcess, private readonly options: JsonRpcPeerOptions) {
-    child.stdout?.setEncoding?.('utf8');
+    const framed = options.framing === 'content-length';
+    // Content-Length counts bytes, so that framing reads bytes.
+    if (!framed) child.stdout?.setEncoding?.('utf8');
     child.stderr?.setEncoding?.('utf8');
-    child.stdout?.on('data', (chunk: string | Buffer) => this.receive(String(chunk)));
+    child.stdout?.on('data', (chunk: string | Buffer) => framed ? this.receiveFrames(Buffer.from(chunk)) : this.receive(String(chunk)));
     child.stderr?.on('data', (chunk: string | Buffer) => {
       this.stderrTail = `${this.stderrTail}${String(chunk)}`.slice(-NOISE_LIMIT);
       this.stillAlive();
@@ -213,7 +220,10 @@ export class JsonRpcPeer {
     if (this.isClosed || this.exited || !stdin || stdin.destroyed || stdin.writableEnded) return false;
     const framed = this.options.jsonrpcVersion === false ? message : { jsonrpc: '2.0', ...message };
     try {
-      stdin.write(`${JSON.stringify(framed)}\n`);
+      if (this.options.framing === 'content-length') {
+        const body = Buffer.from(JSON.stringify(framed));
+        stdin.write(Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`), body]));
+      } else stdin.write(`${JSON.stringify(framed)}\n`);
       return true;
     } catch {
       return false;
@@ -370,6 +380,27 @@ export class JsonRpcPeer {
     // The vendor's first byte after the prompt went out (once per turn).
     markTurn('first-byte');
     for (const line of this.lines.push(chunk)) if (line.trim()) this.handleLine(line);
+  }
+
+  private receiveFrames(chunk: Buffer): void {
+    if (this.isClosed) return;
+    this.stillAlive();
+    this.frames = Buffer.concat([this.frames, chunk]);
+    for (;;) {
+      const headerEnd = this.frames.indexOf('\r\n\r\n');
+      if (headerEnd < 0) return;
+      const length = Number(/Content-Length:\s*(\d+)/i.exec(this.frames.subarray(0, headerEnd).toString())?.[1]);
+      if (!Number.isFinite(length)) {
+        // Not a header: noise, dropped up to where it ends.
+        this.stdoutNoise = `${this.stdoutNoise}${this.frames.subarray(0, headerEnd + 4).toString()}`.slice(-NOISE_LIMIT);
+        this.frames = this.frames.subarray(headerEnd + 4);
+        continue;
+      }
+      if (this.frames.length < headerEnd + 4 + length) return;
+      const body = this.frames.subarray(headerEnd + 4, headerEnd + 4 + length).toString();
+      this.frames = this.frames.subarray(headerEnd + 4 + length);
+      this.handleLine(body);
+    }
   }
 
   private handleLine(line: string): void {

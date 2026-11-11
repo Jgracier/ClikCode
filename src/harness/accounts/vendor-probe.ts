@@ -16,6 +16,7 @@ import { stateDirectory } from '../../session/store/paths.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import { killProcessTreePortable, spawnPortable } from '../transport/spawn.js';
+import { JsonRpcPeer, type JsonRpcPeerOptions } from '../transport/jsonrpc-peer.js';
 import { authEvidencePresent, hasAuthEvidence } from './auth-files.js';
 
 type Environment = Readonly<Record<string, string>>;
@@ -132,4 +133,22 @@ export function probeCommand(binary: string, argv: readonly string[], environmen
     child.stdout!.on('data', (chunk: string) => { stdout += chunk; });
     child.once('close', (code) => resolve(code === 0 ? stdout : undefined));
   }));
+}
+
+/** A JSON-RPC server a probe asks a few questions of (Codex's app-server,
+ * Copilot's SDK server), then lets go: queryAcp's shape, any framing. */
+export function queryJsonRpc<T>(
+  spec: Omit<VendorProbeSpec, 'stdin'> & Pick<JsonRpcPeerOptions, 'label' | 'jsonrpcVersion' | 'framing'>,
+  ask: (peer: JsonRpcPeer, signal: AbortSignal) => Promise<T | undefined>,
+): Promise<T | undefined> {
+  return probeVendor({ ...spec, stdin: 'pipe' }, async (child, signal) => {
+    const peer = new JsonRpcPeer(child, {
+      label: spec.label, detached: process.platform !== 'win32', forwardParentSignals: false,
+      ...(spec.jsonrpcVersion === undefined ? {} : { jsonrpcVersion: spec.jsonrpcVersion }),
+      ...(spec.framing ? { framing: spec.framing } : {}),
+    });
+    // The deadline ends the process group; this ends what is waiting on it.
+    signal.addEventListener('abort', () => peer.rejectPending(new Error(`${spec.label} probe timed out`)), { once: true });
+    return ask(peer, signal);
+  });
 }
