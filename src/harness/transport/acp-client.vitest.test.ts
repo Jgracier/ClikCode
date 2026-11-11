@@ -1,4 +1,3 @@
-import { changed } from '../../agent/line-diff.test-support.js';
 import { describe, expect, it } from 'vitest';
 import { acpActivityEvent, acpApprovalDetail, acpMessageChange, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, createAcpSession, runAcpTurn } from './acp-client.js';
 import { classifyAccountFailure } from '../../turn/failover.js';

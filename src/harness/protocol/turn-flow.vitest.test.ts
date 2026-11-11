@@ -3,6 +3,7 @@ import {
   activityResult, answerWriting, decisionRow, isApprovalWaitPhase, endsWithSummary, estimateTokens, liveTokenTarget, smoothTokens, tokenMeterLabel, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
   backgroundTerminalsLabel, waitingOnCommands,
 } from './turn-flow.js';
+import type { TurnUsage } from './turn-usage.js';
 
 describe('how a turn reads', () => {
   it('words a row in the tense of its state', () => {
@@ -82,7 +83,7 @@ describe('how a turn reads', () => {
   });
 
   it('ends a turn with how long it took and what it changed', () => {
-    const edit = (path: string, additions: number, removals: number) => [{ path, change: 'modify' as const, additions, removals, lines: [] }];
+    const edit = (path: string, additions: number, removals: number) => [{ path, change: 'update' as const, additions, removals, lines: [] }];
     expect(turnSummary({ ms: 62_000, diffs: [edit('a.ts', 10, 2), edit('b.ts', 3, 0), edit('a.ts', 1, 1)] })).toBe('Worked for 1m 2s · 2 files changed +14 −3');
     expect(turnSummary({ ms: 400 })).toBe('Worked for 1s');
     expect(turnSummary({ ms: 62_000, usage: '↑ 1.2k ↓ 340 tokens · $0.02' })).toBe('Worked for 1m 2s · ↑ 1.2k ↓ 340 tokens · $0.02');
@@ -117,7 +118,8 @@ describe('how a turn reads', () => {
     expect(liveTokenTarget({ usage: { output: 5000 }, responseChars: 4000 })).toBe(5000);
     // Reasoning is written too.
     expect(liveTokenTarget({ usage: { output: 340 }, responseChars: 400, thoughtChars: 3600 })).toBe(1000);
-    expect(liveTokenTarget({ usage: { input: 900 }, responseChars: 4000 })).toBe(1000);
+    const inputOnly: TurnUsage = { input: 900 };
+    expect(liveTokenTarget({ usage: inputOnly, responseChars: 4000 })).toBe(1000);
     expect(liveTokenTarget({ responseChars: 0 })).toBe(0);
     // The shown number steps toward the target, and never back.
     const a = smoothTokens(0, 1000);

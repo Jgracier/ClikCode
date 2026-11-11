@@ -33,7 +33,7 @@ describe('every stream format the catalog declares', () => {
     // codex-items: codex always negotiates its app-server, never this path.
     // aider: plain text, read line by line in events/aider.ts.
     const generic = new Set(['generic-json', 'text', 'codex-items', 'aider']);
-    const families = new Set(AI_LOCAL_HARNESSES.map((harness) => harness.parser).filter((parser): parser is string => Boolean(parser)));
+    const families = new Set(AI_LOCAL_HARNESSES.map((harness) => harness.parser).filter((parser) => parser !== undefined));
     for (const family of families) {
       expect(generic.has(family) || family in parsersByFamily, family).toBe(true);
     }

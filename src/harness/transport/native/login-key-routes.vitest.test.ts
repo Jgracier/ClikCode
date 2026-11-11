@@ -135,7 +135,7 @@ describe('keyRoutedScreen', () => {
 });
 
 describe('keyCandidates', () => {
-  const providers = (key: string) => keyCandidates(piRoutes, key, KEY_PROVIDERS).map((route) => route.provider);
+  const providers = (key: string) => keyCandidates(piRoutes, key, KEY_PROVIDERS).map((route) => ('provider' in route ? route.provider : undefined));
   it('sends a key with a known prefix only to the provider that issues it', () => {
     expect(providers('sk-ant-api03-x')).toEqual(['anthropic']);
     expect(providers('sk-proj-x')).toEqual(['openai']);

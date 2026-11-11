@@ -10,7 +10,7 @@ describe('the structured-CLI path asks for what the harness declares', () => {
     expect(family.length).toBeGreaterThan(0);
     for (const harness of family) {
       if (!harness.capabilities?.thinking) continue;
-      expect(harness.turn.startArgv, `${harness.command}: declares thinking but its CLI turn never requests reasoning`).toContain('--thinking');
+      expect(harness.turn?.startArgv, `${harness.command}: declares thinking but its CLI turn never requests reasoning`).toContain('--thinking');
     }
   });
 });

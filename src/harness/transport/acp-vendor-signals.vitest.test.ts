@@ -38,7 +38,7 @@ function agent(opts: { steps?: Step[]; initResult?: Record<string, unknown>; ses
 
 interface Seen { init: any; requests: Array<{ method: string; params: any }>; replies: Record<string, any> }
 
-async function run(opts: Parameters<typeof agent>[0], extra: Record<string, unknown> = {}, sessionOptions: Record<string, never> = {}) {
+async function run(opts: Parameters<typeof agent>[0], extra: Record<string, unknown> = {}, sessionOptions: Parameters<typeof createAcpSession>[0] = {}) {
   const session = createAcpSession(sessionOptions);
   const notices: string[] = [];
   const phases: string[] = [];
@@ -139,10 +139,10 @@ describe('ACP status updates and extension notifications', () => {
     expect(streamed.join('')).toBe(JSON.stringify(seen));
   });
 
-  it('counts extension notifications as proof of life for the idle watchdog', async () => {
+  it('carries a turn through a stretch of nothing but extension notifications', async () => {
     const quiet = (method: string) => ({ after: 150, send: { method, params: { sessionId: 's1' } } });
-    // 4 x 150ms of nothing but extension traffic against a 400ms budget.
-    const { seen } = await run({ steps: ['_claude/sdkMessage', '_session/goal', '_claude/rateLimit', '_session/steering'].map(quiet) }, {}, { idleMs: 400 });
+    // 4 x 150ms of nothing but extension traffic: no idle clock ends the turn (there is none since c0f8e053).
+    const { seen } = await run({ steps: ['_claude/sdkMessage', '_session/goal', '_claude/rateLimit', '_session/steering'].map(quiet) });
     expect(seen.requests.some((r) => r.method === 'session/prompt')).toBe(true);
   });
 

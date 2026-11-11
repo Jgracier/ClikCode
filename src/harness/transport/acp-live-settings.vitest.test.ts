@@ -3,7 +3,7 @@ import { runAcpTurn } from './acp-client.js';
 import { LiveSettings } from '../../turn/live-settings.js';
 
 it('applies an explicit undefined plan-mode change as leaving plan mode during a prompt', async () => {
-  const settings = new LiveSettings({ route: 'local', model: null, effort: 'auto', planMode: true, permissionMode: 'ask' });
+  const settings = new LiveSettings({ route: 'local', accountId: null, model: null, effort: 'auto', planMode: true, permissionMode: 'ask' });
   const agent = `
     const send = (m) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
     let prompt; let buffer='';
@@ -33,7 +33,7 @@ it('applies an explicit undefined plan-mode change as leaving plan mode during a
 });
 
 it('changes a running ACP model and effort through native controls without cancelling the prompt', async () => {
-  const settings = new LiveSettings({ route: 'local', model: 'one', effort: 'low', permissionMode: 'ask' });
+  const settings = new LiveSettings({ route: 'local', accountId: null, model: 'one', effort: 'low', permissionMode: 'ask' });
   const agent = `
     const send = (m) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
     const options=[{id:'model',currentValue:'one',options:[{value:'one'},{value:'two'}]},{id:'effort',currentValue:'low',options:[{value:'low'},{value:'high'}]}];

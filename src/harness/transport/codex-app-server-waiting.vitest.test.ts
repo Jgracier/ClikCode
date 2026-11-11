@@ -86,7 +86,7 @@ describe('a Codex failover standby', () => {
           buf += String(chunk);
           let i; while ((i = buf.indexOf('\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1); if (m.method) methods.push(m.method); }
           return (original as (...args: unknown[]) => boolean).call(this, chunk, ...rest);
-        })(child.stdin!.write) as typeof child.stdin.write;
+        })(child.stdin!.write) as NonNullable<typeof child.stdin>['write'];
         return child;
       },
     });

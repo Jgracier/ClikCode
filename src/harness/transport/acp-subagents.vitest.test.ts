@@ -65,10 +65,10 @@ it("keeps a sub-agent's work under its Agent row and out of the answer, and neve
 
   // A repeat completion for a finished call settles nothing else.
   const pending = createPendingWorkTracker('claude');
-  pending.note({ kind: 'tool-start', label: 'a', id: 'a' });
-  pending.note({ kind: 'tool-start', label: 'b', id: 'b' });
-  pending.note({ kind: 'tool-done', label: 'a', id: 'a' });
-  pending.note({ kind: 'tool-done', label: 'a', id: 'a' });
+  pending.note({ kind: 'tool-start', id: 'a' });
+  pending.note({ kind: 'tool-start', id: 'b' });
+  pending.note({ kind: 'tool-done', id: 'a' });
+  pending.note({ kind: 'tool-done', id: 'a' });
   expect(pending.outstanding).toBe(1);
 });
 

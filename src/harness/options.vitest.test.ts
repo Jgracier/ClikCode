@@ -4,8 +4,8 @@ import { commonControlFor, OPTION_NORMALIZATION, optionIdsForControl, vendorFaci
 
 type Opt = { id: string; category?: string; description?: string };
 const harnesses = allLocalHarnesses() as unknown as Array<{ command: string; displayName: string }>;
-const optionsOf = (h: typeof harnesses[number]): Opt[] =>
-  ((localHarnessCapabilityManifest(h as never) as { options?: Opt[] }).options ?? []);
+const optionsOf = (h: typeof harnesses[number]): readonly Opt[] =>
+  ((localHarnessCapabilityManifest(h as never) as { options?: readonly Opt[] }).options ?? []);
 
 /** id -> the harnesses that publish it. */
 const published = new Map<string, string[]>();

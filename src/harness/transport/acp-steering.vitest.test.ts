@@ -97,9 +97,8 @@ async function turnWithMessage(mode: string, options: {
     if (options.enterAgain) void typed.then(() => broker.sendNow());
   };
   const session = createAcpSession();
-  let stopReason: unknown;
   try {
-    const result = await session.runTurn({
+    await session.runTurn({
       binary: process.execPath, command: 'claude', argv: ['-e', agent(log, mode, options.steering)], cwd: process.cwd(), prompt: 'go',
       environment: {}, permissionMode: 'ask',
       ...(options.catalogSteering === false ? { acp: { steering: false as const } } : {}),
@@ -114,13 +113,12 @@ async function turnWithMessage(mode: string, options: {
         options.approve?.(resolve);
       }),
     });
-    stopReason = result.stopReason;
   } finally {
     await broker.settled();
     await session.close();
   }
   const result = await typed;
-  return { log: readFileSync(log, 'utf8').trim().split('\n'), result, queue: queue.map((item) => item.id), steered: steered.map((item) => item.id), answer, stopReason };
+  return { log: readFileSync(log, 'utf8').trim().split('\n'), result, queue: queue.map((item) => item.id), steered: steered.map((item) => item.id), answer };
 }
 
 describe('a message typed during an ACP turn that advertises steering', () => {
