@@ -8,7 +8,7 @@ import { ABANDONED_WORK_MS } from '../harness/transport/persistent-session.js';
 import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning, reapPersistentCommands } from '../turn/vendor-process.js';
 import { runningShellCount } from '../agent/session-state.js';
 import { stopBackgroundShell } from '../agent/tools/bash.js';
-import { currentWorkerBuild } from './registry.js';
+import { currentWorkerBuild, liveWorkerRecords, workerRecordCount, workerRecordWrittenAt } from './registry.js';
 import { BUILD_WATCH_MS, RETIRE_QUIET_MS } from './build-retire.js';
 import type { WorkerContext } from './worker-context.js';
 
@@ -41,6 +41,14 @@ const VENDOR_WORK_RECHECK_MS = 30 * 1000;
  * next turn starts the vendor again and resumes its thread natively.
  */
 const VENDOR_IDLE_CLOSE_MS = 15 * 60 * 1000;
+
+/** More live workers than this on the machine and the least recently used of
+ * them that hold nothing retire, even with terminals attached (leaveIfOverCap):
+ * each holds a vendor, MCP servers and a Node heap, and a terminal left open
+ * on a chat kept all of that for ever. CLIKCODE_MAX_WORKERS, or the
+ * `maxWorkers` setting, changes it. */
+const DEFAULT_MAX_WORKERS = 8;
+export const OVER_CAP_REASON = 'too many conversations open: the least recently used one let its worker go (the next message starts it again)';
 
 /** What can hold a worker (heldReason). */
 const HELD = {
@@ -258,7 +266,38 @@ export function createIdleControl(ctx: WorkerContext) {
     }
     scheduleIdleExit();
   };
-  return { heldReason, retireBlocker, retireIfFree, leaveIfStaleBuild, noteIdle, scheduleIdleExit, vendorUsed };
+  const maxWorkers = (): number => {
+    const configured = Number(process.env.CLIKCODE_MAX_WORKERS) || Number(ctx.config.get('maxWorkers'));
+    return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_MAX_WORKERS;
+  };
+  /** Over the cap, this worker retires when it is among the least recently
+   * used (its record written longest ago) of the workers that hold nothing a
+   * list can see (no turn, background work or approval), and it holds nothing
+   * itself -- no turn, queued message, background work or quota wait -- and
+   * every window on it attaches again by itself (a terminal; an editor panel
+   * would start a new worker at once). Each worker judges only itself. */
+  let capCheck: Promise<void> | undefined;
+  const leaveIfOverCap = (): Promise<void> => {
+    capCheck ??= (async () => {
+      const cap = maxWorkers();
+      if (ctx.shuttingDown || await workerRecordCount() <= cap) return;
+      if (retireBlocker() || heldReason('idle') === HELD.queuedTurn || ctx.resumeWaiter.pending || quietLeft() > 0) return;
+      if ([...ctx.connections.values()].some((connection) => connection.attached && !connection.reattaches)) return;
+      const records = await liveWorkerRecords();
+      if (records.length <= cap) return;
+      const idle = records.filter((record) => !record.runningTurn && !record.background && !record.awaitingApproval);
+      const used = await Promise.all(idle.map(async (record) => ({ record, at: await workerRecordWrittenAt(record.sessionId) ?? 0 })));
+      used.sort((left, right) => left.at - right.at);
+      const leaving = used.slice(0, records.length - cap).map((entry) => entry.record.sessionId);
+      if (!leaving.includes(sessionId)) return;
+      // Something started while this was read: its own edge checks again.
+      if (retireBlocker() || quietLeft() > 0) return;
+      lifecycle('worker.over-cap', { workers: records.length, cap, clients: observer.attachedCount });
+      void ctx.shutdown(OVER_CAP_REASON);
+    })().catch(quiet('worker/worker-idle')).finally(() => { capCheck = undefined; });
+    return capCheck;
+  };
+  return { heldReason, retireBlocker, retireIfFree, leaveIfStaleBuild, leaveIfOverCap, noteIdle, scheduleIdleExit, vendorUsed };
 }
 
 export type IdleControl = ReturnType<typeof createIdleControl>;

@@ -25,6 +25,8 @@ export interface ConnectionState {
    * `retire`, a `submit`) waits for it rather than being dropped as sent by
    * a window that never attached. */
   attaching?: Promise<void>;
+  /** The window attaches again by itself when it needs to (the attach's `reattaches`). */
+  reattaches?: boolean;
 }
 
 export interface WorkerContext {

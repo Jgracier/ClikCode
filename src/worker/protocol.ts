@@ -48,7 +48,11 @@ export type ClientCommand =
    * worker already read that file; sending it all again scaled every attach,
    * submit and refresh with the length of the conversation. Absent from an
    * older window, which is sent the whole conversation as before. */
-  | { type: 'attach'; token: string; readsSaved?: true }
+  | { type: 'attach'; token: string; readsSaved?: true;
+      /** This window attaches again by itself when it next needs the worker (a terminal: its next
+       * message starts one): the worker may retire under it when too many are running (worker-idle.ts
+       * leaveIfOverCap). A window without it holds the worker as before. */
+      reattaches?: true }
   /** `turnId` and `submittedAt` (the window's wall clock at Enter) carry the
    * turn's latency marks across the two processes (runtime/turn-latency.ts);
    * a client without them gets a turn the worker times from its own start. */

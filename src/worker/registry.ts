@@ -186,6 +186,18 @@ export async function writeWorkerRecord(record: WorkerRuntimeRecord, options: { 
   await atomicWriteFile(recordPath(record.sessionId), `${JSON.stringify(record, null, 2)}\n`);
 }
 
+/** When a record was last written: its worker started, a turn started or
+ * ended, an approval or background work came or went -- when it was last
+ * used, without a write of its own for that. */
+export async function workerRecordWrittenAt(sessionId: string): Promise<number | undefined> {
+  return stat(recordPath(sessionId)).then((info) => info.mtimeMs, () => undefined);
+}
+
+/** How many worker records there are, from one directory read (no record read). */
+export async function workerRecordCount(): Promise<number> {
+  return (await readdir(workersDirectory()).catch(() => [] as string[])).filter((name) => name.endsWith('.json')).length;
+}
+
 export function generateWorkerToken(): string {
   return randomBytes(16).toString('hex');
 }

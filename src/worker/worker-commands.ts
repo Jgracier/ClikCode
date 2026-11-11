@@ -51,6 +51,7 @@ export function createCommandHandler(ctx: WorkerContext) {
     }
     // Before any snapshot: the first one is already the slim kind.
     if (command.readsSaved) windowReadsSaved(socket);
+    connection.reattaches = command.reattaches === true;
     // Read first, then join the broadcast and send the snapshot in the same
     // tick. Joined before the read, the window was sent every delta that
     // streamed during it AND a snapshot whose text already held them, and
