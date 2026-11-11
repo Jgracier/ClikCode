@@ -2,6 +2,7 @@ import { changed } from '../../agent/line-diff.test-support.js';
 import { describe, expect, it } from 'vitest';
 import { acpActivityEvent, acpApprovalDetail, acpMessageChange, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, createAcpSession, runAcpTurn } from './acp-client.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
+import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 
 describe('shared ACP adapter contract', () => {
   it('fails over when Claude reports a session limit as a failed /compact tool', async () => {
@@ -23,7 +24,9 @@ describe('shared ACP adapter contract', () => {
     `;
     let caught: unknown;
     try {
-      await runAcpTurn({ binary: process.execPath, command: 'claude', argv: ['-e', agent], cwd: process.cwd(), prompt: '/compact', environment: {}, permissionMode: 'ask' });
+      // The catalog's own declaration, not a name: the code reads acp.compactCommand.
+      const acp = { compactCommand: localHarnessForCommand('claude')!.acp!.compactCommand };
+      await runAcpTurn({ binary: process.execPath, command: 'claude', argv: ['-e', agent], cwd: process.cwd(), prompt: '/compact', environment: {}, permissionMode: 'ask', acp });
     } catch (error) { caught = error; }
     expect(caught).toBeInstanceOf(Error);
     expect(classifyAccountFailure(caught, { isResultError: true })).toBe('quota-exhausted');

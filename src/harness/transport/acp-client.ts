@@ -108,7 +108,7 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   effort?: string | null;
   /** The harness's catalog ACP entry: how model, effort and permission mode
    * are selected over the protocol, and what its usage readings mean. */
-  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'planModeId' | 'usageTotals' | 'cumulativeChunks' | 'steering'>;
+  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'planModeId' | 'usageTotals' | 'cumulativeChunks' | 'steering' | 'compactCommand'>;
   /** The chat's Plan mode is on: the session runs in `acp.planModeId`; the
    * agent leaving it is onPlanModeExit. */
   planMode?: boolean;
@@ -1416,13 +1416,15 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     let activity = parsedActivity ? this.heldAgents.filter(parsedActivity, update.status === 'completed' ? update.rawOutput : undefined) : undefined;
     if (parsedActivity && !activity) return;
     if (activity) {
-      // Claude's /compact can emit only a failed tool row and still answer
+      // A vendor's compact command (catalog acp.compactCommand; Claude's
+      // /compact) can emit only a failed tool row and still answer
       // session/prompt with end_turn. That used to count as successful tool
       // work, leaving a spent account selected and skipping the standby.
       const active = this.turn;
-      if (active && target === active && active.input.command === 'claude'
-        && /^\/compact(?:\s|$)/.test(active.input.prompt)
-        && activity.kind === 'tool-error' && /^Compact conversation$/i.test(activity.label)) {
+      const compact = active?.input.acp?.compactCommand;
+      if (active && target === active && compact
+        && (active.input.prompt === compact.prompt || active.input.prompt.startsWith(`${compact.prompt} `))
+        && activity.kind === 'tool-error' && activity.label.toLowerCase() === compact.toolLabel.toLowerCase()) {
         const reason = activity.output?.join('\n') ?? '';
         if (classifyEvidence({ vendorError: true, text: reason }) === 'quota-exhausted') {
           active.compactionFailure = new Error(reason);
