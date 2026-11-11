@@ -180,10 +180,15 @@ export async function listWorkerRecords(): Promise<WorkerRuntimeRecord[]> {
 }
 
 /** `existing`: only rewrite a record that is there -- never recreate the
- * directory, which would bring back a state home that was deleted. */
+ * directory, which would bring back a state home that was deleted.
+ *
+ * Not fsynced (atomicWriteFile durable: false): a record describes a live
+ * process and means nothing after a power loss, which ends that process too;
+ * readers still never see a torn one. Two fsyncs per rewrite, on every turn
+ * edge and background change of every worker, were disk waits for nothing. */
 export async function writeWorkerRecord(record: WorkerRuntimeRecord, options: { existing?: boolean } = {}): Promise<void> {
   if (options.existing && !await stat(recordPath(record.sessionId)).then(() => true, () => false)) return;
-  await atomicWriteFile(recordPath(record.sessionId), `${JSON.stringify(record, null, 2)}\n`);
+  await atomicWriteFile(recordPath(record.sessionId), `${JSON.stringify(record, null, 2)}\n`, { durable: false });
 }
 
 /** When a record was last written: its worker started, a turn started or

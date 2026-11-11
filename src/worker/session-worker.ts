@@ -89,6 +89,15 @@ export async function ownConversation(
   }
 }
 
+/** When the worker record's background work is rewritten: when what runs
+ * changes -- the counts, which commands (by pid), and whether one went stale.
+ * Not their cpu or last output, which change on every report: each rewrite is
+ * a write and every open list reading the directory again. A list shows those
+ * as of the last rewrite. */
+export function backgroundSignature(value: { agents?: number; terminals?: number; workflows?: number; commands?: BackgroundCommand[] } | undefined): string {
+  return `${value?.agents ?? 0}/${value?.terminals ?? 0}/${value?.workflows ?? 0}/${(value?.commands ?? []).map((item) => `${item.pid}:${item.stale ?? ''}`).join(',')}`;
+}
+
 /** `warm`: started for a chat that just moved here (worker/client.ts
  * warmSessionWorker): it gets the conversation ready for its first turn. */
 export async function runSessionWorker(sessionId: string, options: { warm?: boolean } = {}): Promise<void> {
@@ -303,10 +312,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
     const counts = Object.fromEntries(Object.entries(sum).filter(([, count]) => count > 0));
     const commands = sum.terminals && liveWork?.commands?.length ? liveWork.commands : undefined;
     const work = Object.keys(counts).length ? { ...counts, ...(commands ? { commands } : {}) } : undefined;
-    // What a list shows changes with the counts and with the commands' pids, cpu and staleness.
-    const signature = (value: { agents?: number; terminals?: number; workflows?: number; commands?: BackgroundCommand[] } | undefined): string =>
-      `${value?.agents ?? 0}/${value?.terminals ?? 0}/${value?.workflows ?? 0}/${(value?.commands ?? []).map((item) => `${item.pid}:${Math.round(item.cpuPercent ?? 0)}:${item.lastOutputAt ?? ''}:${item.stale ?? ''}`).join(',')}`;
-    if (signature(work) === signature(background)) return undefined;
+    if (backgroundSignature(work) === backgroundSignature(background)) return undefined;
     background = work ? { ...work, since: background?.since ?? new Date().toISOString() } as NonNullable<WorkerRuntimeRecord['background']> : undefined;
     return rewriteRecord();
   };
