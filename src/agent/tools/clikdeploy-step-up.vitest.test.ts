@@ -42,7 +42,7 @@ afterEach(async () => {
 describe('ClikDeploy private step-up', () => {
   it('exchanges an authenticator code and keeps it and the token out of the tool result', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ data: { token: 'private-unlock-token' } }), { status: 200 }));
-    const result = await clikDeployStepUpTool.run({ action: 'unlock' }, { requestPrivateSecret: async () => '123456' } as ToolContext);
+    const result = await clikDeployStepUpTool.run({ action: 'unlock' }, { requestPrivateSecret: async () => '123456' } as unknown as ToolContext);
     expect(result.isError).toBeUndefined();
     expect(result.output).not.toMatch(/123456|private-unlock-token/);
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ code: '123456' });
@@ -53,8 +53,8 @@ describe('ClikDeploy private step-up', () => {
     new Conf({ projectName: 'clikdeploy' }).set('adminMfaToken', 'saved-unlock-token');
     const asked: string[] = [];
     const result = await clikDeployStepUpTool.run({ action: 'call', tool: 'admin_users_manage', arguments: { action: 'access_grant', email: 'a@example.com' }, password: true }, {
-      requestPrivateSecret: async (name) => { asked.push(name); return 'private-password'; },
-    } as ToolContext);
+      requestPrivateSecret: async (name: string) => { asked.push(name); return 'private-password'; },
+    } as unknown as ToolContext);
     expect(result.isError).toBeUndefined();
     expect(asked).toEqual(['ClikDeploy super admin']);
     expect(calls.requests[0]!.headers['x-superadmin-password']).toBeUndefined();
@@ -67,7 +67,7 @@ describe('ClikDeploy private step-up', () => {
   it('refuses credentials in model arguments', async () => {
     const result = await clikDeployStepUpTool.run({ action: 'call', tool: 'admin_users_manage', arguments: { superAdminPassword: 'exposed' }, password: true }, {
       requestPrivateSecret: async () => { throw new Error('must not prompt'); },
-    } as ToolContext);
+    } as unknown as ToolContext);
     expect(result.isError).toBe(true);
     expect(calls.requests).toHaveLength(0);
   });

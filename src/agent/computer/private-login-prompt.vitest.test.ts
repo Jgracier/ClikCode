@@ -8,7 +8,7 @@ it('asks for every login field privately and returns values only to the local ca
   const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
     request = asked;
     return { kind: 'answered' as const, answers: { username: ['private@example.com'] } };
-  } } as TurnObserver;
+  } } as unknown as TurnObserver;
   expect(await askPrivateLogin(observer, 'https://accounts.google.com', [
     { index: 0, key: 'username', label: 'Email or phone', kind: 'text', required: true },
   ])).toEqual({ username: 'private@example.com' });
@@ -24,7 +24,7 @@ it('masks passwords while keeping other login answers private', async () => {
   const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
     request = asked;
     return { kind: 'answered' as const, answers: { username: ['person@example.com'], password: ['private password'] } };
-  } } as TurnObserver;
+  } } as unknown as TurnObserver;
   expect(await askPrivateLogin(observer, 'https://example.com', [
     { index: 0, key: 'username', label: 'Email', kind: 'text', required: true },
     { index: 1, key: 'password', label: 'Password', kind: 'password', required: true },
@@ -40,7 +40,7 @@ it('asks which saved account as an option list, keeps the answer secret, and ref
   const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
     request = asked;
     return { kind: 'answered' as const, answers: { account: [answer] } };
-  } } as TurnObserver;
+  } } as unknown as TurnObserver;
   const field = { index: -1, key: 'account', label: 'Choose an account', kind: 'choice' as const, required: true, options: ['one@example.com', 'two@example.com', 'Use a different account'] };
   expect(await askPrivateLogin(observer, 'https://example.com', [field])).toEqual({ account: 'two@example.com' });
   expect(request?.questions).toEqual([{
@@ -57,7 +57,7 @@ it('shows a saved password in the prompt but keeps it masked', async () => {
   const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
     request = asked;
     return { kind: 'answered' as const, answers: { email: ['other@example.com'], password: ['new-password'] } };
-  } } as TurnObserver;
+  } } as unknown as TurnObserver;
   expect(await askPrivateLogin(observer, 'https://discord.com', [
     { index: 0, key: 'email', label: 'Email or Phone Number', kind: 'text', required: true, current: 'saved@example.com' },
     { index: 1, key: 'password', label: 'Password', kind: 'password', required: true, current: 'saved-password' },
@@ -73,7 +73,7 @@ it('starts a known value in the text box to edit or leave alone, and lets an opt
   const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
     request = asked;
     return { kind: 'answered' as const, answers: { phone: ['+17195550123'], city: ['Calhan'] } };
-  } } as TurnObserver;
+  } } as unknown as TurnObserver;
   expect(await askPrivateLogin(observer, 'https://profile.clikcode', [
     { index: 0, key: 'phone', label: 'Phone', kind: 'text', required: true, current: '+17195550123' },
     { index: 1, key: 'city', label: 'City', kind: 'text', required: true },

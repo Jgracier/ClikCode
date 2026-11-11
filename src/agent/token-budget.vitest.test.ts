@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { toChatMessages } from './models/openai-client.js';
-import type { ModelStepRequest } from './model-client.js';
+import type { ModelStepRequest, UsageReport } from './model-client.js';
 import { runAgentLoop } from './run-turn.js';
 import { disposeSessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptedStep } from './testing.js';
@@ -173,7 +173,7 @@ interface SessionOptions {
   hints?: ContextHints;
   /** Project skills to create before the session (writeSkills). */
   skills?: number;
-  onUsage?: (usage: Record<string, unknown>) => void;
+  onUsage?: (usage: UsageReport) => void;
 }
 
 async function runSession(options: SessionOptions): Promise<ModelStepRequest[]> {
@@ -311,7 +311,7 @@ describe('context profiles', () => {
 
   it('chooses the profile from what the model client reports', async () => {
     const seen: unknown[] = [];
-    const onUsage = (usage: Record<string, unknown>): void => { seen.push(usage.contextProfile); };
+    const onUsage = (usage: UsageReport): void => { seen.push(usage.contextProfile); };
     const hosted = measure(await runSession({ sessionId: 'auto-hosted', hints: { hosted: true, contextWindow: 200_000 }, extraTools: syntheticMcpTools(), onUsage }));
     expect(new Set(seen)).toEqual(new Set(['full']));
     seen.length = 0;
