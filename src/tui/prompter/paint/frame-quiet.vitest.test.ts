@@ -37,6 +37,17 @@ describe('frames', () => {
     return rl;
   }
 
+  it('make the live conversation\'s rows safe once while they stay, the rows above the screen included', () => {
+    const prompter = open();
+    prompter.render(session());
+    prompter.startWaiting('thinking', () => undefined);
+    prompter.response(`| a | b |\n|---|---|\n${Array.from({ length: 80 }, (_, n) => `| ${n} | row ${n} |`).join('\n')}`, 'replace');
+    prompter.flushPaint();
+    // Taller than the screen: most of the tail is not in the live block, and each of its rows is still made safe only once.
+    expect(prompter.scrollTail.rows.length).toBeGreaterThan(30);
+    for (const row of prompter.scrollTail.rows) expect([...prompter.safeLiveRows.rows.values()]).toContain(row);
+  });
+
   it('leave a visible caret alone while a key changes the composer', () => {
     const prompter = open();
     prompter.render(session());
