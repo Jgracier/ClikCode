@@ -388,7 +388,7 @@ when you would rather type than pick.
 | `clikcode accounts login <tool> [--label <label>]` | Run that tool's own login, kept separate from your others |
 | `clikcode accounts list` / `status` / `logout` / `remove` | Your accounts: what they are called, and what is left on each |
 | `clikcode models` | The models your local accounts offer |
-| `clikcode usage` | The calls and tokens ClikCode recorded, every one (what is left on each account is `accounts list`) |
+| `clikcode usage` | What `/usage all` shows: each provider's accounts, turns, tokens and cost, then the last seven days (what is left on each account is `accounts list`) |
 | `clikcode sessions list` / `show` / `create` / `resume` (also `open`) / `send` / `command` / `set` / `close` | Your conversations, including ones a tool started on its own; `command <id> <slash…>` runs a slash command on one |
 | `clikcode send <prompt> [--chat <id\|name\|last>] [--harness <tool>] [--model <model>] [--permissions <mode>]` | Send one message without opening a session: a new chat, or continue one |
 | `clikcode search <words>` | Find the conversations that mention something, any provider, most mentions first; `--json` gives each hit and its first mention |

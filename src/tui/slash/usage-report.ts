@@ -202,7 +202,7 @@ export function usageDays(state: HarnessState, now: number = Date.now(), days = 
 /** `/usage all`: every provider with an account or recorded use -- its
  * accounts' allowances and its totals -- then the last seven days. */
 export function usageReportAll(
-  state: HarnessState, session: HarnessSession, options: { now?: number; providerName?: (provider: string) => string } = {},
+  state: HarnessState, session: Pick<HarnessSession, 'accountId'>, options: { now?: number; providerName?: (provider: string) => string } = {},
 ): { text: string } {
   const now = options.now ?? Date.now();
   const name = options.providerName ?? ((provider: string) => provider);
