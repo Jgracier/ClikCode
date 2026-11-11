@@ -62,7 +62,7 @@ describe('a conversation is deleted only by deleting it', () => {
     await writeFile(harnessIndexPath(), JSON.stringify({ version: 1, installationId: 'x', accounts: [], sessions: [{ ...chat('s1', said(2)), messages: undefined }], invocations: [], invocationRollups: {}, globalSettings: {}, providerSettings: {} }));
     resetHarnessStateCaches();
     // The holders write what they changed: nothing is removed, the rows come back.
-    holder.sessions[0]!.title = 'touched';
+    holder.sessions[0]!.name = 'touched';
     await writeState(holder);
     for (const id of ['a', 'b', 'c']) expect(files(id).every(existsSync), id).toBe(true);
     expect((await readState()).sessions.map((item) => item.id).sort()).toEqual(['a', 'b', 'c', 's1']);
@@ -83,12 +83,12 @@ describe('a conversation is deleted only by deleting it', () => {
     const stale = await readState();
     deleteConversations(deleter, ['a']);
     await writeState(deleter);
-    stale.sessions.find((item) => item.id === 'a')!.title = 'late';
-    stale.sessions.find((item) => item.id === 'b')!.title = 'applied';
+    stale.sessions.find((item) => item.id === 'a')!.name = 'late';
+    stale.sessions.find((item) => item.id === 'b')!.name = 'applied';
     await writeState(stale);
     const after = await readState();
     expect(after.sessions.map((item) => item.id)).toEqual(['b']);
-    expect(after.sessions[0]!.title).toBe('applied');
+    expect(after.sessions[0]!.name).toBe('applied');
     expect(files('a').some(existsSync)).toBe(false);
   });
 });

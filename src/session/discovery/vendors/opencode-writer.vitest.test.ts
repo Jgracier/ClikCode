@@ -9,7 +9,7 @@ import {
   kiloThreadWriter, openCodeCallsFor, openCodeExport, openCodeFamilyThreadWriter, openCodeId, openCodeThreadWriter,
 } from './opencode-writer.js';
 
-const CODEX: CanonicalOrigin = { sessionId: 's1', harness: 'codex', route: 'native', provider: 'openai', model: 'gpt-5.6-luna' };
+const CODEX: CanonicalOrigin = { sessionId: 's1', harness: 'codex', route: 'local', provider: 'openai', model: 'gpt-5.6-luna' };
 
 function turn(index: number, user: string, parts: CanonicalTurn['parts'], extra: Partial<CanonicalTurn> = {}): CanonicalTurn {
   return { index, user, attachments: [], parts, assistant: '', tools: [], touchedFiles: [], interrupted: false, origin: CODEX, ...extra };
@@ -54,8 +54,8 @@ describe('openCodeExport', () => {
   });
 
   it('names the producing provider/model on each assistant message, the receiving one on requests', () => {
-    const kilo: CanonicalOrigin = { sessionId: 's2', harness: 'kilo', route: 'native', provider: 'kilo', model: 'kilo/cohere/north-mini-code:free' };
-    const own: CanonicalOrigin = { sessionId: 's3', harness: 'opencode', route: 'native', provider: 'opencode', model: 'opencode/big-pickle' };
+    const kilo: CanonicalOrigin = { sessionId: 's2', harness: 'kilo', route: 'local', provider: 'kilo', model: 'kilo/cohere/north-mini-code:free' };
+    const own: CanonicalOrigin = { sessionId: 's3', harness: 'opencode', route: 'local', provider: 'opencode', model: 'opencode/big-pickle' };
     const record = liveRecord();
     record.turns = [
       turn(0, 'Say hi.', [{ type: 'text', text: 'Hi.' }], { origin: own }),

@@ -62,7 +62,7 @@ describe('canonicalRecord', () => {
   });
 
   it('keeps every tool call, including on turns that wrote text, with category, name, args, output and status', () => {
-    const { root, child } = chain();
+    const { child } = chain();
     const [first, second] = canonicalRecord(child).turns;
     expect(first!.tools).toEqual([expect.objectContaining({
       category: 'read', name: 'Read', input: { file_path: 'src/parser.ts' }, target: 'src/parser.ts', status: 'done', output: ['export function parse() {}'],
@@ -76,7 +76,7 @@ describe('canonicalRecord', () => {
   });
 
   it('collects touched files and attachments across the conversation', () => {
-    const { root, child } = chain();
+    const { child } = chain();
     const record = canonicalRecord({ ...child, attachments: ['/w/next.png'] });
     expect(record.touchedFiles).toEqual(['src/parser.ts', 'docs/README.md']);
     expect(record.turns[0]!.attachments).toEqual(['/w/notes.md']);

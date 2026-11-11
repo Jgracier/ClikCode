@@ -9,7 +9,7 @@ import { codexCallFor, codexRolloutRecords, codexRolloutRelativePath, codexThrea
 
 const sqlite = await import('node:sqlite').then((m) => m, () => undefined);
 
-const ORIGIN: CanonicalOrigin = { sessionId: 's1', harness: 'claude', route: 'native', provider: 'anthropic', model: 'claude-opus-5-5' };
+const ORIGIN: CanonicalOrigin = { sessionId: 's1', harness: 'claude', route: 'local', provider: 'anthropic', model: 'claude-opus-5-5' };
 
 function turn(index: number, user: string, parts: CanonicalTurn['parts'], extra: Partial<CanonicalTurn> = {}): CanonicalTurn {
   return { index, user, attachments: [], parts, assistant: '', tools: [], touchedFiles: [], interrupted: false, origin: ORIGIN, ...extra };

@@ -1,7 +1,7 @@
 /** A summary one harness made of a conversation is the conversation's: the
  * next provider gets it the way it keeps its own, never a retelling of the
  * turns it covers, and a change to those turns retires it. */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -12,7 +12,6 @@ import {
 } from './conversation-summary.js';
 import { exportTranscript } from '../tui/slash/export-transcript.js';
 import { conversationOption } from './options.js';
-import { claudeThreadRecords } from './discovery/vendors/claude-thread.js';
 import { ConversationStore } from '../agent/conversation.js';
 import { seedAgentConversation } from '../turn/agent-history.js';
 import { startConversationThread } from '../turn/thread-start.js';

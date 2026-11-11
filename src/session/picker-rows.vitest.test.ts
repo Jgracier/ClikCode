@@ -7,7 +7,7 @@ import type Conf from 'conf';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from './model.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { accountUsageText, type UsageReading } from '../harness/accounts/usage-reading.js';
+import { accountUsageText, type AccountUsageReading } from '../harness/accounts/usage-reading.js';
 
 const vendor = vi.hoisted(() => ({
   installed: new Set<string>(),
@@ -127,7 +127,7 @@ describe('usage', () => {
     } as AiHarnessAccount['usage'] });
     expect(accountUsage(live, state([live]), NOW)).toMatchObject({ label: 'Weekly 1% left', windows: [{ usedPct: 99 }] });
     expect(accountRow(live, codex, undefined, NOW).problem).toBeUndefined();
-    expect(live.usage?.windows?.[0]?.usedPct).toBe(100);
+    expect((live.usage as AccountUsageReading | undefined)?.windows?.[0]?.usedPct).toBe(100);
   });
   it('reads current windows first', () => {
     const live = account({ usage: { at: new Date(NOW).toISOString(), label: '5h 40% left', windows: [{ name: '5h', usedPct: 60, resetsAt: LATER }] } as AiHarnessAccount['usage'] });

@@ -149,10 +149,11 @@ createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', con
     const own = await readState({ transcripts: ['mine'] });
     expect(own.sessions.find((session) => session.id === 'other')?.messages).toBeUndefined();
     const mine = own.sessions.find((session) => session.id === 'mine')!;
-    mine.pendingTurn = { prompt: 'go', response: '', startedAt: now, updatedAt: now };
+    const pending = { prompt: 'go', response: '', startedAt: now, updatedAt: now, outputStarted: false };
+    mine.pendingTurn = pending;
     await writeState(own);
-    mine.pendingTurn.response = 'streamed';
-    mine.pendingTurn.updatedAt = new Date(Date.parse(now) + 1000).toISOString();
+    pending.response = 'streamed';
+    pending.updatedAt = new Date(Date.parse(now) + 1000).toISOString();
     expect(await writeTranscriptCheckpoint(own, 'mine')).toBe(true);
     mine.messages = [...mine.messages!, { role: 'user', content: 'go' }, { role: 'assistant', content: 'streamed' }];
     delete mine.pendingTurn;
