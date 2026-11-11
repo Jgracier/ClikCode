@@ -25,8 +25,6 @@ type GatewayLoginProvider = 'google' | 'github';
 interface GatewayLoginOptions {
   google?: boolean;
   github?: boolean;
-  /** Return to an owning TUI instead of terminating the process. */
-  embedded?: boolean;
 }
 
 interface GatewayLoginDeps {
@@ -96,33 +94,36 @@ function extractUser(payload: any): { email?: string } | null {
   return payload?.user ?? data ?? null;
 }
 
+/** A poll or verify that failed for a reason that may pass: no answer, a server error, or rate limiting.
+ * Anything else (a 400, a 404: the flow is unknown, the Gateway has no such endpoint) never will, and
+ * polling on would only wait out the five minutes before saying so. */
+function retryable(error: unknown): boolean {
+  if (!(error instanceof GatewayHttpError)) return true;
+  return error.status >= 500 || error.status === 429 || error.status === 408;
+}
+
 /**
  * Run the OAuth device flow and store the resulting Gateway credential.
- * Resolves with the signed-in user when `embedded`; otherwise terminates the
- * process (exit 0 on success, 1 on failure) exactly like the legacy command.
+ * Resolves with the signed-in user; a failure throws, for the command's error
+ * handler (JSON mode included) or the TUI that started it.
  */
 export async function gatewayLogin(
   config: Conf,
   options: GatewayLoginOptions = {},
   deps: GatewayLoginDeps = {}
-): Promise<{ email?: string } | undefined> {
+): Promise<{ email?: string }> {
   const provider: GatewayLoginProvider = options.github ? 'github' : 'google';
-  const embedded = Boolean(options.embedded);
   const log = deps.log ?? ((line: string) => { if (!isJsonDefaultMode()) console.log(line); });
   try {
     const user = await runDeviceFlow(config, provider, { ...deps, log });
     log(`\nLogged in as ${user.email ?? 'unknown'}`);
     log('Authentication saved securely.\n');
-    if (embedded) return user;
-    process.exit(0);
+    return user;
   } catch (error) {
-    if (embedded) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Authentication failed: ${message}`);
     if (error instanceof GatewayHttpError && error.status === 401) {
-      console.error('Tip: CLIKCODE_GATEWAY_URL must point to the same platform you signed in to.');
+      error.message += ' (CLIKCODE_GATEWAY_URL must point to the same platform you signed in to)';
     }
-    process.exit(1);
+    throw error;
   }
 }
 
@@ -164,8 +165,9 @@ async function runDeviceFlow(
         method: 'POST',
         body: { flowId, codeVerifier },
       });
-    } catch {
-      continue; // transient network/server error — keep polling
+    } catch (error) {
+      if (!retryable(error)) throw error;
+      continue; // no answer, or the server is struggling: poll again
     }
     const status = String(poll?.status || 'pending');
     if (status === 'expired') {
@@ -176,8 +178,9 @@ async function runDeviceFlow(
       let user: { email?: string } | null;
       try {
         user = extractUser(await requestJson(fetchImpl, `${baseUrl}/api/gate/auth/me`, { method: 'GET', bearer: String(apiKey) }));
-      } catch {
-        continue; // legacy parity: a failed verify is retried on the next poll
+      } catch (error) {
+        if (!retryable(error)) throw error;
+        continue; // the verify is tried again on the next poll
       }
       if (!user) throw new Error('Authentication verification returned no user');
       saveGatewayAuth(config, String(apiKey), user);

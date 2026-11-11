@@ -28,7 +28,7 @@ async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter, offerLocal:
   if (provider === 'local') return 'local';
   if (rl instanceof TerminalHarnessPrompter) await rl.suspend();
   try {
-    await gatewayLogin(config, { google: provider === 'google', github: provider === 'github', embedded: true });
+    await gatewayLogin(config, { google: provider === 'google', github: provider === 'github' });
   } finally {
     if (rl instanceof TerminalHarnessPrompter) rl.resume();
   }
