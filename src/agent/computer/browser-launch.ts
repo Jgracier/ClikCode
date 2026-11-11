@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { BrowserContext, BrowserType } from 'playwright-core';
 import { pidIsAlive } from '../../session/store/locks.js';
+import { stripAnsi } from '../../tui/render/width.js';
 
 /** Chrome first; Edge (same engine, preinstalled on Windows) when Chrome is not installed. */
 export const BROWSER_CHANNELS = ['chrome', 'msedge'] as const;
@@ -84,7 +85,7 @@ export function playwrightCli(): string {
 
 /** The newest progress line of `playwright-core install`: "Downloading Chromium 141.0.7390.37 ... 100%". */
 export function progressLine(chunk: string): string | undefined {
-  const lines = chunk.split(/[\r\n]+/).map(line => line.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').replace(/[|■□█▒░#]+/g, '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const lines = chunk.split(/[\r\n]+/).map(line => stripAnsi(line).replace(/[|■□█▒░#]+/g, '').replace(/\s+/g, ' ').trim()).filter(Boolean);
   return lines.at(-1);
 }
 

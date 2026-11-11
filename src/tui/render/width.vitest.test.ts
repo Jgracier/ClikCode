@@ -57,6 +57,8 @@ describe('stripAnsi', () => {
     expect(stripAnsi('\u001b]8;;https://x.dev\u001b\\link\u001b]8;;\u001b\\')).toBe('link');
     expect(stripAnsi('\u001b]8;;https://x.dev\u0007link\u001b]8;;\u0007')).toBe('link');
     expect(stripAnsi('a\u001b[2Kb\u001b[?25lc')).toBe('abc');
+    // Private parameters (`<`, `=`, `>`) are CSI parameter bytes too: a kitty keyboard query is not text.
+    expect(stripAnsi('a\u001b[>1ub\u001b[<uc\u001b[=1;1ud')).toBe('abcd');
     expect(stripAnsi('plain')).toBe('plain');
   });
 });

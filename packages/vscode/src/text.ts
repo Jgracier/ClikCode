@@ -1,15 +1,13 @@
 /** Terminal text made fit for an editor. */
+import { stripAnsi as stripTerminalAnsi } from '../../../src/tui/render/width';
 
-// CSI (colours, cursor moves), OSC (titles, hyperlinks, clipboard), and the
-// lone two-byte escapes; what a terminal renderer emits that a webview would
-// show as garbage.
-// eslint-disable-next-line no-control-regex
-const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
+// Escapes as the terminal strips them, then the lone control characters a
+// webview would show as garbage (a terminal acts on them; an editor cannot).
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 
 export function stripAnsi(text: string): string {
-  return text.replace(ANSI, '').replace(CONTROL, '');
+  return stripTerminalAnsi(text).replace(CONTROL, '');
 }
 
 // The bridge sends the level of the notes it forwards; this reads it from the

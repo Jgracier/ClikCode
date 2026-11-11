@@ -21,6 +21,7 @@ import { gatewaySessionModelLabel } from '../gateway/models.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { sessionSandboxMode } from '../agent/sandbox.js';
 import { summaryHeadline } from '../session/conversation-summary.js';
+import { stripAnsi } from '../tui/render/width.js';
 
 export function line(label: string, value: unknown): string {
   return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
@@ -169,7 +170,7 @@ export function renderPanelText(payload: Record<string, unknown>): string | unde
 /** A rendered panel as a title and a body: the first line, and the rest. */
 export function panelParts(text: string): { title: string; body: string } {
   const [title = '', ...rest] = text.replace(/^\n+|\n+$/g, '').split('\n');
-  return { title: title.replace(/\u001b\[[0-9;]*m/g, '').trim(), body: rest.join('\n').replace(/^\n+/, '') };
+  return { title: stripAnsi(title).trim(), body: rest.join('\n').replace(/^\n+/, '') };
 }
 
 /** What a command's output is on a terminal UI: nothing may be written at the composer cursor, so it is the prompter's panel, a repaint of the

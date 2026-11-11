@@ -26,20 +26,13 @@ import { osc52Sequence } from '../../session/attachments.js';
 import { loginPortForwardHint } from './link-info.js';
 export { shortenLoginUrl } from './link-info.js';
 import { HYPERLINK_CLOSE, hyperlinkOpen } from '../../tui/render/hyperlinks.js';
+import { stripAnsi } from '../../tui/render/width.js';
 
 /** Show the exact authorization URL as both visible text and link target. */
 export function loginLinkLine(url: string, hyperlinked = Boolean(process.stdout.isTTY)): string {
   return hyperlinked && /^https?:\/\//.test(url) && !/[\x00-\x1f\x7f]/.test(url)
     ? `${hyperlinkOpen(url)}${url}${HYPERLINK_CLOSE}`
     : url;
-}
-
-/** CSI/OSC sequences a vendor TUI colours its output with, which otherwise
- * land in the middle of a captured URL. */
-const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
-
-export function stripAnsi(text: string): string {
-  return text.replace(ANSI, '');
 }
 
 /** A sign-in URL, or nothing. Deliberately narrow: only https, and only a

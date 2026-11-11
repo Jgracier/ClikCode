@@ -14,6 +14,7 @@ import { appendThought, type Thought } from '../harness/protocol/activity-view.j
 import { FAILURE_TEXT_LIMIT } from '../harness/protocol/stderr-line.js';
 import { reasoningHeading } from '../harness/protocol/turn-flow.js';
 import type { HarnessSession, OpenThought, TurnMark } from '../session/model.js';
+import { stripAnsi } from '../tui/render/width.js';
 
 /** Bounds on what a turn's saved marks keep. They are guards against a
  * runaway, not a display width: other machines and clients read the saved
@@ -32,8 +33,6 @@ const PLAN_ENTRY_CHARS = 2_000;
 export const MAX_TURN_MARKS = 2_000;
 
 const clip = (text: string, limit: number): string => (text.length > limit ? `${text.slice(0, limit - 1)}…` : text);
-// eslint-disable-next-line no-control-regex
-const stripAnsi = (text: string): string => text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
 
 /** Hands out a turn's sequence numbers, one counter for the whole turn.
  *
