@@ -167,7 +167,7 @@ export async function aiDoctor(): Promise<void> {
     };
   }));
   await flush();
-  emitResult({ adapterVersion: harnessAdapterVersion(), harnesses });
+  emitResult({ adapterVersion: harnessAdapterVersion(), harnesses, localModelCatalog: { diagnostics: (await import('../local-models/catalog-source.js')).catalogDiagnostics() } });
 }
 
 /**

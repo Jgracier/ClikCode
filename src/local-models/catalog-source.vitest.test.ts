@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import snapshot from './catalog.snapshot.json' with { type: 'json' };
-import { CATALOG_URL, loadCatalog, refreshCatalog, REFRESH_INTERVAL_MS, TRUSTED_CATALOG_KEYS, type CatalogCache } from './catalog-source';
+import { CATALOG_URL, catalogDiagnostics, loadCatalog, noteRefresh, refreshCatalog, REFRESH_INTERVAL_MS, TRUSTED_CATALOG_KEYS, type CatalogCache } from './catalog-source';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 import { canonicalJson, signLocalCatalog, trustedKeyFrom } from './shared/catalog-signature';
 import type { LocalCatalog } from './shared/index';
+
+vi.mock('../runtime/lifecycle-log.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../runtime/lifecycle-log.js')>()), diagnostic: vi.fn() }));
 
 const DAY = REFRESH_INTERVAL_MS;
 const NOW = Date.parse('2026-11-01T00:00:00Z');
@@ -83,7 +86,8 @@ describe('reading the catalog', () => {
   });
 
   it('refuses a tampered cache and falls back to the bundled snapshot with a diagnostic', () => {
-    const document = signed(6);
+    // A deep copy: `weights` is shared with the bundled snapshot, which later tests read.
+    const document = structuredClone(signed(6));
     document.catalog.models[0]!.weights.sizeBytes += 1;
     writeCache(document, NOW);
     const loaded = loadCatalog(options());
@@ -190,5 +194,17 @@ describe('refreshing the catalog', () => {
     const fetcher = respond(signed(6), { etag: '"new"' });
     expect(await refreshCatalog({ ...options(), fetch: fetcher, now: NOW })).toEqual({ status: 'updated', version: 6 });
     expect(vi.mocked(fetcher).mock.calls[0]![1]!.headers).not.toHaveProperty('If-None-Match');
+  });
+});
+
+describe('a failed refresh in this process', () => {
+  it('is logged and listed with the catalog diagnostics until a refresh succeeds', () => {
+    noteRefresh({ status: 'refused', diagnostic: 'signature does not verify' });
+    expect(vi.mocked(diagnostic)).toHaveBeenCalledWith('local-models.catalog-refresh', 'Model catalog update refused: signature does not verify');
+    expect(catalogDiagnostics()).toContain('Model catalog update refused: signature does not verify');
+    noteRefresh({ status: 'offline', diagnostic: 'The model catalog server answered 503.' });
+    expect(catalogDiagnostics()).toContain('The model catalog server answered 503.');
+    noteRefresh({ status: 'fresh' });
+    expect(catalogDiagnostics().join('\n')).not.toMatch(/503|refused/);
   });
 });
