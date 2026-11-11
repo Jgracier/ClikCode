@@ -346,6 +346,11 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--rank <rank>', 'LoRA rank, 4-128 (default 8)')
     .option('--license <license>', 'The base model\'s license: apache-2.0 (default) or mit')
     .action((dataset: string, options: Record<string, unknown>) => later(() => import('../commands/ai/finetune-local.js'), 'aiLocalFineTune')(dataset, options));
+  const tuned = program.command('local').description('Models ClikCode Local runs on this computer')
+    .command('tuned').description('List the models fine-tuned on this computer (clikcode finetune)')
+    .action(() => later(() => import('../commands/ai/finetune-local.js'), 'aiLocalTunedList')());
+  tuned.command('rm <name>').alias('remove').description('Forget a fine-tuned model and delete its weights')
+    .action((name: string) => later(() => import('../commands/ai/finetune-local.js'), 'aiLocalTunedRemove')(name));
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');
   sessions.command('list').alias('ls').description('List saved sessions').action(later(sessionCommands, 'aiSessionsList'));
   sessions.command('audit').description('Check every conversation against the evidence of how long it was (its index row, its saved records, the vendor threads that carried it); changes nothing')

@@ -6,13 +6,13 @@
  * context come from its own GGUF header, by the same reading a discovered Hugging Face model gets (discover.ts remoteModelFromHeader).
  * The record is `tuned-models.json`; catalog.ts reads it with the built-in and discovered models. */
 
-import { copyFile, link, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { quiet } from '../runtime/lifecycle-log.js';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, relative, isAbsolute } from 'node:path';
 import { remoteModelFromHeader } from './discover.js';
 import { sha256File } from './download.js';
 import { modelFilePath } from './models.js';
-import { tunedModelsFile } from './paths.js';
+import { modelsDir, tunedModelsFile } from './paths.js';
 import { TUNED_ID_PREFIX, TUNED_REPO_PREFIX, type CatalogModel } from './catalog.js';
 
 type Header = Awaited<ReturnType<typeof import('@huggingface/gguf').gguf>>;
@@ -84,9 +84,27 @@ export async function registerTunedModel(input: RegisterTunedInput, deps: TunedD
   if (input.ggufPath !== destination) {
     try { await link(input.ggufPath, destination); } catch { await copyFile(input.ggufPath, destination); }
   }
-  const others = (await readRecord()).filter((item) => item.id !== model.id);
-  await writeRecord([...others, model]);
+  const record = await readRecord();
+  const replaced = record.find((item) => item.id === model.id);
+  await writeRecord([...record.filter((item) => item.id !== model.id), model]);
+  // A new fine-tune under the same name: the weights it replaces are nobody's now.
+  if (replaced) await removeWeights(replaced, destination);
   return model;
+}
+
+/** Deletes a tuned model's weights, and the folders that held only them. Only a file inside the store under a tuned repo: the
+ * record is a file on disk, and a hand-edited entry must not name something else to delete. */
+async function removeWeights(model: CatalogModel, keep?: string): Promise<void> {
+  if (!model.weights?.repo?.startsWith(TUNED_REPO_PREFIX)) return;
+  let file: string;
+  try { file = modelFilePath(model.weights); } catch { return; }
+  const inside = relative(modelsDir(), file);
+  if (file === keep || !inside || inside.startsWith('..') || isAbsolute(inside)) return;
+  await rm(file, { force: true });
+  // Revision folder, then repo folder: each goes only when empty.
+  for (let dir = dirname(file); relative(modelsDir(), dir) && !relative(modelsDir(), dir).startsWith('..'); dir = dirname(dir)) {
+    if (!await rmdir(dir).then(() => true, () => false)) break;
+  }
 }
 
 /** The models this user has tuned. */
@@ -94,11 +112,12 @@ export async function listTunedModels(): Promise<CatalogModel[]> {
   return readRecord();
 }
 
-/** Forgets a tuned model and says whether there was one. Its file stays in the store until the store is cleaned. */
+/** Forgets a tuned model, deleting its weights, and says whether there was one. */
 export async function forgetTunedModel(name: string): Promise<boolean> {
   const all = await readRecord();
-  const kept = all.filter((item) => item.id !== tunedModelId(name));
-  if (kept.length === all.length) return false;
-  await writeRecord(kept);
+  const forgotten = all.find((item) => item.id === tunedModelId(name));
+  if (!forgotten) return false;
+  await writeRecord(all.filter((item) => item !== forgotten));
+  await removeWeights(forgotten);
   return true;
 }

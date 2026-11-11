@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GGMLQuantizationType, type GGUFParseOutput } from '@huggingface/gguf';
 import { allLocalModels, catalogModel, resolveLocalModelId } from './catalog.js';
@@ -61,10 +61,30 @@ describe('registering a model fine-tuned on this computer', () => {
     const again = await register('one');
     expect((await listTunedModels()).map((item) => item.id).sort()).toEqual(['tuned:one', 'tuned:two']);
     expect((await listTunedModels()).find((item) => item.id === 'tuned:one')!.weights.sha256).toBe(again.weights.sha256);
+    const weights = modelFilePath(again.weights);
+    await stat(weights);
     expect(await forgetTunedModel('one')).toBe(true);
+    // Its weights go with it, and the folders that held only them.
+    await expect(stat(weights)).rejects.toThrow();
+    await expect(stat(dirname(dirname(weights)))).rejects.toThrow();
     expect(await forgetTunedModel('one')).toBe(false);
     expect(allLocalModels().some((item) => item.id === tunedModelId('one'))).toBe(false);
     expect(allLocalModels().some((item) => item.id === tunedModelId('two'))).toBe(true);
+  });
+
+  it('deletes the weights a same-named fine-tune replaces, and never a file a hand-edited record points outside the store', async () => {
+    const first = await register('one');
+    await writeFile(source, 'a second, different fine-tune');
+    const second = await register('one');
+    await expect(stat(modelFilePath(first.weights))).rejects.toThrow();
+    await stat(modelFilePath(second.weights));
+    const outside = join(home, 'precious.gguf');
+    await writeFile(outside, 'keep me');
+    const record = JSON.parse(await readFile(tunedModelsFile(), 'utf8'));
+    record.models.push({ ...second, id: tunedModelId('evil'), weights: { ...second.weights, repo: 'clikcode-tuned/../..', file: 'precious.gguf' } });
+    await writeFile(tunedModelsFile(), JSON.stringify(record));
+    await forgetTunedModel('evil');
+    expect(await readFile(outside, 'utf8')).toBe('keep me');
   });
 
   it('refuses a name that is not one, a missing file, and a GGUF it cannot fit safely, saying why', async () => {

@@ -1,7 +1,7 @@
 /** `clikcode finetune`: teach a model from the user's own data on this computer and use it again here as a local model. The cloud
  * counterpart is `clikcode gateway finetune` (ClikDeploy trains it and stores the weights). */
 import { emitResult } from '../../cli/structured-output.js';
-import { tunedModelId } from '../../local-models/tuned.js';
+import { forgetTunedModel, listTunedModels, tunedModelId } from '../../local-models/tuned.js';
 
 export interface LocalFineTuneOptions {
   base?: string;
@@ -32,4 +32,17 @@ export async function aiLocalFineTune(
     model: tunedModelId(options.name), label: model.label, sizeBytes: model.weights.sizeBytes, minutes: Math.round(seconds / 60),
     use: `Choose it with /model ${tunedModelId(options.name)}, or: clikcode send --harness clikcode-local --model ${tunedModelId(options.name)} "…"`,
   });
+}
+
+/** `clikcode local tuned`: the models fine-tuned on this computer. */
+export async function aiLocalTunedList(): Promise<void> {
+  const models = await listTunedModels();
+  emitResult({ models: models.map((model) => ({ id: model.id, label: model.label, sizeBytes: model.weights.sizeBytes })) });
+}
+
+/** `clikcode local tuned rm <name>`: forgets one and deletes its weights. */
+export async function aiLocalTunedRemove(name: string): Promise<void> {
+  const bare = name.startsWith(tunedModelId('')) ? name.slice(tunedModelId('').length) : name;
+  if (!await forgetTunedModel(bare)) throw new Error(`No tuned model is named "${bare}". List them with: clikcode local tuned`);
+  emitResult({ removed: tunedModelId(bare) });
 }
