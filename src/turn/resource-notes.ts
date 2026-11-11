@@ -1,7 +1,8 @@
 /** Private resource notices for the model. When steering is unavailable, a
  * notice waits on disk for this conversation's next turn, including after a
  * worker restart. It is never stored as the user's message. */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { atomicWriteFile } from '../session/store/files.js';
 import { join } from 'node:path';
 import { safeRecordFileName, stateDirectory } from '../session/store/paths.js';
 
@@ -25,14 +26,10 @@ function warningKey(note: string): string | undefined {
   return undefined;
 }
 /** The worker owns the conversation; only it writes a pending notice. */
-export function holdResourceNote(sessionId: string, note: string): void {
-  const path = pathFor(sessionId);
-  mkdirSync(join(stateDirectory(), 'resource-notes'), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.${process.pid}.tmp`;
+export async function holdResourceNote(sessionId: string, note: string): Promise<void> {
   const key = warningKey(note);
   const pending = readNotes(sessionId).filter((held) => !key || warningKey(held) !== key);
-  writeFileSync(tmp, JSON.stringify([...pending, wrapResourceNote(note)]), { mode: 0o600 });
-  renameSync(tmp, path);
+  await atomicWriteFile(pathFor(sessionId), JSON.stringify([...pending, wrapResourceNote(note)]), { durable: false });
 }
 /** Attach queued notices to the next outgoing turn, then consume them. */
 export function withResourceNotes(sessionId: string, turnText: string): string {

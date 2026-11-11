@@ -13,9 +13,9 @@ beforeAll(() => { testHome = mkdtempSync(join(tmpdir(), 'clikcode-resource-notes
 afterAll(() => { if (savedHome === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = savedHome; rmSync(testHome, { recursive: true, force: true }); });
 
 describe('resource notes', () => {
-  it('ride on the next turn once, ahead of its text', () => {
-    holdResourceNote('s1', 'memory is tight');
-    holdResourceNote('s1', 'a command was stopped');
+  it('ride on the next turn once, ahead of its text', async () => {
+    await holdResourceNote('s1', 'memory is tight');
+    await holdResourceNote('s1', 'a command was stopped');
     expect(existsSync(join(testHome, 'resource-notes', 's1.json'))).toBe(true);
     const sent = withResourceNotes('s1', 'fix the bug');
     expect(sent).toBe(`${wrapResourceNote('memory is tight')}\n${wrapResourceNote('a command was stopped')}\n\nfix the bug`);
@@ -24,14 +24,14 @@ describe('resource notes', () => {
     expect(withResourceNotes('other', 'untouched')).toBe('untouched');
   });
 
-  it('keeps the latest pending warning of each kind but preserves stop notices', () => {
-    holdResourceNote('coalesced', 'Disk I/O is stalling the machine (5% full stall time). ClikCode has not identified your command.');
-    holdResourceNote('coalesced', 'ClikCode stopped `npm test` for disk I/O pressure.');
-    holdResourceNote('coalesced', 'Disk I/O is stalling the machine (20% full stall time). ClikCode has not identified your command.');
-    holdResourceNote('coalesced', 'Memory is getting tight: 20 GB used.');
-    holdResourceNote('coalesced', 'Memory is getting tight: 25 GB used.');
-    holdResourceNote('coalesced', 'Disk is getting tight: 20 GB free.');
-    holdResourceNote('coalesced', 'Disk is almost full: 5 GB free.');
+  it('keeps the latest pending warning of each kind but preserves stop notices', async () => {
+    await holdResourceNote('coalesced', 'Disk I/O is stalling the machine (5% full stall time). ClikCode has not identified your command.');
+    await holdResourceNote('coalesced', 'ClikCode stopped `npm test` for disk I/O pressure.');
+    await holdResourceNote('coalesced', 'Disk I/O is stalling the machine (20% full stall time). ClikCode has not identified your command.');
+    await holdResourceNote('coalesced', 'Memory is getting tight: 20 GB used.');
+    await holdResourceNote('coalesced', 'Memory is getting tight: 25 GB used.');
+    await holdResourceNote('coalesced', 'Disk is getting tight: 20 GB free.');
+    await holdResourceNote('coalesced', 'Disk is almost full: 5 GB free.');
     const sent = withResourceNotes('coalesced', 'continue');
     expect(sent).not.toContain('5% full stall');
     expect(sent).not.toContain('20 GB used');
@@ -39,8 +39,8 @@ describe('resource notes', () => {
     for (const text of ['ClikCode stopped `npm test`', '20% full stall', '25 GB used', '5 GB free', 'continue']) expect(sent).toContain(text);
   });
 
-  it('never reach the transcript: cut off a turn, a steered-in one dropped', () => {
-    holdResourceNote('s2', 'memory is tight');
+  it('never reach the transcript: cut off a turn, a steered-in one dropped', async () => {
+    await holdResourceNote('s2', 'memory is tight');
     const sent = withResourceNotes('s2', 'fix the bug');
     expect(stripResourceNotes(sent)).toBe('fix the bug');
     const imported = normalizeImportedTranscript([
