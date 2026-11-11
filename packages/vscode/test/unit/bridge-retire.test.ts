@@ -154,6 +154,16 @@ describe('clikcode.restart', () => {
     expect(controller.state.connectionError).toBeUndefined();
   });
 
+  it('takes down a sign-in card the old bridge left up, which would keep a hidden chat from parking', async () => {
+    const { controller, bridges } = await startChat();
+    bridges[0]!.say({ type: 'sign-in-link', id: 'k1', name: 'Grok Build', ask: { prompt: 'Paste your API key', secret: true } });
+    expect(controller.state.signIn?.id).toBe('k1');
+    await controller.restart();
+    await until(() => bridges.length === 2 && controller.state.connection === 'ready');
+    expect(controller.state.signIn).toBeUndefined();
+    expect(controller.state.busy).toBeUndefined();
+  });
+
   it('resumes a chat with something in it', async () => {
     const { controller, bridges } = await startChat();
     await controller.restart();
