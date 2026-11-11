@@ -17,15 +17,18 @@ function fakeClient(): { socket: Socket; frames: Record<string, unknown>[] } {
 
 describe('sign-in from a worker', () => {
   const request = { command: 'hermes', argv: ['auth', 'add', 'nous'], environment: {}, name: 'Hermes › nous' };
+  const requests = (client: { frames: Record<string, unknown>[] }) => client.frames.filter((frame) => frame.type === 'sign-in-request') as ({ id: string } & typeof request)[];
+  const pendings = (client: { frames: Record<string, unknown>[] }) => client.frames.filter((frame) => frame.type === 'sign-in-pending') as { id: string; name: string }[];
 
-  it('asks the attached window to run the sign-in and waits for its answer', async () => {
+  it('asks the window that sent the turn to run the sign-in and waits for its answer', async () => {
     const observer = new BroadcastObserver();
     const client = fakeClient();
     observer.attach(client.socket);
+    observer.noteTurnSender(client.socket);
     const signedIn = observer.signIn(request);
-    const sent = client.frames.find((frame) => frame.type === 'sign-in-request') as { id: string } & typeof request;
+    const [sent] = requests(client);
     expect(sent).toMatchObject(request);
-    observer.resolveSignIn(sent.id);
+    observer.resolveSignIn(sent!.id);
     await expect(signedIn).resolves.toBeUndefined();
   });
 
@@ -33,13 +36,13 @@ describe('sign-in from a worker', () => {
     const observer = new BroadcastObserver();
     const client = fakeClient();
     observer.attach(client.socket);
+    observer.noteTurnSender(client.socket);
     const signedIn = observer.signIn(request);
-    const sent = client.frames.find((frame) => frame.type === 'sign-in-request') as { id: string };
-    observer.resolveSignIn(sent.id, 'hermes exited with status 1');
+    observer.resolveSignIn(requests(client)[0]!.id, 'hermes exited with status 1');
     await expect(signedIn).rejects.toThrow('hermes exited with status 1');
   });
 
-  it('tells every other window attached that the sign-in is over once one answers it', async () => {
+  it('tells every window attached that the sign-in is over once one answers it', async () => {
     const observer = new BroadcastObserver();
     const first = fakeClient();
     const second = fakeClient();
@@ -47,16 +50,16 @@ describe('sign-in from a worker', () => {
     observer.attach(second.socket);
     observer.noteTurnSender(second.socket);
     const signedIn = observer.signIn(request);
-    const sent = second.frames.find((frame) => frame.type === 'sign-in-request') as { id: string };
-    observer.resolveSignIn(sent.id);
+    const [sent] = requests(second);
+    observer.resolveSignIn(sent!.id);
     await signedIn;
-    expect(first.frames).toContainEqual({ type: 'request-closed', id: sent.id });
-    expect(second.frames).toContainEqual({ type: 'request-closed', id: sent.id });
+    expect(first.frames).toContainEqual({ type: 'request-closed', id: sent!.id });
+    expect(second.frames).toContainEqual({ type: 'request-closed', id: sent!.id });
   });
 
   // Two windows on one conversation each started their own `claude auth
   // login`: two links, two codes, two screens, and only one could work.
-  it('runs in the window that sent the turn, and in no other', () => {
+  it('runs in the window that sent the turn; the others are only told it waits', () => {
     const observer = new BroadcastObserver();
     const sender = fakeClient();
     const watcher = fakeClient();
@@ -64,11 +67,15 @@ describe('sign-in from a worker', () => {
     observer.attach(sender.socket);
     observer.noteTurnSender(sender.socket);
     void observer.signIn(request).catch(() => undefined);
-    expect(sender.frames.filter((frame) => frame.type === 'sign-in-request')).toHaveLength(1);
-    expect(watcher.frames.some((frame) => frame.type === 'sign-in-request')).toBe(false);
+    expect(requests(sender)).toHaveLength(1);
+    expect(requests(watcher)).toHaveLength(0);
+    expect(pendings(watcher)).toEqual([{ type: 'sign-in-pending', id: requests(sender)[0]!.id, name: request.name }]);
+    // The watcher shows the conversation too and claims it: one runs it already.
+    observer.claimSignIn(requests(sender)[0]!.id, watcher.socket);
+    expect(requests(watcher)).toHaveLength(0);
   });
 
-  it('is not re-offered to a window attaching while the one running it is still there', () => {
+  it('a window attaching later is told it waits, not asked to run it', () => {
     const observer = new BroadcastObserver();
     const sender = fakeClient();
     observer.attach(sender.socket);
@@ -77,10 +84,37 @@ describe('sign-in from a worker', () => {
     const late = fakeClient();
     observer.attach(late.socket);
     observer.reofferPending(late.socket);
-    expect(late.frames.some((frame) => frame.type === 'sign-in-request')).toBe(false);
+    expect(requests(late)).toHaveLength(0);
+    expect(pendings(late)).toHaveLength(1);
   });
 
-  it('moves to another attached window when the one running it closes', () => {
+  // The sender moved to another conversation: the sign-in stayed with it,
+  // where no window showing this conversation could answer it.
+  it('goes to the first window showing the conversation to claim it once the sender lets it go', () => {
+    const observer = new BroadcastObserver();
+    const sender = fakeClient();
+    const viewer = fakeClient();
+    const third = fakeClient();
+    observer.attach(sender.socket);
+    observer.attach(viewer.socket);
+    observer.attach(third.socket);
+    observer.noteTurnSender(sender.socket);
+    void observer.signIn(request).catch(() => undefined);
+    const id = requests(sender)[0]!.id;
+    observer.releaseSignIn(id, sender.socket);
+    // Told again that it waits: every window but the one that let it go.
+    expect(pendings(viewer)).toHaveLength(2);
+    expect(pendings(sender)).toHaveLength(1);
+    observer.claimSignIn(id, viewer.socket);
+    observer.claimSignIn(id, third.socket);
+    expect(requests(viewer)).toHaveLength(1);
+    expect(requests(third)).toHaveLength(0);
+    // The sender coming back to the conversation claims it: the viewer runs it.
+    observer.claimSignIn(id, sender.socket);
+    expect(requests(sender)).toHaveLength(1);
+  });
+
+  it('a window not running it cannot let it go', () => {
     const observer = new BroadcastObserver();
     const sender = fakeClient();
     const other = fakeClient();
@@ -88,9 +122,38 @@ describe('sign-in from a worker', () => {
     observer.attach(other.socket);
     observer.noteTurnSender(sender.socket);
     void observer.signIn(request).catch(() => undefined);
-    expect(other.frames.some((frame) => frame.type === 'sign-in-request')).toBe(false);
+    const id = requests(sender)[0]!.id;
+    observer.releaseSignIn(id, other.socket);
+    observer.claimSignIn(id, other.socket);
+    expect(requests(other)).toHaveLength(0);
+  });
+
+  it('a turn the worker started itself (a drained queue) runs it in the first window to claim it', () => {
+    const observer = new BroadcastObserver();
+    const first = fakeClient();
+    const second = fakeClient();
+    observer.attach(first.socket);
+    observer.attach(second.socket);
+    void observer.signIn(request).catch(() => undefined);
+    expect(requests(first)).toHaveLength(0);
+    expect(requests(second)).toHaveLength(0);
+    observer.claimSignIn(pendings(second)[0]!.id, second.socket);
+    expect(requests(second)).toHaveLength(1);
+  });
+
+  it('is told waiting again to the windows left when the one running it closes', () => {
+    const observer = new BroadcastObserver();
+    const sender = fakeClient();
+    const other = fakeClient();
+    observer.attach(sender.socket);
+    observer.attach(other.socket);
+    observer.noteTurnSender(sender.socket);
+    void observer.signIn(request).catch(() => undefined);
+    expect(requests(other)).toHaveLength(0);
     observer.detach(sender.socket);
-    expect(other.frames.filter((frame) => frame.type === 'sign-in-request')).toHaveLength(1);
+    expect(pendings(other)).toHaveLength(2);
+    observer.claimSignIn(pendings(other)[0]!.id, other.socket);
+    expect(requests(other)).toHaveLength(1);
   });
 
   it('fails at once with no window to run it in', async () => {
@@ -121,11 +184,14 @@ describe('a request nobody has answered yet', () => {
     const observer = new BroadcastObserver();
     const first = fakeClient();
     observer.attach(first.socket);
+    observer.noteTurnSender(first.socket);
     const signedIn = observer.signIn({ command: 'hermes', argv: [], environment: {}, name: 'Hermes' });
     observer.detach(first.socket);
     const second = fakeClient();
     observer.attach(second.socket);
     observer.reofferPending(second.socket);
+    const offered = second.frames.find((frame) => frame.type === 'sign-in-pending') as { id: string };
+    observer.claimSignIn(offered.id, second.socket);
     const asked = second.frames.find((frame) => frame.type === 'sign-in-request') as { id: string };
     expect(asked).toMatchObject({ command: 'hermes' });
     observer.resolveSignIn(asked.id);

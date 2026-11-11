@@ -76,16 +76,20 @@ interface WorkerTracker extends LiveTurnState {
   queueVersion: number;
   /** A turn is being shown (driveWorkerTurn), which answers requests itself. */
   driving: boolean;
-  /** Approvals and sign-ins asked while no turn was being shown -- re-offered
+  /** Approvals and questions asked while no turn was being shown -- re-offered
    * on attach, or asked of a window still at its prompt -- for the turn view
    * to answer once it opens. */
   unanswered: WorkerEvent[];
+  /** Sign-ins the conversation waits on (`sign-in-pending`), by id: the turn
+   * view claims each when it opens, so a window returning to the conversation
+   * shows it again. Not run while the window shows another conversation. */
+  signIns: Set<string>;
 }
 const trackers = new WeakMap<WorkerClient, WorkerTracker>();
 const connecting = new Map<string, Promise<WorkerClient | undefined>>();
 
 function track(sessionId: string, client: WorkerClient): void {
-  const tracker: WorkerTracker = { ...newLiveTurnState(), driving: false, unanswered: [], queueVersion: 0 };
+  const tracker: WorkerTracker = { ...newLiveTurnState(), driving: false, unanswered: [], signIns: new Set(), queueVersion: 0 };
   trackers.set(client, tracker);
   const initial = client.initialEvent;
   if (initial?.type === 'snapshot') applyLiveEvent(tracker, initial);
@@ -97,9 +101,13 @@ function track(sessionId: string, client: WorkerClient): void {
       tracker.wake?.('turn');
     } else if (event.type === 'waiting-stop') {
       tracker.unanswered = [];
-    } else if (event.type === 'approval-request' || event.type === 'question-request' || event.type === 'sign-in-request') {
+      trackSignIn(tracker, event, (command) => client.send(command));
+    } else if (event.type === 'approval-request' || event.type === 'question-request') {
       if (!tracker.driving) tracker.unanswered.push(event);
+    } else if (event.type === 'sign-in-pending' || event.type === 'sign-in-request') {
+      trackSignIn(tracker, event, (command) => client.send(command));
     } else if (event.type === 'request-closed') {
+      trackSignIn(tracker, event, (command) => client.send(command));
       // A decision leaves its row where it was asked -- for a window that was
       // not the one to answer it (one that is, drew it itself). Asked while
       // no turn view was open, it was never answered here.
@@ -131,6 +139,28 @@ function track(sessionId: string, client: WorkerClient): void {
     if (clients.get(sessionId) === client) clients.delete(sessionId);
     tracker.wake?.('queue');
   });
+}
+
+/** The one rule for a sign-in, on this window's side: it is the
+ * conversation's, and runs here only while this window shows it (a turn view
+ * is open on it). Kept by id while the conversation waits on it, so the turn
+ * view claims it whenever it opens (signInClaims); asked to run it while
+ * showing another conversation, this window gives it back at once. */
+export function trackSignIn(
+  tracker: Pick<WorkerTracker, 'driving' | 'signIns'>, event: WorkerEvent,
+  send: (command: { type: 'sign-in-release'; id: string }) => void,
+): void {
+  if (event.type === 'sign-in-pending') tracker.signIns.add(event.id);
+  else if (event.type === 'request-closed') tracker.signIns.delete(event.id);
+  else if (event.type === 'waiting-stop') tracker.signIns.clear();
+  else if (event.type === 'sign-in-request' && !tracker.driving) send({ type: 'sign-in-release', id: event.id });
+}
+
+/** What a turn view says on opening and on closing: a claim of every sign-in
+ * the conversation waits on, and their release when it closes (the worker
+ * ignores either from a window it does not concern). */
+export function signInClaims(tracker: Pick<WorkerTracker, 'signIns'>, kind: 'sign-in-claim' | 'sign-in-release', also: Iterable<string> = []): { type: typeof kind; id: string }[] {
+  return [...new Set([...tracker.signIns, ...also])].map((id) => ({ type: kind, id }));
 }
 
 async function connect(sessionId: string, spawn: boolean): Promise<WorkerClient | undefined> {
@@ -343,9 +373,14 @@ async function driveWorkerTurn(
         if (settled) return;
         settled = true;
         lifecycle('window.follow.end', { why });
-        // Left unanswered: the worker still waits, so a return to this
-        // conversation is asked again (the tracker's unanswered).
-        for (const open of [...openSignIns.values()]) { open.withdraw(); tracker.unanswered.push(open.event); }
+        // Left unanswered: the worker still waits, for a window showing the
+        // conversation -- this one again on its return (tracker.signIns).
+        // Every one it waits on is given back: the worker ignores one this
+        // window was not running, and one asked while still held for reveal
+        // (never shown here) would otherwise stay with a window not showing it.
+        const release = signInClaims(tracker, 'sign-in-release', openSignIns.keys());
+        for (const open of [...openSignIns.values()]) open.withdraw();
+        for (const command of release) client.send(command);
         delivery.dispose();
         client.off('event', onEvent);
         client.off('close', onClose);
@@ -355,7 +390,7 @@ async function driveWorkerTurn(
       const openPrompts = new Map<string, AbortController>();
       /** Sign-ins this window runs for the worker: taken down (not answered)
        * when the request closes elsewhere or this window leaves the conversation. */
-      const openSignIns = new Map<string, { event: WorkerEvent; withdraw: () => void }>();
+      const openSignIns = new Map<string, { withdraw: () => void }>();
       const handle = (event: WorkerEvent): void => {
         if (settled) return;
         switch (event.type) {
@@ -435,6 +470,10 @@ async function driveWorkerTurn(
             openSignIns.get(event.id)?.withdraw();
             return;
           }
+          case 'sign-in-pending':
+            // This window shows the conversation: it runs the sign-in unless another already does.
+            client.send({ type: 'sign-in-claim', id: event.id });
+            return;
           case 'sign-in-request': {
             // The worker has no terminal; this window does. The vendor's own
             // sign-in runs here, and the worker retries the turn after.
@@ -442,7 +481,8 @@ async function driveWorkerTurn(
             const signIn = harness ? { ...harness, loginArgv: event.argv } : undefined;
             let withdrawn = false;
             let screen: SignInScreen | undefined;
-            openSignIns.set(event.id, { event, withdraw: () => { withdrawn = true; openSignIns.delete(event.id); screen?.withdraw?.(); } });
+            if (openSignIns.has(event.id)) return;
+            openSignIns.set(event.id, { withdraw: () => { withdrawn = true; openSignIns.delete(event.id); screen?.withdraw?.(); } });
             const shown = {
               activity: (message: string, key?: string) => rl.activity(message, key),
               signInScreen: (name: string): SignInScreen => { screen = rl.signInScreen(name); if (withdrawn) screen.withdraw?.(); return screen; },
@@ -626,6 +666,7 @@ async function driveWorkerTurn(
       submitSent = true;
       if (earlyStop) client.send({ type: 'cancel', restoreDraft: earlyStop.restoreDraft, origin: earlyStop.origin });
       for (const event of tracker.unanswered.splice(0)) onEvent(event);
+      for (const command of signInClaims(tracker, 'sign-in-claim')) client.send(command);
       // Following a turn that ended while this was being set up: its
       // waiting-stop has already gone by.
       if (stillRunning && !stillRunning()) finish('already-ended', () => resolveTurn());

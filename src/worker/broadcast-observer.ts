@@ -121,13 +121,17 @@ export class BroadcastObserver implements TurnObserver {
    * nobody watching waited forever, and reattaching showed nothing to answer. */
   private readonly pendingApprovals = new Map<string, { resolve: (approved: boolean | 'always') => void; event: WorkerEvent; place?: Place }>();
   private readonly pendingQuestions = new Map<string, { resolve: (result: HarnessQuestionResult) => void; event: WorkerEvent; place?: Place }>();
-  /** Each sign-in runs in ONE window: its `owner`. Every window it reached
-   * started its own vendor login, so one turn put two links and two codes
-   * on two screens, of which only one could work. */
-  private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent; owner: Socket }>();
-  /** The window that sent the running turn: a sign-in it needs is that
-   * window's to run. Undefined for a turn the worker started itself (a
-   * queued message drained after its window closed). */
+  /** A sign-in belongs to the conversation, and runs in ONE window showing
+   * it: its `runner`. Every window it reached used to start its own vendor
+   * login (two links, two codes, of which only one could work), and a window
+   * that had moved to another conversation kept it where no one showing this
+   * one could answer it. The turn's sender runs it first; a runner that stops
+   * showing the conversation releases it, and the first window showing it to
+   * claim it runs it next (`sign-in-pending`, `sign-in-claim`). */
+  private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent & { type: 'sign-in-request' }; runner?: Socket }>();
+  /** The window that sent the running turn: a sign-in it needs is offered to
+   * it first. Undefined for a turn the worker started itself (a queued
+   * message drained after its window closed). */
   private turnSender?: Socket;
 
   noteTurnSender(socket: Socket | undefined): void {
@@ -172,12 +176,8 @@ export class BroadcastObserver implements TurnObserver {
   /** Sent to a client that just attached, after its snapshot. */
   reofferPending(socket: Socket): void {
     for (const pending of [...this.pendingApprovals.values(), ...this.pendingQuestions.values()]) sendEvent(socket, pending.event);
-    // A sign-in goes to a window only when the one running it is gone.
-    for (const pending of this.pendingSignIns.values()) {
-      if (this.clients.has(pending.owner) && pending.owner !== socket) continue;
-      pending.owner = socket;
-      sendEvent(socket, pending.event);
-    }
+    // A sign-in is only named: the window claims it if it shows this conversation.
+    for (const pending of this.pendingSignIns.values()) sendEvent(socket, signInPending(pending.event));
   }
 
   get pendingRequestCount(): number {
@@ -188,13 +188,8 @@ export class BroadcastObserver implements TurnObserver {
     this.lastActivityAt = Date.now();
     this.clients.delete(socket);
     if (this.turnSender === socket) this.turnSender = undefined;
-    // Its window closed mid sign-in: another window still attached runs it.
-    const next = this.clients.values().next().value as Socket | undefined;
-    for (const pending of this.pendingSignIns.values()) {
-      if (pending.owner !== socket || !next) continue;
-      pending.owner = next;
-      sendEvent(next, pending.event);
-    }
+    // Its window closed mid sign-in: a window still showing the conversation runs it.
+    for (const [id] of this.pendingSignIns) this.releaseSignIn(id, socket);
   }
 
   get attachedCount(): number {
@@ -617,16 +612,33 @@ export class BroadcastObserver implements TurnObserver {
     if (this.clients.size === 0) return Promise.reject(new Error(`sign in to ${request.name} needs an open ClikCode window`));
     if (signal?.aborted) return Promise.reject(new Error('stopped'));
     const id = randomUUID();
-    const event: WorkerEvent = { type: 'sign-in-request', id, ...request };
-    const owner = this.turnSender && this.clients.has(this.turnSender) ? this.turnSender : this.clients.values().next().value as Socket;
+    const event = { type: 'sign-in-request' as const, id, ...request };
+    const runner = this.turnSender && this.clients.has(this.turnSender) ? this.turnSender : undefined;
     return new Promise((resolve, reject) => {
-      this.pendingSignIns.set(id, { resolve, reject, event, owner });
+      this.pendingSignIns.set(id, { resolve, reject, event, runner });
       // Stop ends a sign-in the user left waiting.
       signal?.addEventListener('abort', () => this.resolveSignIn(id, 'stopped'), { once: true });
       this.userWaitChanged();
-      this.lastActivityAt = Date.now();
-      sendEvent(owner, event);
+      this.broadcast(signInPending(event));
+      if (runner) sendEvent(runner, event);
     });
+  }
+
+  /** A window showing the conversation will run the sign-in: it does, unless one already is. */
+  claimSignIn(id: string, socket: Socket): void {
+    const pending = this.pendingSignIns.get(id);
+    if (!pending || (pending.runner && this.clients.has(pending.runner)) || !this.clients.has(socket)) return;
+    pending.runner = socket;
+    sendEvent(socket, pending.event);
+  }
+
+  /** The window running the sign-in stopped showing the conversation (or
+   * closed): every window is told it waits, and one showing it claims it. */
+  releaseSignIn(id: string, socket: Socket): void {
+    const pending = this.pendingSignIns.get(id);
+    if (!pending || pending.runner !== socket) return;
+    pending.runner = undefined;
+    this.broadcast(signInPending(pending.event), socket);
   }
 
   resolveSignIn(id: string, error?: string): void {
@@ -640,6 +652,8 @@ export class BroadcastObserver implements TurnObserver {
     else pending.resolve();
   }
 }
+
+const signInPending = (event: { id: string; name: string }): WorkerEvent => ({ type: 'sign-in-pending', id: event.id, name: event.name });
 
 const liveThought = (open: OpenThought): LiveThought => ({
   ...(open.id === undefined ? {} : { id: open.id }),
