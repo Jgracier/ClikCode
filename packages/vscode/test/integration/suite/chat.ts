@@ -147,7 +147,7 @@ export function chatSuite(): void {
       }
     });
 
-    it('signs in inside the panel: a link card with its code, a masked key sheet, never a terminal', async () => {
+    it('signs in inside the panel: a link card with its code, a masked key field on it, never a terminal', async () => {
       const opened = (): string[] => (existsSync(process.env.CLIKCODE_IT_OPENED!) ? readFileSync(process.env.CLIKCODE_IT_OPENED!, 'utf8').trim().split('\n').filter(Boolean) : []);
       const path = process.env.PATH;
       process.env.PATH = `${process.env.CLIKCODE_IT_FAKE_BIN}:${path ?? ''}`;
@@ -183,17 +183,19 @@ export function chatSuite(): void {
       } finally { rmSync(process.env.CLIKCODE_IT_HOLD!, { force: true }); }
       if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a link sign-in');
 
-      // A sign-in that asks for a key: ClikCode's own input sheet, masked.
+      // A sign-in that asks for a key: a masked field on the same card, never a sheet over it
+      // (src/ide/prompter.ts: one place to paste the key, not a sheet hiding the card).
       process.env.FAKE_LOGIN_KEY = 'sk-test-42';
       await vscode.commands.executeCommand('clikcode.restart');
       await api.ready();
       await api.send('/accounts add grok');
-      const field = await waitFor(api, '.sheet input#sheet-input', 'the key sheet', 30_000);
-      if (!/API key/i.test((await query(api, '.sheet .sheet-title')).text)) throw new Error(`the sheet asks "${(await query(api, '.sheet .sheet-title')).text}"`);
-      if ((await api.probe('query', '.sheet input#sheet-input[type="password"]') as { count: number }).count !== 1) throw new Error(`the key field is not masked: ${JSON.stringify(field)}`);
-      await screenshot('sign-in-key-sheet', 300);
-      await type(api, '.sheet input#sheet-input', 'sk-test-42');
-      await click(api, '.sheet button[type="submit"]');
+      const field = await waitFor(api, '#sign-in-link input#sign-in-key', 'the key field on the card', 30_000);
+      if ((await api.probe('query', '#sign-in-link input#sign-in-key[placeholder*="API key"]') as { count: number }).count !== 1) throw new Error(`the field does not ask for an API key: ${JSON.stringify(field)}`);
+      if ((await api.probe('query', '#sign-in-link input#sign-in-key[type="password"]') as { count: number }).count !== 1) throw new Error(`the key field is not masked: ${JSON.stringify(field)}`);
+      if ((await query(api, '.sheet')).count) throw new Error('a sheet opened over the sign-in card');
+      await screenshot('sign-in-key-card', 300);
+      await type(api, '#sign-in-link input#sign-in-key', 'sk-test-42');
+      await click(api, '#sign-in-link .signin-key button[type="submit"]');
       await waitFor(api, '#sign-in-link', 'the card gone once signed in with the key', 30_000, (found) => found.count === 0);
       if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a key sign-in');
       } finally {
