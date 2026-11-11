@@ -16,7 +16,7 @@
  * Layout: ~/.local/share/clikcode/release/{dist,package.json,node_modules -> checkout's}, swapped
  * in whole by a rename, and ~/.local/bin/clikcode -> release/dist/index.js. */
 import { execFileSync } from 'node:child_process';
-import { realpathSync, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, lstatSync, readlinkSync, unlinkSync } from 'node:fs';
+import { realpathSync, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, lstatSync, readlinkSync, unlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,6 +76,20 @@ if (modules.startsWith(realpathSync(tmpdir()) + '/')) {
 }
 symlinkSync(modules, join(next, 'node_modules'));
 execFileSync(process.execPath, [join(next, 'dist', 'index.js'), '--version'], { stdio: 'ignore' });
+
+// The program is split into chunks (scripts/build.mjs), and a process still running the build being
+// replaced loads its chunks when it first needs them -- from this same folder, after the swap. Their
+// names carry a hash of their content, so an older chunk never collides with a new one: the previous
+// release's are kept for a day (they keep the time they were first installed), long enough for every
+// process that ran it to have given way to the new build (worker-idle.ts).
+const CARRY_MS = 24 * 60 * 60 * 1000;
+if (existsSync(join(release, 'dist'))) {
+  for (const name of readdirSync(join(release, 'dist'))) {
+    if (!/^chunk-[A-Z0-9]+\.js$/.test(name) || existsSync(join(next, 'dist', name))) continue;
+    const from = join(release, 'dist', name);
+    if (Date.now() - statSync(from).mtimeMs < CARRY_MS) cpSync(from, join(next, 'dist', name), { preserveTimestamps: true });
+  }
+}
 
 const old = join(share, `release.old.${process.pid}`);
 if (existsSync(release)) renameSync(release, old);

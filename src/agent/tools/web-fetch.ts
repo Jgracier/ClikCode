@@ -3,7 +3,8 @@
  * rebinding DNS server cannot swap in a private address between the check and
  * the connection. Redirects are followed manually and re-vetted each hop. */
 import dns from 'node:dns/promises';
-import { nodeHttp, nodeHttps } from '../../runtime/lazy-node.js';
+import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import { OUTPUT_CAPS } from '../security.js';
 import { turnCancelledError } from '../cancellation.js';
@@ -86,7 +87,7 @@ async function defaultLookup(hostname: string): Promise<ResolvedAddress[]> {
 
 function defaultRequest(url: URL, pinned: ResolvedAddress, options: PinnedRequestOptions): Promise<PinnedResponse> {
   return new Promise((resolve, reject) => {
-    const transport = url.protocol === 'https:' ? nodeHttps() : nodeHttp();
+    const transport = url.protocol === 'https:' ? https : http;
     const request = transport.request(url, {
       method: options.method ?? 'GET', headers: options.headers, signal: options.signal,
       // Pin the socket to the vetted address; TLS still verifies the hostname.
