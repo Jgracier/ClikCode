@@ -13,7 +13,7 @@ import { syncBegin, syncEnd } from '../probe.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { INLINE_TRANSCRIPT_ROWS } from './state.js';
-import { settleWindow } from './history-window.js';
+import { scrollBody, settleWindow } from './history-window.js';
 import { anchoredScrollback } from './group-actions.js';
 
 /** More rows than this in one frame and the caret is hidden for it. */
@@ -121,9 +121,8 @@ export function flushAlternateFrame(
   }
   // Held still while rows arrive at the end of what can be read: the
   // transcript's new rows, and the live conversation growing or retiring.
-  const extra = this.viewExtra;
   if (this.alternateScrollback > 0 && lastBody !== undefined) {
-    this.alternateScrollback = Math.max(0, this.alternateScrollback + this.alternateTranscript.length + extra.rows.length + this.scrollWindow.rowsBelow - lastBody);
+    this.alternateScrollback = Math.max(0, this.alternateScrollback + scrollBody(this) - lastBody);
   }
   const height = this.viewportRows();
   const live = pending.live.slice(-height);
@@ -160,7 +159,7 @@ export function flushAlternateFrame(
   // and the window's far rows are let go, before anything is drawn from it.
   settleWindow(this, above);
   const body = this.viewExtra;
-  const bodyLength = this.alternateTranscript.length + body.rows.length + this.scrollWindow.rowsBelow;
+  const bodyLength = scrollBody(this);
   const anchored = target ? anchoredScrollback(target, { length: bodyLength, trimmed: this.alternateTrimmed, above }) : undefined;
   if (anchored !== undefined) this.alternateScrollback = anchored;
   this.jumpToMention(above);

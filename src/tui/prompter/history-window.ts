@@ -218,18 +218,23 @@ function pushAll(rows: string[], more: readonly string[]): void {
   for (let at = 0; at < more.length; at += 20000) rows.push(...more.slice(at, at + 20000));
 }
 
+/** The rows the view scrolls over -- the one count of them: the transcript, the live conversation's rows while the view is
+ * scrolled back over them (attached; at the live end they are the live region's, not the body's), and the rows standing in for
+ * the messages below a detached window. `scrolled`: counted as the view is once scrolled back -- where a scroll is going (its
+ * reach) or a place is held -- rather than as it is now. */
+export function scrollBody(p: TerminalHarnessPrompter, scrolled = p.alternateScrollback > 0): number {
+  const h = p.scrollWindow;
+  return p.alternateTranscript.length + (scrolled && !h.detached ? p.scrollTail.rows.length : 0) + h.rowsBelow;
+}
+
 /** The first row of the view, as an index into the transcript. */
 function topIndex(p: TerminalHarnessPrompter, above: number): number {
-  const h = p.scrollWindow;
-  const extra = h.detached || p.alternateScrollback === 0 ? 0 : p.scrollTail.rows.length;
-  return p.alternateTranscript.length + extra + h.rowsBelow - above - p.alternateScrollback;
+  return scrollBody(p) - above - p.alternateScrollback;
 }
 
 /** Keep the view's first row at `top` after the rows around it changed. */
-function holdTop(p: TerminalHarnessPrompter, above: number, top: number): void {
-  const h = p.scrollWindow;
-  const extra = h.detached ? 0 : p.scrollTail.rows.length;
-  p.alternateScrollback = Math.max(0, p.alternateTranscript.length + extra + h.rowsBelow - above - top);
+export function holdTop(p: TerminalHarnessPrompter, above: number, top: number): void {
+  p.alternateScrollback = Math.max(0, scrollBody(p, true) - above - top);
 }
 
 /** Render the batch of messages just above the window and put it in front of its rows. Returns how many messages it added (0: none
@@ -382,8 +387,7 @@ function dropBelow(p: TerminalHarnessPrompter, above: number, keep: number): boo
   const h = p.scrollWindow;
   const W = p.alternateTranscript;
   const top = topIndex(p, above);
-  const extra = h.detached || p.alternateScrollback === 0 ? 0 : p.scrollTail.rows.length;
-  const bottom = W.length + extra + h.rowsBelow - p.alternateScrollback;
+  const bottom = scrollBody(p) - p.alternateScrollback;
   const cut = firstStartingAt(p, bottom + keep);
   const total = totalOf(p);
   if (cut === undefined || cut >= total) return false;
@@ -404,9 +408,8 @@ function dropBelow(p: TerminalHarnessPrompter, above: number, keep: number): boo
 
 /** Detached with more rows below the view than needed. */
 function cutBelowDetached(p: TerminalHarnessPrompter, above: number, near: number): void {
-  const h = p.scrollWindow;
   const W = p.alternateTranscript;
-  const bottom = W.length + h.rowsBelow - p.alternateScrollback;
+  const bottom = scrollBody(p) - p.alternateScrollback;
   if (W.length - bottom > 2 * near) dropBelow(p, above, near);
 }
 
@@ -436,8 +439,7 @@ function trimFront(p: TerminalHarnessPrompter, above: number, near: number): voi
 /** How far the view can be scrolled back, counting the messages not rendered (estimated), and how far with only what is held. */
 export function scrollReach(p: TerminalHarnessPrompter): { held: number; all: number } {
   const h = p.scrollWindow;
-  const extra = h.detached ? 0 : p.scrollTail.rows.length;
-  const held = Math.max(0, p.alternateTranscript.length + extra + h.rowsBelow - p.alternateAbove);
+  const held = Math.max(0, scrollBody(p, true) - p.alternateAbove);
   return { held, all: held + (h.source ? h.rowsBetween(0, h.first) : 0) };
 }
 

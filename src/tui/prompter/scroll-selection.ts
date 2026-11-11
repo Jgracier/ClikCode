@@ -8,7 +8,7 @@ import { isMouseEvent, mouseWanted, wheelScrollRows } from '../modes.js';
 import { inlineHistoryMode } from '../inline.js';
 import { userError } from '../../harness/protocol/errors.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
-import { followEnd, jumpForScroll, scrollReach } from './history-window.js';
+import { followEnd, jumpForScroll, scrollBody, scrollReach } from './history-window.js';
 import { SCROLL_DRAIN_MIN, SCROLL_DRAIN_MS, SELECTION_SCROLL_MS } from './state.js';
 
 /** Move the viewport through the transcript. Positive scrolls back, and the
@@ -171,7 +171,7 @@ export function handleSelection(this: TerminalHarnessPrompter, action: MouseActi
  * reached the edge. */
 export function lineAtScreenRow(this: TerminalHarnessPrompter, row: number): number {
   return lineAtRow({
-    length: this.alternateTranscript.length + this.viewExtra.rows.length + this.scrollWindow.rowsBelow, trimmed: this.alternateTrimmed,
+    length: scrollBody(this), trimmed: this.alternateTrimmed,
     above: this.alternateAbove, scrollback: this.alternateScrollback,
   }, row);
 }
