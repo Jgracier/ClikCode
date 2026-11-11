@@ -93,9 +93,8 @@ const contentText = (value: unknown): string => Array.isArray(value) ? value.fla
   return record?.type === 'text' && typeof record.text === 'string' ? [record.text] : [];
 }).join('') : '';
 
-// No `codex` entry: codex always negotiates the app-server transport, so this
-// path never sees it. Its item.completed/agent_message shape is covered by the
-// generic parser below if that ever changes.
+// No `codex-items` entry: Codex always runs on its app-server
+// (codex-app-server.ts reads its items), never this path.
 function cursorDelta(state: StreamState, text: string): NativeResponseUpdate {
   state.segment += text;
   return appendText(state, text);

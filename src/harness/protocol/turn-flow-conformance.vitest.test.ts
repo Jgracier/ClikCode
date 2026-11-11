@@ -354,13 +354,14 @@ const antigravityJson = cliFixture('antigravity', 'antigravity stream-json', { c
   { event: 'result', result: { status: 'SUCCESS', response: 'Done.', usage: { input_tokens: 100, output_tokens: 20 } } },
 ], { expected: caps(false, false, false, true, false) });
 
-/** The shape-matching reader every generic-json harness is read by. */
-const genericJson = cliFixture('generic-json', 'generic json-lines (item.* envelopes)', { command: 'generic', parser: 'generic-json' }, [
-  { type: 'item.completed', item: { id: 'rs1', type: 'reasoning', summary: ['Weighing'] } },
-  { type: 'item.started', item: { id: 'cmd1', type: 'command_execution', command: 'ls' } },
-  { type: 'item.completed', item: { id: 'cmd1', type: 'command_execution', command: 'ls', aggregated_output: 'a.ts', exit_code: 0 } },
+/** The shape-matching reader every generic-json harness is read by: the
+ * answer and the usage, nothing more (OpenClaw's one `final` envelope). The
+ * item.* envelopes it once matched were `codex exec`'s, a path Codex never
+ * takes (it runs on its app-server). */
+const genericJson = cliFixture('generic-json', 'generic json-lines (answer and usage)', { command: 'generic', parser: 'generic-json' }, [
+  { type: 'final', text: 'Done.' },
   { type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 20 } },
-], { expected: caps(false, true, false, true, true) });
+], { expected: caps(false, false, false, true, false) });
 
 /** Aider: plain text with a `Tokens:` footer. */
 const aiderText = cliFixture('aider', 'aider text', { command: 'aider', parser: 'aider', turn: { output: 'text' } as never }, [
@@ -621,7 +622,8 @@ describe('every harness\'s own adapter output is drawn the one way, by the termi
       const calls = events.filter((event) => event.kind !== 'thinking');
       // A text CLI (Aider, Continue) prints prose and reports no tool call: nothing to draw, by the vendor's design.
       if (!calls.length) {
-        check(label, familyOf(harness) === 'aider' || familyOf(harness) === 'text', 'its fixtures produced no tool call to draw');
+        // Nor does a generic-json CLI: the shape matcher reads its answer and usage (OpenClaw: one `final` envelope).
+        check(label, ['aider', 'text', 'generic-json'].includes(familyOf(harness)), 'its fixtures produced no tool call to draw');
         return;
       }
       // (a) rows: every call, normalized, is drawn with the one tool mark (a sub-agent too), at the standard indent.

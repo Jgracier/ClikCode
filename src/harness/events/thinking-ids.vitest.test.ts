@@ -54,9 +54,4 @@ describe('thinking has one stable id per thought', () => {
     const out = thoughts(family('goose'), [{ type: 'message', message: { id: 'msg-7', role: 'assistant', content: [{ type: 'thinking', thinking: 'Plan it' }] } }]);
     expect(out).toEqual([{ id: 'thinking:msg-7:0', label: 'Plan it' }]);
   });
-
-  it('Codex exec items: the reasoning item id, as the app-server keys it', () => {
-    const out = thoughts(family('codex-items', 'codex'), [{ type: 'item.completed', item: { id: 'rs_1', type: 'reasoning', summary: ['Reading the diff'] } }]);
-    expect(out).toEqual([{ id: 'rs_1', label: 'Reading the diff' }]);
-  });
 });
