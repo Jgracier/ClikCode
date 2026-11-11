@@ -81,17 +81,17 @@ describe('a chat deleted by one process', () => {
     await writeState(deleter);
 
     const kept = stale.sessions.find((item) => item.id === 'x')!;
-    kept.title = 'renamed in the stale window';
+    kept.name = 'renamed in the stale window';
     kept.messages = [...kept.messages!, message('late')];
-    stale.sessions.find((item) => item.id === 'y')!.title = 'still applied';
+    stale.sessions.find((item) => item.id === 'y')!.name = 'still applied';
     await writeState(stale);
     // And again: the stale copy keeps writing, it still stays deleted.
-    kept.title = 'again';
+    kept.name = 'again';
     await writeState(stale);
 
     const after = await readState();
     expect(after.sessions.map((item) => item.id)).toEqual(['y']);
-    expect(after.sessions[0]!.title).toBe('still applied');
+    expect(after.sessions[0]!.name).toBe('still applied');
     expect(await listStoredSessionIds()).toEqual(['y']);
   });
 });

@@ -154,7 +154,7 @@ describe('the model-client seam', () => {
     const client = await modelClientForSession(local(), config);
     // And what it reads in two minutes at that speed, which bounds the history it is handed (local-models/read-budget.ts).
     expect(client.contextHints).toEqual({ contextWindow: 65536, promptPerSecond: 1200, readableTokens: readableTokens(1200) });
-    expect(client.contextHints.readableTokens).toBeGreaterThan(30_000);
+    expect(client.contextHints?.readableTokens).toBeGreaterThan(30_000);
   });
 
   it('puts no reading bound on a model whose speed the engine did not report', async () => {

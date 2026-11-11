@@ -175,7 +175,7 @@ describe('/undo on a vendor harness (reported diffs)', () => {
     await fs.writeFile(path.join(cwd, 'a.txt'), 'new\ncontent\n');
     // A vendor Write reports its input only: the new content, nothing of what it replaced.
     await reportTurn(s.id, [
-      { kind: 'tool-done', id: 'w1', label: 'Write a.txt', ...toolFacts('Write', { file_path: 'a.txt', content: 'new\ncontent\n' }, 'claude') },
+      { kind: 'tool-done', id: 'w1', ...toolFacts('Write', { file_path: 'a.txt', content: 'new\ncontent\n' }, 'claude') },
     ]);
     const undone = await undoLastTurn(s, { stateDir, who: 'Claude Code' });
     expect(undone.removed).toEqual([]);
@@ -188,7 +188,7 @@ describe('/undo on a vendor harness (reported diffs)', () => {
     const s = session('vendor-fragment', 'local');
     await fs.writeFile(path.join(cwd, 'a.txt'), 'x = 2\nlist:\n2\n');
     await reportTurn(s.id, [
-      { kind: 'tool-done', id: 'e1', label: 'Edit a.txt', ...toolFacts('Edit', { file_path: 'a.txt', old_string: 'x = 1', new_string: 'x = 2' }, 'claude') },
+      { kind: 'tool-done', id: 'e1', ...toolFacts('Edit', { file_path: 'a.txt', old_string: 'x = 1', new_string: 'x = 2' }, 'claude') },
     ]);
     expect((await undoLastTurn(s, { stateDir, who: 'Claude Code' })).restored).toEqual([path.join(cwd, 'a.txt')]);
     expect(await read('a.txt')).toBe('x = 1\nlist:\n2\n');
@@ -198,7 +198,7 @@ describe('/undo on a vendor harness (reported diffs)', () => {
     const s = session('vendor-fragment-ambiguous', 'local');
     await fs.writeFile(path.join(cwd, 'a.txt'), 'x = 2\nlist:\n2\n');
     await reportTurn(s.id, [
-      { kind: 'tool-done', id: 'e1', label: 'Edit a.txt', ...toolFacts('Edit', { file_path: 'a.txt', old_string: '1', new_string: '2' }, 'claude') },
+      { kind: 'tool-done', id: 'e1', ...toolFacts('Edit', { file_path: 'a.txt', old_string: '1', new_string: '2' }, 'claude') },
     ]);
     const undone = await undoLastTurn(s, { stateDir, who: 'Claude Code' });
     expect(undone.restored).toEqual([]);
@@ -344,7 +344,7 @@ describe('/undo stays inside the workspace', () => {
 
 describe('/changes availability', () => {
   const harness = (transport: AiLocalHarnessDefinition['transport']): AiLocalHarnessDefinition => (
-    { command: 'x', provider: 'x', displayName: 'Aider', transport, localAuth: [], binary: 'x' });
+    { command: 'x', provider: 'x', displayName: 'Aider', transport, localAuth: [], binary: 'x' }) as unknown as AiLocalHarnessDefinition;
   const undo = (route: HarnessSession['route'], definition?: AiLocalHarnessDefinition) => resolveSlashCommand('changes')!.availability({ id: 's', route } as HarnessSession, definition);
 
   it("is available on ClikCode's agent and on harnesses that stream their tool calls", () => {

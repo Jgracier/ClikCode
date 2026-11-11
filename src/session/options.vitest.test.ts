@@ -33,14 +33,14 @@ vi.mock('../runtime/lazy-bridge', () => ({
 
 import {
   applyDefaultSetting, conversationOption, optionForControl, optionForHarness,
-  parseHarnessOption, setSessionHarnessOption, VALID_EFFORTS, VALID_PERMISSION_MODES,
+  parseHarnessOption, setSessionHarnessOption, VALID_EFFORTS,
 } from './options.js';
 import type { AiHarnessOptionDefinition, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessSession } from './model.js';
 import type { ConversationRow } from './conversation-rows.js';
 
 const option = (overrides: Partial<AiHarnessOptionDefinition>): AiHarnessOptionDefinition => ({
-  id: 'flag', label: 'Flag', description: 'a flag', category: 'general', kind: 'boolean',
+  id: 'flag', label: 'Flag', description: 'a flag', category: 'advanced', kind: 'boolean',
   ...overrides,
 });
 

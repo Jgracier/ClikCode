@@ -328,7 +328,7 @@ describe('a move sends only what the target lacks', () => {
     },
   });
   beforeEach(() => { sent.length = 0; imports.length = 0; packedSeen.length = 0; });
-  const said = (count: number): HarnessSession['messages'] => Array.from({ length: count }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `turn ${index}` }));
+  const said = (count: number): NonNullable<HarnessSession['messages']> => Array.from({ length: count }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `turn ${index}` }));
   const addOn = async (machine: string, id: string, extra: NonNullable<HarnessSession['messages']>): Promise<void> => {
     on(machine);
     const current = await readState({ transcripts: [id] });

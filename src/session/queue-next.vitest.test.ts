@@ -21,11 +21,11 @@ describe('what a window runs next from the queue', () => {
 
 describe('turnNeedsWindow: what only a window can prepare before a turn', () => {
   it('is true for a ClikCode Local model and for an account that must sign in on a screen', () => {
-    expect(turnNeedsWindow({ route: 'clikcode-local' }, [])).toBe(true);
+    expect(turnNeedsWindow({ route: 'clikcode-local', accountId: null }, [])).toBe(true);
     expect(turnNeedsWindow({ route: 'local', nativeHarness: 'claude', accountId: 'a' }, [{ id: 'a', status: 'needs_login' }])).toBe(true);
   });
   it('is false for the Gateway, ClikCode\'s agent and a signed-in vendor harness', () => {
-    expect(turnNeedsWindow({ route: 'gateway' }, [])).toBe(false);
+    expect(turnNeedsWindow({ route: 'gateway', accountId: null }, [])).toBe(false);
     expect(turnNeedsWindow({ route: 'local', nativeHarness: 'claude', accountId: 'a' }, [{ id: 'a', status: 'available' }])).toBe(false);
     expect(turnNeedsWindow({ route: 'local', accountId: 'a' }, [{ id: 'a', status: 'needs_login' }])).toBe(false);
   });
