@@ -16,8 +16,6 @@
     "build": "node scripts/build.mjs",
     "install-local": "node scripts/install-local.mjs",
     "build:analyze": "node scripts/build.mjs --analyze",
-    "build:strict": "node scripts/build.mjs --analyze --strict",
-    "build:no-strict": "node scripts/build.mjs --analyze --no-strict",
     "type-check": "tsc --noEmit -p tsconfig.json && pnpm --filter @clikcode/router type-check",
     "test": "vitest run",
     "test:router": "pnpm --filter @clikcode/router test",

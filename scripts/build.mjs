@@ -1,31 +1,31 @@
 /**
- * ClikCode build. Produces four files in dist/:
+ * ClikCode build. Clears dist/, then writes:
  *
  *   index.js               The entry (bin): turns on Node's compile cache, then
- *                          loads cli.js. Rewritten on every build, since its mtime
- *                          and size are the build a worker records.
- *   cli.js                 The program (ESM). Small pure-JS dependencies are inlined
- *                          so startup is one file read instead of a node_modules walk.
+ *                          loads cli.js. Rewritten on every build, with a digest of
+ *                          cli.js and every chunk, since its mtime and size are the
+ *                          build a worker records (src/worker/registry.ts).
+ *   cli.js, chunk-*.js     The program (ESM), split: cli.js holds what every command
+ *                          needs, and each command's own code (and the node builtins
+ *                          it imports) is a chunk loaded when that command runs.
+ *                          Small pure-JS dependencies are inlined, so startup is a
+ *                          few file reads instead of a node_modules walk. Chunks are
+ *                          flat in dist/ so `import.meta.url` siblings resolve the
+ *                          same from any of them.
+ *   computer-tools.js      The computer tools on their own (hot-tools.ts reloads it).
  *   harness-catalog.cjs    The pure harness catalog (no AI SDKs); cheap to load.
  *   ai-router-runtime.cjs  streamAiChatTurn (`ai` + @ai-sdk providers);
  *                          only needed for local API-key model turns.
  *
- * Flags:
- *   --analyze   Print a metafile report: top inputs by bytes, runtime externals,
- *               and any deployment-CLI sources that landed in cli.js.
- *   --no-strict Downgrade the deployment-source check to a warning. By default
- *               (and with the legacy --strict spelling) the build FAILS when a
- *               source named like the deployment CLI's (server-*, deploy*,
- *               docker*, admin-*) is in cli.js — those dragged in axios,
- *               inquirer and ora before the split and must not come back.
+ * --analyze prints a metafile report: top inputs by bytes and runtime externals.
  *
  * Always enforced (cheap, and each one is a broken publish if it regresses):
- *   - every package cli.js imports at runtime is in package.json `dependencies`
+ *   - every package the program imports at runtime is in package.json `dependencies`
  *   - harness-catalog.cjs contains no node_modules code at all
  * */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, readFile, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, readFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { builtinModules } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,7 +60,6 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(root);
 
 const analyze = process.argv.includes('--analyze');
-const strict = !process.argv.includes('--no-strict');
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 // The commit this build is of, for ClikCode Remote's version handshake (src/remote): two machines
 // on the same commit run the same code. Empty outside a git checkout (a packed tarball).
@@ -115,13 +114,18 @@ const index_banner = {
   ].join('\n'),
 };
 
+// Whatever an earlier build left (a chunk of an older program, a retired bundle) would be published.
+await rm('dist', { recursive: true, force: true });
+
 const index = await build({
   ...common,
-  entryPoints: ['src/index.ts'],
+  entryPoints: { cli: 'src/index.ts' },
   format: 'esm',
   plugins: [selectiveExternals],
   banner: index_banner,
-  outfile: 'dist/cli.js',
+  splitting: true,
+  outdir: 'dist',
+  chunkNames: 'chunk-[hash]',
 });
 
 // The computer tools on their own, so a rebuilt copy replaces the running one without restarting a
@@ -135,13 +139,17 @@ await build({
   outfile: 'dist/computer-tools.js',
 });
 
-// Compiling the 2 MB program was ~30 ms of every start, and the catalog's CJS
+// Compiling the program was ~30 ms of every start, and the catalog's CJS
 // another ~10: the compile cache keeps V8's code per file content, so each is
 // compiled once per build. It has to be on before cli.js is imported, hence a
-// file of its own. The digest is there so this file changes with the program.
-// It is a cache of code, not ClikCode state, so it lives in the user cache
-// directory whatever CLIKCODE_HOME says (NODE_COMPILE_CACHE, if set, wins).
-const programDigest = createHash('sha256').update(await readFile('dist/cli.js')).digest('hex').slice(0, 16);
+// file of its own. The digest (of cli.js and every chunk) is there so this file
+// changes with the program. It is a cache of code, not ClikCode state, so it
+// lives in the user cache directory whatever CLIKCODE_HOME says
+// (NODE_COMPILE_CACHE, if set, wins).
+const programFiles = Object.keys(index.metafile.outputs).filter((path) => path.endsWith('.js')).sort();
+const programHash = createHash('sha256');
+for (const path of programFiles) programHash.update(path).update(await readFile(path));
+const programDigest = programHash.digest('hex').slice(0, 16);
 await writeFile('dist/index.js', `#!/usr/bin/env node
 // ClikCode (program ${programDigest}). Written by scripts/build.mjs; the program is cli.js.
 import module from 'node:module';
@@ -174,12 +182,31 @@ await copyFile('native/macos-compat/libclikcode-compat-x64.dylib', 'dist/libclik
 // ---------------------------------------------------------------- guards ----
 
 const failures = [];
+
+/** cli.js and the chunks it imports statically: what `clikcode --version` reads, and the builtins they import. */
+function startupImports(metafile) {
+  const seen = new Set();
+  const loaded = new Set();
+  const visit = (path) => {
+    if (seen.has(path) || !metafile.outputs[path]) return;
+    seen.add(path);
+    for (const item of metafile.outputs[path].imports) {
+      if (item.kind !== 'import-statement') continue;
+      if (!item.external) visit(item.path);
+      else if (item.path.startsWith('node:') || builtins.has(item.path)) loaded.add(item.path);
+    }
+  };
+  visit('dist/cli.js');
+  return { bytes: [...seen].reduce((sum, path) => sum + metafile.outputs[path].bytes, 0), builtins: loaded };
+}
 const warnings = [];
 const display = (path) => relative(root, join(root, path)).split('\\').join('/');
 
+/** Packages a bundle imports at runtime; with no outfile, every output of the build (the program's chunks). */
 function runtimeExternals(metafile, outfile) {
   const names = new Set();
-  for (const item of metafile.outputs[outfile]?.imports ?? []) {
+  const outputs = outfile ? [metafile.outputs[outfile]] : Object.values(metafile.outputs);
+  for (const item of outputs.flatMap((output) => output?.imports ?? [])) {
     if (!item.external || item.path.startsWith('node:') || builtins.has(item.path)) continue;
     if (item.path.startsWith('.') || item.path.startsWith('/')) continue;
     names.add(packageName(item.path));
@@ -187,7 +214,7 @@ function runtimeExternals(metafile, outfile) {
   return [...names].sort();
 }
 
-const indexExternals = runtimeExternals(index.metafile, 'dist/cli.js');
+const indexExternals = runtimeExternals(index.metafile);
 const routerExternals = runtimeExternals(router.metafile, 'dist/ai-router-runtime.cjs');
 for (const name of [...indexExternals, ...routerExternals]) {
   if (!pkg.dependencies?.[name]) failures.push(`dist imports "${name}" at runtime but package.json "dependencies" does not list it`);
@@ -196,6 +223,13 @@ for (const name of Object.keys(pkg.dependencies ?? {})) {
   if (!indexExternals.includes(name) && !routerExternals.includes(name)) {
     warnings.push(`"${name}" is in package.json "dependencies" but nothing in dist imports it at runtime (bundled or unused: move to devDependencies)`);
   }
+}
+
+// What every start loads must stay small: the builtins below cost milliseconds each to load (node:http
+// brings undici) and only a few commands use them, so each belongs in a chunk loaded by its command.
+const STARTUP_FORBIDDEN = ['node:http', 'node:https', 'node:http2', 'node:zlib', 'node:worker_threads', 'node:net', 'node:tls', 'node:dns', 'node:readline'];
+for (const name of startupImports(index.metafile).builtins) {
+  if (STARTUP_FORBIDDEN.includes(name.startsWith('node:') ? name : `node:${name}`)) failures.push(`cli.js loads ${name} at every start (reached through a static import); import the module that needs it with await import()`);
 }
 
 const catalogDependencies = Object.keys(catalog.metafile.inputs).filter((path) => /(^|\/)node_modules\//.test(path));
@@ -218,7 +252,8 @@ function kb(bytes) { return `${(bytes / 1024).toFixed(1)} kB`; }
 /** Collapse node_modules inputs to one row per package; keep source files as-is. */
 function topInputs(metafile, outfile, limit) {
   const rows = new Map();
-  for (const [path, info] of Object.entries(metafile.outputs[outfile].inputs)) {
+  const outputs = outfile ? [metafile.outputs[outfile]] : Object.values(metafile.outputs);
+  for (const [path, info] of outputs.flatMap((output) => Object.entries(output.inputs))) {
     const marker = path.lastIndexOf('node_modules/');
     const key = marker >= 0
       ? `npm:${packageName(path.slice(marker + 'node_modules/'.length))}`
@@ -229,14 +264,15 @@ function topInputs(metafile, outfile, limit) {
 }
 
 if (analyze) {
-  for (const [metafile, outfile, limit] of [[index.metafile, 'dist/cli.js', 30], [catalog.metafile, 'dist/harness-catalog.cjs', 8], [router.metafile, 'dist/ai-router-runtime.cjs', 12]]) {
-    const total = metafile.outputs[outfile].bytes;
-    console.log(`\n${outfile}  ${kb(total)}`);
+  for (const [metafile, outfile, limit] of [[index.metafile, undefined, 30], [catalog.metafile, 'dist/harness-catalog.cjs', 8], [router.metafile, 'dist/ai-router-runtime.cjs', 12]]) {
+    const total = outfile ? metafile.outputs[outfile].bytes : Object.values(metafile.outputs).reduce((sum, output) => sum + output.bytes, 0);
+    const startup = outfile ? '' : `, ${kb(startupImports(metafile).bytes)} loaded by every start`;
+    console.log(`\n${outfile ?? `dist/cli.js + ${programFiles.length - 1} chunks`}  ${kb(total)}${startup}`);
     for (const [name, bytes] of topInputs(metafile, outfile, limit)) {
       console.log(`  ${kb(bytes).padStart(10)}  ${((bytes / total) * 100).toFixed(1).padStart(5)}%  ${name}`);
     }
   }
-  console.log(`\ncli.js runtime packages: ${indexExternals.join(', ') || '(none)'}`);
+  console.log(`\nprogram runtime packages: ${indexExternals.join(', ') || '(none)'}`);
   console.log(`ai-router-runtime.cjs runtime packages: ${routerExternals.join(', ') || '(none)'}`);
   // Outside dist/ on purpose: everything in dist/ is published.
   await mkdir('node_modules/.cache/clikcode', { recursive: true });
