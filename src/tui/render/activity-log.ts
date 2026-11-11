@@ -34,7 +34,7 @@ export type ActivityEntry = {
 };
 
 /** A decision, worded and styled once. */
-export type EntryDecision = {
+type EntryDecision = {
   kind: Decision['kind'];
   /** The whole settled row: `✗ denied rm -rf build`. */
   row: string;

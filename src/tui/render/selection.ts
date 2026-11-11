@@ -14,7 +14,7 @@
  * Pure: screen rows and mouse reports in, highlighted rows and text out. */
 import { displayTokens, terminalCellWidth } from './width.js';
 
-export type Cell = { row: number; col: number };
+type Cell = { row: number; col: number };
 export type Selection = { anchor: Cell; head: Cell };
 
 export type MouseAction = { kind: 'press' | 'drag' | 'release'; at: Cell };

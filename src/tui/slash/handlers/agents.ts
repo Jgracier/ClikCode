@@ -12,7 +12,7 @@ import { conversationSubagentEvents, readConversationSubagent } from '../../../w
 
 const ANSWER_MS = 10_000;
 
-export async function askAgents(sessionId: string, command: Extract<ClientCommand, { type: 'agents' }>): Promise<string> {
+async function askAgents(sessionId: string, command: Extract<ClientCommand, { type: 'agents' }>): Promise<string> {
   const client = await WorkerClient.attachExisting(sessionId);
   if (!client) {
     // No worker, so nothing runs: what the record says happened.

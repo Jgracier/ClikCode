@@ -11,10 +11,9 @@
  * the chat. Nothing from this machine is copied to the other one. */
 import chalk from 'chalk';
 import type { HarnessPrompter } from '../../harness/prompter.js';
-import { relativeTime } from '../../harness/protocol/format.js';
 import { chooseOption } from './choose.js';
 import { withSlowWait, type WaitingBand } from '../slow-wait.js';
-import { reconnectWindowMachine, type MachineView } from '../../remote/connection.js';
+import { reconnectWindowMachine } from '../../remote/connection.js';
 import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines, updatePolicy, type RemoteMachine } from '../../remote/machines.js';
 import { installedRecord, localBuildCommit, updateRemoteMachine } from '../../remote/updates.js';
 import type { DiscoveredMachine } from '../../remote/tailscale.js';
@@ -24,7 +23,7 @@ import { targetHost, targetUser, validateSshTarget, withUser } from '../../remot
 import { wrapWords } from '../render/wrap.js';
 
 /** What adding or managing a machine needs of the window it runs in. */
-export interface RemoteHost {
+interface RemoteHost {
   readonly prompter: HarnessPrompter;
   /** A one-line question; undefined when Esc cancelled it. */
   ask(label: string): Promise<string | undefined>;
@@ -65,16 +64,6 @@ function say(host: RemoteHost, mark: string, text: string, tail = ''): void {
   });
 }
 
-
-/** How an added machine is, in a word or two. */
-export function machineStateText(machine: RemoteMachine, view: MachineView | undefined, now = Date.now()): string {
-  if (!machine.ready) return 'install not finished';
-  if (!view || view.state === 'connecting') return 'checking…';
-  if (view.state === 'offline') return `offline${machine.lastSeen ? ` · last seen ${relativeTime(machine.lastSeen, now)}` : ''}`;
-  if (view.updating) return 'updating ClikCode…';
-  if (!view.needsUpdate) return 'connected';
-  return chalk.yellow(view.updateError ? 'needs update · the last update failed' : 'needs update');
-}
 
 /** Discovered machines not already added (by Tailscale node, by name it is
  * reached at, or by installation id once it has one). */
@@ -121,7 +110,7 @@ async function runInstall(host: RemoteHost, machine: RemoteMachine, update: bool
  * reached at, never the account on it, and only the user knows which one is
  * theirs. A name that is not one says why and is asked again. Returns
  * `user@host` for `target`; undefined: Esc, add nothing. */
-export async function askLoginUser(host: RemoteHost, name: string, target: string): Promise<string | undefined> {
+async function askLoginUser(host: RemoteHost, name: string, target: string): Promise<string | undefined> {
   for (;;) {
     const typed = await host.ask(`Log in to ${name} as which user?`);
     if (typed === undefined) return undefined;
@@ -136,7 +125,7 @@ export async function askLoginUser(host: RemoteHost, name: string, target: strin
 
 /** What adding a machine came to: its id once its chats can be listed
  * (it is added, or was already, maybe under another name), and what to say. */
-export interface AddedMachine { id?: string; notice?: string }
+interface AddedMachine { id?: string; notice?: string }
 
 /** Adds a machine Tailscale found (tailscale.ts), wherever machines are
  * listed (/machine, the board's Machines): asks which user to log in

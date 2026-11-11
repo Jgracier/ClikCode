@@ -18,7 +18,7 @@ export const REEXEC_TERMINAL_ENV = 'CLIKCODE_KEEP_TERMINAL_ON_REEXEC';
  * scrollback) or `alt` (a full-screen UI on the alternate screen). `1` is what builds from before this value existed send, whichever
  * model they used, so it means UNKNOWN: an old inline process exec'ing into a full-screen build sends the same `1` as an old
  * full-screen one. */
-export type ReexecScreen = 'inline' | 'alt' | '1';
+type ReexecScreen = 'inline' | 'alt' | '1';
 
 /** The value this process hands to the program it execs into. */
 export function reexecHandover(env: NodeJS.ProcessEnv = process.env): 'inline' | 'alt' {

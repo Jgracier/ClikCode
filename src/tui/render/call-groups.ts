@@ -138,7 +138,7 @@ export class GroupRegistry {
 }
 
 /** A thought kept as its row's data (the settled row and the expansion). */
-export function thoughtEntryRow(thought: GroupThought): string {
+function thoughtEntryRow(thought: GroupThought): string {
   return thoughtRow(thought.durationMs, thought.heading ?? reasoningHeading(thought.text));
 }
 

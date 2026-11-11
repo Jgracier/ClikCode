@@ -51,7 +51,7 @@ export function frameMessages(p: TerminalHarnessPrompter, session: HarnessSessio
   return { pending, pendingPrompt, persistedMessages, hasTransientAssistant };
 }
 
-export type TranscriptInput = {
+type TranscriptInput = {
   session: HarnessSession; pending: HarnessSession['pendingTurn']; persistedMessages: ReturnType<typeof frameMessages>['persistedMessages'];
   hasTransientAssistant: boolean; conversationInner: number;
 };

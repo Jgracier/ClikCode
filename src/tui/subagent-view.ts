@@ -34,10 +34,10 @@ export interface SubAgentViewState {
   detail: SubAgentDetail;
 }
 
-export type SubAgentDetail = 'recent' | 'all' | 'lines';
+type SubAgentDetail = 'recent' | 'all' | 'lines';
 const DETAILS: readonly SubAgentDetail[] = ['recent', 'all', 'lines'];
 /** The calls `recent` opens, counted from the newest. */
-export const RECENT_CALLS = 4;
+const RECENT_CALLS = 4;
 
 type SubAgentViewEffect =
   | { type: 'none' }
@@ -100,7 +100,7 @@ export function subAgentViewKey(state: SubAgentViewState, key: string, vendor: s
 }
 
 /** `main > Agent explore`, the ring while it runs, a tick or cross once over. */
-export function subAgentHeader(ref: SubAgentRef, frame: number): string {
+function subAgentHeader(ref: SubAgentRef, frame: number): string {
   const mark = ref.status === 'running' ? look.paint.accent(agentSpinnerGlyph(frame))
     : ref.status === 'done' ? look.paint.success(LOOK.glyph.ok) : ref.status === 'stopped' ? look.paint.stopped(LOOK.glyph.stopped) : look.paint.failed(LOOK.glyph.failed);
   return `${look.paint.neutral('main >')} ${mark} ${ref.label}`;
