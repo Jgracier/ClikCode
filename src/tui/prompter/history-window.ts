@@ -232,20 +232,23 @@ function holdTop(p: TerminalHarnessPrompter, above: number, top: number): void {
   p.alternateScrollback = Math.max(0, p.alternateTranscript.length + extra + h.rowsBelow - above - top);
 }
 
-/** Render the batch of messages just above the window and put it in front of its rows. */
-function prependBatch(p: TerminalHarnessPrompter, want: number): void {
+/** Render the batch of messages just above the window and put it in front of its rows. Returns how many messages it added (0: none
+ * are left above). */
+function prependBatch(p: TerminalHarnessPrompter, want: number): number {
   const h = p.scrollWindow;
   let lo = h.first;
   let rows = 0;
   while (lo > 0 && rows < want && h.first - lo < BATCH_MESSAGES) { lo -= 1; rows += rowsOf(p, lo); }
-  if (lo === h.first) return;
+  if (lo === h.first) return 0;
   const chunk = renderChunk(p, lo, h.first);
   const base = p.alternateTrimmed - chunk.rows.length;
   spliceFront(p.alternateTranscript, chunk.rows);
   for (const [i, start] of chunk.starts.entries()) { p.messageLines.set(lo + i, base + start); h.measure(lo + i, chunk.counts[i]!); }
   for (const [i, tag] of chunk.tags.entries()) if (tag) p.lineTags.set(base + i, tag);
   p.alternateTrimmed = base;
+  const added = h.first - lo;
   h.first = lo;
+  return added;
 }
 
 /** Render the batch of messages just below a detached window and add its rows to the end. */
@@ -345,10 +348,8 @@ export function settleWindow(p: TerminalHarnessPrompter, above: number): void {
     if (p.alternateScrollback === 0) { h.reset(); toLive(p, undefined); return; }
   }
   // Rows above the view: rendered ahead, a batch at a time.
-  let guard = 0;
-  while (h.first > 0 && topIndex(p, above) < near && guard < 1000) {
-    guard += 1;
-    prependBatch(p, Math.max(above, 30));
+  while (h.first > 0 && topIndex(p, above) < near) {
+    if (!prependBatch(p, Math.max(above, 30))) break;
     if (!timeLeft()) { if (h.first > 0 && topIndex(p, above) < near) h.more = true; break; }
   }
   // Rows below a view that is far from the end (detached): the same.
