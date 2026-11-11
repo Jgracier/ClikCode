@@ -325,6 +325,8 @@ function tellWorker(record: WorkerRuntimeRecord, command: ClientCommand): Promis
   });
 }
 
+interface AttachOptions { reattaches?: boolean }
+
 /** A worker took the connection and never answered the attach. */
 class WorkerSilent extends Error {
   constructor() {
@@ -433,12 +435,14 @@ export class WorkerClient extends EventEmitter {
     });
   }
 
-  static async attach(sessionId: string): Promise<WorkerClient> {
+  /** `reattaches`: this window attaches again by itself when it next needs the
+   * worker (a terminal), so the worker may retire under it when too many run. */
+  static async attach(sessionId: string, options: AttachOptions = {}): Promise<WorkerClient> {
     await warmingWorkerStarts.get(sessionId)?.catch(quiet('worker/client'));
     const running = await usableWorker(sessionId);
     if (running) {
       try {
-        return await WorkerClient.connectTo(running);
+        return await WorkerClient.connectTo(running, options);
       } catch (first) {
         if (!(first instanceof WorkerSilent)) throw first;
       }
@@ -446,41 +450,41 @@ export class WorkerClient extends EventEmitter {
       // window that cannot ask it to step down must not wait on it for ever (a turn it held is
       // journaled and picked up by the replacement).
       try {
-        return await WorkerClient.connectTo(running);
+        return await WorkerClient.connectTo(running, options);
       } catch (second) {
         if (!(second instanceof WorkerSilent)) throw second;
       }
       await replaceUnresponsiveWorker(running);
       await ensureSessionOnDisk(sessionId);
-      return WorkerClient.connectTo(await spawnSessionWorker(sessionId));
+      return WorkerClient.connectTo(await spawnSessionWorker(sessionId), options);
     }
     // The worker is another process and reads the chat from disk. A new
     // chat is a draft in this one until it is used, and starting its worker
     // is using it: one started first found nothing and crashed.
     await ensureSessionOnDisk(sessionId);
-    return WorkerClient.connectTo(await spawnSessionWorker(sessionId));
+    return WorkerClient.connectTo(await spawnSessionWorker(sessionId), options);
   }
 
   /** The session's worker if one is already running; never starts one. A
    * window at its prompt uses this to follow turns it did not start. */
-  static async attachExisting(sessionId: string): Promise<WorkerClient | undefined> {
+  static async attachExisting(sessionId: string, options: AttachOptions = {}): Promise<WorkerClient | undefined> {
     const record = await usableWorker(sessionId);
-    return record ? WorkerClient.connectTo(record) : undefined;
+    return record ? WorkerClient.connectTo(record, options) : undefined;
   }
 
   /** One reconnect, and only for a connection lost before the worker answered
    * (the worker is still there to be asked again); any other failure is the
    * answer. */
-  private static async connectTo(record: WorkerRuntimeRecord): Promise<WorkerClient> {
+  private static async connectTo(record: WorkerRuntimeRecord, options: AttachOptions): Promise<WorkerClient> {
     try {
-      return await WorkerClient.connectOnce(record);
+      return await WorkerClient.connectOnce(record, options);
     } catch (error) {
       if (!(error instanceof ClosedBeforeAnswer)) throw error;
-      return WorkerClient.connectOnce(record);
+      return WorkerClient.connectOnce(record, options);
     }
   }
 
-  private static async connectOnce(record: WorkerRuntimeRecord): Promise<WorkerClient> {
+  private static async connectOnce(record: WorkerRuntimeRecord, options: AttachOptions): Promise<WorkerClient> {
     const socket = await new Promise<Socket>((resolveSocket, rejectSocket) => {
       const candidate = connect(record.socketPath);
       candidate.once('connect', () => resolveSocket(candidate));
@@ -489,7 +493,7 @@ export class WorkerClient extends EventEmitter {
     const client = new WorkerClient(socket);
     lifecycle('client.worker.connect', { worker: record.sessionId, workerPid: record.pid });
     // This window reads the saved conversation itself (saved-conversation.ts).
-    client.send({ type: 'attach', token: record.token, readsSaved: true });
+    client.send({ type: 'attach', token: record.token, readsSaved: true, ...(options.reattaches ? { reattaches: true as const } : {}) });
     // A worker that took the connection and says nothing is not waited on for ever.
     const initial = await Promise.race([
       client.initialSnapshot,

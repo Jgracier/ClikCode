@@ -141,7 +141,9 @@ async function connect(sessionId: string, spawn: boolean): Promise<WorkerClient 
     const joined = await pending;
     if (joined || !spawn) return joined;
   }
-  const attempt = (spawn ? WorkerClient.attach(sessionId) : WorkerClient.attachExisting(sessionId)).then((client) => {
+  // A terminal attaches again by itself (askUntilWorker, and its next message starts a worker), so
+  // its worker may retire under it when too many run (worker-idle.ts leaveIfOverCap).
+  const attempt = (spawn ? WorkerClient.attach(sessionId, { reattaches: true }) : WorkerClient.attachExisting(sessionId, { reattaches: true })).then((client) => {
     if (client) { clients.set(sessionId, client); track(sessionId, client); }
     return client;
   }).finally(() => connecting.delete(sessionId));

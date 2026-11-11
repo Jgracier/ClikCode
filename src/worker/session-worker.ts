@@ -326,6 +326,8 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
     // workers lived for days this way, each holding its MCP servers.
     if (ctx.homeGone()) { void ctx.shutdown('its ClikCode home was removed'); return; }
     ctx.idle.leaveIfStaleBuild();
+    // Too many workers on the machine: the least recently used idle one goes (worker-idle.ts).
+    void ctx.idle.leaveIfOverCap();
   }, BUILD_WATCH_MS);
   buildWatch.unref();
   if (options.warm) handleCommand.warm();
