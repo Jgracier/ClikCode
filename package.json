@@ -16,7 +16,7 @@
     "build": "node scripts/build.mjs",
     "install-local": "node scripts/install-local.mjs",
     "build:analyze": "node scripts/build.mjs --analyze",
-    "type-check": "tsc --noEmit -p tsconfig.json && pnpm --filter @clikcode/router type-check",
+    "type-check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser-tests.json && pnpm --filter @clikcode/router type-check",
     "test": "vitest run",
     "test:router": "pnpm --filter @clikcode/router test",
     "test:all": "pnpm run test && pnpm run test:router",
