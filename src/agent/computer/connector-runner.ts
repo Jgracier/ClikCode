@@ -5,12 +5,14 @@
  * with a full humanStep. It never solves a captcha, spends money, or prints a key, and every vendor has a step and time budget. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
-import { IDENTITY_WALL } from './keygrab.js';
+import { IDENTITY_WALL, paymentWall } from './keygrab.js';
 import { BACKOFF_HOURS } from './keygrab-park.js';
 import { detectBlocker } from './signup-recipes.js';
 
 export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'vendor-contact' | 'decision' | 'retire' | 'worker-setup';
-export interface HumanStep { kind: HumanKind | 'retire'; url?: string; instructions?: string; reasonCode?: string; prefill?: string[] }
+/** `reasonCode` says what the wall is, set by whoever read the page (keygrab, humanStepFor, qualify); a step ClikDeploy sent without one
+ * gets its kind (planFor). The loop types walls from it alone (connector-loop.ts wallOf). */
+export interface HumanStep { kind: HumanKind | 'retire'; url?: string; instructions?: string; reasonCode: string; prefill?: string[] }
 export interface AgentCall { tool: string; args: Record<string, unknown> }
 export type Next =
   | { kind: 'call'; task: string }
@@ -154,7 +156,7 @@ export function planFor(result: OnboardResult, recipe: boolean): Plan {
   if (!next || next.kind === 'none') return result.state === 'blocked' ? { do: 'done', status: 'blocked' } : { do: 'handoff', why: 'onboarding supplied no next step without confirming completion' };
   if (next.kind === 'agent' && (isSpecFix(next.task) || isSpecFix(result.reason))) return { do: 'specfix', why: 'the auth probe ended path-wrong or in the wrong place: a spec fix', ...(blockedCall(next) ? { call: blockedCall(next)! } : {}) };
   if (next.kind === 'call') return { do: 'wait', ms: waitMs(next.task) };
-  if (next.kind === 'human') return { do: 'human', humanStep: next.humanStep };
+  if (next.kind === 'human') return { do: 'human', humanStep: { ...next.humanStep, reasonCode: next.humanStep.reasonCode || next.humanStep.kind } };
   if (WALL_STATES.has(result.state)) return { do: 'handoff', why: 'ClikDeploy says a person is needed but gave no step' };
   const call = next.call;
   if (call?.tool === 'oauth_connect') return { do: 'oauth' };
@@ -183,7 +185,7 @@ export function humanStepFor(id: string, stop: StopInfo): HumanStep | undefined 
   const at = url ? { url } : {};
   if (stop.kind === 'captcha' || blocker === 'a captcha') return { kind: 'captcha', ...at, reasonCode: 'captcha', instructions: `Solve the captcha at ${hostOf(url)} for ${id}, then the runner can carry on.` };
   if (stop.kind === 'mfa' || blocker === 'an SMS or authenticator code') return { kind: 'mfa', ...at, reasonCode: 'verification-code', instructions: `Enter the verification code (SMS or authenticator) at ${hostOf(url)} for ${id}.` };
-  if (stop.kind === 'payment' || blocker === 'a payment page') return { kind: 'payment', ...at, reasonCode: 'payment', instructions: `${hostOf(url)} wants a card, credits or a paid plan before ${id} can continue; nothing was paid.` };
+  if (stop.kind === 'payment' || blocker === 'a payment page') return { kind: 'payment', ...at, reasonCode: paymentWall(`${stop.message} ${stop.pageText}`), instructions: `${hostOf(url)} wants a card, credits or a paid plan before ${id} can continue; nothing was paid.` };
   if (IDENTITY_WALL.test(stop.pageText)) return { kind: 'identity', ...at, reasonCode: 'identity-check', instructions: `${hostOf(url)} asks for identity or business verification for ${id}.` };
   if (blocker === 'a review page') return { kind: 'app-review', ...at, reasonCode: 'app-review', instructions: `${hostOf(url)} holds the ${id} app for review; check its status.` };
   if (stop.kind === 'unrecognized-client') return { kind: 'app-registration', ...at, reasonCode: 'oauth-client-unknown', instructions: `${hostOf(url)} does not recognize ClikDeploy's OAuth client for ${id}: register the app there and save its client id and secret.` };

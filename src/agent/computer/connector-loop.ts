@@ -25,26 +25,23 @@ export function budgeted(client: DeployClient, budget: CallBudget): DeployClient
   return { waiting: count(client.waiting.bind(client)), batch: count(client.batch.bind(client)), onboard: count(client.onboard.bind(client)), report: count(client.report.bind(client)), note: count(client.note.bind(client)), tool: count(client.tool.bind(client)) };
 }
 
+/** A step's reason code (keygrab, the runner, qualify, or ClikDeploy's own -- its kind where it sent none, connector-runner.ts planFor)
+ * as a typed wall, where it is not already one. The page was read once, by whoever set the code; nothing here reads text again. */
+const REASON_WALLS: Readonly<Record<string, WallKind>> = {
+  'phone-verification': 'sms', 'verification-code': 'sms', mfa: 'sms',
+  payment: 'card',
+  'approval-needed': 'sales', 'vendor-contact': 'sales',
+  'app-registration': 'oauth-app', 'oauth-client-unknown': 'oauth-app',
+  'domain-for-sale': 'dead-host', 'host-dead': 'dead-host',
+  'vendor-retired': 'no-api', retire: 'no-api',
+};
+
 /** The wall a vendor stopped on, as one of the typed kinds. */
 export function wallOf(o: VendorOutcome): WallKind | undefined {
   if (o.status === 'budget') return 'budget';
   if (o.status !== 'human' || !o.humanStep) return undefined;
-  const h = o.humanStep;
-  if (isWall(h.reasonCode)) return h.reasonCode;
-  const text = `${h.instructions ?? ''} ${o.summary}`.toLowerCase();
-  switch (h.kind) {
-    case 'captcha': return 'captcha';
-    case 'sms': case 'mfa': return 'sms';
-    case 'payment': return /\bplan\b|pricing|upgrade|subscription|paid/.test(text) ? 'paid-plan' : 'card';
-    case 'app-review': return 'app-review';
-    case 'app-registration': return 'oauth-app';
-    case 'vendor-contact': return 'sales';
-    case 'retire': return /dead|resolve|unreachable|no longer|offline|404|parked|expired/.test(text) ? 'dead-host' : 'no-api';
-    default:
-      if (/free.?mail|gmail|personal e-?mail/.test(text)) return 'free-mail';
-      if (/work.?e-?mail|business e-?mail|company e-?mail/.test(text)) return 'work-email';
-      return undefined;
-  }
+  const code = o.humanStep.reasonCode;
+  return isWall(code) ? code : REASON_WALLS[code];
 }
 
 /** One `some`/`full` line of /proc/pressure/*: the 10 second average. */

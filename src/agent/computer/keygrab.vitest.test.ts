@@ -665,3 +665,10 @@ describe('keygrab picks the broadest access on a key form', () => {
     expect(site.log).toContain('click All scopes');
   });
 });
+
+it('says which wall it read in the reason code: a card or a plan, a work address or no free mail', () => {
+  expect(keygrabWall('Enter your credit card number to start. Card number')?.reasonCode).toBe('card');
+  expect(keygrabWall('Upgrade to the Pro plan to use the API. Enter your credit card number')?.reasonCode).toBe('paid-plan');
+  expect(keygrabWall('Please use a work email to sign up.')?.reasonCode).toBe('work-email');
+  expect(keygrabWall('Gmail addresses are not allowed.')?.reasonCode).toBe('free-mail');
+});

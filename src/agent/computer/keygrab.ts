@@ -84,6 +84,9 @@ const IDENTITY_WEAK = /identity verification|business verification|verify your b
 /** The identity wall words the runner shares: the strong evidence only. */
 export const IDENTITY_WALL = new RegExp(`${IDENTITY_STRONG.source}|${IDENTITY_WEAK.source}`, 'i');
 
+/** A payment wall, typed from the page that showed it: a plan to buy, or a card to give. */
+export const paymentWall = (text: string): 'paid-plan' | 'card' => /\bplan\b|pricing|upgrade|subscription|paid tier/i.test(text) ? 'paid-plan' : 'card';
+
 /** A wall only a person clears, from the page; undefined for an ordinary page. `keyPage`: the page already offers key controls, so a stray mention of billing is not a wall. */
 export function keygrabWall(text: string, keyPage = false, signInOffered = false, extra: { captchaFrame?: boolean; fields?: string[] } = {}): { kind: HumanKind; reasonCode: string; what: string } | undefined {
   const blocker = detectBlocker(text);
@@ -93,9 +96,9 @@ export function keygrabWall(text: string, keyPage = false, signInOffered = false
   // "Verify your identity ... a verification email will follow" over name and email boxes is a sign-up form (HERE), not a document check.
   const signUpForm = /verification e-?mail|we(?:'ll| will) e-?mail you/i.test(text) && (extra.fields ?? []).some(f => /e-?mail/i.test(f)) && !/passport|licen[cs]e|upload|government/i.test(text);
   if (!signUpForm && IDENTITY_STRONG.test(text) || (!keyPage && !signInOffered && IDENTITY_WEAK.test(text))) return { kind: 'identity', reasonCode: 'identity-check', what: 'identity or business verification' };
-  if (/(?:e-?mail|address)[^.\n]{0,50}(?:not allowed|not accepted|not supported|is blocked|invalid domain|not permitted)|(?:personal|free|public|gmail)[^.\n]{0,30}(?:e-?mail|address)[^.\n]{0,30}(?:not|can(?:'|no)t)|(?:work|business|company) e-?mail (?:is )?(?:required|only)|use a (?:work|business|company) e-?mail/i.test(text)) return { kind: 'decision', reasonCode: 'email-not-allowed', what: 'a refusal of the email address' };
+  if (/(?:e-?mail|address)[^.\n]{0,50}(?:not allowed|not accepted|not supported|is blocked|invalid domain|not permitted)|(?:personal|free|public|gmail)[^.\n]{0,30}(?:e-?mail|address)[^.\n]{0,30}(?:not|can(?:'|no)t)|(?:work|business|company) e-?mail (?:is )?(?:required|only)|use a (?:work|business|company) e-?mail/i.test(text)) return { kind: 'decision', reasonCode: /(?:work|business|company) e-?mail/i.test(text) ? 'work-email' : 'free-mail', what: 'a refusal of the email address' };
   // A card form (a card-number box, "enter your card") is a payment wall wherever it shows; pricing words never are.
-  if (!keyPage && ((extra.fields ?? []).some(f => PAYMENT_FIELD.test(f)) || PAYMENT_TEXT.test(text))) return { kind: 'payment', reasonCode: 'payment', what: 'a payment page' };
+  if (!keyPage && ((extra.fields ?? []).some(f => PAYMENT_FIELD.test(f)) || PAYMENT_TEXT.test(text))) return { kind: 'payment', reasonCode: paymentWall(text), what: 'a payment page' };
   if (keyPage || signInOffered) return undefined;
   if (/(?:verify|confirm|enter|add)[^.\n]{0,30}(?:phone|mobile)(?: number)?|(?:sms|text message)[^.\n]{0,40}code|code[^.\n]{0,30}(?:sent|texted)[^.\n]{0,20}(?:phone|number|\+\d)|phone verification/i.test(text) && /verif|code|confirm/i.test(text)) return { kind: 'sms', reasonCode: 'phone-verification', what: 'a phone (SMS) verification' };
   if (blocker === 'an SMS or authenticator code') return { kind: 'mfa', reasonCode: 'verification-code', what: 'an authenticator or SMS code' };

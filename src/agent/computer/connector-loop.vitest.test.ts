@@ -175,7 +175,7 @@ describe('reports and the log', () => {
   it('success is reported done; a human wall is reported blocked with its typed kind; one log line per vendor with ids, calls, minutes, outcome, wall', async () => {
     const f = fakes(['good', 'walled'], async (id, ctx) => {
       ctx.budget.spend(); ctx.budget.spend();
-      return id === 'good' ? outcome(id) : outcome(id, { status: 'human', summary: 'a captcha on the sign-up form', humanStep: { kind: 'captcha', instructions: 'solve it' } });
+      return id === 'good' ? outcome(id) : outcome(id, { status: 'human', summary: 'a captcha on the sign-up form', humanStep: { kind: 'captcha', instructions: 'solve it', reasonCode: 'captcha' } });
     });
     const sum = await runLoop(f.ports, limits());
     expect(f.reports.find(([id]) => id === 'good')![1]).toMatchObject({ outcome: 'done' });
@@ -189,26 +189,32 @@ describe('reports and the log', () => {
   });
 
   it('a wall the server already holds is not reported again', async () => {
-    const f = fakes(['a'], async id => outcome(id, { status: 'human', summary: 's', recorded: 'ClikDeploy already holds this human step', humanStep: { kind: 'payment', instructions: 'card' } }));
+    const f = fakes(['a'], async id => outcome(id, { status: 'human', summary: 's', recorded: 'ClikDeploy already holds this human step', humanStep: { kind: 'payment', instructions: 'card', reasonCode: 'card' } }));
     await runLoop(f.ports, limits());
     expect(f.reports).toHaveLength(0);
   });
 
-  it('maps human steps and reason codes to the typed wall kinds', () => {
-    const h = (kind: string, instructions = '', reasonCode?: string) => wallOf(outcome('x', { status: 'human', summary: '', humanStep: { kind, instructions, ...(reasonCode ? { reasonCode } : {}) } as never }));
+  it('types a wall from its reason code alone, never from the words of the step', () => {
+    const h = (reasonCode: string, instructions = '') => wallOf(outcome('x', { status: 'human', summary: '', humanStep: { kind: 'decision', instructions, reasonCode } }));
     expect(h('captcha')).toBe('captcha');
+    expect(h('phone-verification')).toBe('sms');
+    expect(h('verification-code')).toBe('sms');
+    expect(h('card', 'the API needs the Pro plan')).toBe('card');
+    expect(h('paid-plan')).toBe('paid-plan');
+    expect(h('approval-needed')).toBe('sales');
+    expect(h('oauth-client-unknown')).toBe('oauth-app');
+    expect(h('host-dead')).toBe('dead-host');
+    expect(h('domain-for-sale')).toBe('dead-host');
+    expect(h('vendor-retired', 'the domain no longer resolves')).toBe('no-api');
+    expect(h('free-mail')).toBe('free-mail');
+    expect(h('work-email')).toBe('work-email');
+    // A step ClikDeploy sent with no code carries its kind (planFor).
     expect(h('mfa')).toBe('sms');
-    expect(h('payment', 'a credit card')).toBe('card');
-    expect(h('payment', 'the API needs the Pro plan')).toBe('paid-plan');
+    expect(h('payment')).toBe('card');
     expect(h('vendor-contact')).toBe('sales');
-    expect(h('app-review')).toBe('app-review');
     expect(h('app-registration')).toBe('oauth-app');
-    expect(h('retire', 'the domain no longer resolves')).toBe('dead-host');
-    expect(h('retire', 'the vendor has no public API')).toBe('no-api');
-    expect(h('decision', 'gmail addresses are not accepted')).toBe('free-mail');
-    expect(h('decision', 'a work email is required')).toBe('work-email');
-    expect(h('decision', 'choose', 'sales')).toBe('sales');
-    expect(h('decision', 'choose')).toBeUndefined();
+    expect(h('identity-check', 'gmail addresses are not accepted')).toBeUndefined();
+    expect(h('decision', 'a work email is required')).toBeUndefined();
     expect(wallOf(outcome('x', { status: 'budget' }))).toBe('budget');
     expect(wallOf(outcome('x'))).toBeUndefined();
   });
