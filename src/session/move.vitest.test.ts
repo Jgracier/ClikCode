@@ -32,6 +32,12 @@ vi.mock('../harness/transport/native/inspect.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../harness/transport/native/inspect.js')>(),
   inspectNativeHarnessForPicker: (async () => ({ installed: true })) as never,
 }));
+// Selecting the provider for a chat with no account here installs its CLI when missing: the test's facts say it is installed.
+const selected = vi.hoisted(() => [] as string[]);
+vi.mock('../commands/ai/harness.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../commands/ai/harness.js')>(),
+  aiHarnessSelect: async (harness: string) => { selected.push(harness); },
+}));
 beforeEach(() => { vi.spyOn(process, 'getuid').mockReturnValue(1000); });
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -240,6 +246,16 @@ describe('a move between two machines', () => {
     expect(session.messages).toHaveLength(4);
     expect(session.ownedThreads).toEqual(expect.arrayContaining(['claude:old', 'claude:vendor-thread-1']));
     expect((await readState({ transcripts: [] })).sessions.filter((item) => item.conversationId === 'c3')).toHaveLength(1);
+  });
+
+  it('a provider not installed there is not installed by the move: the move does not wait on a download', async () => {
+    on('g');
+    await writeState(state([]));
+    selected.length = 0;
+    await importChat(exported(), names, facts({ installed: async () => false }));
+    expect(selected).toEqual([]);
+    await importChat({ ...exported(), sessionId: 's9', conversationId: 'c9' }, names, facts());
+    expect(selected).toEqual(['claude']);
   });
 
   it('a live chat of the same id there keeps its own; the moved one gets another id', async () => {

@@ -219,7 +219,7 @@ function machineFacts(config: Conf | undefined): MoveFacts {
   };
 }
 
-type Planned = ImportPlan & { session: Omit<HarnessSession, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'messages'> };
+type Planned = ImportPlan & { session: Omit<HarnessSession, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'messages'>; installedThere: boolean };
 
 /** What the chat would be here, and what of it changes. Reads only. */
 export async function planImport(state: HarnessState, chat: ChatExport, facts: MoveFacts): Promise<Planned> {
@@ -308,7 +308,7 @@ export async function planImport(state: HarnessState, chat: ChatExport, facts: M
     };
   }
   if (wanted.routeModels) session.routeModels = wanted.routeModels;
-  return { changes, folder, session };
+  return { changes, folder, session, installedThere };
 }
 
 /** The note the agent is given, unseen, with the chat's first turn here. */
@@ -355,8 +355,10 @@ export async function importChat(chat: ChatExport, names: MoveNames, facts: Move
   } else state.sessions.push(session);
   await writeState(state);
   // A provider with no account here at all gets the one a new chat would (its
-  // vendor's own sign-in, if any): the first turn signs in where it must.
-  if (session.route === 'local' && session.nativeHarness && !session.accountId) {
+  // vendor's own sign-in, if any): the first turn signs in where it must. Only
+  // when it is installed: selecting installs a missing vendor CLI, and the move
+  // waited on that download; the first turn installs it instead.
+  if (session.route === 'local' && session.nativeHarness && !session.accountId && planned.installedThere) {
     const { aiHarnessSelect } = await import('../commands/ai/harness.js');
     await aiHarnessSelect(session.nativeHarness, id, { emit: false, signIn: false }).catch(quiet('session/move'));
   }

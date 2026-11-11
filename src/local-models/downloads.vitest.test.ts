@@ -26,6 +26,11 @@ function controlled() {
   return { fetch, finish: () => finish(), fail: (message: string) => fail(new Error(message)), get calls() { return calls; }, get signal() { return signal; }, report: (update: LocalModelProgress) => report(update) };
 }
 const tick = (ms = 20): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+/** The fetch is called once the download lock is held (a lease file): on a loaded machine that is not 20 ms. */
+async function fetchStarted(fake: { calls: number }): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (fake.calls === 0 && Date.now() < deadline) await tick(5);
+}
 
 describe('a model download', () => {
   it('is one per model: asked again, it is the fetch already running', async () => {
@@ -33,6 +38,7 @@ describe('a model download', () => {
     const first = startModelDownload('qwen3.5-4b', fake.fetch);
     const second = startModelDownload('qwen3.5-4b', fake.fetch);
     expect(second).toBe(first);
+    await fetchStarted(fake);
     await tick();
     expect(fake.calls).toBe(1);
     expect(modelDownloads().map((job) => job.modelId)).toEqual(['qwen3.5-4b']);
@@ -55,7 +61,7 @@ describe('a model download', () => {
     const seen: Array<string | undefined> = [];
     const stop = onModelDownload((job) => seen.push(job.progress ? `${job.progress.message}@${job.progress.bytes}` : 'ended'));
     const job = startModelDownload('gemma-4-12b', fake.fetch);
-    await tick();
+    await fetchStarted(fake);
     fake.report({ stage: 'download', message: 'downloading gemma', bytes: 10, totalBytes: 100 });
     fake.report({ stage: 'download', message: 'downloading gemma', bytes: 50, totalBytes: 100 });
     fake.finish();
@@ -67,7 +73,7 @@ describe('a model download', () => {
   it('rejects for whoever awaits it when the fetch fails, and is not a job any more', async () => {
     const fake = controlled();
     const job = startModelDownload('gpt-oss-20b', fake.fetch);
-    await tick();
+    await fetchStarted(fake);
     fake.fail('Download failed (HTTP 503)');
     await expect(job.done).rejects.toThrow('HTTP 503');
     expect(modelDownloads()).toEqual([]);
@@ -82,7 +88,7 @@ describe('a model download', () => {
   it('is stopped by cancel, through the signal the fetch was given', async () => {
     const fake = controlled();
     const job = startModelDownload('qwen3.5-4b', fake.fetch);
-    await tick();
+    await fetchStarted(fake);
     job.cancel();
     expect(fake.signal?.aborted).toBe(true);
     await expect(job.done).rejects.toThrow(/cancelled/);
@@ -173,7 +179,7 @@ describe('the download lock', () => {
     expect([...job.askers]).toEqual(['s1', 's2']);
     expect(seen).toEqual([1, 2]);
     stop();
-    await tick();
+    await fetchStarted(fake);
     fake.finish();
     await job.done;
   });
