@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  extractLoginUrl, hasLocalDisplay, loginLinkLine, loginUrlNotice, shortenLoginUrl, stripAnsi,
+  extractLoginUrl, hasLocalDisplay, loginLinkLine, loginUrlNotice, shortenLoginUrl,
 } from './url.js';
+import { stripAnsi } from '../../tui/render/width.js';
 import { loginCallbackPort, loginPortForwardHint } from './link-info.js';
 import { scriptArgv, shellQuote } from './pty.js';
 

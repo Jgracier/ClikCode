@@ -8,6 +8,7 @@
  * whole, wrapped by whoever draws it, and a JSON body is replaced by the
  * readable message inside it, never dropped.
  */
+import { stripAnsi } from '../../tui/render/width.js';
 
 /** A bound against a runaway flood only. The note wraps over as many rows as
  * it needs (tool-rows.ts noteRows) and the log keeps the whole message, so
@@ -77,7 +78,7 @@ function readableBodies(text: string): string {
 
 export function failureText(message: string, limit = FAILURE_TEXT_LIMIT): string {
   // Colour and cursor escapes are how a terminal shows the line, not the line.
-  const plain = message.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
+  const plain = stripAnsi(message);
   const kept = readableBodies(plain)
     .split(/\r?\n/)
     .filter((line) => !NOISE.test(line) && !DEPRECATION.test(line) && !CODEX_BANNER.test(line))

@@ -15,7 +15,7 @@ export const TAB_WIDTH = 4;
 /** Every escape a styled line can carry: CSI (SGR colour, cursor moves),
  * OSC ending in BEL or ST (OSC 8 links, titles), and two-byte escapes. The
  * one strip function; callers that want plain text use this, not a regex. */
-const ANSI_SEQUENCES = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
+const ANSI_SEQUENCES = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-Z\\-_]/g;
 
 export function stripAnsi(text: string): string {
   return text.includes('\u001b') ? text.replace(ANSI_SEQUENCES, '') : text;

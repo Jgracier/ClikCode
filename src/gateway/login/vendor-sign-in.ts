@@ -29,7 +29,8 @@ import { delimiter, join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from '../../harness/transport/spawn.js';
 import { runInPty, SIGN_IN_COLUMNS, SIGN_IN_ROWS } from './pty.js';
 import { Screen, type ScreenState } from './screen.js';
-import { completeLoginUrl, extractLoginUrl, stripAnsi } from './url.js';
+import { completeLoginUrl, extractLoginUrl } from './url.js';
+import { stripAnsi } from '../../tui/render/width.js';
 
 export interface LoginLink { url: string; code?: string }
 
