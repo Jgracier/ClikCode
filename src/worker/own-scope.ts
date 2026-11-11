@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { divideScope } from './command-groups.js';
+import { sleep } from '../runtime/sleep.js';
 
 /** Top level, BESIDE app.slice -- not inside it. A slice over its MemoryHigh
  * throttles every allocation of every process under it: MEASURED 2026-10-08,
@@ -217,7 +218,7 @@ async function moveToOwnScope(sessionId: string, cgroup: string): Promise<string
   if (adopted) {
     const deadline = Date.now() + MOVED_WAIT_MS;
     while (!(await ownCgroup()).includes(`/${unit}`) && Date.now() < deadline) {
-      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+      await sleep(10);
     }
   }
   lifecycle('worker.scope', { worker: sessionId, unit, adopted });

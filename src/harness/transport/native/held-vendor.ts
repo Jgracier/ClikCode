@@ -33,6 +33,7 @@ import type { BackgroundWait } from './background-wait.js';
 import type { ReleasedTurnExit } from './turn.js';
 import { turnCancelledError } from '../../../agent/cancellation.js';
 import { endedAgentWork, type EndedWork, type RunningWork } from '../handoff-work.js';
+import { sleep } from '../../../runtime/sleep.js';
 
 type Json = Record<string, unknown>;
 
@@ -280,7 +281,7 @@ export function whenHeldVendorGone(sessionId: string): Promise<void> {
 export async function waitForHeldVendorSubagents(sessionId: string, signal?: AbortSignal): Promise<void> {
   while (held.get(sessionId)?.agentWork) {
     if (signal?.aborted) throw turnCancelledError();
-    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    await sleep(200);
   }
   if (signal?.aborted) throw turnCancelledError();
 }

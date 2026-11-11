@@ -11,6 +11,7 @@ import { emitResult } from '../../cli/structured-output.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { CLIKCODE_USER_AGENT } from '../../version.js';
+import { sleep as sleepFor } from '../../runtime/sleep.js';
 
 export interface FineTuneOptions {
   /** The base model: a Hugging Face repo id, e.g. Qwen/Qwen2.5-0.5B-Instruct. */
@@ -47,7 +48,7 @@ function reasonOf(body: Envelope<unknown> | undefined, status: number): string {
 
 export async function aiGatewayFineTune(config: Conf, datasetPath: string, options: FineTuneOptions = {}, deps: FineTuneDeps = {}): Promise<void> {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = deps.sleep ?? sleepFor;
   const progress = deps.progress ?? ((line: string) => { process.stderr.write(`${line}\n`); });
   const apiUrl = getApiUrl(config);
   const apiKey = getApiKeyForUrl(config, apiUrl);

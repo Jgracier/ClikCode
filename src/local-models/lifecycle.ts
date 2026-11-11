@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { memoryStep, mergeFootprint, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmStatMac, parseVmstatSwapOut } from './memwatch.js';
 import { safeName, serversDir } from './paths.js';
 import { pidIsAlive, tryLease, type Lease } from '../session/store/locks.js';
+import { sleep } from '../runtime/sleep.js';
 
 /** The command line of a process, to tell a live llama-server from a
  * recycled pid before stopping it. */
@@ -173,7 +174,7 @@ async function killTree(pid: number): Promise<void> {
     return;
   }
   try { process.kill(pid, 'SIGTERM'); } catch { return; }
-  for (let waited = 0; waited < 10_000 && pidIsAlive(pid); waited += 250) await new Promise((done) => setTimeout(done, 250));
+  for (let waited = 0; waited < 10_000 && pidIsAlive(pid); waited += 250) await sleep(250);
   if (pidIsAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already gone. */ } }
 }
 
@@ -188,7 +189,7 @@ async function withModelLock<T>(lock: string, work: () => Promise<T>, waiting: {
     lease = await tryLease(lock);
     if (lease) break;
     if (waiting.timeoutMs !== undefined && Date.now() - started > waiting.timeoutMs) throw new Error(waiting.timedOut ?? 'Timed out waiting for a lock.');
-    await new Promise((done) => setTimeout(done, 500));
+    await sleep(500);
   }
   try { return await work(); } finally { await lease.release(); }
 }
@@ -555,7 +556,7 @@ export async function startSupervisor(config: SupervisorConfig): Promise<ServerR
     const record = await readServerRecord(config.modelId);
     if (record && record.supervisorPid === child.pid) return record;
     if (child.exitCode !== null) break;
-    await new Promise((done) => setTimeout(done, 200));
+    await sleep(200);
   }
   throw new Error(`The local model supervisor did not start. See ${join(config.dir, 'supervisor.log')}.`);
 }
@@ -571,7 +572,7 @@ export async function stopServer(modelId: string): Promise<void> {
       await killTree(record.serverPid);
     }
     try { process.kill(record.supervisorPid, 'SIGTERM'); } catch { /* Gone already. */ }
-    for (let waited = 0; waited < 15_000 && pidIsAlive(record.supervisorPid); waited += 250) await new Promise((done) => setTimeout(done, 250));
+    for (let waited = 0; waited < 15_000 && pidIsAlive(record.supervisorPid); waited += 250) await sleep(250);
   }
   await sweepOrphan(modelId);
 }

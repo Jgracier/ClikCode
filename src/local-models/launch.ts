@@ -43,6 +43,7 @@ import { createServer } from 'node:net';
 import http from 'node:http';
 import type { Fit, Placement } from './shared/index.js';
 import type { HardwareProfile } from './hardware.js';
+import { sleep } from '../runtime/sleep.js';
 
 interface ThreadPlan { threads: number; threadsBatch: number }
 
@@ -171,7 +172,7 @@ export async function waitForHealth(port: number, stillRunning: () => boolean, o
     if (reply.status === 200) return;
     if (!stillRunning()) throw new Error('the model server exited while loading');
     onWait(Math.round((Date.now() - started) / 1000));
-    await new Promise((done) => setTimeout(done, 1000));
+    await sleep(1000);
   }
   throw new Error(`the model server did not become ready within ${Math.round(limitMs / 60_000)} minutes`);
 }

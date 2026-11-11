@@ -19,6 +19,7 @@ import { breakStaleLock, pidIsAlive } from '../session/store/locks.js';
 import { stateDirectory } from '../session/store/paths.js';
 
 import type { BackgroundCommand } from '../harness/protocol/background-agents.js';
+import { sleep } from '../runtime/sleep.js';
 
 export interface WorkerRuntimeRecord {
   pid: number;
@@ -497,7 +498,7 @@ export async function takeConversation(
     const holder = parseOwner(raw);
     if (holder && await ownerIsLive(sessionId, holder, path)) return { holder };
     if (!holder && await ownerIsLive(sessionId, undefined, path)) {
-      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      await sleep(20);
       continue;
     }
     await breakStaleLock(path, raw);

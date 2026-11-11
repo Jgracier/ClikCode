@@ -18,6 +18,7 @@ import { spawnPortable } from '../transport/spawn.js';
 import { processesWithEnvironment } from '../transport/process-group.js';
 import { vendorMcpServerNames } from '../../agent/mcp/import.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
+import { sleep } from '../../runtime/sleep.js';
 
 type Json = Record<string, any>;
 
@@ -105,7 +106,7 @@ async function stopEscaped(tag: string): Promise<void> {
   const escaped = await processesWithEnvironment(QUERY_TAG, tag);
   if (!escaped.length) return;
   signal(escaped, 'SIGTERM');
-  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  await sleep(1_000);
   signal(await processesWithEnvironment(QUERY_TAG, tag), 'SIGKILL');
 }
 

@@ -13,6 +13,7 @@ import { turnCancelledError } from '../agent/cancellation.js';
 import type { SignInScreen } from './login/vendor-sign-in.js';
 import type { TurnObserver } from '../turn/observer.js';
 import { GATEWAY_LABEL } from '../session/route.js';
+import { sleep as sleepFor } from '../runtime/sleep.js';
 
 type Login = typeof gatewayLogin;
 
@@ -24,14 +25,10 @@ export async function signInGatewayForTurn(
   if (!prompter) return false;
   const screenOf = (prompter as { signInScreen?: (name: string) => SignInScreen }).signInScreen;
   let screen: SignInScreen | undefined;
-  const sleep = (ms: number): Promise<void> => new Promise((resolve, reject) => {
-    const stop = screen?.signal ?? signal;
-    if (stop?.aborted || signal?.aborted) { reject(turnCancelledError()); return; }
-    const timer = setTimeout(resolve, ms);
-    const onAbort = (): void => { clearTimeout(timer); reject(turnCancelledError()); };
-    stop?.addEventListener('abort', onAbort, { once: true });
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
+  const sleep = (ms: number): Promise<void> => {
+    const stops = [screen?.signal, signal].filter((stop): stop is AbortSignal => stop !== undefined);
+    return sleepFor(ms, stops.length ? AbortSignal.any(stops) : undefined, turnCancelledError);
+  };
   const run = async (): Promise<void> => {
     const choice = screen ? await screen.choose(`Sign in to ${GATEWAY_LABEL}`, ['Continue with Google', 'Continue with GitHub'], 0) : 0;
     if (choice === undefined) throw turnCancelledError();

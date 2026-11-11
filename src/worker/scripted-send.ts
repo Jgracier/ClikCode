@@ -28,6 +28,7 @@ import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import { turnCancelledError } from '../agent/cancellation.js';
+import { sleep } from '../runtime/sleep.js';
 
 export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: string, signal?: AbortSignal): Promise<void> {
   const text = prompt.trim();
@@ -58,7 +59,7 @@ export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: 
     }
     // A worker is coming up (it answers in a moment), or another scripted
     // turn is running here (this one goes after it).
-    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    await sleep(250);
   }
 }
 

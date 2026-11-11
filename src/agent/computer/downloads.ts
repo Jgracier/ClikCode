@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Download, Page } from 'playwright-core';
 import { sharedState } from './shared-state.js';
+import { sleep } from '../../runtime/sleep.js';
 
 export type SavedDownload = { name: string; path: string; size: number };
 
@@ -92,8 +93,8 @@ export async function downloadNotes(page: Page, waitMs = 30_000, expectStart = f
   const tab = tabs.get(page);
   if (!tab) return [];
   // A navigation that turned out to be a download can fail a moment before the download is announced.
-  for (let waited = 0; expectStart && waited < 3_000 && !tab.inflight.size && !tab.fresh.length && !tab.failed.length; waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
-  if (tab.inflight.size) await Promise.race([Promise.allSettled([...tab.inflight]), new Promise(resolve => setTimeout(resolve, waitMs))]);
+  for (let waited = 0; expectStart && waited < 3_000 && !tab.inflight.size && !tab.fresh.length && !tab.failed.length; waited += 100) await sleep(100);
+  if (tab.inflight.size) await Promise.race([Promise.allSettled([...tab.inflight]), sleep(waitMs)]);
   const notes = [
     ...tab.fresh.splice(0).map(file => `Downloaded ${describeDownload(file)}.`),
     ...tab.failed.splice(0).map(why => `A download failed: ${why}.`),

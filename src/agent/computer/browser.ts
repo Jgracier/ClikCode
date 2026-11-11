@@ -4,7 +4,6 @@ import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { setTimeout as pause } from 'node:timers/promises';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { computerHostFile, computerProfile } from './browser-host.js';
 import { hostStatusFile, installingMessage, liveHostStatus, readHostStatus } from './browser-launch.js';
@@ -15,6 +14,7 @@ import { watchDownloads } from './downloads.js';
 import { watchDialogs } from './page-dialogs.js';
 import { watchConsole } from './console-log.js';
 import { allTabs, closeTabsByLabel, closeTabsOfOwner, readTabRecords, sweepTabs, writeTabRecord, type TabRecord } from './tab-registry.js';
+import { sleep } from '../../runtime/sleep.js';
 
 type Connected = { browser: Browser; context: BrowserContext };
 const running = sharedState('browser-running', () => new Map<string, Promise<Connected>>());
@@ -76,7 +76,7 @@ async function reclaimOrphanChrome(stateDir: string): Promise<boolean> {
   if (!pid || !(await chromeIsOrphan(pid))) return false;
   lifecycle('browser.chrome.orphan_reclaimed', { pid });
   try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
-  for (let wait = 0; wait < 20 && pidIsAlive(pid); wait++) await pause(250);
+  for (let wait = 0; wait < 20 && pidIsAlive(pid); wait++) await sleep(250);
   try { process.kill(pid, 'SIGKILL'); } catch { /* exited on SIGTERM */ }
   await Promise.all(['SingletonLock', 'SingletonSocket', 'SingletonCookie'].map(name => fs.unlink(path.join(profile, name)).catch(quiet('agent/computer/browser'))));
   return true;
@@ -106,7 +106,7 @@ async function startHost(stateDir: string): Promise<Connected> {
       if (working?.state === 'installing') throw new Error(installingMessage(working));
       // A busy machine can miss the 8 second connect: while Chrome is alive, ask a few more times before calling it foreign.
       for (let again = 0; again < 4 && await externalChromeRunning(stateDir); again++) {
-        await pause(1_500);
+        await sleep(1_500);
         const later = await connect(stateDir);
         if (later) return later;
       }
@@ -115,7 +115,7 @@ async function startHost(stateDir: string): Promise<Connected> {
       // Our own host's Chrome is alive but slow to answer (a stalled disk): wait for it, never start a second host over its profile.
       if (await ownChromeAlive(stateDir)) {
         for (let again = 0; again < 8; again++) {
-          await pause(5_000);
+          await sleep(5_000);
           const later = await connect(stateDir);
           if (later) return later;
         }
@@ -154,7 +154,7 @@ async function startHost(stateDir: string): Promise<Connected> {
           startupError = undefined;
           child = launch(plain);
         } else if (startupError || (child.exitCode !== null && !(scoped && own?.detachesAtOnce && child.exitCode === 0))) break;
-        await pause(200);
+        await sleep(200);
       }
       const last = await readHostStatus(stateDir);
       if (last?.state === 'failed' && last.text) throw new Error(last.text);
@@ -167,7 +167,7 @@ async function startHost(stateDir: string): Promise<Connected> {
     const status = await readHostStatus(stateDir);
     if (status?.state === 'installing') throw new Error(installingMessage(status));
     if (status?.state === 'failed' && status.text) throw new Error(status.text);
-    await pause(200);
+    await sleep(200);
   }
   throw new Error('ClikCode Chrome could not start.');
 }
@@ -462,7 +462,7 @@ export async function closeComputerBrowser(stateDir: string): Promise<void> {
     if (Number.isSafeInteger(record.pid) && record.pid! > 1) {
       process.kill(record.pid!, 'SIGTERM');
       // Return once it has really exited: a caller that removes the profile next would race its last writes.
-      for (let waited = 0; waited < 5_000 && pidIsAlive(record.pid!); waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
+      for (let waited = 0; waited < 5_000 && pidIsAlive(record.pid!); waited += 100) await sleep(100);
     }
   } catch { /* no ClikCode-owned browser */ }
 }

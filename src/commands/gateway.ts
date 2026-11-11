@@ -19,6 +19,7 @@ import type Conf from 'conf';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 import { getApiUrl, saveGatewayAuth } from '../gateway/credentials.js';
+import { sleep as sleepFor } from '../runtime/sleep.js';
 
 type GatewayLoginProvider = 'google' | 'github';
 
@@ -133,7 +134,7 @@ async function runDeviceFlow(
   deps: GatewayLoginDeps & { log: (line: string) => void }
 ): Promise<{ email?: string }> {
   const fetchImpl = deps.fetch ?? fetch;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? sleepFor;
   const now = deps.now ?? Date.now;
   const baseUrl = getApiUrl(config).replace(/\/$/, '');
 

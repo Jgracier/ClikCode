@@ -7,6 +7,7 @@ import type { Page, Request } from 'playwright-core';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { readConsole, watchConsole } from './console-log.js';
 import { safeUrl } from './network-capture.js';
+import { sleep } from '../../runtime/sleep.js';
 
 export type Problem = { kind: 'failed' | 'blocked' | 'status' | 'pending'; url: string; thirdParty: boolean; detail: string; type: string };
 
@@ -60,7 +61,7 @@ export async function whyBlank(page: Page, options: { seconds?: number } = {}): 
   try {
     await page.reload({ waitUntil: 'commit', timeout: Math.min(budget, 15_000) }).catch(quiet('agent/computer/why-blank'));
     await page.waitForLoadState('networkidle', { timeout: budget }).catch(quiet('agent/computer/why-blank'));
-    await new Promise(resolve => setTimeout(resolve, 300)); // late response callbacks
+    await sleep(300); // late response callbacks
   } finally {
     page.off('request', onRequest); page.off('requestfailed', onFailed); page.off('requestfinished', onFinished);
   }

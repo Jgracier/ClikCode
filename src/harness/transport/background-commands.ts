@@ -13,6 +13,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { describeCommands, formatAge, type BackgroundCommand } from '../protocol/background-agents.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { commandLine, outputFile, processAlive } from './process-group.js';
+import { sleep } from '../../runtime/sleep.js';
 
 /** One background command as a status line reads it. Times are epoch ms. */
 export interface CommandStats extends BackgroundCommand {
@@ -131,8 +132,6 @@ async function descendants(pid: number): Promise<number[]> {
 }
 
 export interface KillReport { pid: number; how: 'group' | 'tree' | 'gone'; signalled: number[]; error?: string }
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
 
 /** End the tracked command `pid`: SIGTERM, then SIGKILL after `graceMs` to whatever is left. When it
  * leads a process group of its own (the vendor spawns a tool's shell that way) the whole group goes

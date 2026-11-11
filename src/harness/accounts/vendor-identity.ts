@@ -53,6 +53,7 @@ import { captureMistralVibeCredential, mistralVibeAccountEmail } from './mistral
 import { droidAccountEmail } from './droid-identity.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { stripAnsi } from '../../tui/render/width.js';
+import { sleep } from '../../runtime/sleep.js';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -370,7 +371,7 @@ async function antigravityEmail(profilePath: string | undefined): Promise<string
       const match = /OAuth: authenticated successfully as ([^\s,]+@[^\s,]+)/.exec(content);
       if (match) return match[1];
     }
-    if (attempt < 11) await new Promise((resolve) => setTimeout(resolve, 600));
+    if (attempt < 11) await sleep(600);
   }
   return undefined;
 }

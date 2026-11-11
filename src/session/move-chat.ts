@@ -5,6 +5,7 @@
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import type { ChatMovedTo, HarnessSession, TranscriptMessage } from './model.js';
+import { sleep } from '../runtime/sleep.js';
 
 /** What a machine already holds of a chat (`chat-have`): the copy that moved
  * away from it, as it would export it -- how many messages, and a hash of
@@ -196,7 +197,7 @@ const MARK_MOVED_PAUSES_MS: readonly number[] = [0, 500, 2_000];
 async function markMovedWithRetry(source: MoveEnd, sessionId: string, movedTo: Omit<ChatMovedTo, 'at'>, targetName: string): Promise<void> {
   let failure: unknown;
   for (const pause of MARK_MOVED_PAUSES_MS) {
-    if (pause) await new Promise<void>((resolve) => { setTimeout(resolve, pause); });
+    if (pause) await sleep(pause);
     try {
       await source.call({ type: 'mark-moved', sessionId, movedTo });
       return;

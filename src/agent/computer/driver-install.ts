@@ -21,6 +21,7 @@ import { basename, dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { driverHome, findDriverBinary } from './driver.js';
+import { sleep } from '../../runtime/sleep.js';
 
 export const DRIVER_REPO = 'trycua/cua';
 const TAG_PREFIX = 'cua-driver-rs-v';
@@ -110,7 +111,7 @@ async function fetchRetry(deps: InstallDeps, url: string, init?: RequestInit): P
       if (![408, 429].includes(response.status) && response.status < 500) return response;
       last = new Error(`HTTP ${response.status}`);
     } catch (error) { last = error; }
-    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+    if (attempt < 3) await sleep(attempt * 500);
   }
   throw new Error(`Could not reach ${new URL(url).host}: ${last instanceof Error ? last.message : String(last)}`);
 }

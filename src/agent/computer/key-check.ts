@@ -7,6 +7,7 @@
  * A service that answers both the same does not check keys at that endpoint, and
  * the result is "not tested" rather than a false "works". */
 import { createSign } from 'node:crypto';
+import { sleep } from '../../runtime/sleep.js';
 
 export type KeyCheck = { verdict: 'works' | 'rejected' | 'untested'; service?: string; detail: string };
 
@@ -69,7 +70,7 @@ const FRESH_TRIES = 8;
 const FRESH_GAP_MS = 8_000;
 
 async function checkServiceAccount(account: { client_email: string; private_key: string }, fetcher: typeof fetch, options: CheckOptions): Promise<KeyCheck> {
-  const pause = options.pause ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const pause = options.pause ?? sleep;
   let last = await tryServiceAccount(account, fetcher);
   for (let attempt = 1; options.fresh && last.verdict === 'rejected' && /invalid_grant/.test(last.detail) && attempt < FRESH_TRIES; attempt++) {
     await pause(FRESH_GAP_MS);
