@@ -24,8 +24,8 @@ const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 const MOUSE_TRACKING_ON = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h';
 
 /** Alternate scroll (xterm `?1007`): with no mouse mode set, the client sends Up/Down for a wheel notch while the alternate screen is up. xterm.js and
- * most terminals do it on their own; this asks the ones that have it off by default. Left set on the way out (what it was before is not known:
- * terminalTeardown resets it, once, where this UI set it). */
+ * most terminals do it on their own; this asks the ones that have it off by default. Reset on the way out by terminalTeardown, on both screens,
+ * and only if this UI set it (what it was before is not known). */
 export const ALTERNATE_SCROLL_ON = '\u001b[?1007h';
 const ALTERNATE_SCROLL_OFF = '\u001b[?1007l';
 

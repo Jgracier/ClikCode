@@ -1,8 +1,11 @@
-/** What has already been written to the terminal's scrollback.
+/** What has already been written into the transcript.
  *
- * The transcript is the terminal's own scrollback, which means every write is
- * irreversible: a row emitted twice cannot be unwritten, and one skipped is
- * gone. Seven fields in prompter.ts carried the rules for that between them,
+ * Full-screen, the transcript is this program's own list of retired rows
+ * (prompter alternateTranscript); inline, it is the terminal's scrollback.
+ * Either way a retired row is never rewritten in place: one written twice
+ * stays there twice, and one skipped is never drawn, until the whole
+ * conversation is written again (a reseed). Seven fields in prompter.ts
+ * carried the rules for that between them,
  * mutated from six places inside a 480-line paint(), and nothing tested any
  * of them -- which is how a message once vanished and how a response once
  * appeared twice.
@@ -85,13 +88,6 @@ export class EmittedTranscript {
     // A steer carries its id. The text is the fallback for a user message
     // that was never given one.
     if (message.role === 'user') this.retired.add(message.id ?? message.content);
-  }
-
-  /** Whether a steer with this text has already gone out as a real message.
-   *  Matched by TEXT, which is only safe after the pending turn has been
-   *  materialized -- before that the live copy is the only copy. */
-  wasRetired(content: string): boolean {
-    return this.retired.has(content);
   }
 
   retiredTexts(): ReadonlySet<string> {

@@ -8,9 +8,9 @@
  *    folded into the persisted list;
  *  - liveAssistantAt: where the answer that just streamed actually landed.
  *
- * The transcript is the terminal's own scrollback, so every one of these is
- * irreversible: a row written twice cannot be unwritten, and a row skipped is
- * gone. That is why they are pure functions with the failures written down as
+ * A retired row is never rewritten in place (emitted-transcript.ts), so every
+ * one of these sticks: a row written twice stays twice, and a row skipped is
+ * never drawn. That is why they are pure functions with the failures written down as
  * tests, rather than conditions buried in a 480-line paint.
  */
 

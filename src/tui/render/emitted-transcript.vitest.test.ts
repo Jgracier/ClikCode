@@ -87,9 +87,9 @@ describe('what has already been written to scrollback', () => {
     const record = new EmittedTranscript();
     record.wrote(user('try the other file'));
     record.wrote(assistant('done'));
-    expect(record.wasRetired('try the other file')).toBe(true);
+    expect(record.retiredTexts().has('try the other file')).toBe(true);
     // Only the user's own words are retired; an answer is never a steer.
-    expect(record.wasRetired('done')).toBe(false);
+    expect(record.retiredTexts().has('done')).toBe(false);
   });
 
   it('asks for a reseed the same way whether or not anything was written', () => {
@@ -116,7 +116,7 @@ describe('what has already been written to scrollback', () => {
     expect(record.pendingReseed()).toBe(false);
     expect(record.writtenCount()).toBe(0);
     expect(record.resume(conversation).firstUnwritten).toBe(0);
-    expect(record.wasRetired('q')).toBe(false);
+    expect(record.retiredTexts().has('q')).toBe(false);
     expect(record.claimActivity(7)).toBe(true);
     expect(record.liveAssistantIndex).toBeUndefined();
   });
