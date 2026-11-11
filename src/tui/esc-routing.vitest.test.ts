@@ -41,7 +41,7 @@ describe('Esc routing mid-turn', () => {
       stdin.emit('data', Buffer.from(ESC));
       await wait(200);
       expect(cancel).not.toHaveBeenCalled();
-      expect(rl.turn?.draft).toBe('');
+      expect(rl.composer.text).toBe('');
       stdin.emit('data', Buffer.from(ESC));
       await wait(200);
       expect(cancel).toHaveBeenCalledTimes(1);

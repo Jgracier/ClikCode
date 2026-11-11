@@ -107,7 +107,8 @@ describe('frames', () => {
     }
     expect(written.join('')).toBe('');
     // A key typed in the middle of the burst is drawn at once and does not clear.
-    prompter.paint('typing', [], 0, '› ', 6);
+    prompter.composer.set('typing');
+    prompter.paintCurrent();
     const echo = written.join('');
     expect(echo).toContain('typing');
     expect(echo).not.toContain('[2J');

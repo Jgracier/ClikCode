@@ -6,6 +6,7 @@ import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../../gateway/log
 import { loginPortForwardHint } from '../../gateway/login/link-info.js';
 import { stdout as output } from 'node:process';
 import type { TerminalHarnessPrompter } from '../prompter.js';
+import type { DraftWithPastes } from '../render/held-pastes.js';
 
 /** A vendor sign-in on screen (commands/account.ts withSignIn): its link
  * and code above the waiting band, a code or key typed into the waiting
@@ -22,11 +23,10 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
   // drawn in this window's band, and the window can move on to another
   // conversation (prompter.render) while it waits.
   const owner = this.currentSession?.id;
-  let withdrawn = false;
   let stopped = false;
   // Taken down at once, not when the vendor's login notices the abort: the
   // link must be off this window's band before it draws the next conversation.
-  const withdraw = (): void => { withdrawn = true; cancel(); screenStop(); };
+  const withdraw = (): void => { cancel(); screenStop(); };
   this.signInOwner = { session: owner, withdraw };
   const local = hasLocalDisplay();
   let opened = false;
@@ -53,10 +53,9 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
   // What was typed before the sign-in asked: set aside for the code, and
   // put back once it is answered (or the sign-in ends unanswered). The
   // code itself is the sign-in's and never joins it.
-  let aside: { draft: string; cursor: number } | undefined;
+  let aside: DraftWithPastes | undefined;
   const putBack = (): void => {
-    const live = this.turn;
-    if (live && aside) { live.draft = aside.draft; live.cursor = aside.cursor; }
+    if (aside) this.composer.set(aside);
     aside = undefined;
   };
   // Beside the vendor's sign-in (alongside): a line under its link, and
@@ -65,8 +64,8 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
     const live = this.turn;
     hint = alongside ? chalk.dim(`${prompt} · paste it and press Enter`) : undefined;
     if (live && !alongside) {
-      aside ??= { draft: live.draft, cursor: live.cursor };
-      live.draft = ''; live.cursor = 0; live.label = `${prompt} · type it and press Enter`;
+      aside ??= this.composer.take();
+      live.label = `${prompt} · type it and press Enter`;
     }
     this.signInInput = {
       secret, optional, alongside,
@@ -107,10 +106,8 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
     stopped = true;
     this.signInLines = [];
     this.signInOwner = undefined;
-    // An unanswered code is dropped; what was typed for the conversation
-    // stays in the composer -- the turn's, or (outside one) the prompt's
-    // that opens next, by stopWaiting.
-    if (this.signInInput && !this.signInInput.alongside && this.turn) { this.turn.draft = ''; this.turn.cursor = 0; }
+    // An unanswered code is dropped (the draft set aside for it comes back over it); what was typed for the conversation stays
+    // in the composer, for the turn or the prompt that opens next.
     this.signInInput = undefined;
     putBack();
     this.signingIn = false;
@@ -120,7 +117,6 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
     // The message whose first use opened it is still on its way: its
     // prompt stays drawn into the turn that starts next.
     if (!turn) {
-      if (!withdrawn) this.signedInJustNow = true;
       const prompt = this.submittedPrompt;
       if (this.turn) this.stopWaiting(false);
       this.submittedPrompt = prompt;

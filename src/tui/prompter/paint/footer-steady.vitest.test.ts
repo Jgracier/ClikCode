@@ -48,8 +48,8 @@ describe('the footer keeps its height', () => {
     heights.set('terminals', settle());
     rl.setBackgroundWork({ terminals: 0 });
     heights.set('terminals gone', settle());
-    rl.showTransientNotice('Copied the selection to the clipboard and also said a good deal more than one row holds so that it wraps onto a second row', 4000, () => rl.repaint());
-    rl.repaint();
+    rl.showTransientNotice('Copied the selection to the clipboard and also said a good deal more than one row holds so that it wraps onto a second row', 4000);
+    rl.paintCurrent();
     heights.set('notice', settle());
     expect(strip(written.join('')).slice(-4000)).toContain('Copied the selection');
     vi.advanceTimersByTime(4100);

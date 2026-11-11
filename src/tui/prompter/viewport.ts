@@ -36,7 +36,7 @@ export function onResize(this: TerminalHarnessPrompter): void {
     if (!inlineHistoryMode() && !this.suspended && !this.resizePaintTimer) {
       this.rewrapIfWidthChanged();
       this.forgetScreenPosition();
-      this.repaint();
+      this.redrawScreen();
       this.resizeSettled = true;
     } else this.resizeSettled = false;
     // No height probe here: it jumps the cursor to the bottom-right corner
@@ -56,12 +56,12 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
     // spinner tick) came due while the timer ran and was dropped for it; that change is on no screen yet.
     const dropped = this.paintDropped;
     this.paintDropped = false;
-    if (this.resizeSettled && !inlineHistoryMode()) { if (dropped) this.repaint(); return; }
+    if (this.resizeSettled && !inlineHistoryMode()) { if (dropped) this.redrawScreen(); return; }
     const rewritten = this.rewrapIfWidthChanged();
     // Whole: the preamble this frame carries clears the screen, once.
     this.forgetScreenPosition();
     if (inlineHistoryMode() && !rewritten) this.anchorBlock();
-    else this.repaint();
+    else this.redrawScreen();
   }, RESIZE_SETTLE_MS);
   this.resizePaintTimer.unref();
 }
@@ -90,7 +90,7 @@ export function rewrapIfWidthChanged(this: TerminalHarnessPrompter): boolean {
  * flushInlineFrame for what is done with the answer.) */
 export function anchorBlock(this: TerminalHarnessPrompter): void {
   // A modal surface is drawn from the top row at the new size: nothing is measured (see flushInlinePage).
-  if (!inlineBlock.rows || inlineBlock.page) { this.repaint(); return; }
+  if (!inlineBlock.rows || inlineBlock.page) { this.redrawScreen(); return; }
   inlineBlock.measuring = true;
   const asked = Date.now();
   const done = (row: number | undefined): void => {
@@ -106,8 +106,7 @@ export function anchorBlock(this: TerminalHarnessPrompter): void {
       // again. The one case where the conversation is written again for a change of height.
       if (inlineBlock.found < 0) this.emitted.requestReseed();
     }
-    if (!this.canPaint('picker')) return;
-    this.repaint();
+    this.redrawScreen();
   };
   askCursorRow(done, CURSOR_REPORT_MS);
 }

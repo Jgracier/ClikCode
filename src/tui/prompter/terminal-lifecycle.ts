@@ -90,8 +90,7 @@ export function onContinue(this: TerminalHarnessPrompter): void {
   if (this.closed) return;
   this.retakeScreen();
   retakeKeyboard();
-  if (this.turn) this.paint(this.turn.draft, [], 0, '› ', this.turn.cursor);
-  else this.repaint();
+  this.paintCurrent();
 }
 
 export function close(this: TerminalHarnessPrompter): void {
@@ -159,5 +158,5 @@ export function resume(this: TerminalHarnessPrompter): void {
   lifecycle('window.resume');
   this.retakeScreen();
   if (input.isTTY) input.resume();
-  this.repaint({ keepPalette: false });
+  this.paintCurrent();
 }

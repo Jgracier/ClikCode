@@ -118,7 +118,7 @@ describe('the background terminals indicator (standard section 10)', () => {
       rl.setBackgroundWork({ agents: 1, agentTasks: [{ id: 'a', label: 'updated-chat-agent' }] });
       rl.setPlan([{ content: 'previous-chat-checklist', status: 'in_progress' }]);
       rl.requestRedraw('repair');
-      rl.repaint();
+      rl.paintCurrent();
       vi.advanceTimersByTime(300);
       const history = since();
       expect(history).toContain('History conversation');
@@ -129,7 +129,7 @@ describe('the background terminals indicator (standard section 10)', () => {
       await board;
       expect(rl.surface).toBe('conversation');
       rl.requestRedraw('repair');
-      rl.repaint();
+      rl.paintCurrent();
       vi.advanceTimersByTime(300);
       expect(since()).toContain('updated-chat-agent');
       rl.render({ ...rl.currentSession!, id: 'other-chat' }, undefined, { running: false });

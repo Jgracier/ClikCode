@@ -48,12 +48,12 @@ function refresh(p: TerminalHarnessPrompter): void {
     if (p.subView !== view || view.state.index !== index) return;
     view.rows = rows;
     view.readError = undefined;
-    p.paint(p.composer.text, p.composer.options, p.composer.selected, p.composer.prompt, p.composer.cursor, p.composer.palette);
+    p.paintCurrent();
   }).catch((error: unknown) => {
     quiet('tui/prompter/subagent-host')(error);
     if (p.subView === view) {
       view.readError = error instanceof Error ? error.message : String(error);
-      if (p.turn) p.paintWaiting(p.turn);
+      p.paintCurrent();
     }
   }).finally(() => { view.reading = false; });
 }

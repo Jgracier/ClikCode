@@ -20,16 +20,20 @@ import { enterInputModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { WaitingTurn } from './state.js';
 
-/** A key typed into the waiting composer. */
-export function editTurnDraft(this: TerminalHarnessPrompter, turn: WaitingTurn, key: string): void {
-  const edited = editWaitingComposer(turn.draft, turn.cursor, key);
+/** A key typed into an answer the composer is taking while a turn runs (a question's text, "tell it instead", a sign-in's code):
+ * plain text editing, a paste as it is -- no history, nothing held. */
+export function editTurnDraft(this: TerminalHarnessPrompter, key: string): void {
+  const edited = editWaitingComposer(this.composer.text, this.composer.cursor, key);
   if (!edited.changed) return;
-  turn.draft = edited.value;
-  turn.cursor = edited.cursor;
-  // Drawn now. Streaming text, spinners and tool rows share one paint every PAINT_COALESCE_MS (they arrive in bursts); a typed character
-  // is not one of them -- waiting for that timer put every keystroke 33 ms behind during a turn (3 ms at an idle prompt).
-  this.updateWaiting();
-  this.flushPaint();
+  this.composer.set({ value: edited.value, cursor: edited.cursor, held: [] });
+  this.echoDraft();
+}
+
+/** The draft just edited, drawn now. Streaming text, spinners and tool rows share one paint every PAINT_COALESCE_MS (they arrive
+ * in bursts); a typed character is not one of them -- waiting for that timer put every keystroke 33 ms behind during a turn (3 ms
+ * at an idle prompt), and a resize settling never holds it back either. */
+export function echoDraft(this: TerminalHarnessPrompter): void {
+  if (this.turn) this.paintCurrent();
 }
 
 /** User messages still waiting, oldest first. A command and a background
@@ -79,11 +83,7 @@ export function takeBackWaiting(this: TerminalHarnessPrompter): boolean {
     if (outcome !== 'removed') { this.updateWaiting(); return; }
     this.waitingSubmissions = this.waitingSubmissions.filter((item) => item.id !== last.id);
     if (this.currentSession?.queuedTurns) this.currentSession.queuedTurns = this.currentSession.queuedTurns.filter((item) => item.id !== last.id);
-    if (this.turn) {
-      this.turn.draft = this.turn.draft ? `${last.text}\n${this.turn.draft}` : last.text;
-      this.turn.cursor = last.text.length;
-      this.updateWaiting();
-    } else this.queuedDraft = this.queuedDraft ? `${last.text}\n${this.queuedDraft}` : last.text;
+    this.restoreDraft(last.text);
   }, () => { this.takingBack.delete(last.id); this.updateWaiting(); });
   return true;
 }
@@ -94,7 +94,7 @@ export function takeBackWaiting(this: TerminalHarnessPrompter): boolean {
 export function submitWaiting(this: TerminalHarnessPrompter, text: string, allowCommand = true): void {
   const turn = this.turn;
   if (!turn?.submit) {
-    this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
+    this.restoreDraft(text);
     return;
   }
   // A slash line is ClikCode's own command and never text for the model.
@@ -139,15 +139,8 @@ export function submitWaiting(this: TerminalHarnessPrompter, text: string, allow
   }).catch(() => {
     const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
     if (item) item.state = 'error';
-    // Restored once: into the running turn's draft (handed to queuedDraft when
-    // the turn ends, stopWaiting), else straight to queuedDraft.
-    if (this.turn && !this.turn.draft) {
-      this.turn.draft = text;
-      this.turn.cursor = text.length;
-    } else {
-      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
-    }
-    this.updateWaiting();
+    // Back in the composer, once, in front of anything typed since.
+    this.restoreDraft(text);
   });
   this.waitingSubmissionWrites.add(write);
   void write.finally(() => this.waitingSubmissionWrites.delete(write));
@@ -195,17 +188,8 @@ export function startWaiting(
   // happened to bring it back. This call is only resetting the previous
   // turn's waiting state. The prompt belongs to the turn being started.
   const submittedPrompt = this.submittedPrompt;
-  // The same turn, drawn early: it carries on, its clock and draft with it.
+  // The same turn, drawn early: it carries on, its clock with it. (The draft is the composer's, and simply stays.)
   const early = this.turn?.early ? { ...this.turn } : undefined;
-  if (early) this.turn!.draft = '';
-  // Typed under the sign-in that opened as this message was sent (a
-  // provider's first use): it belongs to the turn starting now -- in its
-  // composer, and sent once the turn can take messages if Enter was
-  // pressed (typedAhead, replayed below). Handed to the composer after the
-  // turn instead, it vanished until the turn ended.
-  const underSignIn = !early && this.signedInJustNow ? this.queuedDraft : undefined;
-  this.signedInJustNow = false;
-  if (underSignIn !== undefined) this.queuedDraft = undefined;
   this.stopWaiting(false);
   this.submittedPrompt = submittedPrompt;
   // A summary its turn never got to write (it ended with no answer) is
@@ -235,7 +219,7 @@ export function startWaiting(
   const turn: WaitingTurn = {
     label: message, clock: early?.clock ?? startTurnClock(Date.now()),
     activeAt: early?.activeAt ?? Date.now(),
-    draft: early?.draft ?? underSignIn ?? '', cursor: early?.cursor ?? underSignIn?.length ?? 0, cancelled: false,
+    cancelled: false,
     ...(onCancel ? { cancel: onCancel } : {}), ...(onSubmit ? { submit: onSubmit } : {}),
     ...(onCommand ? { command: onCommand } : {}), ...(onLeave ? { leave: onLeave } : {}),
     ...(onTakeBack ? { takeBack: onTakeBack } : {}),
@@ -267,9 +251,9 @@ export function startWaiting(
     };
     listen();
   }
-  // With the draft it carried in (an early start's, or one typed under a
-  // sign-in): painted empty, it vanished until the next keystroke or tick.
-  this.paint(turn.draft, [], 0, '› ', turn.cursor);
+  // With the draft it carried in (typed at rest, under a sign-in, before the
+  // turn could take it): the composer's, drawn as the turn shows it.
+  this.paintCurrent();
   this.scheduleWaitingTick();
   const keys = onSubmit ? this.typedAhead.splice(0) : [];
   if (keys.length) setImmediate(() => { for (const key of keys) if (this.turn === turn) this.onWaitingKey(key); });
@@ -471,19 +455,11 @@ export function stopWaiting(this: TerminalHarnessPrompter, refresh = true, why?:
   this.backgroundTerminals = 0;
   this.thought = undefined;
   this.thoughtStart = undefined;
-  // Anything typed during the turn and not submitted is still the user's
-  // text. It lives in the turn's draft while the turn runs, and the composer
-  // that opens afterwards reads queuedDraft -- so without this handoff a
-  // message typed while the answer streamed was simply gone the moment the
-  // turn finished. Appended rather than assigned: a queued submission may
-  // already be waiting there, and neither should overwrite the other.
-  if (turn?.draft.trim()) {
-    this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${turn.draft}` : turn.draft;
-  }
+  // Anything typed during the turn and not submitted stays in the composer: it is the draft of the prompt that opens next.
   // The turn is over: its prompt is a real message now, and holding the
   // client's copy any longer would draw it twice.
   this.submittedPrompt = undefined;
-  if (refresh && !this.closed) this.repaint({ keepPalette: false });
+  if (refresh && !this.closed) this.paintCurrent();
   turn?.ended?.();
 }
 

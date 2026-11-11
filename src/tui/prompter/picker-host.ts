@@ -11,7 +11,7 @@ import { EMPTY_COMPOSER } from './state.js';
  * inspects the harness and resolves a model before it renders), and the chat hopped when it returned. */
 export function clearInteractiveFrame(this: TerminalHarnessPrompter): void {
   this.pickerOverlay = [];
-  this.repaint({ keepPalette: false });
+  this.paintCurrent();
 }
 
 /** Provider/model/effort pickers share the same frame and palette layout as
@@ -58,7 +58,7 @@ export function pickerHost(this: TerminalHarnessPrompter): OptionPickerHost {
     // palette's hint under it) before the next frame replaced it.
     setSelecting: (selecting) => {
       this.selecting = selecting;
-      if (!selecting) this.composer = EMPTY_COMPOSER;
+      if (!selecting) this.drawnComposer = EMPTY_COMPOSER;
     },
     select: (subTitle, subOptions, subAction, subSettings) => this.select(subTitle, subOptions, subAction, subSettings),
   };

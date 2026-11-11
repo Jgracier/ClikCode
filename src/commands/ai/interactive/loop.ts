@@ -266,7 +266,7 @@ export class ChatLoop {
       }
       if (back.length) {
         await writeState(latestState);
-        terminal.restoreDraft([terminal.queuedDraft, ...back].filter(Boolean).join('\n'));
+        terminal.restoreDraft(back.join('\n'));
       }
       queued = latest.queuedTurns?.[0];
     }
@@ -318,7 +318,7 @@ export class ChatLoop {
         // The worker may start a turn while this sits here (another
         // window's, or a follow-up for a finished background shell), or
         // queue something: either ends the prompt, keeping the draft.
-        const answer = await questionOrWorker(latest.id, (signal) => terminal.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, ...(signal ? { signal } : {}) }), queueMark);
+        const answer = await questionOrWorker(latest.id, (signal) => terminal.question('› ', slashCommandsFor(latest), { conversation: true, rightArrowPalette: true, leftArrowCommand: BOARD_LINE, ...(signal ? { signal } : {}) }), queueMark);
         if ('woke' in answer) {
           if (answer.woke === 'turn') await this.followRunning(terminal, latest, account, answer.prompt, answer.prompt);
           return 'continue';

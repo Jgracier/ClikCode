@@ -28,6 +28,7 @@ import type { SteerRow } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import type { MentionFocus } from './render/search-focus.js';
 import type { Selection } from './render/selection.js';
+import type { DraftWithPastes } from './render/held-pastes.js';
 import { reducedMotion } from './capabilities.js';
 import { KEEP_STDIN_FLOWING, onTerminalFocus } from './input-decoder.js';
 import { sessionModesOn, setTerminalRawMode, type Redraw } from './modes.js';
@@ -37,13 +38,14 @@ import { type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter
 import { takeHistoryDump } from './prompter/history-dump.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 import { HistoryWindow } from './prompter/history-window.js';
-import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
+import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
 import { showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
 import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, openQuestionCall, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn, joinMark, joinThought, settleDecision, ofThisTurn, settleSavedStops } from './prompter/activity-state.js';
-import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, adoptSubmission, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
-import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, flushPaint, paintWaiting, waitingPalette, repaint } from './prompter/waiting-band.js';
+import { editTurnDraft, echoDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, adoptSubmission, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
+import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, flushPaint, paintWaiting, waitingPalette, paintCurrent, redrawScreen, repairScreen } from './prompter/waiting-band.js';
+import { Composer } from './prompter/composer.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
 import { SwipeArrowGate } from './swipe-arrows.js';
 import { openSubView, closeSubView, subViewKey, paintSubView, type SubView } from './prompter/subagent-host.js';
@@ -66,8 +68,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   currentSession?: HarnessSession;
   /** History borrows provider controls, but owns no conversation's live work. */
   surface: 'conversation' | 'history' = 'conversation';
-  /** The composer as the last paint drew it, for repaint() to draw again. */
-  composer: ComposerFrame = EMPTY_COMPOSER;
+  /** The conversation's draft, at rest and while a turn runs (prompter/composer.ts): the one place it is kept. */
+  readonly composer = new Composer();
+  /** The prompt open at rest, if one is: it draws the current state while it is (paintCurrent). */
+  restingPrompt?: { draw(): void };
+  /** The composer frame as the last paint drew it: what an open picker's frame is drawn again from (paintCurrent). */
+  drawnComposer: ComposerFrame = EMPTY_COMPOSER;
   /** The turn (or other wait) in flight: see WaitingTurn. */
   turn?: WaitingTurn;
   waitingFrame = 0;
@@ -130,16 +136,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Why the next frame that draws rows is drawn, when it is not routine:
    * after a resize, or a repair (Ctrl+L). See redrawPreamble. */
   pendingRedraw: Redraw | undefined;
-  queuedDraft?: string;
   /** The last conversation turn ended stopped; read once by the loop (takeStopped). */
   turnEndedStopped = false;
   /** A message typed and sent (Enter) under a sign-in's own wait, and any
    * keys after it: typed into the prompt that opens next, as if typed there,
    * so it is sent -- the wait has no turn to send it to. */
   typedAhead: string[] = [];
-  /** A sign-in's wait just ended: what was typed under it goes on into the
-   * turn that starts next (startWaiting). */
-  signedInJustNow = false;
   /** The turn this window stepped out of (leaveTurn), still running in its
    * worker. What it already wrote to scrollback is remembered here, nothing
    * more of it is drawn while away, and following the same turn again
@@ -263,8 +265,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   terminalTitle?: string;
   /** Long pastes held as placeholders so far, for the next one's number. */
   pasteCount = 0;
-  /** "Tell it instead" is being typed; the draft the composer held before. */
-  tellingInstead?: { draft: string; cursor: number };
+  /** "Tell it instead" (or a question's answer) is being typed; the draft the composer held before. */
+  tellingInstead?: DraftWithPastes;
   approvalRestoreLabel?: string;
   /** The last label a phase report set ("switching to …", "retrying"): what
    * the turn was doing before the vendor answered. The vendor's first output
@@ -528,7 +530,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // frame goes through the coalescing scheduler: a snapshot, a queue change
     // and a stop arrive together, and a direct paint drew each in between.
     if (this.turn) this.updateWaiting();
-    else if (!(this.journal.running && this.journal.following)) this.paint('', [], 0, '› ', 0);
+    else if (!(this.journal.running && this.journal.following)) this.paintCurrent();
   }
 
   setSteerable(value: boolean): void {
@@ -558,9 +560,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.schedulePaint();
   }
 
-  /** What the next prompt's composer opens with: a message that never
-   * reached its turn, a cancelled one the worker hands back, or a `/`. */
-  restoreDraft(value: string): void { this.queuedDraft = value; }
+  /** A message handed back to the composer -- one that never reached its turn, a cancelled one the worker returns, a line the
+   * board composed -- in front of whatever is typed (composer.ts restore). */
+  restoreDraft(value: string): void {
+    this.composer.restore(value);
+    this.schedulePaint();
+  }
   /** Whether the turn that just ended was stopped: what was queued behind it must not run on its own. */
   takeStopped(): boolean { const stopped = this.turnEndedStopped; this.turnEndedStopped = false; return stopped; }
   markTurnStopped(): void { this.turnEndedStopped = true; }
@@ -636,9 +641,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   releasePaints(): void {
     if (!this.paintsHeld) return;
     this.paintsHeld = false;
-    if (!this.canPaint()) return;
-    if (this.turn) this.paintWaiting(this.turn);
-    else this.repaint();
+    this.paintCurrent();
   }
 
   /** The last frame's live rows and live conversation made safe, by the row as built and the width. */
@@ -710,7 +713,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * queued draft (an open palette is a typed `/`). A newer build may replace the process here. */
   idleForBuildReplace(): boolean {
     return this.screenOwner === 'chat'
-      && !this.turn && !this.composer.text && !this.queuedDraft;
+      && !this.turn && !this.composer.text;
   }
 
 }
@@ -724,6 +727,7 @@ const methods = {
   subViewKey,
   paintSubView,
   editTurnDraft,
+  echoDraft,
   waitingUserMessages,
   enterAgainReady,
   turnHasAnswer,
@@ -793,7 +797,9 @@ const methods = {
   schedulePaint,
   flushPaint,
   paintWaiting,
-  repaint,
+  paintCurrent,
+  redrawScreen,
+  repairScreen,
   renderFrame,
   flushFrame,
   flushAlternateFrame,
@@ -816,7 +822,6 @@ const methods = {
   followSelectionEdge,
   stepSelectionScroll,
   stopSelectionScroll,
-  redrawSelection,
   noteReadingDirection,
   forgetScreenPosition,
   showTransientNotice,
