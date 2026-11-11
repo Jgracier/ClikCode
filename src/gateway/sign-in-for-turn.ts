@@ -35,7 +35,7 @@ export async function signInGatewayForTurn(
   const run = async (): Promise<void> => {
     const choice = screen ? await screen.choose(`Sign in to ${GATEWAY_LABEL}`, ['Continue with Google', 'Continue with GitHub'], 0) : 0;
     if (choice === undefined) throw turnCancelledError();
-    await login(config, { embedded: true, google: choice === 0, github: choice === 1 }, {
+    await login(config, { google: choice === 0, github: choice === 1 }, {
       log: () => undefined,
       sleep,
       // The link goes where the user is: their sign-in screen, else the turn's own rows.
