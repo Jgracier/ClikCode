@@ -121,6 +121,32 @@ describe('the composer', () => {
     } finally { rl.close(); }
   });
 
+  it('neither pops nor pushes the kitty keyboard flag, nor shows the caret outside a frame, as prompts and turns come and go', async () => {
+    vi.stubEnv('TERM', 'xterm-kitty');
+    vi.stubEnv('CLIKCODE_NO_KITTY_KEYBOARD', '');
+    vi.stubEnv('TMUX', '');
+    vi.stubEnv('STY', '');
+    const writes: string[] = [];
+    process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => { writes.push(String(chunk)); for (const arg of rest) if (typeof arg === 'function') (arg as () => void)(); return true; }) as typeof process.stdout.write;
+    const { rl, press } = open();
+    try {
+      writes.length = 0;
+      for (let round = 0; round < 2; round += 1) {
+        const asked = rl.question('› ', [], { conversation: true });
+        press('hi');
+        press('\r');
+        await asked;
+        rl.startWaiting('thinking', () => undefined, async () => ({ disposition: 'queued' }) as never);
+        rl.stopWaiting();
+      }
+      const out = writes.join('');
+      expect(out).not.toContain('\u001b[>1u');
+      expect(out).not.toContain('\u001b[<u');
+      // Every caret change is inside a synchronized frame.
+      for (const chunk of writes) if (chunk.includes('?25h')) expect(chunk.startsWith('\u001b[?2026h')).toBe(true);
+    } finally { rl.close(); vi.unstubAllEnvs(); }
+  });
+
   it('holds a long paste as a placeholder during a turn, as at rest, and sends it whole', () => {
     const { rl, shown } = open();
     try {

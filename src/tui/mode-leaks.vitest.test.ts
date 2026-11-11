@@ -27,6 +27,15 @@ describe('modes the program leaves set', () => {
     expect(terminalTeardown(true)).not.toContain('?1007');
   });
 
+  it('pushes the kitty keyboard flag with the session\'s modes and pops it only when the terminal is handed over', () => {
+    const on = sessionModesOn();
+    expect(count(on, '\u001b[>1u')).toBe(1);
+    expect(sessionModesOn()).not.toContain('\u001b[>1u');
+    const off = sessionModesOff(true);
+    expect(count(off, '\u001b[<u')).toBe(1);
+    expect(sessionModesOn()).toContain('\u001b[>1u');
+  });
+
   it('start-up clears the kitty keyboard stack a predecessor left, but not where the push is not understood', () => {
     expect(terminalPrepare()).toContain('\u001b[<99u');
     vi.stubEnv('CLIKCODE_NO_KITTY_KEYBOARD', '1');

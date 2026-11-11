@@ -5,7 +5,6 @@ import { kittyKeyboardSafe, POP_KITTY_KEYBOARD, PUSH_KITTY_KEYBOARD } from './ke
 import { stdin as input } from 'node:process';
 import { MOUSE_MODES_OFF, signalsTeardown, terminalModes, terminalTeardown } from './restore.js';
 import { FOCUS_REPORTING_ON } from './terminal-signals.js';
-import { logCursorEvent } from './cursor-log.js';
 import { inlineHistoryMode } from './inline.js';
 
 /** Bracketed paste. Without it the terminal hands pasted text over as ordinary
@@ -76,7 +75,11 @@ export function sessionModesOn(): string {
   // build, or one started without the client marker) may have set it, and nothing would reset it on the way out.
   const scroll = inlineHistoryMode() ? '' : wheelWanted() ? ALTERNATE_SCROLL_OFF : ALTERNATE_SCROLL_ON;
   terminalModes.alternateScroll = scroll === ALTERNATE_SCROLL_ON;
-  return `${ENABLE_BRACKETED_PASTE}${mouse}${scroll}${FOCUS_REPORTING_ON}`;
+  // The kitty keyboard flag (Shift+Enter told from Enter) is a session mode too: pushed once with the others, popped only by
+  // sessionModesOff. Pushed and popped around every prompt, it went out on its own between frames dozens of times a session.
+  const kitty = !terminalModes.kittyKeyboard && kittyKeyboardSafe() ? PUSH_KITTY_KEYBOARD : '';
+  if (kitty) terminalModes.kittyKeyboard = true;
+  return `${ENABLE_BRACKETED_PASTE}${mouse}${scroll}${FOCUS_REPORTING_ON}${kitty}`;
 }
 
 /** Every session mode off, and the title and progress handed back, for
@@ -85,7 +88,7 @@ export function sessionModesOn(): string {
 export function sessionModesOff(leavingAlternateScreen: boolean): string {
   terminalModes.bracketedPaste = false;
   terminalModes.wheelReporting = false;
-  return `${popReadModes()}${terminalTeardown(leavingAlternateScreen)}${signalsTeardown()}`;
+  return `${popKittyKeyboard()}${terminalTeardown(leavingAlternateScreen)}${signalsTeardown()}`;
 }
 
 /** What a frame that draws rows writes first, by why it is drawn.
@@ -159,75 +162,23 @@ export const isMouseEvent = (key: string): boolean => MOUSE_EVENT.test(key) || L
  * moves the transcript. The rate a terminal scrolls its own scrollback at. */
 export const SWIPE_ROWS = 3;
 
-/** Raw mode, and the record of it, in one place.
+/** Raw mode, and the record of it, in one place, HELD for the session and dropped only when the terminal is handed to something
+ * else -- close, suspend, suspend-to-shell.
  *
- * They were two: `input.setRawMode(false)` at the end of a prompt, a picker, a
- * waiting band or a vendor handover, and `terminalModes.rawMode` left saying
- * `true` because only two of the seven exits cleared it. Everything that asks
- * the terminal a question checks that flag first, for a good reason -- with
- * echo on, the line discipline prints the terminal's answer as text and hands
- * it to whatever reads stdin next. So a resize between two prompts (a phone's
- * keyboard, which resizes the screen every time it opens) sent a DSR into a
- * cooked terminal, and its answer -- `^[[31;54R` -- was echoed and typed
- * straight into the composer.
- *
- * Every entry and exit goes through here now, so the flag cannot disagree with
- * the terminal about what mode it is in. */
-/** Raw mode is HELD for the session, and dropped only when the terminal is
- * handed to something else -- close, suspend, suspend-to-shell.
- *
- * It used to be dropped at the end of every prompt, picker and palette and
- * taken again at the start of the next: seven tcsetattr cycles a session on
- * the pty, each one a window in which the terminal is briefly cooked. That is
- * what let a DSR answer get echoed into the composer, above. Holding it for
- * the session closes the window, and matches what other terminal UIs do. */
+ * Everything that asks the terminal a question checks the record first, for a good reason: with echo on, the line discipline
+ * prints the terminal's answer as text and hands it to whatever reads stdin next. Raw mode used to be dropped at the end of every
+ * prompt, picker and palette and taken again at the start of the next -- seven tcsetattr cycles a session, each a window in which
+ * the terminal was briefly cooked -- and the record was left saying `true` by five of the seven exits. A resize between two
+ * prompts (a phone's keyboard) then sent a DSR into a cooked terminal, and its answer -- `^[[31;54R` -- was echoed and typed into
+ * the composer. Holding it, through this one function, closes the window and keeps the record true. */
 export function setTerminalRawMode(on: boolean): void {
   if (input.isTTY) input.setRawMode(on);
   terminalModes.rawMode = on;
 }
 
-/** Sequences for entering an interactive read. The kitty flag is pushed at most
- * once however many reads start, so one pop always restores the user's own. */
-export function enterInputModes(): string {
-  // A mode already set emits nothing.
-  //
-  // Modelled on Claude Code's own mode stack, read out of its binary: `set()`
-  // returns the empty string when the mode is already in its entry list, so a
-  // mode is asked for once and never again for as long as it is held. This
-  // asked for all four groups at every prompt, every picker and every palette,
-  // whether or not they were already on -- dozens of redundant mode changes in
-  // a session, each one an event the client on the other end has to interpret.
-  //
-  // The flags were already tracked here. They were simply never read.
-  let sequence = '';
-  if (!terminalModes.bracketedPaste) { sequence += ENABLE_BRACKETED_PASTE; terminalModes.bracketedPaste = true; }
-  if (!terminalModes.wheelReporting && !SELECTION_MODE.active && wheelWanted()) {
-    sequence += ENABLE_MOUSE_TRACKING();
-    terminalModes.wheelReporting = true;
-  }
-  if (!terminalModes.kittyKeyboard && kittyKeyboardSafe()) {
-    sequence += PUSH_KITTY_KEYBOARD;
-    terminalModes.kittyKeyboard = true;
-  }
-  if (sequence) logCursorEvent(`input modes asked: ${JSON.stringify(sequence)}`);
-  return sequence;
-}
-
-/** What a single read owns, and nothing else.
- *
- * The kitty flag is pushed per read, so one pop belongs at the end of each.
- * The rest -- bracketed paste, mouse tracking, focus and theme reporting --
- * belong to the SESSION, and dropping them between prompts is what cost the
- * wheel: captured from Claude Code in this user's own terminal, it sets those
- * modes once at startup and the only disables in 185KB of output are at exit,
- * while this code turned them off at every submit, every picker and every
- * palette. A client with no tracking on at the moment its keyboard slides
- * away has no reason to forward the swipe that follows, and claims the
- * gesture for itself instead.
- *
- * They come back off in sessionModesOff(), which is for handing
- * the terminal to something else: a suspend, a vendor CLI, an exit. */
-export function popReadModes(): string {
+/** This process's kitty keyboard entry popped, if it pushed one (sessionModesOn): when the terminal is handed over, given back,
+ * or this process is replaced. The stack belongs to the terminal, so exactly one pop goes with each push. */
+export function popKittyKeyboard(): string {
   if (!terminalModes.kittyKeyboard) return '';
   terminalModes.kittyKeyboard = false;
   return POP_KITTY_KEYBOARD;

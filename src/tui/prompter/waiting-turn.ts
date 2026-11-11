@@ -4,7 +4,7 @@ import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { isModelStartPhase } from '../../harness/protocol/turn-pace.js';
 import { editWaitingComposer } from '../composer-edit.js';
 import { completedCommandLine } from '../command-palette.js';
-import { stdin as input, stdout as output } from 'node:process';
+import { stdin as input } from 'node:process';
 import { createStreamingBlockParser } from '../render/markdown.js';
 import type { LiveTurnInputResult, TakeBackOutcome } from '../../turn/live-input.js';
 import type { ToolCategory } from '../../harness/prompter.js';
@@ -16,7 +16,6 @@ import type { BackgroundWork } from '../../harness/protocol/background-agents.js
 import { enterAgainSends, type WaitingMessage } from '../render/steer-rows.js';
 import { commandLineTypedDuringTurn } from '../waiting-slash.js';
 import { takeTerminalKeys } from '../input-decoder.js';
-import { enterInputModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { WaitingTurn } from './state.js';
 
@@ -247,7 +246,6 @@ export function startWaiting(
   if (input.isTTY) {
     const listen = (): void => {
       turn.stopInput = takeTerminalKeys(this.onWaitingKey, () => { turn.stopInput?.(); listen(); });
-      output.write(enterInputModes());
     };
     listen();
   }

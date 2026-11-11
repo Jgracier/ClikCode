@@ -5,7 +5,7 @@ import { eraseInlineBlock, inlineBlock, inlineHistoryMode } from '../inline.js';
 import { enterAlternateScreen, giveBackTerminal, historyDumpSequence, leavePage, pushShellTitle, restoreTerminal, terminalModes } from '../restore.js';
 import { notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle } from '../terminal-signals.js';
 import { KEEP_STDIN_FLOWING, retakeKeyboard } from '../input-decoder.js';
-import { popReadModes, sessionModesOff, sessionModesOn, setTerminalRawMode } from '../modes.js';
+import { popKittyKeyboard, sessionModesOff, sessionModesOn, setTerminalRawMode } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 
 /** The screen back from whoever had it (the shell after Ctrl+Z, a vendor
@@ -121,7 +121,7 @@ export function close(this: TerminalHarnessPrompter): void {
   input.pause();
   // The alternate screen is handed back and the shell's own screen returns, with the conversation written under what the shell had
   // (giveBackTerminal): it is in the client's scrollback. It is on disk too -- `clikcode sessions resume <id>` reopens it.
-  giveBackTerminal(`${leavePage()}${eraseInlineBlock()}${popReadModes()}`);
+  giveBackTerminal(`${leavePage()}${eraseInlineBlock()}${popKittyKeyboard()}`);
 }
 
 /** Hands the real terminal to a vendor CLI's own interactive flow (typically
