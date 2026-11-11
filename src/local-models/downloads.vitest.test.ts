@@ -1,10 +1,10 @@
 /** A model's download runs on its own: one per model in this process, reported to whoever listens, and serialized across processes. */
-import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { allowBackgroundDownloads, backgroundDownloadsAllowed, modelDownloads, onDownloadOutcome, onModelDownload, reportDownloadOutcome, startModelDownload } from './downloads.js';
-import { withDownloadLock, serverDir } from './lifecycle.js';
+import { withDownloadLock, withStartLock, serverDir } from './lifecycle.js';
 import type { LocalModelProgress } from './index.js';
 
 let home: string;
@@ -129,11 +129,12 @@ describe('the download lock', () => {
     expect(order).toEqual(['a start', 'a end', 'b start', 'b end']);
   });
 
-  it('is not broken by age -- a download takes as long as the link does -- but is by a holder that is gone', async () => {
+  it('is not broken while its holder lives -- a download takes as long as the link does -- but is by a holder that is gone', async () => {
     mkdirSync(serverDir('gemma-4-12b'), { recursive: true });
     const lock = join(serverDir('gemma-4-12b'), 'download.lock');
-    // Held by a process that is alive, and old: still held.
-    writeFileSync(lock, JSON.stringify({ pid: process.pid, at: Date.now() - 6 * 3_600_000 }));
+    // Held by a process that is alive, for hours (its heartbeat keeps the file fresh): still held.
+    const owner = (pid: number) => JSON.stringify({ pid, host: hostname(), nonce: 'n', at: new Date(Date.now() - 6 * 3_600_000).toISOString() });
+    writeFileSync(lock, owner(process.pid));
     const controller = new AbortController();
     const waiting = withDownloadLock('gemma-4-12b', async () => 'ran', controller.signal);
     await tick(700);
@@ -141,8 +142,21 @@ describe('the download lock', () => {
     await expect(waiting).rejects.toThrow(/cancelled/);
     expect(existsSync(lock)).toBe(true);
     // Held by one that is gone: taken over.
-    writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 - 1, at: Date.now() }));
+    writeFileSync(lock, owner(2 ** 22 - 1));
     await expect(withDownloadLock('gemma-4-12b', async () => 'ran')).resolves.toBe('ran');
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it('is taken over from an empty lock a killed process left, and the start lock is the same kind', async () => {
+    mkdirSync(serverDir('gemma-4-12b'), { recursive: true });
+    const lock = join(serverDir('gemma-4-12b'), 'start.lock');
+    writeFileSync(lock, '');
+    const started = Date.now();
+    let during = '';
+    await expect(withStartLock('gemma-4-12b', async () => { during = readFileSync(lock, 'utf8'); return 'ran'; })).resolves.toBe('ran');
+    expect(Date.now() - started).toBeLessThan(4_000);
+    // Never an empty lock: the owner is in it from the moment it exists.
+    expect(JSON.parse(during)).toMatchObject({ pid: process.pid });
     expect(existsSync(lock)).toBe(false);
   });
 

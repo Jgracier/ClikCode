@@ -16,12 +16,12 @@
  * it (sweepOrphan). */
 
 import { execFile, spawn } from 'node:child_process';
-import { closeSync, openSync, readdirSync, rmSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { readdirSync, rmSync } from 'node:fs';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { memoryStep, mergeFootprint, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmStatMac, parseVmstatSwapOut } from './memwatch.js';
 import { safeName, serversDir } from './paths.js';
-import { pidIsAlive } from '../session/store/locks.js';
+import { pidIsAlive, tryLease, type Lease } from '../session/store/locks.js';
 
 /** The command line of a process, to tell a live llama-server from a
  * recycled pid before stopping it. */
@@ -177,56 +177,36 @@ async function killTree(pid: number): Promise<void> {
   if (pidIsAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already gone. */ } }
 }
 
-/** One start at a time per model, across processes: two sessions asking
- * for the same model at once would otherwise start two servers. The lock
- * is a file created exclusively; one left by a dead process, or older than
- * the longest a start takes, is broken. */
-export async function withStartLock<T>(modelId: string, work: () => Promise<T>, timeoutMs = 20 * 60_000): Promise<T> {
-  const lock = join(serverDir(modelId), 'start.lock');
-  await mkdir(serverDir(modelId), { recursive: true });
+/** Holds `lock` (a lease, locks.ts) while `work` runs, waiting for it while another holder has it. The lease is created with its
+ * owner already in it and kept fresh while held, so a holder killed at any moment leaves a lock judged stale (its pid gone, or no
+ * longer refreshed) rather than an empty file, and two waiters never both break the same stale lock. */
+async function withModelLock<T>(lock: string, work: () => Promise<T>, waiting: { timeoutMs?: number; timedOut?: string; signal?: AbortSignal }): Promise<T> {
   const started = Date.now();
+  let lease: Lease | undefined;
   for (;;) {
-    try {
-      closeSync(openSync(lock, 'wx'));
-      await writeFile(lock, JSON.stringify({ pid: process.pid, at: Date.now() }));
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const holder = await readFile(lock, 'utf8').then((text) => JSON.parse(text) as { pid?: number; at?: number }, () => undefined);
-      const age = Date.now() - ((await stat(lock).catch(() => undefined))?.mtimeMs ?? 0);
-      // An empty lock is one being written this instant; give it a moment.
-      const stale = holder ? !pidIsAlive(Number(holder.pid)) || age > timeoutMs : age > 5000;
-      if (stale) { await rm(lock, { force: true }); continue; }
-      if (Date.now() - started > timeoutMs) throw new Error(`Timed out waiting for another ClikCode process to start ${modelId}.`);
-      await new Promise((done) => setTimeout(done, 500));
-    }
+    if (waiting.signal?.aborted) throw new Error('The download was cancelled.');
+    lease = await tryLease(lock);
+    if (lease) break;
+    if (waiting.timeoutMs !== undefined && Date.now() - started > waiting.timeoutMs) throw new Error(waiting.timedOut ?? 'Timed out waiting for a lock.');
+    await new Promise((done) => setTimeout(done, 500));
   }
-  try { return await work(); } finally { await rm(lock, { force: true }); }
+  try { return await work(); } finally { await lease.release(); }
+}
+
+/** One start at a time per model, across processes: two sessions asking
+ * for the same model at once would otherwise start two servers. A holder
+ * that is gone loses it; a waiter gives up after the longest a start takes. */
+export async function withStartLock<T>(modelId: string, work: () => Promise<T>, timeoutMs = 20 * 60_000): Promise<T> {
+  await mkdir(serverDir(modelId), { recursive: true });
+  return withModelLock(join(serverDir(modelId), 'start.lock'), work, { timeoutMs, timedOut: `Timed out waiting for another ClikCode process to start ${modelId}.` });
 }
 
 /** One download at a time per model, across processes: two windows fetching the same weights would append to one `.part` file
- * from two places. Unlike the start lock this one has no age limit -- a download of several GB takes as long as the link does --
- * so only a holder that is gone loses it. Waiting is cancellable. */
+ * from two places. No time limit -- a download of several GB takes as long as the link does -- so only a holder that is gone
+ * loses it. Waiting is cancellable. */
 export async function withDownloadLock<T>(modelId: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  const lock = join(serverDir(modelId), 'download.lock');
   await mkdir(serverDir(modelId), { recursive: true });
-  for (;;) {
-    if (signal?.aborted) throw new Error('The download was cancelled.');
-    try {
-      closeSync(openSync(lock, 'wx'));
-      await writeFile(lock, JSON.stringify({ pid: process.pid, at: Date.now() }));
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const holder = await readFile(lock, 'utf8').then((text) => JSON.parse(text) as { pid?: number }, () => undefined);
-      const age = Date.now() - ((await stat(lock).catch(() => undefined))?.mtimeMs ?? 0);
-      // An empty lock is one being written this instant; give it a moment.
-      const stale = holder ? !pidIsAlive(Number(holder.pid)) : age > 5000;
-      if (stale) { await rm(lock, { force: true }); continue; }
-      await new Promise((done) => setTimeout(done, 500));
-    }
-  }
-  try { return await work(); } finally { await rm(lock, { force: true }); }
+  return withModelLock(join(serverDir(modelId), 'download.lock'), work, { ...(signal ? { signal } : {}) });
 }
 
 /** A configuration the server can be restarted in to give memory back. */
