@@ -28,7 +28,7 @@ describe('sign-in from a worker', () => {
     const signedIn = observer.signIn(request);
     const [sent] = requests(client);
     expect(sent).toMatchObject(request);
-    observer.resolveSignIn(sent!.id);
+    observer.answerSignIn(sent!.id, client.socket);
     await expect(signedIn).resolves.toBeUndefined();
   });
 
@@ -38,7 +38,7 @@ describe('sign-in from a worker', () => {
     observer.attach(client.socket);
     observer.noteTurnSender(client.socket);
     const signedIn = observer.signIn(request);
-    observer.resolveSignIn(requests(client)[0]!.id, 'hermes exited with status 1');
+    observer.answerSignIn(requests(client)[0]!.id, client.socket, 'hermes exited with status 1');
     await expect(signedIn).rejects.toThrow('hermes exited with status 1');
   });
 
@@ -51,7 +51,7 @@ describe('sign-in from a worker', () => {
     observer.noteTurnSender(second.socket);
     const signedIn = observer.signIn(request);
     const [sent] = requests(second);
-    observer.resolveSignIn(sent!.id);
+    observer.answerSignIn(sent!.id, second.socket);
     await signedIn;
     expect(first.frames).toContainEqual({ type: 'request-closed', id: sent!.id });
     expect(second.frames).toContainEqual({ type: 'request-closed', id: sent!.id });
@@ -156,6 +156,57 @@ describe('sign-in from a worker', () => {
     expect(requests(other)).toHaveLength(1);
   });
 
+  it('takes the answer only from the window running the sign-in', async () => {
+    const observer = new BroadcastObserver();
+    const runner = fakeClient();
+    const other = fakeClient();
+    observer.attach(runner.socket);
+    observer.attach(other.socket);
+    observer.noteTurnSender(runner.socket);
+    let settled = false;
+    const signedIn = observer.signIn(request).finally(() => { settled = true; });
+    const [sent] = requests(runner);
+    observer.answerSignIn(sent!.id, other.socket);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    // Released by its runner: its late answer is no one's.
+    observer.releaseSignIn(sent!.id, runner.socket);
+    observer.answerSignIn(sent!.id, runner.socket);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    observer.claimSignIn(sent!.id, other.socket);
+    observer.answerSignIn(sent!.id, other.socket);
+    await expect(signedIn).resolves.toBeUndefined();
+  });
+
+  it('closes the sign-in in every window when the turn ends under it', async () => {
+    const observer = new BroadcastObserver();
+    const runner = fakeClient();
+    const other = fakeClient();
+    observer.attach(runner.socket);
+    observer.attach(other.socket);
+    observer.noteTurnSender(runner.socket);
+    const signedIn = observer.signIn(request);
+    const [sent] = requests(runner);
+    observer.rejectPendingRequests();
+    await expect(signedIn).rejects.toThrow();
+    expect(runner.frames).toContainEqual({ type: 'request-closed', id: sent!.id });
+    expect(other.frames).toContainEqual({ type: 'request-closed', id: sent!.id });
+  });
+
+  it('lets go of the turn\'s signal once the sign-in is answered', async () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.noteTurnSender(client.socket);
+    const turn = new AbortController();
+    const removed = vi.spyOn(turn.signal, 'removeEventListener');
+    const signedIn = observer.signIn(request, turn.signal);
+    observer.answerSignIn(requests(client)[0]!.id, client.socket);
+    await signedIn;
+    expect(removed).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+
   it('fails at once with no window to run it in', async () => {
     await expect(new BroadcastObserver().signIn(request)).rejects.toThrow('needs an open ClikCode window');
   });
@@ -194,7 +245,7 @@ describe('a request nobody has answered yet', () => {
     observer.claimSignIn(offered.id, second.socket);
     const asked = second.frames.find((frame) => frame.type === 'sign-in-request') as { id: string };
     expect(asked).toMatchObject({ command: 'hermes' });
-    observer.resolveSignIn(asked.id);
+    observer.answerSignIn(asked.id, second.socket);
     await expect(signedIn).resolves.toBeUndefined();
   });
 
