@@ -220,7 +220,7 @@ export interface ShrinkStep {
   footprintKey: string;
 }
 
-export interface MemoryWatchConfig {
+interface MemoryWatchConfig {
   /** Spare memory (see memwatch.ts) kept for other programs. */
   bufferBytes: number;
   sampleMs: number;
