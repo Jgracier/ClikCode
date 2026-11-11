@@ -327,10 +327,10 @@ export class BroadcastObserver implements TurnObserver {
     this.putMark(settledThought(open, Date.now()));
   }
 
-  /** A turn's end, whatever it was: nobody is left to answer what it asked. */
   /** A hard Stop: nothing the turn asked is answered any more. */
   rejectPendingRequests(): void { this.dropPending(); }
 
+  /** A turn's end, whatever it was: nobody is left to answer what it asked. */
   private dropPending(): void {
     const hadApprovals = this.pendingApprovals.size > 0 || this.pendingQuestions.size > 0;
     // A sign-in too: the window running it takes it down, and none still holds it.
