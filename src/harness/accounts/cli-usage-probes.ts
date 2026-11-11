@@ -23,9 +23,8 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { spawnPortable, terminatePortable } from '../transport/spawn.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { PROBE_DEADLINE_MS, mayRunSignInCapable, probeCommand, probeFetch, probeVendor } from './vendor-probe.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { acpDiscoverySession, queryAcp } from './acp-query.js';
 import { type UsageReading, type UsageWindow, usageReading, usageWindow } from './usage-reading.js';
@@ -83,16 +82,8 @@ export function copilotQuotaReading(result: unknown, now = Date.now()): UsageRea
 /** One JSON-RPC request over the Content-Length framing the Copilot SDK
  * server speaks (not ACP's newline framing). */
 function contentLengthRequest(binary: string, argv: readonly string[], environment: Environment, method: string, params: Json): Promise<Json | undefined> {
-  return new Promise((resolve) => {
-    const child = spawnPortable(binary, [...argv], { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, ...environment } });
+  return probeVendor({ binary, argv, environment, deadlineMs: PROBE_DEADLINE_MS, stdin: 'pipe' }, (child) => new Promise((resolve) => {
     let buffer = Buffer.alloc(0);
-    let settled = false;
-    const finish = (value?: Json): void => {
-      if (settled) return;
-      settled = true;
-      terminatePortable(child);
-      resolve(value);
-    };
     child.stdout!.on('data', (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
       for (;;) {
@@ -104,17 +95,15 @@ function contentLengthRequest(binary: string, argv: readonly string[], environme
         buffer = buffer.subarray(headerEnd + 4 + length);
         try {
           const message = JSON.parse(body) as Json;
-          if (message.id === 1) return finish(message.result as Json | undefined);
+          if (message.id === 1) return resolve(message.result as Json | undefined);
         } catch { /* fail-open-ok: a malformed frame is not the answer; the vendor's exit ends the probe */ }
       }
     });
-    child.once('error', () => finish());
-    child.once('exit', () => finish());
+    child.once('exit', () => resolve(undefined));
     const payload = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }));
-    child.stdin!.on('error', () => undefined);
     child.stdin!.write(`Content-Length: ${payload.length}\r\n\r\n`);
     child.stdin!.write(payload);
-  });
+  }));
 }
 
 export async function copilotUsageReading(environment: Environment): Promise<UsageReading | undefined> {
@@ -191,14 +180,16 @@ export async function antigravityUsageReading(environment: Environment): Promise
       if (error.code === 'ENOENT') return undefined;
       throw error;
     });
-    if (!token) {
-      const harness = localHarnessForCommand('antigravity');
-      if (harness) await captureNativeHarnessOutput(harness, ['models'], environment).catch(() => '');
+    // Only a profile with a sign-in on disk is asked to renew it: `agy`
+    // run signed out starts its own sign-in.
+    const harness = localHarnessForCommand('antigravity');
+    if (!token && harness && await mayRunSignInCapable(harness, environment)) {
+      await probeCommand(harness.binary, ['models'], environment);
       token = await antigravityAccessToken(environment);
     }
     if (!token) return undefined;
     const ask = async (method: string, body: Json): Promise<Json | undefined> => {
-      const response = await fetch(`https://cloudcode-pa.googleapis.com/v1internal:${method}`, {
+      const response = await probeFetch(`https://cloudcode-pa.googleapis.com/v1internal:${method}`, {
         method: 'POST', body: JSON.stringify(body),
         // Any other client is told "This client is no longer supported".
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'antigravity/1.0.0' },
@@ -256,8 +247,7 @@ export async function kimiUsageReading(environment: Environment): Promise<UsageR
   const binary = await resolveBinaryPath(catalogBinary('kimi', 'kimi'));
   if (!binary) return undefined;
   // Port 0: never collides with a `kimi web` the user is running.
-  const child = spawnPortable(binary, ['web', '--no-open', '--port', '0'], { stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...environment } });
-  try {
+  return probeVendor({ binary, argv: ['web', '--no-open', '--port', '0'], environment, deadlineMs: PROBE_DEADLINE_MS }, async (child, signal) => {
     const endpoint = await new Promise<{ url: string; token: string } | undefined>((resolve) => {
       let banner = '';
       child.stdout!.setEncoding('utf8');
@@ -267,11 +257,10 @@ export async function kimiUsageReading(environment: Environment): Promise<UsageR
         if (found) resolve(found);
       });
       child.once('exit', () => resolve(undefined));
-      child.once('error', () => resolve(undefined));
     });
     if (!endpoint) return undefined;
-    const response = await fetch(`${endpoint.url}/api/v1/oauth/usage`, {
-      headers: { Authorization: `Bearer ${endpoint.token}` },
+    const response = await probeFetch(`${endpoint.url}/api/v1/oauth/usage`, {
+      headers: { Authorization: `Bearer ${endpoint.token}` }, signal,
     });
     if (!response.ok) return undefined;
     const body = await response.json() as Json;
@@ -279,11 +268,7 @@ export async function kimiUsageReading(environment: Environment): Promise<UsageR
     const said = body?.data?.kind === 'error' && typeof body.data.message === 'string' ? body.data.message : '';
     if (/re-?login required|rejected/i.test(said)) return { windows: [], account: 'signed-out' };
     return kimiQuotaReading(body);
-  } catch {
-    return undefined; // fail-open-ok: no figure beats a wrong one
-  } finally {
-    terminatePortable(child);
-  }
+  });
 }
 
 // ---------------------------------------------------------------- Cursor
@@ -316,7 +301,7 @@ export function cursorQuotaReading(result: unknown, planName?: string): UsageRea
 async function cursorUnnamedModels(environment: Environment): Promise<string[] | undefined> {
   const token = await cursorAccessToken(environment);
   if (!token) return undefined;
-  const response = await fetch('https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels', {
+  const response = await probeFetch('https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels', {
     method: 'POST', body: '{}',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
   });
@@ -336,7 +321,7 @@ export async function cursorUsageReading(environment: Environment): Promise<Usag
   const ask = async (method: string): Promise<Response | undefined> => {
     const token = await cursorAccessToken(environment);
     if (!token) return undefined;
-    return fetch(`https://api2.cursor.sh/aiserver.v1.DashboardService/${method}`, {
+    return probeFetch(`https://api2.cursor.sh/aiserver.v1.DashboardService/${method}`, {
       method: 'POST', body: '{}',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
     });
@@ -344,9 +329,12 @@ export async function cursorUsageReading(environment: Environment): Promise<Usag
   try {
     let response = await ask('GetCurrentPeriodUsage');
     if (response?.status === 401) {
-      // An expired token: the CLI refreshes its own on `status`, then ask once more.
+      // An expired token: the CLI refreshes its own on `status`, then ask
+      // once more -- only while a sign-in is on disk, as `status` run signed
+      // out can start one.
       const harness = localHarnessForCommand('cursor');
-      if (harness) await captureNativeHarnessOutput(harness, ['status'], environment).catch(() => '');
+      if (!harness || !await mayRunSignInCapable(harness, environment)) return undefined;
+      await probeCommand(harness.binary, ['status'], environment);
       response = await ask('GetCurrentPeriodUsage');
     }
     if (!response?.ok) return undefined;
@@ -386,7 +374,7 @@ export async function clineUsageReading(environment: Environment): Promise<Usage
     // Signed in to a Cline account; a provider key of its own has no balance here.
     const auth = providers?.providers?.cline?.settings?.auth as Json | undefined;
     if (typeof auth?.accessToken !== 'string' || typeof auth.accountId !== 'string') return undefined;
-    const response = await fetch(`https://api.cline.bot/api/v1/users/${encodeURIComponent(auth.accountId)}/balance`, {
+    const response = await probeFetch(`https://api.cline.bot/api/v1/users/${encodeURIComponent(auth.accountId)}/balance`, {
       headers: { Authorization: `Bearer ${auth.accessToken}` },
     });
     return response.ok ? clineQuotaReading(await response.json()) : undefined;
@@ -412,7 +400,7 @@ export async function vibeUsageReading(environment: Environment): Promise<UsageR
     const home = environment.VIBE_HOME ?? join(environment.HOME ?? homedir(), '.vibe');
     const key = /^MISTRAL_API_KEY=["']?([^"'\s]+)/m.exec(await readFile(join(home, '.env'), 'utf8'))?.[1];
     if (!key) return undefined;
-    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+    const response = await probeFetch('https://api.mistral.ai/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'mistral-small-latest', messages: [] }),
@@ -448,7 +436,7 @@ export async function devinUsageReading(environment: Environment): Promise<Usage
     const server = /^\s*api_server_url\s*=\s*"([^"]+)"/m.exec(credentials)?.[1] ?? 'https://server.codeium.com';
     if (!key) return undefined;
     // The full metadata: with only the key the server answers invalid_argument.
-    const response = await fetch(`${server}/exa.seat_management_pb.SeatManagementService/GetUserStatus`, {
+    const response = await probeFetch(`${server}/exa.seat_management_pb.SeatManagementService/GetUserStatus`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
       body: JSON.stringify({ metadata: { apiKey: key, ideName: 'windsurf', ideVersion: '1.0.0', extensionName: 'windsurf', extensionVersion: '1.0.0' } }),
@@ -483,7 +471,7 @@ export async function hermesUsageReading(environment: Environment): Promise<Usag
     // A short-lived token hermes renews as it runs; never renewed here.
     if (typeof nous?.access_token !== 'string') return undefined;
     const base = typeof nous.portal_base_url === 'string' ? nous.portal_base_url : 'https://portal.nousresearch.com';
-    const response = await fetch(`${base}/api/oauth/account`, { headers: { Authorization: `Bearer ${nous.access_token}` } });
+    const response = await probeFetch(`${base}/api/oauth/account`, { headers: { Authorization: `Bearer ${nous.access_token}` } });
     return response.ok ? hermesQuotaReading(await response.json()) : undefined;
   } catch {
     return undefined; // fail-open-ok: no figure beats a wrong one
@@ -543,7 +531,7 @@ export async function commandCodeUsageReading(environment: Environment): Promise
     const home = environment.HOME ?? homedir();
     const auth = JSON.parse(await readFile(join(home, '.commandcode', 'auth.json'), 'utf8')) as { apiKey?: unknown };
     if (typeof auth.apiKey !== 'string' || !auth.apiKey) return undefined;
-    const response = await fetch('https://api.commandcode.ai/alpha/billing/credits', {
+    const response = await probeFetch('https://api.commandcode.ai/alpha/billing/credits', {
       headers: { Authorization: `Bearer ${auth.apiKey}` },
     });
     return response.ok ? commandCodeQuotaReading(await response.json()) : undefined;
@@ -569,7 +557,8 @@ export function kiloProfileLabel(output: string): string | undefined {
 async function captureLabel(command: string, argv: readonly string[], environment: Environment, parse: (output: string) => string | undefined): Promise<string | undefined> {
   try {
     const harness = localHarnessForCommand(command);
-    return harness ? parse(await captureNativeHarnessOutput(harness, argv, environment)) : undefined;
+    const output = harness ? await probeCommand(harness.binary, argv, environment) : undefined;
+    return output === undefined ? undefined : parse(output);
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
 }
 
@@ -590,12 +579,9 @@ export function auggieUsageLabel(raw: string): string | undefined {
 }
 
 export async function auggieUsageReading(environment: Environment): Promise<UsageReading | undefined> {
-  let raw: string;
-  try {
-    const harness = localHarnessForCommand('auggie');
-    if (!harness) return undefined;
-    raw = await captureNativeHarnessOutput(harness, ['account', 'status', '--json'], environment);
-  } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
+  const harness = localHarnessForCommand('auggie');
+  const raw = harness ? await probeCommand(harness.binary, ['account', 'status', '--json'], environment) : undefined;
+  if (raw === undefined) return undefined;
   const label = auggieUsageLabel(raw);
   if (label === undefined) return undefined;
   let plan: unknown;

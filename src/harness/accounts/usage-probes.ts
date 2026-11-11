@@ -4,10 +4,9 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
 import { grokUsageReading } from './grok-usage.js';
 import { ampUsageProbe, antigravityUsageReading, auggieUsageReading, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { PROBE_DEADLINE_MS, probeCommand, probeVendor } from './vendor-probe.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
 import type { NativeUsageProbe } from '../definition.js';
@@ -40,19 +39,10 @@ function harnessBinary(command: string, fallback: string = command): string {
 async function codexUsageReading(environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   let signedOut = false;
   const binary = harnessBinary('codex');
-  const response = await new Promise<Record<string, unknown> | undefined>((resolveUsage) => {
-    const child = spawn(binary, ['app-server', '--listen', 'stdio://'], {
-      stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...environment },
-    });
+  const response = await probeVendor({ binary, argv: ['app-server', '--listen', 'stdio://'], environment, deadlineMs: PROBE_DEADLINE_MS, stdin: 'pipe' }, (child) => new Promise<Record<string, unknown> | undefined>((resolveUsage) => {
     let buffer = '';
-    let settled = false;
     let initialized = false;
-    const finish = (value?: Record<string, unknown>): void => {
-      if (settled) return;
-      settled = true;
-      terminatePortable(child);
-      resolveUsage(value);
-    };
+    const finish = (value?: Record<string, unknown>): void => resolveUsage(value);
     const send = (message: Record<string, unknown>): void => {
       if (child.stdin?.writable) child.stdin.write(`${JSON.stringify(message)}\n`);
     };
@@ -84,11 +74,10 @@ async function codexUsageReading(environment: Readonly<Record<string, string>>):
         } catch { /* Ignore logs and unrelated notifications. */ }
       }
     });
-    child.once('error', () => finish());
     child.once('exit', () => finish());
     send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'clikcode', version: CLIKCODE_VERSION } } });
     send({ method: 'initialized', params: {} });
-  });
+  }));
   if (signedOut) return { windows: [], account: 'signed-out' };
   const reading = codexRateLimitsReading(response?.rateLimits);
   // The plan is in the id token on disk, readable even when the rate-limit
@@ -135,7 +124,8 @@ async function claudeUsageReading(environment: Readonly<Record<string, string>>)
   const harness = localHarnessForCommand('claude');
   if (!harness) return undefined;
   try {
-    const output = await captureNativeHarnessOutput(harness, CLAUDE_USAGE_PROBE_ARGV, environment);
+    const output = await probeCommand(harness.binary, CLAUDE_USAGE_PROBE_ARGV, environment);
+    if (output === undefined) return undefined;
     const result = (JSON.parse(output) as { result?: unknown }).result;
     return typeof result === 'string' ? claudeUsageCommandReading(result) : undefined;
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
