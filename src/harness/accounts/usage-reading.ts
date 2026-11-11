@@ -3,7 +3,6 @@
 
 import { quotaResetPhrase } from '../protocol/format.js';
 import type { AiHarnessAccount } from '../definition.js';
-import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 
 /** One quota window as the vendor reported it. `usedPct` is the unrounded
  * percentage used (0..100+); the display label rounds, this does not, so
@@ -216,30 +215,14 @@ function quotaMarkExpiresAt(account: AiHarnessAccount): number | undefined {
  *    published after it shows no window spent. Only a window that can stop
  *    the account speaks to a refusal: an advisory one (Antigravity's pools,
  *    Cline's credits) does not say the account has room. */
-export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.now(), model?: string): boolean {
+export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.now(), scope?: string): boolean {
   return vendorWindows(account).some((window) => windowSpent(window) && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now))
-    || quotaRefusalHolds(account, now, model);
+    || quotaRefusalHolds(account, now, scope);
 }
 
-/** The independently metered model family a model belongs to, as the
- * catalog's `quotaScopes` names them (Antigravity's pools). */
-export function quotaScopeForModel(account: AiHarnessAccount, model: string | undefined): string | undefined {
-  if (!model) return undefined;
-  let scopes: Readonly<Record<string, readonly string[]>> | undefined;
-  try { scopes = localHarnessForProvider(account.provider)?.quotaScopes; } catch { scopes = undefined; } // fail-open-ok: no catalog, no scopes: the refusal holds the whole account
-  if (!scopes) return undefined;
-  const id = model.toLowerCase();
-  const family = Object.entries(scopes).find(([, words]) => words.some((word) => id.includes(word)))?.[0];
-  if (!family) return undefined;
-  // Some Antigravity models share one vendor pool and reset instant. Its
-  // usage response names every family in that pool (for example Claude and
-  // GPT-OSS); preserve that grouping when recording a model refusal.
-  const pool = vendorWindows(account).find((window) => window.name.toLowerCase()
-    .split(/[\/,+\s]+/).includes(family));
-  if (pool) return pool.name.toLowerCase().split(/[\/,+\s]+/).filter(Boolean).sort().join('+');
-  return family;
-}
-
+/** The quota functions below take a model's metered family (`scope`, from
+ * quota-scope.ts) rather than the model: that lookup reads the catalog, which
+ * only Node has, and this module is shared with the editor's webview. */
 function scopedQuotaHolds(account: AiHarnessAccount, scope: string, now: number): boolean {
   const mark = account.quotaScopes?.[scope];
   if (!mark) return false;
@@ -247,16 +230,14 @@ function scopedQuotaHolds(account: AiHarnessAccount, scope: string, now: number)
   return !Number.isFinite(until) || until > now;
 }
 
-export function modelQuotaRefusalHolds(account: AiHarnessAccount, now: number, model?: string): boolean {
-  const scope = quotaScopeForModel(account, model);
+export function modelQuotaRefusalHolds(account: AiHarnessAccount, now: number, scope?: string): boolean {
   return Boolean(scope && scopedQuotaHolds(account, scope, now));
 }
 
 /** The refusal half of accountQuotaSpent: the vendor refused this account
  * and nothing since says otherwise. What moves a chat off its own account
  * before a turn -- a reading alone does not (account-routing.ts). */
-export function quotaRefusalHolds(account: AiHarnessAccount, now: number = Date.now(), model?: string): boolean {
-  const scope = quotaScopeForModel(account, model);
+export function quotaRefusalHolds(account: AiHarnessAccount, now: number = Date.now(), scope?: string): boolean {
   if (scope && scopedQuotaHolds(account, scope, now)) return true;
   const expires = quotaMarkExpiresAt(account);
   if (expires === undefined || expires <= now) return false;
@@ -274,8 +255,7 @@ export function quotaRefusalHolds(account: AiHarnessAccount, now: number = Date.
  * verification, and not out of quota by the rule above. Every "has usage"
  * decision -- failover, Resume in, the preferred account, the pickers, the
  * status labels -- asks this, so none of them can disagree about an account. */
-export function accountCanTakeTurn(account: AiHarnessAccount, now: number = Date.now(), model?: string): boolean {
-  const scope = quotaScopeForModel(account, model);
+export function accountCanTakeTurn(account: AiHarnessAccount, now: number = Date.now(), scope?: string): boolean {
   return account.status === 'ready' && !account.verification
     && !(scope ? scopedQuotaHolds(account, scope, now) : false)
     && !accountQuotaSpent(account, now);

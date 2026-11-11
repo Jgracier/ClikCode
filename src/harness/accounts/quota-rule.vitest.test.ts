@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessState } from '../../session/model.js';
 import { accountCanTakeTurn, accountQuotaSpent, QUOTA_MARK_DEFAULT_MS, settleQuotaMark } from './usage-reading.js';
+import { quotaScopeForModel } from './quota-scope.js';
 import { accountsDueForUsageRecheck } from './account-usage.js';
 
 const now = Date.parse('2026-09-27T15:00:00.000Z');
@@ -19,13 +20,13 @@ describe('can an account take a turn now', () => {
     const agy = account({ provider: 'antigravity' });
     const state = { accounts: [agy], sessions: [], invocations: [] } as unknown as HarnessState;
     recordQuotaRefusal(state, agy, new Error('usage limit reached, resets in 2 hours'), now, 'claude-sonnet-4-6');
-    expect(accountCanTakeTurn(agy, now, 'claude-opus-4-6')).toBe(false);
-    expect(accountCanTakeTurn(agy, now, 'gemini-3.8-flash')).toBe(true);
-    expect(accountCanTakeTurn(agy, now, 'gpt-oss-120b-medium')).toBe(true);
+    expect(accountCanTakeTurn(agy, now, quotaScopeForModel(agy, 'claude-opus-4-6'))).toBe(false);
+    expect(accountCanTakeTurn(agy, now, quotaScopeForModel(agy, 'gemini-3.8-flash'))).toBe(true);
+    expect(accountCanTakeTurn(agy, now, quotaScopeForModel(agy, 'gpt-oss-120b-medium'))).toBe(true);
     recordSuccessfulAccountTurn(agy, 'gemini-3.8-flash');
-    expect(accountCanTakeTurn(agy, now, 'claude-sonnet-4-6')).toBe(false);
+    expect(accountCanTakeTurn(agy, now, quotaScopeForModel(agy, 'claude-sonnet-4-6'))).toBe(false);
     recordSuccessfulAccountTurn(agy, 'claude-sonnet-4-6');
-    expect(accountCanTakeTurn(agy, now, 'claude-sonnet-4-6')).toBe(true);
+    expect(accountCanTakeTurn(agy, now, quotaScopeForModel(agy, 'claude-sonnet-4-6'))).toBe(true);
   });
 
   it('lets back an account marked exhausted whose spent window reset hours ago', () => {

@@ -1,6 +1,7 @@
 /** Select a usable account for a turn or a failover. */
 import { quiet } from '../runtime/lifecycle-log.js';
 import { USAGE_RECHECK_MS, accountCanTakeTurn, modelQuotaRefusalHolds, quotaRefusalHolds, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
+import { quotaScopeForModel } from '../harness/accounts/quota-scope.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
@@ -39,7 +40,7 @@ export function providerHasAccountForTurn(
   state: HarnessState, provider: string, matchesTransport: (candidate: AiHarnessAccount) => boolean, now: number = Date.now(),
   attempted?: ReadonlyMap<string, number>, model?: string,
 ): boolean {
-  return state.accounts.some((candidate) => candidate.provider === provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now, model)
+  return state.accounts.some((candidate) => candidate.provider === provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now, quotaScopeForModel(candidate, model))
     && !(attempted?.has(candidate.id) && !resetPassedSince(candidate, attempted.get(candidate.id)!, now)));
 }
 
@@ -92,10 +93,10 @@ export function nextUsableFailoverAccount(
   now: number = Date.now(),
   model?: string,
 ): AiHarnessAccount | undefined {
-  const usable = (candidate: AiHarnessAccount): boolean => accountCanTakeTurn(candidate, now, model)
+  const usable = (candidate: AiHarnessAccount): boolean => accountCanTakeTurn(candidate, now, quotaScopeForModel(candidate, model))
     && (!attempted.has(candidate.id) || resetPassedSince(candidate, attempted.get(candidate.id)!, now));
   const unconfirmed = (candidate: AiHarnessAccount): boolean => !attempted.has(candidate.id)
-    && candidate.status === 'ready' && !candidate.verification && !modelQuotaRefusalHolds(candidate, now, model)
+    && candidate.status === 'ready' && !candidate.verification && !modelQuotaRefusalHolds(candidate, now, quotaScopeForModel(candidate, model))
     && now - confirmedAt(candidate) >= USAGE_RECHECK_MS;
   const rank = (account: AiHarnessAccount): [tier: number, order: number] => usable(account)
     ? [0, -(reportedRoom(account, now) ?? -1)]
@@ -125,10 +126,10 @@ export function initialAccountChoice(
   options: { now?: number; turns?: number; model?: string } = {},
 ): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount; reason: 'quota-exhausted' | 'low-room' } {
   const now = options.now ?? Date.now();
-  const refused = quotaRefusalHolds(current, now, options.model);
+  const refused = quotaRefusalHolds(current, now, quotaScopeForModel(current, options.model));
   const fallback = nextUsableFailoverAccount(state, current, matchesBackend, new Map([...attempted, [current.id, now]]), now, options.model);
   if (!fallback) return { kind: 'continue' };
-  const early = !refused && accountCanTakeTurn(fallback, now, options.model)
+  const early = !refused && accountCanTakeTurn(fallback, now, quotaScopeForModel(fallback, options.model))
     && earlyMoveTarget(current, [fallback], state.invocations, { now, turns: options.turns ?? 1 }) !== undefined;
   if (!refused && !early) return { kind: 'continue' };
   attempted.set(current.id, now);
