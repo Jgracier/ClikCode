@@ -348,10 +348,16 @@ export function onTerminalFocus(listener: (focused: boolean) => void): () => voi
  * a palette over a running turn). Keys go to it alone, so an overlay consumes
  * Esc and the turn's own handler under it never sees it. This is the single
  * routing rule; no handler checks whether something else is open. */
-const keyOwners: object[] = [];
+const keyOwners: Array<{ retake?: () => void }> = [];
 
-function listenForTerminalKeys(onKey: (key: string) => void): () => void {
-  const owner = {};
+/** The keyboard back after someone else had the terminal (Ctrl+Z then `fg`): the reader on top -- whoever has the keyboard now --
+ * takes it again, the way it said to. A reader that said nothing keeps listening as it was. */
+export function retakeKeyboard(): void {
+  keyOwners.at(-1)?.retake?.();
+}
+
+function listenForTerminalKeys(onKey: (key: string) => void, retake?: () => void): () => void {
+  const owner = retake ? { retake } : {};
   keyOwners.push(owner);
   const decoder = new TerminalInputDecoder();
   let flushTimer: NodeJS.Timeout | undefined;
@@ -438,8 +444,8 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
 /** Take the keyboard: raw mode, stdin flowing, and every key to `onKey`
  * until the returned function is called. What a picker does on opening and
  * again each time a screen it opened hands the keyboard back. */
-export function takeTerminalKeys(onKey: (key: string) => void): () => void {
+export function takeTerminalKeys(onKey: (key: string) => void, retake?: () => void): () => void {
   setTerminalRawMode(true);
   input.resume();
-  return listenForTerminalKeys(onKey);
+  return listenForTerminalKeys(onKey, retake);
 }

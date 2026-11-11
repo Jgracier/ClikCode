@@ -250,8 +250,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The most rows the plan block has had this turn: it keeps that height (blank rows) so the chat does not move as steps change. */
   planHold = 0;
   streamingBlocks = createStreamingBlockParser();
-  /** Re-installs the key listener and raw mode after Ctrl+Z / `fg`. */
-  resumeInput?: () => void;
   /** Providers fan out parallel tool calls, so a second request can arrive
    * while the first is still on screen. Queueing asks them one at a time;
    * resolving the extras false meant silently denying a tool the user was
