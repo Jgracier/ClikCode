@@ -68,6 +68,10 @@ async function presentAt(path: string, entry: AuthFile): Promise<boolean> {
   }
 }
 
+function parsesAsJson(text: string): boolean {
+  try { JSON.parse(text); return true; } catch { return false; }
+}
+
 /** Only during an explicitly requested sign-in: let the vendor start even
  * when an old JSON credential is corrupt (does not parse). Preserve it for
  * recovery instead of deleting it or guessing which trailing bytes were
@@ -87,7 +91,7 @@ export async function prepareAuthFilesForLogin(
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw error;
       }
-      try { JSON.parse(text); continue; } catch { /* corrupt: set aside below */ }
+      if (parsesAsJson(text)) continue;
       await rename(path, `${path}.invalid-${randomUUID()}.bak`);
     }
   }
