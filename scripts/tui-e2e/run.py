@@ -2312,17 +2312,16 @@ SCENARIOS = {
         'rows_within_screen': True, 'composer_whole_after_mark': True, 'cheap_frames_after_mark': 20,
         'never': ['Interrupted turn activity'],
     },
-    # A phone with its keyboard up sends a swipe as arrow keys only: Up with
-    # nothing typed must scroll a running turn back, as it does at the prompt.
-    # Recorded: during a long turn the keyboard came up and every swipe after
-    # that did nothing.
+    # A phone with its keyboard up sends a swipe as arrow keys only (no mouse mode: the client's own selection), in bursts: the
+    # swipe must scroll a running turn back, as it does at the prompt (swipe-arrows.ts). Recorded: during a long turn the
+    # keyboard came up and every swipe after that did nothing. An arrow pressed as a key recalls history instead.
     'long-turn-swipe-arrows-scroll': {
-        'cols': 70, 'rows': 32, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40'},
+        'cols': 70, 'rows': 32, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40', 'CLIKCODE_MOUSE': ''},
         'turns': [{'emits': [*[{'op': 'text', 'text': f'run part{n} done.\n\n', 'ms': 5} for n in range(1, 31)],
                              {'op': 'tool', 'id': 'hold', 'title': 'sleep 30', 'ms': 25000}]}],
         'steps': [
             ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1.5), ('snap', 'before'), ('mark',),
-            *[step for _ in range(4) for step in (('keys', '\x1b[A'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
+            *[step for _ in range(2) for step in (('keys', '\x1b[A\x1b[A'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
             ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'), ('mark_end',),
         ],
         'watch': [], 'scroll_moves': {'pattern': r'run part(\d+)'},
@@ -3814,7 +3813,9 @@ def run(name, spec, entry, keep):
         if leave >= 0:
             start = tail.rfind(b'\x1b[?1006l\x1b[?1016l', 0, leave)
             tail = tail[:start if 0 <= start and leave - start < 200 else leave]
-        for mode in ('1000', '1002', '1003', '1006', '2004'):
+        # The mouse modes only where the scenario asks for the mouse (the suite's default); bracketed paste always.
+        mouse = spec.get('env', {}).get('CLIKCODE_MOUSE', '1') == '1'
+        for mode in (('1000', '1002', '1003', '1006') if mouse else ()) + ('2004',):
             on, off = tail.rfind(f'\x1b[?{mode}h'.encode()), tail.rfind(f'\x1b[?{mode}l'.encode())
             if on < 0 or on < off: problems.append(f'mode ?{mode} is off at the end (last switched off, never on again)')
     for sequence in spec.get('raw_never', []):
