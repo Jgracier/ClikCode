@@ -494,8 +494,7 @@ const SETTLE_MS = 350;
 const REDRAW_MS = 4_000;
 /** How often the credential is looked for, and how long the vendor gets
  * to finish once it is there. */
-const SIGNED_IN_POLL_MS = 1_000;
-const SIGNED_IN_GRACE_MS = 1_500;
+const SIGNED_IN_TIMINGS = { pollMs: 1_000, graceMs: 1_500 } as const;
 /** How soon a step whose text the screen still shows may fire again. */
 const STEP_AGAIN_MS = 2_000;
 /** The longest a screen that keeps drawing goes unread. */
@@ -516,7 +515,11 @@ export async function runVendorSignIn(input: {
   /** True once the vendor has written its credential: the sign-in is done,
    * and the vendor is closed after a moment to finish writing. */
   signedIn?: () => Promise<boolean>;
+  /** How often `signedIn` is asked and how long the vendor then gets
+   * (SIGNED_IN_TIMINGS when omitted; tests pass shorter ones). */
+  timings?: { pollMs: number; graceMs: number };
 }): Promise<void> {
+  const timings = input.timings ?? SIGNED_IN_TIMINGS;
   const { ui: given } = input;
   const cancelled = (): Error => new SignInCancelled(input.displayName);
   // Every answer to a secret question: never repeated in what the sign-in
@@ -618,7 +621,7 @@ export async function runVendorSignIn(input: {
     void answer(async () => {
       // Signed in already: what the vendor asks next (Cline's model pick
       // after its browser sign-in) is its own setup, never put to the user.
-      if (await landed()) { await new Promise((resolve) => setTimeout(resolve, SIGNED_IN_GRACE_MS)); return undefined; }
+      if (await landed()) { await new Promise((resolve) => setTimeout(resolve, timings.graceMs)); return undefined; }
       if (prompt.kind === 'input') return `${await ui.ask(prompt.prompt, prompt.secret, prompt.optional)}\r`;
       const choices = prompt.searchable ? [...prompt.choices, SEARCH_CHOICE] : prompt.choices;
       const index = await ui.choose(prompt.title, choices, prompt.selected);
@@ -661,8 +664,8 @@ export async function runVendorSignIn(input: {
   };
   const watch = input.signedIn ? setInterval(() => {
     if (succeeded) return;
-    void landed().then((done) => { if (done) setTimeout(abort, SIGNED_IN_GRACE_MS); });
-  }, SIGNED_IN_POLL_MS) : undefined;
+    void landed().then((done) => { if (done) setTimeout(abort, timings.graceMs); });
+  }, timings.pollMs) : undefined;
   const poll = standIns ? setInterval(() => {
     void readFile(standIns.log, 'utf8').then((text) => {
       const last = text.trim().split('\n').pop();

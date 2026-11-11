@@ -292,9 +292,9 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
     const started = Date.now();
     await runVendorSignIn({
       binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: ui().value,
-      signedIn: () => access(credential).then(() => true, () => false),
+      signedIn: () => access(credential).then(() => true, () => false), timings: { pollMs: 50, graceMs: 50 },
     });
-    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('never asks what the vendor puts up once its credential is written (Cline\'s model pick)', async () => {
@@ -302,11 +302,13 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
     const vendor = await script(`echo '{"token":"t"}' > '${credential}'\nprintf "Recommended\\r\\n❯ model-a\\r\\n  model-b\\r\\n"\nsleep 30\n`);
     const { access } = await import('node:fs/promises');
     const screen = ui({ choose: [0] });
+    const started = Date.now();
     await runVendorSignIn({
       binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: screen.value,
-      signedIn: () => access(credential).then(() => true, () => false),
+      signedIn: () => access(credential).then(() => true, () => false), timings: { pollMs: 50, graceMs: 50 },
     });
     expect(screen.seen).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('says what the vendor said when its sign-in fails', async () => {
