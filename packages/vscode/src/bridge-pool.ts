@@ -17,9 +17,11 @@
  * quiet: it says `host-retiring` (src/ide/bridge-retire.ts), each chat hears
  * `retiring` and its exit, and reconnects at once into a new process.
  *
- * A ClikCode from before shared processes answers with a plain `ready`: its
- * process becomes the first chat's own, and every other chat gets one of its
- * own, as before.
+ * With `clikcode.sharedProcess` off, each chat has a process of its own --
+ * still spoken to inside the envelope, since that is the only way a bridge
+ * runs. A ClikCode from before that (protocol revision 11) answers with a
+ * plain `ready`: the chat is handed it as it is, and refused for its revision
+ * (compat.ts), which says to update ClikCode.
  */
 import { randomUUID } from 'node:crypto';
 import { BridgeClient, BridgeEndpoint, MultiplexBridge } from './bridge-client';
@@ -28,18 +30,16 @@ import type { RemoteMachine } from '../../../src/remote/machines';
 import type { IdeEvent, IdeHostEvent, IdeRequest } from './protocol';
 import { entryBuild, type Runtime } from './runtime';
 
-export const MULTIPLEX_ENV: Readonly<Record<string, string>> = { CLIKCODE_IDE_MULTIPLEX: '1' };
-
-type Starter = (runtime: Runtime, cwd: string | undefined, extraEnv?: Readonly<Record<string, string>>) => MultiplexBridge;
+type Starter = (runtime: Runtime, cwd: string | undefined) => MultiplexBridge;
 
 export class BridgePool {
   private readonly hosts = new Map<string, SharedHost>();
   /** Runtimes whose ClikCode cannot share a process: a chat each. */
   private readonly single = new Set<string>();
 
-  constructor(private readonly start: Starter = (runtime, cwd, extraEnv) => runtime.entry.startsWith('remote:')
+  constructor(private readonly start: Starter = (runtime, cwd) => runtime.entry.startsWith('remote:')
     ? SshBridgeClient.start(runtime.entry.slice('remote:'.length), runtime)
-    : BridgeClient.start(runtime, cwd, extraEnv)) {}
+    : BridgeClient.start(runtime, cwd)) {}
 
   /** One SSH bridge per remote machine, shared by its chats in this window. */
   connectRemote(machine: RemoteMachine): BridgeEndpoint {
@@ -54,7 +54,9 @@ export class BridgePool {
    * off, or a ClikCode that cannot share -- a process of its own. */
   connect(runtime: Runtime, cwd: string | undefined, shared = true): BridgeEndpoint {
     const key = poolKey(runtime);
-    if (!shared || this.single.has(key)) return this.start(runtime, cwd);
+    if (this.single.has(key)) return this.start(runtime, cwd);
+    // A host of its own, in no pool: it goes when this chat leaves.
+    if (!shared) return new SharedHost(runtime, cwd, this.start, { gone: () => {}, cannotShare: () => { this.single.add(key); } }).join();
     let host = this.hosts.get(key);
     if (!host?.accepting) {
       const created = new SharedHost(runtime, cwd, this.start, {
@@ -91,7 +93,7 @@ class SharedHost {
     private readonly start: Starter,
     private readonly pool: { gone(): void; cannotShare(): void },
   ) {
-    this.proc = start(runtime, cwd, MULTIPLEX_ENV);
+    this.proc = start(runtime, cwd);
     this.proc.on('event', (message) => this.onMessage(message as IdeEvent | IdeHostEvent));
     this.proc.on('log', (line) => {
       // While it starts, every chat waiting on it sees why it failed (an
@@ -167,8 +169,8 @@ class SharedHost {
     }
   }
 
-  /** An older ClikCode: one conversation per process. This one becomes the
-   * first chat's own; every other chat starts its own. */
+  /** A ClikCode from before every bridge shared (revision 11): one conversation per process. This one
+   * becomes the first chat's own; every other chat starts its own; each is then refused for its revision. */
   private fallBack(ready: IdeEvent): void {
     this.state = 'single';
     this.pool.cannotShare();

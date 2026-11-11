@@ -1,5 +1,5 @@
 /** `clikcode ide-bridge` serving every chat of an editor window from one
- * process (CLIKCODE_IDE_MULTIPLEX=1).
+ * process (the only way it runs since protocol revision 11).
  *
  * Each editor chat -- the side bar, every chat tab -- used to run a bridge
  * process of its own: 120-330 MB each, six or seven in one window (measured
@@ -160,8 +160,6 @@ export class MultiplexHost {
 }
 
 export async function runMultiplexedBridge(config: Conf, send: NonNullable<typeof process.send>): Promise<void> {
-  // Not passed on to the workers and vendors this process starts.
-  delete process.env.CLIKCODE_IDE_MULTIPLEX;
   // The last event before a retirement exit is what tells the editor to
   // reconnect: the exit waits until it has left (IPC writes asynchronously).
   let sent: Promise<void> = Promise.resolve();

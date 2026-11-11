@@ -30,7 +30,7 @@ import { gatewayCreditLabel } from '../gateway/credit-label.js';
 import { usageNextReset, usageResetLabel, usageWindowsDetail } from '../harness/accounts/usage-reading.js';
 import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { signInCancelledLine } from '../commands/account.js';
-import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
+import type { HarnessInstallReporter } from '../harness/transport/native/install.js';
 import { followModelDownloadsInEditor, reconcileLocalModelLeases } from '../commands/ai/local-model.js';
 import { conversationCost } from '../tui/slash/usage-report.js';
 import { autoSelectSessionHarness } from '../tui/pickers/engine.js';
@@ -41,7 +41,6 @@ import { IdePrompter, type IdeChannel } from './prompter.js';
 import { watchConversationList, type ListWatch } from '../session/list-watch.js';
 import { encodeTerminalSpec, type IdeEvent, type IdeFeature, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
 import { IDE_PROTOCOL } from './protocol-version.js';
-import { watchForNewerBuild } from './bridge-retire.js';
 import { sessionEvent } from './session-event.js';
 import { SessionDeltaSender } from './session-delta.js';
 import { wireCalls, wireMessage, wireTurn } from './session-wire.js';
@@ -642,42 +641,7 @@ export async function runIdeBridge(config: Conf): Promise<void> {
   // Command results as records, which the editor renders -- never as text
   // drawn for a terminal that is not there.
   process.env.CLIKCODE_OUTPUT_MODE = 'json';
-  // An editor that serves every chat of a window from one process asks for
-  // it (bridge-mux.ts); any other caller gets one conversation per process.
-  if (process.env.CLIKCODE_IDE_MULTIPLEX === '1') {
-    const { runMultiplexedBridge } = await import('./bridge-mux.js');
-    return runMultiplexedBridge(config, send);
-  }
-  let bridge: IdeBridge | undefined;
-  // The last event before a retirement exit has to have left first (bridge-mux.ts says why).
-  let sent: Promise<void> = Promise.resolve();
-  const channel: IdeChannel = {
-    send: (event: IdeEvent) => {
-      if (event.type === 'output' && bridge?.quietOutput && event.payload.panel !== 'error') return;
-      if (process.connected) sent = new Promise((resolve) => send(event, undefined, {}, () => resolve()));
-    },
-  };
-  captureStdout(channel);
-  // Choosing a harness that is not installed installs it (install.ts); here
-  // that shows as the chat's busy line, then a notice.
-  setHarnessInstallReporter(ideInstallReporter(channel));
-  const running = new IdeBridge(config, channel);
-  bridge = running;
-  process.on('message', (message) => {
-    if (message && typeof message === 'object' && typeof (message as { type?: unknown }).type === 'string') running.handle(message as IdeRequest);
-  });
-  // The editor closed or crashed: the channel is gone with it.
-  process.on('disconnect', () => { lifecycle('bridge.stop', { reason: 'editor disconnected' }); void running.shutdown().finally(() => process.exit(0)); });
-  process.on('SIGTERM', () => { lifecycle('bridge.stop', { reason: 'SIGTERM' }); void running.shutdown().finally(() => process.exit(0)); });
-  running.start();
-  // A newer ClikCode installed while the editor stays connected: leave once quiet (bridge-retire.ts).
-  watchForNewerBuild({
-    blocker: () => running.retireBlocker(),
-    lastActivityAt: () => running.lastActivityAt,
-    retire: () => {
-      channel.send({ type: 'retiring', reason: 'newer-build' });
-      void running.shutdown().then(() => sent).finally(() => process.exit(0));
-    },
-  });
-  await new Promise<void>(() => { /* lives as long as the channel */ });
+  // One process serves every chat of the window (bridge-mux.ts), even a window of one chat.
+  const { runMultiplexedBridge } = await import('./bridge-mux.js');
+  return runMultiplexedBridge(config, send);
 }

@@ -412,7 +412,10 @@ export function verifyScript(): string {
 }
 
 /** What starts the board's connection on the other machine: its own
- * bridge, multiplexed, over this SSH session's stdin/stdout. */
+ * bridge, multiplexed, over this SSH session's stdin/stdout. A bridge from
+ * protocol revision 11 on always multiplexes; CLIKCODE_IDE_MULTIPLEX is only
+ * for a ClikCode there that predates it, which would otherwise never say
+ * host-ready, so it is never found out of date and updated. */
 export function bridgeScript(): string {
   return [withOwnNode, `CLIKCODE_IDE_MULTIPLEX=1 ${WIRE_GZIP_ENV}=1 exec ${BIN_LINK} ide-bridge --stdio`].join('\n');
 }

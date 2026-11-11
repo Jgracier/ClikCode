@@ -3,7 +3,7 @@
  * fake `tailscale` printing a fixture, a file:// repository standing in for
  * GitHub, and a file:// Node mirror. Nothing connects to a real machine. */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -24,6 +24,8 @@ import type { IdeConversation } from '../ide/protocol.js';
 import type { HarnessPrompter, PickerOption, PickerSettings } from '../harness/prompter.js';
 
 const REPO = resolve(__dirname, '..', '..');
+/** Whether this checkout's build has the code (the program is cli.js and its chunks). */
+const builtIncludes = (text: string): boolean => readdirSync(join(REPO, 'dist')).some((file) => file.endsWith('.js') && readFileSync(join(REPO, 'dist', file), 'utf8').includes(text));
 const FAKES = join(REPO, 'scripts', 'tui-e2e');
 let root: string;
 let fakeWorld: { repoUrl: string; mirrorUrl: string; macportsMirror: string; macportsPins: Record<number, { node: { sha256: string } }>; commit: string; bare: string; work: string };
@@ -895,11 +897,11 @@ describe('keeping machines at this build', () => {
 
 describe('ide-bridge --stdio (the built CLI)', () => {
   const entry = join(REPO, 'dist', 'index.js');
-  const built = existsSync(entry) && readFileSync(join(REPO, 'dist', 'cli.js'), 'utf8').includes('bridge-stdio');
+  const built = existsSync(entry) && builtIncludes('bridge-stdio');
   it.skipIf(!built)('relays the multiplexed bridge as JSON lines, and exits when stdin closes', async () => {
     const { spawn } = await import('node:child_process');
     const { createInterface } = await import('node:readline');
-    const child = spawn(process.execPath, [entry, 'ide-bridge', '--stdio'], { env: { ...process.env, CLIKCODE_IDE_MULTIPLEX: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [entry, 'ide-bridge', '--stdio'], { env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
     const events: Array<{ type: string; chat?: string; event?: { type: string; data?: unknown } }> = [];
     const nonJson: string[] = [];
     createInterface({ input: child.stdout }).on('line', (line) => {
@@ -925,7 +927,7 @@ describe('ide-bridge --stdio (the built CLI)', () => {
  * vendor in the editor's folder, which Node reported as `spawn claude-agent-acp ENOENT`. */
 describe('a chat on the machine that owns it', () => {
   const entry = join(REPO, 'dist', 'index.js');
-  const built = existsSync(entry) && readFileSync(join(REPO, 'dist', 'cli.js'), 'utf8').includes('bridge-stdio');
+  const built = existsSync(entry) && builtIncludes('bridge-stdio');
   // The editor machine's home: a path of the client's, which the owner does not have.
   const editorHome = join(mkdtempSync(join(tmpdir(), 'cc-editor-machine-')), 'home', 'editor');
   let owner: { home: string };
@@ -1002,7 +1004,7 @@ describe('a chat on the machine that owns it', () => {
  * one-line entry importing this build, so rewriting it is a new build there. */
 describe('a chat whose machine is updated under it', () => {
   const entry = join(REPO, 'dist', 'index.js');
-  const built = existsSync(entry) && readFileSync(join(REPO, 'dist', 'cli.js'), 'utf8').includes('bridge-retire');
+  const built = existsSync(entry) && builtIncludes('bridge-retire');
   it.skipIf(!built)('reconnects onto the new build and goes on, with no error', async () => {
     const machineHome = join(root, 'hosts', 'renewed', 'home');
     const release = join(machineHome, 'release', 'index.mjs');

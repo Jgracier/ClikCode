@@ -7,14 +7,14 @@ import type { BridgeEndpoint } from '../../src/bridge-client';
 import type { IdeEvent } from '../../src/protocol';
 import type { Runtime } from '../../src/runtime';
 
-/** A stand-in `ide-bridge`: shares itself when asked (CLIKCODE_IDE_MULTIPLEX),
+/** A stand-in `ide-bridge`: shares itself, as every bridge from revision 11 does,
  * unless FAKE_OLD says it is a ClikCode from before that. Every start, and
  * every chat it closes, is written down. */
 const FAKE = `
 const fs = require('node:fs');
 if (process.argv[2] !== 'ide-bridge') process.exit(2);
 fs.appendFileSync(process.env.FAKE_LOG, 'start ' + process.pid + '\\n');
-const shared = process.env.CLIKCODE_IDE_MULTIPLEX === '1' && !process.env.FAKE_OLD;
+const shared = !process.env.FAKE_OLD;
 const answer = (chat, request) => {
   if (request.type === 'open') return { type: 'result', requestId: request.requestId, ok: true, data: { chat, pid: process.pid } };
   if (request.type === 'query') return { type: 'result', requestId: request.requestId, ok: true, data: request.query };
