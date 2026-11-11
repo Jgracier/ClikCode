@@ -7,7 +7,6 @@ import { composerUsageLabel, paintTitleRule, paintUsageRule, usageRemainingPerce
 // below vacuously pass. These tests are about which colour is chosen.
 beforeAll(() => { chalk.level = 3; });
 
-const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
 const colourOf = (text: string, needle: string): string =>
   new RegExp(`\\u001b\\[([0-9;]*)m[^\\u001b]*${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).exec(text)?.[1] ?? '';
 

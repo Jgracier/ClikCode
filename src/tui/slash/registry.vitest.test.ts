@@ -9,7 +9,7 @@ import type { HarnessSession } from '../../session/model.js';
 const harness = (overrides: Partial<AiLocalHarnessDefinition> = {}): AiLocalHarnessDefinition => ({
   command: 'vendor', provider: 'vendor', displayName: 'Vendor', localAuth: ['vendor-cli'], binary: 'vendor',
   modelArgvPrefix: ['--model'], ...overrides,
-});
+}) as AiLocalHarnessDefinition;
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', route: 'local', accountId: null, provider: 'vendor', model: null, effort: 'medium', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', status: 'active', nativeHarness: 'vendor', ...overrides,
 });

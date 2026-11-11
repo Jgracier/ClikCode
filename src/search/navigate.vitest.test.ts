@@ -17,7 +17,7 @@ describe('walking mentions', () => {
     expect(browser.next()).toBe(true);
     expect(browser.next()).toBe(true);
     expect(browser.next()).toBe(false);
-    expect(browser.current().mention.messageIndex).toBe(2);
+    expect(browser.current().mention?.messageIndex).toBe(2);
     expect(browser.nextChat()).toBe(true);
     expect(browser.current()).toMatchObject({ chat: 1, index: 0, mention: { sessionId: 'b' } });
     expect(browser.nextChat()).toBe(true);

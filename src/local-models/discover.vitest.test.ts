@@ -22,7 +22,7 @@ const header = {
     { name: 'token_embd.weight', shape: [100n], dtype: GGMLQuantizationType.F16 },
     { name: 'blk.0.ffn_up_exps.weight', shape: [1024n], dtype: GGMLQuantizationType.Q4_K },
   ],
-} as GGUFParseOutput;
+} as unknown as GGUFParseOutput;
 
 describe('remote GGUF candidates', () => {
   it('uses header geometry and active expert tensors while keeping a pinned hash', () => {
@@ -36,7 +36,7 @@ describe('remote GGUF candidates', () => {
   });
 
   it('rejects a header whose attention shape or tool template cannot be established', () => {
-    expect(remoteModelFromHeader(repo, file, { ...header, metadata: { ...header.metadata, 'general.architecture': 'unknown' } } as GGUFParseOutput)).toBeUndefined();
+    expect(remoteModelFromHeader(repo, file, { ...header, metadata: { ...header.metadata, 'general.architecture': 'unknown' } } as unknown as GGUFParseOutput)).toBeUndefined();
     expect(remoteModelFromHeader(repo, file, { ...header, metadata: { ...header.metadata, 'tokenizer.chat_template': 'plain text' } } as GGUFParseOutput)).toBeUndefined();
   });
 });

@@ -69,7 +69,7 @@ describe('committing a turn', () => {
   const session = (): HarnessSession => ({
     id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active',
     messages: [], pendingTurn: { prompt: 'check', response: 'Done.', startedAt: '2026-10-09T10:00:00.000Z', updatedAt: '2026-10-09T10:00:00.000Z', outputStarted: true },
-  } as HarnessSession);
+  } as unknown as HarnessSession);
 
   it('stamps the answer it ended on with how long it took', () => {
     const finished = session();

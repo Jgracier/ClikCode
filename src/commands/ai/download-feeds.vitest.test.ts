@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { downloadsByChat, downloadText, followModelDownloads, followModelDownloadsInEditor } from './local-model.js';
 import { backgroundDownloadsAllowed, modelDownloads, reportDownloadOutcome, startModelDownload } from '../../local-models/downloads.js';
-import type { LocalModelProgress } from '../../local-models';
+import type { LocalModelProgress } from '../../local-models/index.js';
 import type { HarnessSession } from '../../session/model.js';
 
 afterEach(async () => { for (const job of modelDownloads()) { job.cancel(); await job.done.catch(() => undefined); } });

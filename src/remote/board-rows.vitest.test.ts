@@ -8,7 +8,7 @@ import type { PickerOption } from '../harness/prompter.js';
 import { machineHue, mergeMachineRows, otherMachineRows, type RankedRow } from './board-rows.js';
 
 const NOW = Date.parse('2026-10-31T21:30:00Z');
-const chat = (id: string, title: string): IdeConversation => ({ id, title, updatedAt: '2026-10-31T21:20:00Z', messages: 4, preview: 'last ask' });
+const chat = (id: string, title: string): IdeConversation => ({ id, title, updatedAt: '2026-10-31T21:20:00Z', messages: 4, preview: 'last ask', current: false });
 const view = (id: string, name: string, state: MachineView['state'], chats: IdeConversation[]): MachineView => (
   { machine: { id, name, sshTarget: `${name}.ts.net`, addedAt: '2026-10-22T00:00:00Z' } as MachineView['machine'], state, needsUpdate: false, chats });
 const plain = (text: string | undefined): string => (text ?? '').replace(/\u001b\[[0-9;]*m/g, '');
@@ -21,7 +21,7 @@ describe('other machines in the conversation list', () => {
     const previous = chalk.level;
     chalk.level = 1;
     try {
-      const rows = otherMachineRows([view('m-1', 'macbook', 'ready', [chat('c1', 'Graciergcx website')])], NOW);
+      const rows = otherMachineRows([view('m-1', 'macbook', 'connected', [chat('c1', 'Graciergcx website')])], NOW);
       expect(rows).toHaveLength(1);
       const hue = machineHue('m-1');
       expect(rows[0]!.option.label).toBe(hue('Graciergcx website'));
@@ -52,13 +52,13 @@ describe('other machines in the conversation list', () => {
 
   it('puts a chat in Working, Recent or Older by the rules of this machine\'s own, and adds nothing for a machine with no chats', () => {
     const old: IdeConversation = { ...chat('c9', 'Older one'), updatedAt: '2026-10-20T00:00:00Z' };
-    const working: IdeConversation = { ...chat('c8', 'Busy'), activity: 'working', turn: { startedAt: '2026-10-31T21:00:00Z', lastActivityAt: '2026-10-31T21:29:00Z' } } as IdeConversation;
-    const rows = otherMachineRows([view('m-1', 'macbook', 'ready', [chat('c1', 'One'), old, working]), view('m-3', 'extra', 'ready', [])], NOW);
+    const working: IdeConversation = { ...chat('c8', 'Busy'), activity: 'working', turn: { startedAt: '2026-10-31T21:00:00Z', activeAt: '2026-10-31T21:29:00Z' } };
+    const rows = otherMachineRows([view('m-1', 'macbook', 'connected', [chat('c1', 'One'), old, working]), view('m-3', 'extra', 'connected', [])], NOW);
     expect(rows.map((row) => [plain(row.option.label), row.section])).toEqual([['One', 'active'], ['Older one', 'past'], ['Busy', 'working']]);
   });
 
   it('merges them with this machine\'s own by when each last changed, a chat that needs you first, each under its section\'s title', () => {
-    const others = otherMachineRows([view('m-1', 'macbook', 'ready', [chat('remote', 'On the macbook')])], NOW);
+    const others = otherMachineRows([view('m-1', 'macbook', 'connected', [chat('remote', 'On the macbook')])], NOW);
     const merged = mergeMachineRows([
       own('newer here', '2026-10-31T21:25:00Z'), own('older here', '2026-10-31T10:00:00Z'), own('needs me', '2026-10-31T05:00:00Z', 'active', true), own('way back', '2026-10-01T00:00:00Z', 'past'),
     ], others);

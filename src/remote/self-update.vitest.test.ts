@@ -63,12 +63,11 @@ describe('which install this is', () => {
 /** A runner that answers by script, recording what ran. */
 function scriptedRunner(answers: Array<[RegExp, SshResult]>): ScriptRunner & { ran: string[] } {
   const ran: string[] = [];
-  const run = (async (script: string) => {
+  const run: ScriptRunner = async (script: string) => {
     ran.push(script);
     return answers.find(([pattern]) => pattern.test(script))?.[1] ?? { code: 127, stdout: '', stderr: 'not expected' };
-  }) as ScriptRunner & { ran: string[] };
-  run.ran = ran;
-  return run;
+  };
+  return Object.assign(run, { ran });
 }
 
 describe('/update, by kind', () => {
