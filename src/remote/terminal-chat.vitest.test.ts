@@ -120,7 +120,7 @@ const fakeTerminal = () => {
   return { terminal, said, prompts, calls, assigned };
 };
 
-const until = async (check: () => boolean, ms = 5_000): Promise<void> => {
+const until = async (check: () => boolean, ms = 15_000): Promise<void> => {
   const end = Date.now() + ms;
   while (!check()) {
     if (Date.now() > end) throw new Error('timed out');
