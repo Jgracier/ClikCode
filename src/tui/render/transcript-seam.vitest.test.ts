@@ -31,6 +31,12 @@ describe('where the transcript resumes', () => {
     expect(firstUnwritten(persisted, 4, messageKey(user('ok')))).toBe(3);
   });
 
+  it('does not skip ahead to a copy of the last message that arrived later in the same batch', () => {
+    // An empty tool-only answer was the last written; the next turn adds a prompt and another empty answer at once.
+    const persisted = [user('go'), assistant(''), user('again'), assistant('')];
+    expect(firstUnwritten(persisted, 2, messageKey(assistant('')))).toBe(2);
+  });
+
   it('falls back to the count when nothing has been written yet', () => {
     expect(firstUnwritten([user('a'), user('b')], 1, undefined)).toBe(1);
   });

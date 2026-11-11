@@ -38,14 +38,17 @@ export function hasMessageKey(message: TranscriptMessage, key: string): boolean 
  * start past its end and write nothing -- including a newly submitted message.
  *
  * The last message actually written identifies the seam wherever it sits,
- * window or not. Searched from the END so that a repeated sentence does not
- * rewind the transcript to its first occurrence. */
+ * window or not. Searched back from the count written so that a repeated
+ * sentence neither rewinds the transcript to its first occurrence nor skips
+ * ahead to a copy that arrived after it. */
 export function firstUnwritten(
   persisted: readonly TranscriptMessage[], emittedMessages: number, lastEmittedMessage?: string,
 ): number {
-  let seam = Math.min(emittedMessages, persisted.length);
+  const seam = Math.min(emittedMessages, persisted.length);
   if (lastEmittedMessage === undefined) return seam;
-  for (let index = persisted.length - 1; index >= 0; index -= 1) {
+  // Never past what was written: the same message arriving again later in one batch (an empty tool-only answer, `assistant:`)
+  // is a new message, and resuming after it skipped every message between.
+  for (let index = seam - 1; index >= 0; index -= 1) {
     if (hasMessageKey(persisted[index]!, lastEmittedMessage)) return index + 1;
   }
   return seam;
