@@ -1,4 +1,4 @@
-import { zonedResetTime } from '../harness/accounts/usage-reading.js';
+import { MONTHS, zonedResetTime } from '../harness/accounts/usage-reading.js';
 import type { AccountSwitch } from '../session/model.js';
 
 /** `request-invalid` is the odd one out and the reason it exists: every other
@@ -120,7 +120,7 @@ const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|ver
 const REQUEST_INVALID_TEXT = /(?:invalid model selection|conflicts with --|is not supported for model|unknown (?:flag|option|argument)|unrecogni[sz]ed (?:flag|option|argument)|invalid (?:flag|option|argument) value)/i;
 
 /** JSON-RPC code ACP agents answer with when the user must sign in. */
-const ACP_AUTH_REQUIRED_CODE = -32000;
+export const ACP_AUTH_REQUIRED_CODE = -32000;
 
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
   if (errorKind === 'model_not_on_plan') return 'account-ineligible';
@@ -223,7 +223,6 @@ export function quotaRollingWindowMs(error: unknown): number | undefined {
   return hours > 0 ? hours * 3_600_000 : undefined;
 }
 
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 /** "try again at 10:38 AM" / "at Oct 6th, 2026 9:00 AM" / "at 14:05" -- a
  * wall-clock time, as Codex words it: the vendor CLI runs here, so the time is

@@ -20,7 +20,11 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** `value` as an email address, trimmed, when it is one: what every identity reader takes for one (vendor-identity.ts and
+ * api-key-identity.ts import it; it lives in this leaf module so neither imports the other for it). */
+export function emailIn(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()) ? value.trim() : undefined;
+}
 
 /** Decrypt one droid credential file with its key and read the access
  * token's `email` claim. Undefined on any mismatch: wrong key, bad format, no
@@ -36,8 +40,7 @@ export function droidCredentialEmail(encrypted: string, key: Buffer): string | u
     const record = JSON.parse(Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8')) as { access_token?: unknown };
     const payload = typeof record.access_token === 'string' ? record.access_token.split('.')[1] : undefined;
     if (!payload) return undefined;
-    const email = (JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { email?: unknown }).email;
-    return typeof email === 'string' && EMAIL.test(email.trim()) ? email.trim() : undefined;
+    return emailIn((JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { email?: unknown }).email);
   } catch {
     return undefined; // fail-open-ok: an unreadable credential names no one
   }
