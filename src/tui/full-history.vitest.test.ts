@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TerminalHarnessPrompter } from './prompter.js';
 import { TestScreen } from './inline-screen.vitest-helper.js';
 import { HISTORY_DUMP_ROWS } from './prompter/history-dump.js';
+import { followEnd } from './prompter/history-window.js';
 
 const realTty = process.stdout.isTTY;
 const realWrite = process.stdout.write.bind(process.stdout);
@@ -133,6 +134,26 @@ describe('scroll-back through a long conversation', () => {
       settle();
       expect(rl.scrolledBack).toBe(false);
       expect(rl.scrollWindow.detached).toBe(false);
+      expect(term.screen().join('\n')).toContain('answer 1500');
+    } finally { rl.close(); }
+  });
+
+  it('returning to the live end draws through the one paint scheduler: repeated returns do not pile up frames', () => {
+    const { term, rl, settle } = setup();
+    try {
+      rl.render(session(3000));
+      settle();
+      rl.handleScrollKey(HOME);
+      settle();
+      const repaint = vi.spyOn(rl, 'repaint');
+      expect(followEnd(rl)).toBe(true);
+      const timers = vi.getTimerCount();
+      rl.schedulePaint(0);
+      rl.schedulePaint(0);
+      expect(vi.getTimerCount()).toBe(timers);
+      vi.advanceTimersByTime(1);
+      expect(repaint).toHaveBeenCalledTimes(1);
+      settle();
       expect(term.screen().join('\n')).toContain('answer 1500');
     } finally { rl.close(); }
   });

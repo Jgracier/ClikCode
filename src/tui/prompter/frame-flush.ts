@@ -294,10 +294,7 @@ export function flushAlternateFrame(
   });
   // More history is wanted under the view than one frame's budget rendered: the next batch is another frame, so the event loop
   // is free between them (a key, a resize, the stream).
-  if (this.scrollWindow.more) {
-    const timer = setTimeout(() => { if (!this.closed && !this.suspended) this.redrawSelection(); }, 0);
-    timer.unref?.();
-  }
+  if (this.scrollWindow.more) this.schedulePaint(0);
 }
 
 /** Append-only frame for inline-history mode. Finished rows are printed once,

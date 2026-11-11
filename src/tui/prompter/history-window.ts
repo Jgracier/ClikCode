@@ -274,8 +274,7 @@ function toLive(p: TerminalHarnessPrompter, anchor: Anchor | undefined): void {
   h.more = false;
   p.emitted.requestReseed();
   if (!anchor) p.alternateScrollback = 0;
-  const timer = setTimeout(() => { if (!p.closed && !p.suspended) p.redrawSelection(); }, 0);
-  timer.unref?.();
+  p.schedulePaint(0);
 }
 
 /** Where in the conversation the view's first row is: the message, and how many rows into it. */
