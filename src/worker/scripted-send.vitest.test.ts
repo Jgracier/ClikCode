@@ -4,10 +4,8 @@
  * Real spawned workers on real sockets, running ClikCode's own agent against
  * a local HTTP server that speaks the Gateway's chat protocol. */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type ServerResponse } from 'node:http';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,7 +34,6 @@ const arrived: (() => void)[] = [];
 
 beforeAll(async () => {
   process.env.CLIKCODE_WORKER_ENTRY = distEntry;
-  if (!await access(distEntry).then(() => true, () => false)) await promisify(execFile)('node', ['scripts/build.mjs'], { cwd: repoRoot });
 }, 30_000);
 
 afterAll(() => {

@@ -2,9 +2,7 @@
  * the command only hears a count, and no username reaches anything but the
  * window. Uses the built entry (dist/index.js). */
 import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +24,6 @@ const clients: WorkerClient[] = [];
 
 beforeAll(async () => {
   process.env.CLIKCODE_WORKER_ENTRY = distEntry;
-  if (!await access(distEntry).then(() => true, () => false)) await promisify(execFile)('node', ['scripts/build.mjs'], { cwd: repoRoot });
 }, 60_000);
 
 afterAll(() => {

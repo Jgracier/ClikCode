@@ -1,7 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, access } from 'node:fs/promises';
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { promisify } from 'node:util';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,8 +46,6 @@ beforeAll(async () => {
   // esbuild is fast enough (double-digit milliseconds) that this never
   // meaningfully slows the suite down when it does need to run.
   process.env.CLIKCODE_WORKER_ENTRY = distEntry;
-  const alreadyBuilt = await access(distEntry).then(() => true, () => false);
-  if (!alreadyBuilt) await promisify(execFile)('node', ['scripts/build.mjs'], { cwd: repoRoot });
 }, 30_000);
 
 afterAll(() => {
