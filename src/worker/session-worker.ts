@@ -46,7 +46,7 @@ import { startStuckWatchdog } from './stuck-watchdog.js';
 import { LiveSettings } from '../turn/live-settings.js';
 import { sessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { CONVERSATION_HANDOFF_REASON, conversationHandoffRequested, watchHandoffRequest, generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold, type WorkerRuntimeRecord } from './registry.js';
+import { CONVERSATION_HANDOFF_REASON, announceWorkerReady, conversationHandoffRequested, takeWorkerReadyFd, watchHandoffRequest, generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold, type WorkerRuntimeRecord } from './registry.js';
 import { persistentWorkRunning } from '../turn/vendor-process.js';
 import type { ConnectionState, WorkerContext } from './worker-context.js';
 import { createWorkerIo } from './worker-io.js';
@@ -101,6 +101,8 @@ export function backgroundSignature(value: { agents?: number; terminals?: number
 /** `warm`: started for a chat that just moved here (worker/client.ts
  * warmSessionWorker): it gets the conversation ready for its first turn. */
 export async function runSessionWorker(sessionId: string, options: { warm?: boolean } = {}): Promise<void> {
+  // Before anything this worker starts could inherit it (client.ts launchWorker).
+  const readyFd = takeWorkerReadyFd();
   const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
   const state = await readState({ transcripts: [sessionId] });
   const session = state.sessions.find((item) => item.id === sessionId);
@@ -276,6 +278,8 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
     ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}),
   };
   await writeWorkerRecord(record);
+  // Listening, and findable: the window that started this worker stops waiting now.
+  announceWorkerReady(readyFd);
   // Agents a worker that died left running: their work is committed to their branches, and the model hears of it.
   void reconcileAgents(stateDirectory(), sessionId).then(async (reports) => {
     if (!reports.length) return;

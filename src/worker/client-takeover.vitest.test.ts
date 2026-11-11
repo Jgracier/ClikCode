@@ -67,7 +67,7 @@ describe('a worker that accepts the connection and never answers', () => {
     process.env.CLIKCODE_WORKER_ENTRY = entry;
 
     const failure = await WorkerClient.attach(id).then(() => 'attached', (error: Error) => error.message);
-    expect(failure).toContain('did not start in time');
+    expect(failure).toContain('exited (code 3) before it started');
     expect(failure).toContain('worker killed with exit code 137 (out of memory)');
     // The silent worker is gone.
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });

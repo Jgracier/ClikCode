@@ -9,7 +9,7 @@
  */
 import { quiet } from '../runtime/lifecycle-log.js';
 import { createHash, randomBytes } from 'node:crypto';
-import { statSync, watch } from 'node:fs';
+import { closeSync, statSync, watch, writeSync } from 'node:fs';
 import { link, mkdir, readdir, readFile, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { hostname, tmpdir } from 'node:os';
@@ -291,12 +291,37 @@ export async function conversationHandoffRequested(sessionId: string, workerHost
   } catch { return false; }
 }
 
-/** Calls `changed` when this conversation's handoff file is written, where
- * the filesystem reports it (not every shared filesystem does: the caller
- * also looks on a timer). The directory is watched: the file is not there
- * until a request writes it. Returns what stops the watch. */
-export function watchHandoffRequest(sessionId: string, changed: () => void): () => void {
-  const name = `${sessionKey(sessionId)}.handoff`;
+/** The descriptor a window that started this worker reads for its readiness
+ * (client.ts launchWorker), taken out of the environment at once: a process
+ * this worker starts (a successor) must not inherit a number that names
+ * something else in it. */
+const READY_FD_ENV = 'CLIKCODE_WORKER_READY_FD';
+export function takeWorkerReadyFd(): number | undefined {
+  const value = process.env[READY_FD_ENV];
+  delete process.env[READY_FD_ENV];
+  const fd = Number(value);
+  return Number.isInteger(fd) && fd > 2 ? fd : undefined;
+}
+export function workerReadyEnvironment(fd: number): Record<string, string> {
+  return { [READY_FD_ENV]: String(fd) };
+}
+
+/** Tells the window that started this worker it is listening and its record
+ * written, and closes the descriptor. A window that has gone simply is not told. */
+export function announceWorkerReady(fd: number | undefined): void {
+  if (fd === undefined) return;
+  try { writeSync(fd, 'ready\n'); } catch { /* fail-open-ok: the window gave up waiting; its record says the same */ }
+  try { closeSync(fd); } catch { /* fail-open-ok: already closed */ }
+}
+
+/** Calls `changed` whenever this conversation's worker record is written:
+ * what a window waiting for a worker started by the user manager (no
+ * inherited descriptor) wakes on. Returns what stops the watch. */
+export function watchWorkerRecord(sessionId: string, changed: () => void): () => void {
+  return watchWorkersFile(`${sessionKey(sessionId)}.json`, changed);
+}
+
+function watchWorkersFile(name: string, changed: () => void): () => void {
   try {
     const watcher = watch(workersDirectory(), { persistent: false }, (_event, file) => {
       if (file === null || String(file) === name) changed();
@@ -304,9 +329,17 @@ export function watchHandoffRequest(sessionId: string, changed: () => void): () 
     watcher.on('error', () => watcher.close());
     return () => watcher.close();
   } catch {
-    // fail-open-ok: no watch here; the caller's timer still sees the request
+    // fail-open-ok: no watch here; the caller's timer still looks
     return () => undefined;
   }
+}
+
+/** Calls `changed` when this conversation's handoff file is written, where
+ * the filesystem reports it (not every shared filesystem does: the caller
+ * also looks on a timer). The directory is watched: the file is not there
+ * until a request writes it. Returns what stops the watch. */
+export function watchHandoffRequest(sessionId: string, changed: () => void): () => void {
+  return watchWorkersFile(`${sessionKey(sessionId)}.handoff`, changed);
 }
 
 function parseOwner(raw: string): ConversationOwner | undefined {

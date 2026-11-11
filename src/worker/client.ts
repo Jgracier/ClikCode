@@ -11,7 +11,8 @@ import { userManagerLaunch } from './own-scope.js';
 import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
 import { hostname } from 'node:os';
-import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, requestConversationHandoff, workerIsReachable, workersDirectory, workerStartLogPath, type WorkerRuntimeRecord } from './registry.js';
+import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, requestConversationHandoff, watchWorkerRecord, workerIsReachable, workerReadyEnvironment, workersDirectory, workerStartLogPath, type WorkerRuntimeRecord } from './registry.js';
+import type { Readable } from 'node:stream';
 import { failureText } from '../harness/protocol/stderr-line.js';
 import { pidIsAlive } from '../session/store/locks.js';
 import { ensureSessionOnDisk } from '../session/blank.js';
@@ -20,10 +21,14 @@ import { withSavedConversation } from './saved-conversation.js';
 
 const SPAWN_TIMEOUT_MS = 5_000;
 const HANDOFF_START_TIMEOUT_MS = 30_000;
-/** A new worker is looked for this often: the first message of a
- * conversation waits on it, and a look is one small file read. At 50 ms the
- * wait past the moment the worker was listening averaged 25 ms. */
-const SPAWN_POLL_MS = 10;
+/** A worker this window started says when it is listening, over a pipe it
+ * inherits (launchWorker), and a record written wakes the wait too
+ * (watchWorkerRecord); this is only how often it is looked for besides --
+ * the holder of the conversation, a worker the watch missed. It used to be
+ * the whole mechanism, a file read every 10 ms. */
+const SPAWN_POLL_MS = 250;
+/** How often a retiring worker's socket is tried while waiting for it to let go. */
+const RELEASE_POLL_MS = 10;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
@@ -49,9 +54,10 @@ function workerSpawnArgv(sessionId: string, extra: readonly string[] = []): stri
  * manager (an SSH session) the user manager starts it, so it lands in the
  * agent slice like every other worker (own-scope.ts userManagerLaunch); if
  * that cannot be done, it is started directly, as everywhere else. */
-function launchWorker(sessionId: string, extra: readonly string[] = []): void {
+function launchWorker(sessionId: string, extra: readonly string[], signal: (exitCode?: number) => void): { close(): void } {
   const argv = workerSpawnArgv(sessionId, extra);
   let started = false;
+  let readiness: Readable | undefined;
   // Its stderr goes to a file of the conversation's, so a worker that dies at startup says why
   // (spawnSessionWorker reads it); it is removed once the worker is up.
   const startLog = workerStartLogPath(sessionId);
@@ -61,14 +67,22 @@ function launchWorker(sessionId: string, extra: readonly string[] = []): void {
     started = true;
     let errorFd: number | 'ignore' = 'ignore';
     try { errorFd = openSync(startLog, 'w', 0o600); } catch { /* no log: the cause is lost, not the start */ }
+    // fd 3: the worker writes to it once it is listening (registry.ts announceWorkerReady).
     const child = spawn(process.execPath, argv, {
       // windowsHide: a detached child on Windows otherwise opens a console
       // window of its own for as long as the worker lives.
-      stdio: ['ignore', 'ignore', errorFd], detached: true, windowsHide: true,
+      stdio: ['ignore', 'ignore', errorFd, 'pipe'], detached: true, windowsHide: true,
+      env: { ...process.env, ...workerReadyEnvironment(3) },
     });
     if (typeof errorFd === 'number') closeSync(errorFd);
     // A process that could not even start has nothing to write: its error is the cause.
-    child.on('error', (error) => { try { appendFileSync(startLog, `${error.message}\n`); } catch { /* the log below says nothing then */ } });
+    child.on('error', (error) => { try { appendFileSync(startLog, `${error.message}\n`); } catch { /* the log below says nothing then */ } signal(); });
+    // Exited before it said it was ready: looked at now, not at the deadline.
+    child.on('exit', (code) => signal(code ?? undefined));
+    readiness = child.stdio[3] as Readable | undefined;
+    readiness?.on('data', () => signal());
+    readiness?.on('error', () => undefined);
+    (readiness as { unref?: () => void } | undefined)?.unref?.();
     child.unref();
   };
   const viaManager = process.platform === 'linux' ? userManagerLaunch(argv, {
@@ -77,12 +91,14 @@ function launchWorker(sessionId: string, extra: readonly string[] = []): void {
     unit: `clikcode-start-${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${process.pid}-${Date.now()}.service`,
     busExists: existsSync, stderrFile: startLog,
   }) : undefined;
-  if (!viaManager) { direct(); return; }
+  const handle = { close: () => { readiness?.destroy(); } };
+  if (!viaManager) { direct(); return handle; }
   lifecycle('client.worker.spawn-via-user-manager', { worker: sessionId });
   const launcher = spawn(viaManager.command, viaManager.args, { env: viaManager.env, stdio: 'ignore', detached: true });
   launcher.on('error', direct);
   launcher.on('exit', (code) => { if (code !== 0) direct(); });
   launcher.unref();
+  return handle;
 }
 
 function readStartLog(sessionId: string): string {
@@ -97,7 +113,27 @@ function removeStartLog(sessionId: string): void {
  * would race the worker's own listen() call. */
 async function spawnSessionWorker(sessionId: string, extra: readonly string[] = []): Promise<WorkerRuntimeRecord> {
   lifecycle('client.worker.spawn', { worker: sessionId });
-  launchWorker(sessionId, extra);
+  let wake: (() => void) | undefined;
+  /** The worker this window started exited with an error before it was ready. */
+  let failedWith: number | undefined;
+  const signal = (exitCode?: number): void => {
+    if (exitCode !== undefined && exitCode !== 0) failedWith = exitCode;
+    wake?.();
+  };
+  const stopWatching = watchWorkerRecord(sessionId, () => signal());
+  const launched = launchWorker(sessionId, extra, signal);
+  try {
+    return await waitForSpawnedWorker(sessionId, () => failedWith, (ms) => new Promise<void>((resolveWait) => {
+      const timer = setTimeout(resolveWait, ms);
+      wake = () => { clearTimeout(timer); wake = undefined; resolveWait(); };
+    }));
+  } finally {
+    stopWatching();
+    launched.close();
+  }
+}
+
+async function waitForSpawnedWorker(sessionId: string, failed: () => number | undefined, waitForSign: (ms: number) => Promise<void>): Promise<WorkerRuntimeRecord> {
   let deadline = Date.now() + SPAWN_TIMEOUT_MS;
   let handoffAskedAt = 0;
   let holder: Awaited<ReturnType<typeof conversationHolder>>;
@@ -120,13 +156,15 @@ async function spawnSessionWorker(sessionId: string, extra: readonly string[] = 
       }
     }
     // A scripted send is running a turn in-process: the worker starts when it
-    // ends, and this waits for it like any turn already running.
-    if (Date.now() > deadline && holder?.kind !== 'turn') {
+    // ends, and this waits for it like any turn already running. A worker that
+    // failed at startup is said at once, with what it wrote.
+    if ((Date.now() > deadline || failed() !== undefined) && holder?.kind !== 'turn') {
       const cause = failureText(readStartLog(sessionId));
       removeStartLog(sessionId);
-      throw new Error(`session worker for "${sessionId}" did not start in time${cause ? `:\n${cause}` : ' (it wrote nothing to say why; see "clikcode logs")'}`);
+      const what = failed() !== undefined ? `exited (code ${failed()}) before it started` : 'did not start in time';
+      throw new Error(`session worker for "${sessionId}" ${what}${cause ? `:\n${cause}` : ' (it wrote nothing to say why; see "clikcode logs")'}`);
     }
-    await delay(SPAWN_POLL_MS);
+    await waitForSign(Math.min(SPAWN_POLL_MS, Math.max(1, deadline - Date.now())));
   }
 }
 
@@ -141,7 +179,7 @@ async function socketReleased(record: WorkerRuntimeRecord): Promise<boolean> {
   const deadline = Date.now() + RETIRE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (!await workerIsReachable(record.socketPath, 200)) return true;
-    await delay(SPAWN_POLL_MS);
+    await delay(RELEASE_POLL_MS);
   }
   return false;
 }
