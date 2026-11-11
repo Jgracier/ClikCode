@@ -13,7 +13,6 @@
  * BSD script does not flush that file until exit anyway.
  */
 import { killProcessTreePortable, spawnPortable as spawn } from '../../harness/transport/spawn.js';
-import { forwardParentSignals } from '../../harness/transport/parent-signals.js';
 
 /** Single-quote for `sh -c`, the only form util-linux script accepts. */
 export function shellQuote(parts: readonly string[]): string {
@@ -96,7 +95,8 @@ export async function runInPty(input: {
   env: Readonly<Record<string, string>>;
   onOutput: (chunk: string) => void;
   onStdin: (write: (text: string) => void) => void;
-  /** Ends it (SIGTERM to script, which hangs up the vendor). */
+  /** Ends it (SIGTERM to script, which hangs up the vendor). The caller's
+   * one stop: a ClikCode told to stop aborts it too (vendor-sign-in.ts). */
   signal?: AbortSignal;
   platform?: NodeJS.Platform;
 }): Promise<PtyResult> {
@@ -123,8 +123,6 @@ export async function runInPty(input: {
     };
     child.stdout?.on('data', read);
     child.stderr?.on('data', read);
-    // A ClikCode told to stop takes the vendor with it, rather than leaving
-    // a login waiting on a browser nobody will open.
     // util-linux script(1) passes SIGTERM on to the vendor at once, then
     // waits 2s of its own before exiting (measured on 2.41.3, a vendor that
     // exited on the signal included); SIGKILL to script after a moment ends
@@ -136,11 +134,9 @@ export async function runInPty(input: {
       kill.unref();
     };
     input.signal?.addEventListener('abort', stop, { once: true });
-    const releaseSignals = forwardParentSignals(stop, ['SIGTERM', 'SIGHUP']);
     const cleanup = (): void => {
       if (kill) clearTimeout(kill);
       input.signal?.removeEventListener('abort', stop);
-      releaseSignals();
     };
     // ENOENT means no script(1) on this machine: not an error, just a
     // platform without the capability, same as Windows.
