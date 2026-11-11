@@ -24,7 +24,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolveBinaryPath } from '../transport/native/binary.js';
-import { PROBE_DEADLINE_MS, mayRunSignInCapable, probeCommand, probeFetch, probeVendor } from './vendor-probe.js';
+import { PROBE_DEADLINE_MS, mayRunSignInCapable, probeCommand, probeFetch, probeVendor, queryJsonRpc } from './vendor-probe.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { acpDiscoverySession, queryAcp } from './acp-query.js';
 import { type UsageReading, type UsageWindow, usageReading, usageWindow } from './usage-reading.js';
@@ -82,28 +82,8 @@ export function copilotQuotaReading(result: unknown, now = Date.now()): UsageRea
 /** One JSON-RPC request over the Content-Length framing the Copilot SDK
  * server speaks (not ACP's newline framing). */
 function contentLengthRequest(binary: string, argv: readonly string[], environment: Environment, method: string, params: Json): Promise<Json | undefined> {
-  return probeVendor({ binary, argv, environment, deadlineMs: PROBE_DEADLINE_MS, stdin: 'pipe' }, (child) => new Promise((resolve) => {
-    let buffer = Buffer.alloc(0);
-    child.stdout!.on('data', (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      for (;;) {
-        const headerEnd = buffer.indexOf('\r\n\r\n');
-        if (headerEnd < 0) return;
-        const length = Number(/Content-Length:\s*(\d+)/i.exec(buffer.subarray(0, headerEnd).toString())?.[1]);
-        if (!Number.isFinite(length) || buffer.length < headerEnd + 4 + length) return;
-        const body = buffer.subarray(headerEnd + 4, headerEnd + 4 + length).toString();
-        buffer = buffer.subarray(headerEnd + 4 + length);
-        try {
-          const message = JSON.parse(body) as Json;
-          if (message.id === 1) return resolve(message.result as Json | undefined);
-        } catch { /* fail-open-ok: a malformed frame is not the answer; the vendor's exit ends the probe */ }
-      }
-    });
-    child.once('exit', () => resolve(undefined));
-    const payload = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }));
-    child.stdin!.write(`Content-Length: ${payload.length}\r\n\r\n`);
-    child.stdin!.write(payload);
-  }));
+  return queryJsonRpc({ binary, argv, environment, deadlineMs: PROBE_DEADLINE_MS, label: 'copilot', framing: 'content-length' },
+    (peer) => peer.request(method, params));
 }
 
 export async function copilotUsageReading(environment: Environment): Promise<UsageReading | undefined> {

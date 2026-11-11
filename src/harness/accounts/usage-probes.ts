@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { grokUsageReading } from './grok-usage.js';
 import { ampUsageProbe, antigravityUsageReading, auggieUsageReading, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
-import { PROBE_DEADLINE_MS, probeCommand, probeVendor } from './vendor-probe.js';
+import { PROBE_DEADLINE_MS, probeCommand, queryJsonRpc } from './vendor-probe.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
 import type { NativeUsageProbe } from '../definition.js';
@@ -39,45 +39,21 @@ function harnessBinary(command: string, fallback: string = command): string {
 async function codexUsageReading(environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   let signedOut = false;
   const binary = harnessBinary('codex');
-  const response = await probeVendor({ binary, argv: ['app-server', '--listen', 'stdio://'], environment, deadlineMs: PROBE_DEADLINE_MS, stdin: 'pipe' }, (child) => new Promise<Record<string, unknown> | undefined>((resolveUsage) => {
-    let buffer = '';
-    let initialized = false;
-    const finish = (value?: Record<string, unknown>): void => resolveUsage(value);
-    const send = (message: Record<string, unknown>): void => {
-      if (child.stdin?.writable) child.stdin.write(`${JSON.stringify(message)}\n`);
-    };
-    child.stdout!.setEncoding('utf8');
-    child.stdout!.on('data', (chunk: string) => {
-      buffer += chunk;
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        try {
-          const message = JSON.parse(line) as { id?: unknown; result?: unknown; error?: { message?: unknown } };
-          if (message.id === 1 && message.result && typeof message.result === 'object') {
-            if (initialized) return;
-            initialized = true;
-            // The rate-limits read answers only after the initialize handshake has
-            // settled; give the transport a moment before asking, and leave stdin
-            // open so the response can come back.
-            const ask = setTimeout(() => send({ id: 2, method: 'account/rateLimits/read', params: { excludeResetCreditDetails: true } }), 250);
-            ask.unref();
-          } else if (message.id === 2 && message.result && typeof message.result === 'object') {
-            return finish(message.result as Record<string, unknown>);
-          } else if (message.id === 2 && message.error) {
-            // An answer too, and a prompt one: it used to be waited out to the
-            // timeout. "Provided authentication token is expired. Please try
-            // signing in again." is the account signed out.
-            signedOut = /token_expired|sign(?:ing)? in again|401 Unauthorized/i.test(String(message.error.message ?? ''));
-            return finish();
-          }
-        } catch { /* Ignore logs and unrelated notifications. */ }
-      }
-    });
-    child.once('exit', () => finish());
-    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'clikcode', version: CLIKCODE_VERSION } } });
-    send({ method: 'initialized', params: {} });
-  }));
+  const response = await queryJsonRpc({
+    binary, argv: ['app-server', '--listen', 'stdio://'], environment, deadlineMs: PROBE_DEADLINE_MS, label: 'codex app-server', jsonrpcVersion: false,
+  }, async (peer) => {
+    // The server is ready once it has answered initialize and been told so.
+    await peer.request('initialize', { clientInfo: { name: 'clikcode', version: CLIKCODE_VERSION } });
+    peer.notify('initialized', {});
+    try {
+      return await peer.request('account/rateLimits/read', { excludeResetCreditDetails: true });
+    } catch (error) {
+      // An answer too, and a prompt one: "Provided authentication token is
+      // expired. Please try signing in again." is the account signed out.
+      signedOut = /token_expired|sign(?:ing)? in again|401 Unauthorized/i.test(error instanceof Error ? error.message : String(error));
+      return undefined;
+    }
+  });
   if (signedOut) return { windows: [], account: 'signed-out' };
   const reading = codexRateLimitsReading(response?.rateLimits);
   // The plan is in the id token on disk, readable even when the rate-limit
@@ -159,8 +135,8 @@ export function claudeStreamReading(lineText: string): UsageReading | undefined 
 
 /** Codex pushes account/rateLimits/updated on its app-server connection during
  * a turn, unprompted (confirmed live). Reading it there replaces codexUsageProbe
- * spawning an ENTIRE SECOND `codex app-server` process -- handshake, a 250ms
- * settle, one request, teardown -- on every refresh, per account, per terminal.
+ * spawning an ENTIRE SECOND `codex app-server` process -- handshake, one
+ * request, teardown -- on every refresh, per account, per terminal.
  * usedPercent here is already a percent, unlike Claude's 0..1 fraction. */
 export function codexRateLimitsReading(rateLimits: unknown): UsageReading | undefined {
   type Window = { usedPercent?: unknown; windowDurationMins?: unknown; resetsAt?: unknown; resetsInSeconds?: unknown };
