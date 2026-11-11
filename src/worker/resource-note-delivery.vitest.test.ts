@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll } from 'vitest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { withResourceNotes } from '../turn/resource-notes.js';
 import { createResourceNoteDelivery } from './resource-note-delivery.js';
 import type { WorkerContext } from './worker-context.js';
@@ -20,8 +20,7 @@ describe('resource notes to agents', () => {
       io: { currentSessionAndAccount: async () => ({ session: { provider: 'claude' }, account: {} }) },
     } as unknown as WorkerContext;
     createResourceNoteDelivery(ctx)('A test was stopped for memory');
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(withResourceNotes('vendor-test', 'Continue')).toContain('A test was stopped for memory');
+    await vi.waitFor(() => expect(withResourceNotes('vendor-test', 'Continue')).toContain('A test was stopped for memory'));
   });
 
   it('steers a note to a running vendor agent', async () => {

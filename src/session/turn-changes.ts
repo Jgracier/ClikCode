@@ -24,11 +24,11 @@
  * (a change known only in part is never put back), unless the agent's
  * snapshots still hold them. */
 
-import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { FileDiff } from '../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import { atomicWriteFile } from './store/files.js';
 import { withFileLock } from './store/locks.js';
 import { safeRecordFileName } from './store/paths.js';
 
@@ -99,10 +99,8 @@ export async function readTurnChanges(stateDir: string, sessionId: string): Prom
 export async function writeTurnChanges(stateDir: string, sessionId: string, records: readonly TurnChangeRecord[]): Promise<void> {
   const file = logPath(stateDir, sessionId);
   if (!records.length) { await fs.rm(file, { force: true }); return; }
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  await fs.writeFile(temporary, JSON.stringify(withinDiffBudget(records)), { mode: 0o600 });
-  await fs.rename(temporary, file);
+  // Not fsynced, as it never was: an /undo record lost to a power cut loses only that undo.
+  await atomicWriteFile(file, JSON.stringify(withinDiffBudget(records)), { durable: false });
 }
 
 /** Add one turn's record, under the log's lock. */

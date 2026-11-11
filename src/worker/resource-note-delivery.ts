@@ -9,8 +9,8 @@ export function createResourceNoteDelivery(ctx: WorkerContext): (note: string) =
   return (note) => {
     void ctx.io.currentSessionAndAccount().then(() => {
       const live = ctx.activeLiveInput;
-      if (!live) { holdResourceNote(ctx.sessionId, note); return undefined; }
-      return live.steerNote(wrapResourceNote(note)).then((steered) => { if (!steered) holdResourceNote(ctx.sessionId, note); });
+      if (!live) return holdResourceNote(ctx.sessionId, note);
+      return live.steerNote(wrapResourceNote(note)).then((steered) => { if (!steered) return holdResourceNote(ctx.sessionId, note); return undefined; });
     }).catch(quiet('worker/resource-note-delivery'));
   };
 }

@@ -13,7 +13,7 @@ import { connect, type Socket } from 'node:net';
 import { hostname } from 'node:os';
 import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, requestConversationHandoff, workerIsReachable, workersDirectory, workerStartLogPath, type WorkerRuntimeRecord } from './registry.js';
 import { failureText } from '../harness/protocol/stderr-line.js';
-import { processAlive } from '../harness/transport/process-group.js';
+import { pidIsAlive } from '../session/store/locks.js';
 import { ensureSessionOnDisk } from '../session/blank.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 import { withSavedConversation } from './saved-conversation.js';
@@ -225,7 +225,7 @@ async function replaceUnresponsiveWorker(record: WorkerRuntimeRecord): Promise<v
   // Another window already replaced it: the record is no longer the one that was silent.
   if (current && current.pid !== record.pid) return;
   for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
-    if (!processAlive(record.pid)) break;
+    if (!pidIsAlive(record.pid)) break;
     try { process.kill(record.pid, signal); } catch { break; }
     if (await socketReleased(record)) break;
   }
@@ -265,7 +265,7 @@ async function findRunningWorker(sessionId: string): Promise<WorkerRuntimeRecord
  * listens on the same path before it writes its own -- connecting with the
  * old record's token then is refused ("stale or invalid token"). */
 async function recordIsLive(record: WorkerRuntimeRecord): Promise<boolean> {
-  return processAlive(record.pid) && workerIsReachable(record.socketPath);
+  return pidIsAlive(record.pid) && workerIsReachable(record.socketPath);
 }
 
 /** A chat that just arrived on this machine (moved here): its worker is
