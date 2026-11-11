@@ -15,7 +15,8 @@ import type { SubAgentModes } from '../../harness/protocol/activity-normalize.js
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { isClikCodeAgent } from '../../session/route.js';
 
-export interface SubView { state: SubAgentViewState; rows: SubAgentRow[]; notice?: string; readError?: string; timer?: NodeJS.Timeout; reading?: boolean }
+/** `stale`: the agent did something while its rows were being read: they are read again once that read is in. */
+export interface SubView { state: SubAgentViewState; rows: SubAgentRow[]; notice?: string; readError?: string; reading?: boolean; stale?: boolean }
 
 function harnessOf(p: TerminalHarnessPrompter): { command: string; vendor: string; modes: SubAgentModes } {
   const command = p.currentSession?.nativeHarness;
@@ -41,9 +42,11 @@ async function readRows(p: TerminalHarnessPrompter, view: SubView): Promise<SubA
 
 function refresh(p: TerminalHarnessPrompter): void {
   const view = p.subView;
-  if (!view || view.reading) return;
+  if (!view) return;
+  if (view.reading) { view.stale = true; return; }
   const index = view.state.index;
   view.reading = true;
+  view.stale = false;
   void readRows(p, view).then((rows) => {
     if (p.subView !== view || view.state.index !== index) return;
     view.rows = rows;
@@ -55,7 +58,17 @@ function refresh(p: TerminalHarnessPrompter): void {
       view.readError = error instanceof Error ? error.message : String(error);
       p.paintCurrent();
     }
-  }).finally(() => { view.reading = false; });
+  }).finally(() => {
+    view.reading = false;
+    if (view.stale && p.subView === view) refresh(p);
+  });
+}
+
+/** The sub-agent `parentId` did something (a call, its prose, its thinking): read it again if it is the one open. Its rows change
+ * when it acts, so that is when they are read -- not on a timer while nothing happens. */
+export function subAgentActed(this: TerminalHarnessPrompter, parentId: string): void {
+  const view = this.subView;
+  if (view && view.state.siblings[view.state.index]?.id === parentId) refresh(this);
 }
 
 /** Right on an empty composer opens a running sub-agent's full view. */
@@ -74,26 +87,21 @@ export function openSubView(this: TerminalHarnessPrompter): boolean {
   if (!state) return false;
   this.subView = { state, rows: [] };
   refresh(this);
-  // Cheap: a transcript read, and only while it is on screen.
-  this.subView.timer = setInterval(() => refresh(this), 1500);
-  this.subView.timer.unref?.();
-  this.paintWaiting(this.turn);
+  this.paintCurrent();
   return true;
 }
 
 export function closeSubView(this: TerminalHarnessPrompter): void {
   const view = this.subView;
   if (!view) return;
-  if (view.timer) clearInterval(view.timer);
   // Leaving the view leaves the agent: its row is put away, so Right is the command menu again unless the reader opens one.
   const open = view.state.siblings[view.state.index];
   if (open) this.groupExpansion.close(`call:${open.id}`);
   this.subView = undefined;
-  if (this.turn) {
-    this.requestRedraw('repair');
-    this.forgetScreenPosition();
-    this.paintWaiting(this.turn);
-  }
+  // The chat again, every row of it rewritten at its address: nothing was lost from the screen, so nothing is cleared. (With the
+  // turn over, the paint that noticed is drawing the chat already.)
+  this.forgetScreenPosition();
+  if (this.turn) this.paintCurrent();
 }
 
 export function subViewKey(this: TerminalHarnessPrompter, key: string): void {
@@ -111,11 +119,11 @@ export function subViewKey(this: TerminalHarnessPrompter, key: string): void {
     else {
       view.notice = effect.ref.steer === 'relay' ? 'Sending to the main agent, asking it to pass this on…' : 'Sending to the sub-agent…';
       void steer(effect.ref, effect.text).then((message) => {
-        if (this.subView === view) { view.notice = message ?? (effect.ref.steer === 'relay' ? `Sent through the main agent to ${effect.ref.label}.` : `Sent to ${effect.ref.label}.`); this.paintWaiting(this.turn!); }
+        if (this.subView === view) { view.notice = message ?? (effect.ref.steer === 'relay' ? `Sent through the main agent to ${effect.ref.label}.` : `Sent to ${effect.ref.label}.`); this.paintCurrent(); }
       });
     }
   } else return;
-  if (this.turn) this.paintWaiting(this.turn);
+  this.paintCurrent();
 }
 
 /** One frame of the view, in place of the live region. */
