@@ -13,7 +13,6 @@
  */
 import { backgroundWorkOf } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
-import { RevealEvents } from './reveal-events.js';
 import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
@@ -376,12 +375,10 @@ async function driveWorkerTurn(
         // Left unanswered: the worker still waits, for a window showing the
         // conversation -- this one again on its return (tracker.signIns).
         // Every one it waits on is given back: the worker ignores one this
-        // window was not running, and one asked while still held for reveal
-        // (never shown here) would otherwise stay with a window not showing it.
+        // window was not running.
         const release = signInClaims(tracker, 'sign-in-release', openSignIns.keys());
         for (const open of [...openSignIns.values()]) open.withdraw();
         for (const command of release) client.send(command);
-        delivery.dispose();
         client.off('event', onEvent);
         client.off('close', onClose);
         fn();
@@ -391,7 +388,7 @@ async function driveWorkerTurn(
       /** Sign-ins this window runs for the worker: taken down (not answered)
        * when the request closes elsewhere or this window leaves the conversation. */
       const openSignIns = new Map<string, { withdraw: () => void }>();
-      const handle = (event: WorkerEvent): void => {
+      const onEvent = (event: WorkerEvent): void => {
         if (settled) return;
         switch (event.type) {
           case 'snapshot':
@@ -555,9 +552,6 @@ async function driveWorkerTurn(
             return;
         }
       };
-      const delivery = new RevealEvents<WorkerEvent>(rl.reveal, handle,
-        (event) => (event.type === 'snapshot' && !event.live) || event.type === 'waiting-stop');
-      const onEvent = (event: WorkerEvent): void => delivery.push(event);
       const onClose = (): void => {
         if (settled) return;
         // The worker is gone mid-turn (killed, crashed): nothing more of

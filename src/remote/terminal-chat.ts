@@ -2,7 +2,6 @@
  * multiplexed bridge that VS Code uses carries its session and worker events;
  * only the screen and keyboard stay on this machine. */
 import { remoteDeadline } from './deadline.js';
-import { RevealEvents } from '../worker/reveal-events.js';
 import { quiet } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -652,10 +651,7 @@ export async function runRemoteChat(
         case 'closed': terminal.activity('This conversation closed on the remote machine.'); leftTurn = true; wakePrompt?.(); return;
       }
     };
-    const delivery = new RevealEvents<IdeEvent>(terminal.reveal, handleEvent, (event) =>
-      event.type === 'session' || event.type === 'send-complete' || (event.type === 'worker'
-        && ((event.event.type === 'snapshot' && !event.event.live) || event.event.type === 'waiting-stop')));
-    bridge.onEvent = (event) => delivery.push(event);
+    bridge.onEvent = handleEvent;
     bridge.onClose = (error) => {
       dropEarly();
       promptController.abort();
@@ -843,7 +839,7 @@ export async function runRemoteChat(
       // for Enter on the new connection.
       if (sending !== undefined) draft = sending;
       continue;
-    } finally { delivery.dispose(); terminal.activityDetails = undefined; terminal.subAgentRead = undefined; terminal.subAgentSteer = undefined; keeper.now(); void images.release(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
+    } finally { terminal.activityDetails = undefined; terminal.subAgentRead = undefined; terminal.subAgentSteer = undefined; keeper.now(); void images.release(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
   }
   return undefined;
 }

@@ -1,4 +1,4 @@
-/** Pacing text that arrives in a burst so it reads as it was written.
+/** Pacing text that arrives in a burst so it reads as it was written (the VS Code chat; the terminal draws what arrived).
  *
  * Some models (Claude Sonnet and Opus after a tool call, measured 2026-10-26) hand over a whole
  * answer within tens of milliseconds, so it would appear at once. The words already here are shown
