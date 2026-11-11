@@ -38,6 +38,18 @@ describe('streaming in full-screen mode', () => {
     vi.advanceTimersByTime(5);
   };
 
+  it('draws a burst of answer text whole in the frame after it arrives, not eased in over many frames', () => {
+    const { rl, term } = open();
+    try {
+      rl.render({ id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [] } as never);
+      rl.startWaiting('thinking', () => undefined);
+      const burst = Array.from({ length: 12 }, (_, n) => `sentence number ${n} of a long burst.`).join(' ');
+      rl.response(burst);
+      vi.advanceTimersByTime(40);
+      expect(term.screen().join(' ')).toContain('sentence number 11 of a long burst.');
+    } finally { rl.close(); }
+  });
+
   it('writes under a kilobyte for a frame that retires one line over a 50-row transcript, and the screen is right', () => {
     const { rl, term, writes } = open();
     try {
