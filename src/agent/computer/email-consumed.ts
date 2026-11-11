@@ -1,25 +1,13 @@
 /** Emails already handed to a waiter, kept on disk so two agents (two processes) never take the same message. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { withFileLock } from '../../session/store/locks.js';
 
 const KEEP_MS = 24 * 3_600_000;
 const file = (stateDir: string): string => path.join(stateDir, 'computer', 'email-consumed.json');
 
-async function locked<T>(stateDir: string, work: () => Promise<T>): Promise<T> {
-  const lock = `${file(stateDir)}.lock`;
-  await fs.mkdir(path.dirname(lock), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; ; attempt++) {
-    try { (await fs.open(lock, 'wx')).close(); break; }
-    catch {
-      // A lock older than a few seconds belongs to a process that died.
-      const age = await fs.stat(lock).then(info => Date.now() - info.mtimeMs, () => 0);
-      if (age > 10_000) await fs.rm(lock, { force: true });
-      else if (attempt > 200) throw new Error('The consumed-email record is busy.');
-      else await new Promise(resolve => setTimeout(resolve, 25));
-    }
-  }
-  try { return await work(); } finally { await fs.rm(lock, { force: true }); }
-}
+/** The record is read, changed and written under the shared file lock: a holder that died is known by its pid, not guessed from the lock's age. */
+const locked = <T>(stateDir: string, work: () => Promise<T>): Promise<T> => withFileLock(`${file(stateDir)}.lock`, work);
 
 /** Marks one message as taken. False when another waiter already took it. */
 export async function claimMessage(stateDir: string, id: string): Promise<boolean> {

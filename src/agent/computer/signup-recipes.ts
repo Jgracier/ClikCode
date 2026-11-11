@@ -81,8 +81,7 @@ export async function saveRecipe(stateDir: string, input: { host: string; loginR
   return recipe;
 }
 
-/** A profile detail a step names without holding it: replaced with the real value only at replay. */
-export const PROFILE_PLACEHOLDERS = ['sso_email'] as const;
+/** A profile detail a step names without holding it (`{{sso_email}}`): replaced with the real value only at replay. */
 export const fillPlaceholders = (text: string | undefined, values: Readonly<Record<string, string | undefined>>): string | undefined =>
   text?.replace(/\{\{(sso_email)\}\}/g, (all, name: string) => values[name] ?? all);
 

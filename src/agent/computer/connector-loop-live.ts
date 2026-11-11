@@ -4,6 +4,7 @@ import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/pr
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { quiet } from '../../runtime/lifecycle-log.js';
+import { pidIsAlive } from '../../session/store/locks.js';
 import type { DeployClient, HumanStep, OnboardResult } from './connector-runner.js';
 import { runVendor } from './connector-runner.js';
 import { budgeted, stalledBy, tabName, type LoopPorts, type LoopState, type WorkContext } from './connector-loop.js';
@@ -18,7 +19,7 @@ export const loopStatePath = (): string => join(loopDir(), 'connector-loop.json'
 export async function readLoopState(): Promise<LoopState | undefined> {
   try { return JSON.parse(await readFile(loopStatePath(), 'utf8')) as LoopState; } catch { return undefined; }
 }
-export const alive = (pid: number | undefined): boolean => { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
+export const alive = (pid: number | undefined): boolean => pid !== undefined && pidIsAlive(pid);
 
 /** The queue rows worth claiming: waiting for an agent, with no other worker's live lease. */
 export function claimable(rows: Array<Record<string, unknown>>, exclude: ReadonlySet<string>, nowMs: number, n: number): string[] {

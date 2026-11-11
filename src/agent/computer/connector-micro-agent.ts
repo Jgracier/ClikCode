@@ -9,7 +9,6 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import type { DriveOutcome, HumanStep, StopInfo } from './connector-runner.js';
 
-export const MICRO_GOAL = 'get an API key (or finish the OAuth consent) for this vendor, then save a recipe';
 export const microTab = (id: string): string => `agent-${id.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`;
 
 export function microPrompt(id: string, stop: StopInfo, maxCalls: number): string {
