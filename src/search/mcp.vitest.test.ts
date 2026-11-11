@@ -1,6 +1,7 @@
 /** The conversation tools over stdio MCP, from the built CLI, as a vendor
  * starts them. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { HarnessSession } from '../session/model.js';
 import { readState } from '../session/state/read.js';
@@ -96,6 +97,21 @@ describe('clikcode conversations-mcp', () => {
       child.stdin.write(frame.slice(0, 7));
       child.stdin.write(frame.slice(7));
       expect((await answers.next(6)).result!.content![0]!.text).toContain('Webhook retries');
+    } finally {
+      child.kill();
+    }
+  }, 20_000);
+
+  it('starts the small bundle, not the whole program; the program still answers it too', async () => {
+    // One of these runs next to every vendor chat (src/search/mcp-main.ts).
+    expect(readFileSync('dist/index.js', 'utf8')).toContain(`process.argv[2] === 'conversations-mcp' ? './conversations-mcp.js' : './cli.js'`);
+    expect(statSync('dist/conversations-mcp.js').size).toBeLessThan(300 * 1024);
+    expect(readFileSync('dist/conversations-mcp.js', 'utf8')).not.toContain('cli.js');
+    const child = spawn(process.execPath, ['dist/cli.js', 'conversations-mcp'], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    try {
+      const answers = reader(child);
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })}\n`);
+      expect((await answers.next(1)).result?.protocolVersion).toBe('2025-06-18');
     } finally {
       child.kill();
     }
