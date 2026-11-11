@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { accountSignedOutOnDisk, versionFromOutput } from './account.js';
+import { accountSignedOutOnDisk, nativeStatusSignedIn, statusEmail, versionFromOutput } from './account.js';
 
 const previousHome = process.env.HOME;
 let root: string | undefined;
@@ -16,6 +16,19 @@ describe('honest account status', () => {
   it('reads the version past a deprecation warning', () => {
     expect(versionFromOutput('DeprecationWarning: the old flag is deprecated\n1.4.2\n')).toBe('1.4.2');
     expect(versionFromOutput('warning: x 1.0 deprecated')).toBeUndefined();
+  });
+
+  it('recognizes only explicit authentication status, not any successful status output', () => {
+    expect(nativeStatusSignedIn('{"loggedIn":true}')).toBe(true);
+    expect(nativeStatusSignedIn('{"isAuthenticated":false}')).toBe(false);
+    expect(nativeStatusSignedIn('Not logged in')).toBe(false);
+    expect(nativeStatusSignedIn('Logged in as justin@example.com')).toBe(true);
+    expect(nativeStatusSignedIn('Account usage: 10% remaining')).toBeUndefined();
+  });
+
+  it('reads the signed-in email from Cursor-style status JSON', () => {
+    expect(statusEmail('{"isAuthenticated":true,"userInfo":{"email":"me@example.com"}}')).toBe('me@example.com');
+    expect(statusEmail('Not logged in')).toBeUndefined();
   });
 
   it('calls a ready account signed out when the vendor keeps no credential on disk', async () => {

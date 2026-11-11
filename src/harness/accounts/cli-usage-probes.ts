@@ -268,10 +268,12 @@ export function cursorQuotaReading(result: unknown, planName?: string): UsageRea
   // unavailable. Free plans can only use Auto" (2026-10-06), so its API
   // share -- always "100% left" -- is no allowance at all.
   const api = planName === 'Free' ? undefined : usageWindow('API', plan.apiPercentUsed, reset);
-  // A Free plan's agent usage is all bonus: with none left (`remainingBonus:
-  // false`) its turns answer "Upgrade your plan to continue" even at 0% used
-  // (GetPlanInfo "Free", 2026-10-06). A paid plan's included usage is not bonus.
-  const auto = planName === 'Free' && plan.remainingBonus === false ? 100 : plan.autoPercentUsed ?? plan.totalPercentUsed;
+  // Trust `autoPercentUsed`. An earlier rule treated Free + `remainingBonus:
+  // false` as fully spent (that used to match "Upgrade your plan to continue"
+  // at 0% used on 2026-10-06). Live Free accounts still report remaining Auto
+  // with `remainingBonus: false` (2026-11-11: 0/14/23/39/66/100), and forcing
+  // 100 made every Free account show "Auto 0% left" / "Auto 1% left".
+  const auto = plan.autoPercentUsed ?? plan.totalPercentUsed;
   // The API share is advisory: spent, it stops named models, not Auto.
   return usageReading([usageWindow('auto', auto, reset), api ? { ...api, advisory: true as const } : undefined]);
 }
