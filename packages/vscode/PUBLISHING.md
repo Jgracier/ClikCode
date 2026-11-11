@@ -21,8 +21,11 @@ Publishing**. Rotate them there; nothing in this repository holds a token.
 On ClikDeploy's cadence, or at once with **Publish now** in the admin console. A run publishes only
 what changed since that artifact's last release:
 
-- **Extension**: `packages/vscode/**`, `src/ide/**`, `src/worker/protocol.ts`.
-- **CLI**: everything else except `*.md` (and except `packages/vscode/**`).
+- **CLI**: everything except `packages/vscode/**` and Markdown.
+- **Extension**: everything the CLI counts (it bundles the CLI), plus `packages/vscode/**`, its
+  `README.md` and `CHANGELOG.md` included.
+- **Neither**: tests and their fixtures and golden files, `packages/vscode/test/`, `bench/`,
+  `scripts/tui-e2e/`, `docs/`, `.github/`, `.vscode/`, and lint, editor and vitest configuration.
 
 When both changed, the CLI is published first and the extension after it in the same run, so an
 extension never reaches users before the ClikCode it needs.
