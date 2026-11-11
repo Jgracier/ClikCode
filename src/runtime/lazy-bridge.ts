@@ -36,6 +36,7 @@ function sibling<T>(name: string): T {
 let routerRuntime: Pick<AiRouterRuntime, 'streamAiChatTurn'> | undefined;
 const localRouter = (): Pick<AiRouterRuntime, 'streamAiChatTurn'> => (routerRuntime ??= sibling<Pick<AiRouterRuntime, 'streamAiChatTurn'>>('ai-router-runtime.cjs'));
 
+/** What dist/harness-catalog.cjs provides: everything except model streaming. */
 type HarnessCatalogRuntime = Omit<AiRouterRuntime, 'streamAiChatTurn'>;
 let catalogRuntime: HarnessCatalogRuntime | undefined;
 

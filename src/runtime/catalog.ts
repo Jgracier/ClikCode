@@ -7,8 +7,6 @@
  * ALL catalog calls go through this one bundle: registerCustomHarnesses()
  * keeps module state that a second copy would not see.
  */
-import type { AiRouterRuntime } from '../harness/definition.js';
-
 export * from '@clikcode/router/ai-local-harness';
 
 /** The provider registry's own lookup, for the one question the app cannot
@@ -24,6 +22,3 @@ export * from '@clikcode/router/ai-local-harness';
  * Pure data with no imports outside the registry, so it does not endanger this
  * bundle's dependency-free guarantee -- which the build asserts. */
 export { getAiProvider } from '@clikcode/router/ai-provider-registry-public';
-
-/** What dist/harness-catalog.cjs provides: everything except model streaming. */
-export type HarnessCatalogRuntime = Omit<AiRouterRuntime, 'streamAiChatTurn'>;

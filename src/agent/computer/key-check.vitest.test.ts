@@ -1,6 +1,6 @@
 import { createVerify, generateKeyPairSync } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { checkKey, keyCheckService } from './key-check.js';
+import { checkKey } from './key-check.js';
 
 const KEY = ['hf', 'QjXkVbNzWpLcRmTgHsYdFaUeIoKnBvCxZq'].join('_'); // assembled so no token-shaped text sits in the source
 /** A service that accepts exactly one key. */
@@ -38,8 +38,6 @@ it('counts Google\'s 400 for a bad key as a refusal', async () => {
 
 it('has no check for a site it does not know', async () => {
   expect(await checkKey('https://example.com/keys', KEY)).toMatchObject({ verdict: 'untested', detail: 'no check is known for this site' });
-  expect(keyCheckService('https://platform.openai.com/api-keys')).toBe('OpenAI');
-  expect(keyCheckService('https://example.com/')).toBeUndefined();
 });
 
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -117,5 +115,4 @@ it('knows the common key pages, and sends each key only to its own service', asy
     expect(await checkKey(page, 'abcDEF123456789xyz0', spy)).toMatchObject({ verdict: 'works' });
     expect(urls.every(url => new URL(url).hostname === host)).toBe(true);
   }
-  expect(keyCheckService('https://console.x.ai/team/keys')).toBe('xAI');
 });

@@ -466,7 +466,3 @@ function snippetLine(index: number, message: { role: string; text: string; conte
 }
 
 export const CONVERSATION_TOOLS: readonly ConversationTool[] = [searchTool, readTool, activeTool, hindsightTool];
-
-export function conversationTool(name: string): ConversationTool | undefined {
-  return CONVERSATION_TOOLS.find((tool) => tool.name === name);
-}

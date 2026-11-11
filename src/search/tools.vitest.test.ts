@@ -8,7 +8,7 @@ import { appendTurnChanges } from '../session/turn-changes.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { takeConversation, workersDirectory, writeWorkerRecord } from '../worker/registry.js';
 import { resetCorpusCache } from './corpus.js';
-import { conversationTool } from './tools.js';
+import { CONVERSATION_TOOLS } from './tools.js';
 import { deleteConversations } from '../session/state/deletions.js';
 
 const NOW = Date.now();
@@ -29,7 +29,7 @@ async function store(...sessions: HarnessSession[]): Promise<void> {
 }
 
 const run = async (name: string, args: Record<string, unknown>, currentSessionId?: string) =>
-  conversationTool(name)!.run(args, { ...(currentSessionId ? { currentSessionId } : {}), now: NOW });
+  CONVERSATION_TOOLS.find((tool) => tool.name === name)!.run(args, { ...(currentSessionId ? { currentSessionId } : {}), now: NOW });
 
 const OTHER = 'aaaaaaaa-1111-4111-8111-111111111111';
 const CURRENT = 'bbbbbbbb-2222-4222-8222-222222222222';
