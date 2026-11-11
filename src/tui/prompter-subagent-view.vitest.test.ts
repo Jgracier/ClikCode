@@ -39,9 +39,8 @@ describe('sub-agent view in the terminal', () => {
       // Agents are running, none opened: Right is the command menu, as when no agent runs.
       key('\u001b[C');
       expect(rl.subView).toBeUndefined();
-      expect(rl.turn?.draft).toBe('/');
-      rl.turn!.draft = '';
-      rl.turn!.cursor = 0;
+      expect(rl.composer.text).toBe('/');
+      rl.composer.clear();
       // One opened (a tap, Ctrl+O) is the one "on": Right goes into it.
       open(rl, 'a1');
       key('\u001b[C');
@@ -56,7 +55,7 @@ describe('sub-agent view in the terminal', () => {
       expect(rl.groupExpansion.isOpen('call:a1')).toBe(false);
       key('\u001b[C');
       expect(rl.subView).toBeUndefined();
-      expect(rl.turn?.draft).toBe('/');
+      expect(rl.composer.text).toBe('/');
     } finally { rl.closeSubView(); rl.close(); }
   });
 
@@ -102,7 +101,7 @@ describe('sub-agent view in the terminal', () => {
       for (const k of 'go on') key(k);
       key('\r');
       expect(steer).toHaveBeenCalledWith(expect.objectContaining({ id: 'a1', label: 'Agent explore' }), 'go on');
-      expect(rl.turn?.draft).toBe('');
+      expect(rl.composer.text).toBe('');
     } finally { rl.closeSubView(); rl.close(); }
   });
 

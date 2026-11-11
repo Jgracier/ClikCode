@@ -185,22 +185,22 @@ describe('tapping and Ctrl+O', () => {
     const lineTags = new Map<number, string>();
     transcript.tags.forEach((tag, index) => { if (tag) lineTags.set(10 + index, tag); });
     const emitted = { requestReseed: vi.fn() };
-    const redrawSelection = vi.fn();
+    const paintCurrent = vi.fn();
     const h = {
-      ...k.p, alternateTrimmed: 10, alternateTranscript: transcript.rows, alternateAbove: 40, alternateScrollback: 0, viewExtra: { rows: [], tags: [] }, scrollWindow: { rowsBelow: 0, detached: false }, lineTags, emitted, redrawSelection,
+      ...k.p, alternateTrimmed: 10, alternateTranscript: transcript.rows, alternateAbove: 40, alternateScrollback: 0, viewExtra: { rows: [], tags: [] }, scrollWindow: { rowsBelow: 0, detached: false }, lineTags, emitted, paintCurrent,
       frameLayout: { live: [], tags: [] as Array<string | undefined> }, groupAnchor: undefined as unknown,
     };
-    return { h, transcript, emitted, redrawSelection };
+    return { h, transcript, emitted, paintCurrent };
   }
 
   it('toggles the group from its header, an item from its row, and rewrites the transcript', () => {
-    const { h, transcript, emitted, redrawSelection } = host();
+    const { h, transcript, emitted, paintCurrent } = host();
     const header = 10 + transcript.rows.findIndex((row) => row.includes('Ran 1 command'));
     expect(tapGroupRow.call(h as never, 10)).toBe(false);
     expect(tapGroupRow.call(h as never, header)).toBe(true);
     expect(h.groupExpansion.isOpen('1')).toBe(true);
     expect(emitted.requestReseed).toHaveBeenCalledTimes(1);
-    expect(redrawSelection).toHaveBeenCalled();
+    expect(paintCurrent).toHaveBeenCalled();
     expect(tapGroupRow.call(h as never, header)).toBe(true);
     expect(h.groupExpansion.isOpen('1')).toBe(false);
     // The transcript as it is drawn once open: an item row toggles its item.

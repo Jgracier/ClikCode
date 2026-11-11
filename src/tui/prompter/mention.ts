@@ -27,7 +27,7 @@ export function mentionKey(this: TerminalHarnessPrompter): Promise<'next' | 'pre
         const action = key === '\u001b[A' ? 'previous' as const : key === '\u001b[B' ? 'next' as const : key === '\t' ? 'chat' as const
           : key === '\u001b' || key === '\r' || key === '\u0003' ? 'done' as const : undefined;
         if (!action) {
-          if (key === '\u000c') { this.requestRedraw('repair'); this.forgetScreenPosition(); this.repaint(); return; }
+          if (key === '\u000c') { this.repairScreen(); return; }
           this.handleScrollKey(key);
           return;
         }
@@ -46,7 +46,7 @@ export function mentionKey(this: TerminalHarnessPrompter): Promise<'next' | 'pre
 export function endMention(this: TerminalHarnessPrompter): void {
   if (!this.mentionFocus) return;
   this.mentionFocus = { ...this.mentionFocus, status: undefined };
-  this.repaint();
+  this.paintCurrent();
 }
 
 /** Puts the mention a few rows below the top of the view, once, on the

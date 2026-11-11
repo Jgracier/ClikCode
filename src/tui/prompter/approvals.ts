@@ -38,10 +38,7 @@ export function restoreTellingDraft(this: TerminalHarnessPrompter): void {
   const telling = this.tellingInstead;
   if (!telling) return;
   this.tellingInstead = undefined;
-  if (this.turn) {
-    this.turn.draft = telling.draft;
-    this.turn.cursor = telling.cursor;
-  }
+  this.composer.set(telling);
 }
 
 export function approval(this: TerminalHarnessPrompter, title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<ApprovalAnswer> {
@@ -160,9 +157,8 @@ export function questionKey(this: TerminalHarnessPrompter, turn: WaitingTurn, pe
   };
   const typeIn = (): void => {
     state.typing = true;
-    this.tellingInstead ??= { draft: turn.draft, cursor: turn.cursor };
-    turn.draft = state.question.initial ?? '';
-    turn.cursor = turn.draft.length;
+    this.tellingInstead ??= this.composer.take();
+    this.composer.set(state.question.initial ?? '');
     this.updateWaiting();
   };
   switch (action.type) {
@@ -193,7 +189,7 @@ export function questionKey(this: TerminalHarnessPrompter, turn: WaitingTurn, pe
     }
     case 'submit': {
       if (state.typing) {
-        const text = state.question.secret ? turn.draft : turn.draft.trim();
+        const text = state.question.secret ? this.composer.text : this.composer.text.trim();
         // A formatted answer counts only when the whole pattern is filled.
         const pattern = maskPattern(state.question.format);
         if (pattern && text && !maskComplete(text, pattern)) return;
@@ -208,12 +204,13 @@ export function questionKey(this: TerminalHarnessPrompter, turn: WaitingTurn, pe
     }
     case 'type': {
       const pattern = maskPattern(state.question.format);
-      if (!pattern) { this.editTurnDraft(turn, key); return; }
+      if (!pattern) { this.editTurnDraft(key); return; }
       // The box types the pattern itself: literals appear and are jumped over, Backspace walks back past them.
-      const before = turn.draft;
-      this.editTurnDraft(turn, key);
-      const shaped = applyInputMask(turn.draft, pattern, turn.draft.length < before.length);
-      if (shaped !== turn.draft) { turn.draft = shaped; turn.cursor = shaped.length; this.updateWaiting(); }
+      const before = this.composer.text;
+      this.editTurnDraft(key);
+      const typed = this.composer.text;
+      const shaped = applyInputMask(typed, pattern, typed.length < before.length);
+      if (shaped !== typed) { this.composer.set(shaped); this.echoDraft(); }
       return;
     }
   }
@@ -228,14 +225,13 @@ export function presentNextApproval(this: TerminalHarnessPrompter): boolean {
   // Each approval gets its own guard window and its own focus requirement:
   // answering the first of two must not let the same keypress, or the next
   // character of a sentence, answer the second.
-  this.pendingApproval = { ...next, shownAt: Date.now(), needsFocus: Boolean(this.turn?.draft), focused: false };
+  this.pendingApproval = { ...next, shownAt: Date.now(), needsFocus: Boolean(this.turn && this.composer.text), focused: false };
   // A question with nothing to pick is answered in the composer from the start.
   const asked = next.question?.state;
   if (asked && startsTyping(asked.question) && this.turn && !this.pendingApproval.needsFocus) {
     asked.typing = true;
-    this.tellingInstead = { draft: this.turn.draft, cursor: this.turn.cursor };
-    this.turn.draft = asked.question.initial ?? '';
-    this.turn.cursor = this.turn.draft.length;
+    this.tellingInstead = this.composer.take();
+    this.composer.set(asked.question.initial ?? '');
   }
   if (this.turn) {
     this.turn.label = next.question ? 'waiting for your answer' : 'waiting for approval';
@@ -281,7 +277,7 @@ export function approvalKey(
   const telling = this.tellingInstead;
   if (telling) {
     if (key === '\r') {
-      const text = turn.draft.trim();
+      const text = this.composer.text.trim();
       if (!text) return;
       // The text goes with the answer: whoever sends the denial sends it
       // after, so the steer cannot overtake it.
@@ -294,7 +290,7 @@ export function approvalKey(
       else this.updateWaiting();
       return;
     }
-    this.editTurnDraft(turn, key);
+    this.editTurnDraft(key);
     return;
   }
   // Otherwise the draft is never edited from here: every key is either an
@@ -304,9 +300,7 @@ export function approvalKey(
     pending.focused = true;
     this.updateWaiting();
   } else if (action === 'tell') {
-    this.tellingInstead = { draft: turn.draft, cursor: turn.cursor };
-    turn.draft = '';
-    turn.cursor = 0;
+    this.tellingInstead = this.composer.take();
     this.updateWaiting();
   } else if (action === 'allow' || action === 'always' || action === 'deny') {
     this.answerApproval(pending, action === 'deny' ? false : action === 'always' ? 'always' : true);

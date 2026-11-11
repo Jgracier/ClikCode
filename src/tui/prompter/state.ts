@@ -65,9 +65,6 @@ export type WaitingTurn = {
   writingAt?: number;
   /** When the latest call started (a statusOrder tick). */
   callAt?: number;
-  /** The composer typed into while the turn runs. */
-  draft: string;
-  cursor: number;
   /** Ctrl+C, or Esc once the turn has an answer, has asked the turn to stop. */
   cancelled: boolean;
   cancel?: (restoreDraft: boolean, trigger?: CancelTrigger) => void;

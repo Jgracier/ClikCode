@@ -91,7 +91,7 @@ function loadDetail(p: TerminalHarnessPrompter, group: string): void {
       if (message.activities) message.activities = message.activities.map((item) => item && typeof item === 'object' && 'event' in item ? { ...item, event: merge(item.event) } : item);
     }
     p.emitted.requestReseed();
-    p.redrawSelection();
+    p.paintCurrent();
   }).catch((error: unknown) => { quiet('tui/prompter/group-actions')(error); p.activity('Could not load the full tool detail. Try expanding it again.'); });
 }
 
@@ -114,7 +114,7 @@ export function tapGroupRow(this: TerminalHarnessPrompter, line: number): boolea
   if (tag.item) this.groupExpansion.toggleItem(tag.group, tag.item);
   else this.groupExpansion.toggleGroup(tag.group);
   if (opening) loadDetail(this, tag.group);
-  this.redrawSelection();
+  this.paintCurrent();
   return true;
 }
 
@@ -138,7 +138,7 @@ export function toggleLatestGroup(this: TerminalHarnessPrompter): boolean {
   }
   this.groupExpansion.toggleGroup(latest.id);
   if (opening) loadDetail(this, latest.id);
-  this.redrawSelection();
+  this.paintCurrent();
   return true;
 }
 

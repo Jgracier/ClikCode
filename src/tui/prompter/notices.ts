@@ -2,13 +2,14 @@
 import { sanitizeTerminalText } from '../render/text.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 
-export function showTransientNotice(this: TerminalHarnessPrompter, text: string, durationMs: number, redraw: () => void): void {
+/** A notice on the notice row for `durationMs`; when it goes, the screen is drawn as it is then (paintCurrent). */
+export function showTransientNotice(this: TerminalHarnessPrompter, text: string, durationMs: number): void {
   this.clearTransientNotice();
   this.transientNotice = text;
   this.transientNoticeTimer = setTimeout(() => {
     this.transientNoticeTimer = undefined;
     this.transientNotice = undefined;
-    if (this.canPaint('picker')) redraw();
+    this.paintCurrent();
   }, durationMs);
   this.transientNoticeTimer.unref();
 }
@@ -28,7 +29,7 @@ export function panel(this: TerminalHarnessPrompter, title: string, body: string
   while (lines.length && !lines[0]) lines.shift();
   while (lines.length && !lines[lines.length - 1]) lines.pop();
   this.panelState = { title: sanitizeTerminalText(title, { keepSgr: true, singleLine: true }), lines, offset: 0, page: 1, total: lines.length };
-  this.repaint({ keepPalette: false });
+  this.paintCurrent();
 }
 
 /** True when the key was a panel command. Only consulted on an empty draft,

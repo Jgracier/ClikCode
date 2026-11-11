@@ -105,7 +105,7 @@ describe('the chat and the composer stay put while a list is open', () => {
 
     written.length = 0;
     prompter.pickerOverlay = [];
-    prompter.repaint({ keepPalette: false });
+    prompter.paintCurrent();
     const back = closed.map((line, index) => {
       const rewritten = [...written.join('').matchAll(/\u001b\[(\d+);1H([\s\S]*?)\u001b\[K/g)]
         .filter((match) => Number(match[1]) - 1 === index).at(-1);

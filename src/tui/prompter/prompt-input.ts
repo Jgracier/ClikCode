@@ -1,19 +1,20 @@
 /** The resting prompt: the composer read key by key, its palette, history, paste, and the answer it resolves. */
 import { lifecycle } from '../../runtime/lifecycle-log.js';
-import { pastedText } from '../keys.js';
-import { backslashNewline, composerVerticalMove, editWaitingComposer } from '../composer-edit.js';
+import { backslashNewline } from '../composer-edit.js';
 import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, type PaletteEntry } from '../command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { nextCharacterIndex, previousCharacterIndex } from '../render/width.js';
-import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from '../render/held-pastes.js';
 import { takeTerminalKeys } from '../input-decoder.js';
 import { SWIPE_ROWS, enterInputModes, popReadModes } from '../modes.js';
 import { keyHint, keyHintFor } from '../../harness/protocol/wording.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import type { ArrowSource } from '../swipe-arrows.js';
 import { EXIT_CONFIRM_MS } from './state.js';
+import { Composer, draftKey } from './composer.js';
 
-type PromptSettings = { cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string; signal?: AbortSignal; secret?: boolean };
+/** `conversation`: this is the conversation's composer -- its draft is the prompter's (composer.ts), kept across turns, and what
+ * it sends is history. Otherwise the question is a field of its own (a name, a model id, a key), starting empty. */
+type PromptSettings = { conversation?: boolean; cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string; signal?: AbortSignal; secret?: boolean };
 
 /** What one key sees of the palette: its matches, whether they are an
  * argument's own values, and the rows the selection keys move through. */
@@ -40,18 +41,11 @@ export async function question(
   });
 }
 
-/** One prompt, from its first frame to the answer (or rejection) it ends in:
- * the draft, the palette selection, held pastes and history position. */
+/** One prompt, from its first frame to the answer (or rejection) it ends in: the palette and its selection, over the draft it
+ * edits (composer.ts). */
 class PromptSession {
-  private value: string;
-  private cursor: number;
+  private readonly composer: Composer;
   private selected = 0;
-  private historyIndex: number;
-  /** The draft as typed, kept while history is recalled over it (at index `history.length`), so Down past the newest entry restores it. */
-  private stashedDraft: DraftWithPastes | undefined;
-  // Long pastes, held out of the draft as placeholders (held-pastes.ts)
-  // and put back when it is sent.
-  private held: HeldPaste[] = [];
   // Reserved once for the whole prompt, not recomputed per keystroke: keeping the
   // footer band a fixed height is what stops the conversation area above it from
   // reflowing (and the cursor from jumping) as the number of matches narrows.
@@ -68,21 +62,13 @@ class PromptSession {
     private readonly resolveQuestion: (answer: string) => void,
     private readonly rejectQuestion: (reason: unknown) => void,
   ) {
-    this.value = p.queuedDraft ?? '';
-    p.queuedDraft = undefined;
-    p.signedInJustNow = false;
-    this.cursor = this.value.length;
-    this.historyIndex = p.history.length;
+    this.composer = settings?.conversation ? p.composer : new Composer();
     this.paletteCapacity = commands.length ? Math.min(commands.length, 8) + 2 : 0;
   }
 
-  private draft(): DraftWithPastes { return { value: this.value, cursor: this.cursor, held: this.held }; }
-
-  private apply(next: DraftWithPastes): void { this.value = next.value; this.cursor = next.cursor; this.held = [...next.held]; }
-
   // Every match, not the first eight: paint() windows a longer list, so
   // the selection can reach all of them.
-  private matches() { return commandPaletteMatches(this.value, this.commands); }
+  private matches() { return commandPaletteMatches(this.composer.text, this.commands); }
 
   // The row that runs is the row that is highlighted. When what was typed
   // names a command outright (`/new`), that command's row starts
@@ -100,15 +86,17 @@ class PromptSession {
   // whatever it opens next -- a picker, a sign-in -- never has the
   // finished list and its `/command` left on screen around it.
   private runCommand(line: string): void {
-    this.value = '';
-    this.cursor = 0;
+    this.composer.clear();
     this.selected = 0;
     this.draw();
     this.finish(line);
   }
 
-  private draw(): void {
-    const { p, value, prompt, settings } = this;
+  /** This prompt's frame: the draft, the palette under it, a secret drawn as dots. What the prompter draws as the current state
+   * while this prompt is open (paintCurrent). */
+  draw(): void {
+    const { p, prompt, settings } = this;
+    const { text: value, cursor } = this.composer;
     const options = commandPaletteMatches(value, this.commands);
     if (this.selected >= options.length) this.selected = 0;
     if (options.length) {
@@ -116,23 +104,29 @@ class PromptSession {
       // from, or -- for a free-text argument -- just its hint.
       const hint = options[0]?.completes ? [keyHintFor('↑↓', 'choose'), keyHintFor('tab', 'fill in'), keyHint('apply'), keyHintFor('esc', 'clear')].join(' · ')
         : value.includes(' ') ? `${keyHintFor('enter', 'run')} · ${keyHintFor('esc', 'clear')}` : undefined;
-      p.paint(value, options, this.selected, prompt, this.cursor, { capacity: this.paletteCapacity, ...(hint ? { hint } : {}) });
+      p.paint(value, options, this.selected, prompt, cursor, { capacity: this.paletteCapacity, ...(hint ? { hint } : {}) });
       return;
     }
     // Palette closure and ordinary typing are both complete frames, so
     // the transcript immediately reclaims any previously reserved rows.
     // A secret (an API key typed into a sign-in) is drawn as dots.
-    p.paint(settings?.secret ? '•'.repeat(value.length) : value, [], 0, prompt, this.cursor);
+    p.paint(settings?.secret ? '•'.repeat(value.length) : value, [], 0, prompt, cursor);
   }
 
   /** The prompt is over, however it ended: the keyboard and the read
-   * modes are given back, once. False when it had already ended. */
+   * modes are given back, once, and its notice (Ctrl+C's) goes with it.
+   * False when it had already ended. */
   private release(): boolean {
     if (this.finished) return false;
     this.finished = true;
     this.stopInput();
+    const { p } = this;
+    if (p.restingPrompt === this) p.restingPrompt = undefined;
+    p.clearTransientNotice();
+    // A secret typed and not sent is not kept anywhere.
+    if (this.settings?.secret) this.composer.clear();
     output.write(`${popReadModes()}\u001b[?25h`);
-    this.p.cursorShown = true;
+    p.cursorShown = true;
     return true;
   }
 
@@ -140,14 +134,12 @@ class PromptSession {
     if (!this.release()) return;
     const { p, settings } = this;
     lifecycle('window.prompt.end', { how: !answer ? 'empty' : answer.startsWith('/') ? `command ${answer.split(/\s/, 1)[0]}` : 'message' });
-    p.clearTransientNotice();
     if (answer) p.panelState = undefined;
     // A line sent is done with the mention it was looking at.
     if (answer) p.mentionFocus = undefined;
-    // The submitted line is the conversation's now. Leaving it in the
-    // composer made the next idle check look like a draft still in progress.
-    p.composer = { ...p.composer, text: '' };
-    if (answer && !settings?.secret && !answer.startsWith('/') && p.history[p.history.length - 1] !== answer) p.history.push(answer);
+    // The submitted line is the conversation's now, not a draft still in progress.
+    this.composer.clear();
+    if (answer && settings?.conversation && !answer.startsWith('/') && p.history[p.history.length - 1] !== answer) p.history.push(answer);
     this.resolveQuestion(answer);
   }
 
@@ -165,14 +157,10 @@ class PromptSession {
   }
 
   // Something other than the keyboard needs the screen: a turn this
-  // window did not start is running (worker/turn-bridge.ts). The draft is
-  // kept for the next prompt, and the caller is told why it ended.
+  // window did not start is running (worker/turn-bridge.ts). The draft
+  // stays in the composer, and the caller is told why it ended.
   private interrupt(): void {
     if (!this.release()) return;
-    // Kept whole: a placeholder in the next prompt's draft would have
-    // lost the paste it stood for.
-    const kept = expandPastes(this.value, this.held);
-    if (kept) this.p.queuedDraft = this.p.queuedDraft ? `${this.p.queuedDraft}\n${kept}` : kept;
     this.rejectQuestion(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
   }
 
@@ -184,7 +172,6 @@ class PromptSession {
   start(): void {
     const { p, settings } = this;
     if (settings?.signal?.aborted) {
-      p.queuedDraft = this.value || undefined;
       this.rejectQuestion(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
       return;
     }
@@ -198,11 +185,12 @@ class PromptSession {
         for (const [index, key] of ahead.entries()) {
           if (!this.finished) { this.handleKey(key); continue; }
           const rest = ahead.slice(index).filter((item) => !item.startsWith('\u001b') && item.charCodeAt(0) >= 0x20 && item !== '\u007f').join('');
-          if (rest) p.queuedDraft = p.queuedDraft ? `${p.queuedDraft}${rest}` : rest;
+          if (rest) p.composer.set(`${p.composer.text}${rest}`);
           break;
         }
       });
     }
+    p.restingPrompt = this;
     this.listen();
     this.draw();
   }
@@ -216,70 +204,48 @@ class PromptSession {
   private dispatchKey(key: string, source: ArrowSource): void {
     const { p } = this;
     if (source === 'swipe') return this.swipe(key);
-    if (key === '\u000c') {
-      p.requestRedraw('repair');
-      p.forgetScreenPosition();
-      return this.draw();
-    }
+    if (key === '\u000c') { p.repairScreen(); return; }
     const matched = this.matches();
     // `options` drives selection keys. While an argument is being typed the
     // palette is only a hint -- unless it is listing the argument's own
     // values, which are chosen exactly like commands are.
     const completing = Boolean(matched[0]?.completes);
-    const context: KeyContext = { matched, completing, options: this.value.includes(' ') && !completing ? [] : matched };
-    if (this.pasteAndControlKey(key, context)) return;
+    const context: KeyContext = { matched, completing, options: this.composer.text.includes(' ') && !completing ? [] : matched };
+    if (this.controlKey(key, context)) return;
     if (this.commitKey(key, context)) return;
-    if (this.navigationKey(key, context)) return;
-    this.editKey(key);
+    if (this.paletteKey(key, context)) return;
+    const before = this.composer.text;
+    if (draftKey(p, this.composer, key) !== 'edit') return;
+    if (this.composer.text !== before) this.selected = this.highlightFor(this.composer.text);
+    this.draw();
   }
 
-  /** Paste, Ctrl+O/Z/C/D, and Esc: true when the key was handled here. */
-  private pasteAndControlKey(key: string, { matched }: KeyContext): boolean {
+  /** Ctrl+Z/C/D, and Esc: true when the key was handled here. */
+  private controlKey(key: string, { matched }: KeyContext): boolean {
     const { p, settings } = this;
-    const pasted = pastedText(key);
-    if (pasted !== undefined) {
-      // Pasted newlines are content, not Enter. Splitting on them is what
-      // turned one pasted block into a queue of separate messages. A long
-      // one is held as `[Pasted text #1 +40 lines]`.
-      const next = insertPaste(this.draft(), pasted, p.pasteCount + 1);
-      if (next.held.length > this.held.length) p.pasteCount += 1;
-      this.apply(next);
-      this.selected = 0;
-      this.draw();
-      return true;
-    }
-    // Ctrl+O: the held pastes back in the draft as text, to read or edit.
-    if (key === '\u000f') {
-      if (!this.held.length) { p.handleScrollKey(key); return true; }
-      this.cursor = expandPastes(this.value.slice(0, this.cursor), this.held).length;
-      this.value = expandPastes(this.value, this.held);
-      this.held = [];
-      this.draw();
-      return true;
-    }
+    const value = this.composer.text;
     if (key === '\u001a') { p.suspendToShell(); return true; }
     // Esc on an empty composer, no panel open, stops a turn parked for
     // the quota reset.
-    if (key === '\u001b' && !this.value && !p.panelState && p.idleEscape) { const stop = p.idleEscape; p.idleEscape = undefined; stop(); return true; }
-    if (!this.value && !matched.length && p.panelKey(key)) { this.draw(); return true; }
+    if (key === '\u001b' && !value && !p.panelState && p.idleEscape) { const stop = p.idleEscape; p.idleEscape = undefined; stop(); return true; }
+    if (!value && !matched.length && p.panelKey(key)) { this.draw(); return true; }
     if (key === '\u0003') {
       // Ctrl+C clears a draft first. Leaving takes a second press, because
       // the same key also interrupts a turn and is pressed by reflex.
-      if (this.value) { this.value = ''; this.cursor = 0; this.held = []; this.selected = 0; this.historyIndex = p.history.length; this.stashedDraft = undefined; this.draw(); return true; }
+      if (value) { this.composer.clear(); this.selected = 0; this.draw(); return true; }
       if (Date.now() - this.exitArmedAt <= EXIT_CONFIRM_MS) { this.finish('/exit'); return true; }
       this.exitArmedAt = Date.now();
-      p.showTransientNotice('Press Ctrl+C again to exit', EXIT_CONFIRM_MS, () => this.draw());
+      p.showTransientNotice('Press Ctrl+C again to exit', EXIT_CONFIRM_MS);
       this.draw();
       return true;
     }
     if (this.exitArmedAt) { this.exitArmedAt = 0; p.clearTransientNotice(); }
     // Ctrl+D is end-of-input only on an empty draft; otherwise it deletes
     // forward like every other line editor.
-    if (key === '\u0004' && !this.value) { this.finish('/exit'); return true; }
+    if (key === '\u0004' && !value) { this.finish('/exit'); return true; }
     if (key === '\u001b' && settings?.cancellable) { this.cancel(); return true; }
     if (key === '\u001b' && matched.length) {
-      this.value = '';
-      this.cursor = 0;
+      this.composer.clear();
       this.selected = 0;
       this.draw();
       return true;
@@ -289,10 +255,11 @@ class PromptSession {
 
   /** Enter and Tab: true when the key was handled here. */
   private commitKey(key: string, { completing, options }: KeyContext): boolean {
-    const { value, cursor, commands, selected } = this;
+    const { commands, selected, composer } = this;
+    const { text: value, cursor } = composer;
     if (key === '\r') {
       const continued = options.length ? undefined : backslashNewline(value, cursor);
-      if (continued) { this.value = continued.value; this.cursor = continued.cursor; this.draw(); return true; }
+      if (continued) { composer.set({ value: continued.value, cursor: continued.cursor, held: composer.held }); this.draw(); return true; }
       // A value from the command's own list: what was typed wins when it
       // IS a value, otherwise the highlighted one.
       if (completing) { this.runCommand(completedCommandLine(value, commands, selected)); return true; }
@@ -301,16 +268,15 @@ class PromptSession {
       // and starting on the current value; the values are listed here
       // only once one is being typed (`/model op`).
       if (options.length && value.startsWith('/') && !value.includes(' ')) { this.runCommand(options[selected]!.value); return true; }
-      if (value.startsWith('/')) { this.runCommand(expandPastes(value, this.held)); return true; }
-      this.finish(expandPastes(value, this.held));
+      if (value.startsWith('/')) { this.runCommand(composer.expanded()); return true; }
+      this.finish(composer.expanded());
       return true;
     }
     if (key === '\t' && options.length) {
       // A value fills in as it is, ready to run or to keep editing; a
       // command that takes an argument completes ready for it.
-      this.value = completing ? options[selected]!.value
-        : `${options[selected]!.value}${options[selected]!.argHint || options[selected]!.argValues ? ' ' : ''}`;
-      this.cursor = this.value.length;
+      composer.set(completing ? options[selected]!.value
+        : `${options[selected]!.value}${options[selected]!.argHint || options[selected]!.argValues ? ' ' : ''}`);
       this.selected = 0;
       this.draw();
       return true;
@@ -322,52 +288,22 @@ class PromptSession {
    * cursor, changes the palette's selection or touches the draft (swipe-arrows.ts). */
   private swipe(key: string): void {
     const { p } = this;
-    if (!this.value && !this.matches().length && p.panelKey(key)) { this.draw(); return; }
+    if (!this.composer.text && !this.matches().length && p.panelKey(key)) { this.draw(); return; }
     p.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS);
   }
 
-  private historyStep(direction: -1 | 1): void {
-    const live = this.p.history.length;
-    // Down on the draft itself (no entry recalled) goes nowhere. It used to "step" to index `live` anyway, find no stash there and
-    // load `history[live]`, which is nothing: one Down (the first arrow of a downward swipe, or Ctrl+N) emptied the composer.
-    if (direction > 0 && this.historyIndex >= live) return;
-    // Leaving the draft: it is kept, whatever it is, and comes back when Down returns past the newest entry.
-    if (direction < 0 && this.historyIndex === live && this.historyIndex > 0) this.stashedDraft = { value: this.value, cursor: this.cursor, held: [...this.held] };
-    if (direction < 0 && this.historyIndex > 0) this.historyIndex -= 1;
-    else if (direction > 0) this.historyIndex = Math.min(live, this.historyIndex + 1);
-    else return;
-    if (this.historyIndex === live) {
-      const draft = this.stashedDraft;
-      this.stashedDraft = undefined;
-      if (draft) { this.apply(draft); return; }
-    }
-    this.value = this.p.history[this.historyIndex] ?? '';
-    this.cursor = this.value.length;
-  }
-
-  /** Arrows and history keys: true when the key was handled here.
-   * Up/Down pressed as keys (a swipe never gets here: swipe-arrows.ts, swipe()) navigate palette options; otherwise they move
-   * through a multi-line draft and fall through to input history from its first and last line, empty composer or not. Recalling
-   * history over a draft keeps the draft (Down past the newest entry brings it back). Ctrl+P/Ctrl+N always mean history. The
-   * conversation is read by a swipe or wheel, PageUp/PageDown, Ctrl+B/Ctrl+F, Shift+Up/Down, and Home/End on an empty composer. */
-  private navigationKey(key: string, { completing, options }: KeyContext): boolean {
-    const { p, value, commands, settings } = this;
-    if (key === '\u001b[A' || key === '\u001b[B') {
+  /** The keys an open palette gives a meaning of its own: Up/Down move its selection, Left backs out of it, Right runs the
+   * highlighted row. Left on an empty draft opens the conversations, Right on a `/`-less one may open the palette. True when the
+   * key was handled here; Up/Down otherwise are the draft's (draftKey). */
+  private paletteKey(key: string, { completing, options }: KeyContext): boolean {
+    const { commands, settings, composer } = this;
+    const { text: value, cursor } = composer;
+    if ((key === '\u001b[A' || key === '\u001b[B') && options.length) {
       const direction = key === '\u001b[A' ? -1 : 1;
-      if (options.length) { this.selected = (this.selected + direction + options.length) % options.length; this.draw(); return true; }
-      const moved = composerVerticalMove(value, this.cursor, direction);
-      if (moved !== undefined) this.cursor = moved;
-      else this.historyStep(direction);
+      this.selected = (this.selected + direction + options.length) % options.length;
       this.draw();
       return true;
     }
-    // Home and End (the decoder reads them as Ctrl+A and Ctrl+E) on an empty composer go to the first and the last row of the conversation.
-    if (!value && !options.length && (key === '\u0001' || key === '\u0005')) {
-      p.scrollTranscript(key === '\u0001' ? Number.MAX_SAFE_INTEGER : -Number.MAX_SAFE_INTEGER);
-      return true;
-    }
-    if (key === '\u0010' && !options.length) { this.historyStep(-1); this.draw(); return true; }
-    if (key === '\u000e' && !options.length) { this.historyStep(1); this.draw(); return true; }
     if (key === '\u001b[D') {
       // With nothing typed there is nothing for the arrow to move through,
       // so the chat composer spends it on its conversations: what is
@@ -375,55 +311,27 @@ class PromptSession {
       if (!value && settings?.leftArrowCommand) { this.finish(settings.leftArrowCommand); return true; }
       // Backing out of the command list clears it; inside an argument the
       // arrow edits, as it does in any line.
-      if (options.length && !completing) { this.value = ''; this.cursor = 0; this.selected = 0; }
-      else this.cursor = previousCharacterIndex(value, this.cursor);
+      if (options.length && !completing) { composer.clear(); this.selected = 0; }
+      else composer.cursor = previousCharacterIndex(value, cursor);
       this.draw();
       return true;
     }
     if (key === '\u001b[C') {
       // Right Arrow is deliberately identical to Enter.
-      if (completing && this.cursor >= value.length) { this.runCommand(completedCommandLine(value, commands, this.selected)); return true; }
+      if (completing && cursor >= value.length) { this.runCommand(completedCommandLine(value, commands, this.selected)); return true; }
       // When the palette is open (any options match), right arrow selects/runs the highlighted option
-      if (options.length && this.cursor >= value.length) { this.runCommand(options[this.selected]!.value); return true; }
+      if (options.length && cursor >= value.length) { this.runCommand(options[this.selected]!.value); return true; }
       const paletteValue = composerRightArrowValue(value, options.length > 0, settings?.rightArrowPalette);
       if (paletteValue) {
-        this.value = paletteValue;
-        this.cursor = paletteValue.length;
+        composer.set(paletteValue);
         this.selected = 0;
         this.draw();
         return true;
       }
-      this.cursor = nextCharacterIndex(value, this.cursor);
+      composer.cursor = nextCharacterIndex(value, cursor);
       this.draw();
       return true;
     }
     return false;
-  }
-
-  /** Page keys, then text editing. */
-  private editKey(key: string): void {
-    const { p } = this;
-    // Page keys read the conversation rather than edit the draft: the
-    // alternate screen has no terminal scrollback behind it, so this is
-    // the only way back through what was said. Shift+Up/Down does the
-    // same a row at a time. Esc, which already clears a draft, also
-    // returns to the live end.
-    if (p.handleScrollKey(key)) return;
-    // Escape returns to the live end here; in the waiting band it keeps
-    // meaning interrupt, and a new turn rejoins on its own.
-    if (key === '\u001b' && p.scrolledBack) { p.scrollTranscript(-Number.MAX_SAFE_INTEGER); return; }
-    // A placeholder is deleted whole, its paste with it.
-    const removed = key === '\u007f' || key === '\b' ? removePlaceholderAt(this.draft(), 'back')
-      : key === '\u001b[3~' || key === '\u0004' ? removePlaceholderAt(this.draft(), 'forward') : undefined;
-    if (removed) { this.apply(removed); this.selected = this.highlightFor(this.value); this.draw(); return; }
-    // Everything else is text editing, shared with the waiting composer.
-    const edited = editWaitingComposer(this.value, this.cursor, key);
-    if (!edited.changed) return;
-    if (edited.value !== this.value) this.selected = this.highlightFor(edited.value);
-    this.value = edited.value;
-    this.cursor = edited.cursor;
-    // An edit that broke a placeholder drops its paste.
-    this.held = keptPastes(this.value, this.held);
-    this.draw();
   }
 }

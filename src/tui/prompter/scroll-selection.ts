@@ -76,8 +76,7 @@ export function drainAtBatchEnd(this: TerminalHarnessPrompter): void {
 export function scheduleScrollPaint(this: TerminalHarnessPrompter): void {
   const draw = (): void => {
     this.scrollPaintQueued = false;
-    if (!this.canPaint()) return;
-    this.repaint();
+    this.paintCurrent();
   };
   // Inside a batch the frame waits for the end of the chunk; outside one --
   // a page key, an arrow, a test pressing a single key -- it draws at once.
@@ -146,7 +145,7 @@ export function handleSelection(this: TerminalHarnessPrompter, action: MouseActi
   if (Number.isFinite(at.row)) selection.head = at;
   if (action.kind === 'drag') {
     this.followSelectionEdge(action.at.row, action.at.col);
-    this.redrawSelection();
+    this.paintCurrent();
     return;
   }
   this.stopSelectionScroll();
@@ -154,11 +153,11 @@ export function handleSelection(this: TerminalHarnessPrompter, action: MouseActi
   // A click that never moved selects nothing; on a group's row it opens the group.
   if (selectionIsEmpty(selection)) { this.tapGroupRow(selection.anchor.row); return; }
   const text = this.selectionText(selection);
-  this.redrawSelection();
+  this.paintCurrent();
   if (!text) return;
   void copyToClipboard(text).catch((error: unknown) => {
-    this.showTransientNotice(userError('copy', error), NOTICE_MS, () => this.redrawSelection());
-    this.redrawSelection();
+    this.showTransientNotice(userError('copy', error), NOTICE_MS);
+    this.paintCurrent();
   });
 }
 
@@ -218,13 +217,6 @@ export function stopSelectionScroll(this: TerminalHarnessPrompter): void {
   if (!this.selectionScroll) return;
   clearInterval(this.selectionScroll.timer);
   this.selectionScroll = undefined;
-}
-
-/** The current frame again, so the highlight follows the pointer. */
-export function redrawSelection(this: TerminalHarnessPrompter): void {
-  if (!this.canPaint()) return;
-  if (this.turn) this.paintWaiting(this.turn);
-  else this.repaint();
 }
 
 /** Down at the live end moves nothing: there is nothing newer than the

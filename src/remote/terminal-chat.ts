@@ -699,7 +699,7 @@ export async function runRemoteChat(
           const wake = new AbortController();
           wakePrompt = () => wake.abort();
           try {
-            line = (await terminal.question('› ', commands, { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: AbortSignal.any([promptController.signal, wake.signal]) })).trim();
+            line = (await terminal.question('› ', commands, { conversation: true, rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: AbortSignal.any([promptController.signal, wake.signal]) })).trim();
           } catch (error) {
             // Cut short, not closed: go round again -- to the turn that began, or the list -- with the draft kept.
             if (wake.signal.aborted && !promptController.signal.aborted && (error as { code?: string }).code === 'ERR_PROMPT_INTERRUPTED') continue;

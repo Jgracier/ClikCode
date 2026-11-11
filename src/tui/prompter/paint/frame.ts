@@ -20,7 +20,7 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   if (this.subView) { this.pickerOverlay = []; this.paintSubView(); return; }
   if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
   this.responsePaintTimer = undefined;
-  this.composer = {
+  this.drawnComposer = {
     text: composer, options, selected, prompt, cursor,
     // Kept whole: a repaint (a resize) draws the list as it was asked for,
     // its section headings included.

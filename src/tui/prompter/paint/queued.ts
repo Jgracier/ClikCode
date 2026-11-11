@@ -55,7 +55,7 @@ export function queuedMessagesOf(
   // it would (enterAgainSends -- the key asks the same). Esc takes the
   // newest back. With one message they are the same row.
   const waitingUser = (message: { user: boolean; queueState: string }): boolean => message.user && !['steered', 'sending', 'error'].includes(message.queueState);
-  const enterAt = p.turn?.sendWaiting && !p.turn.cancelled && !p.turn.draft.trim()
+  const enterAt = p.turn?.sendWaiting && !p.turn.cancelled && !p.composer.text.trim()
     && enterAgainSends(queuedMessages.filter(waitingUser).map((message) => ({ held: message.queueState === 'pause' })), p.steerable)
     ? queuedMessages.findIndex(waitingUser) : -1;
   const escAt = p.turn?.takeBack ? queuedMessages.map(waitingUser).lastIndexOf(true) : -1;

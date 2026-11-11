@@ -5,7 +5,8 @@ import { queuedMessageRows, queuedMessagesOf } from './queued.js';
 
 const fake = (waiting: unknown[] = [], takingBack: string[] = []) => ({
   waitingSubmissions: waiting, takingBack: new Set(takingBack),
-  turn: { sendWaiting: () => undefined, takeBack: async () => 'removed', cancelled: false, draft: '' },
+  turn: { sendWaiting: () => undefined, takeBack: async () => 'removed', cancelled: false },
+  composer: { text: '' },
 }) as unknown as TerminalHarnessPrompter;
 const session = (queued: Array<{ id: string; text: string; submittedAt?: string }>): HarnessSession =>
   ({ queuedTurns: queued.map((item) => ({ submittedAt: '2026-01-01T00:00:00Z', ...item })) }) as unknown as HarnessSession;

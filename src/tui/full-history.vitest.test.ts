@@ -145,7 +145,7 @@ describe('scroll-back through a long conversation', () => {
       settle();
       rl.handleScrollKey(HOME);
       settle();
-      const repaint = vi.spyOn(rl, 'repaint');
+      const repaint = vi.spyOn(rl, 'paintCurrent');
       expect(followEnd(rl)).toBe(true);
       const timers = vi.getTimerCount();
       rl.schedulePaint(0);

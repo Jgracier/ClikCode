@@ -122,10 +122,7 @@ export function schedulePaint(this: TerminalHarnessPrompter, delay = PAINT_COALE
     // A resize burst in progress: the settled repaint draws the turn at its final size. A key's echo
     // does not come through here, so typing is never held.
     if (this.resizePaintTimer) { this.paintDropped = true; return; }
-    if (this.canPaint()) {
-      if (this.turn) this.paintWaiting(this.turn);
-      else this.repaint();
-    }
+    this.paintCurrent();
   }, delay);
   this.responsePaintTimer.unref();
 }
@@ -139,60 +136,68 @@ export function flushPaint(this: TerminalHarnessPrompter): void {
   this.responsePaintTimer = undefined;
   if (!this.canPaint()) return;
   if (this.resizePaintTimer) { this.paintDropped = true; return; }
-  if (this.turn) this.paintWaiting(this.turn);
-  else this.repaint();
+  this.paintCurrent();
 }
 
 /** The waiting frame, with the slash palette when one is being typed.
  *
- * A hint list, not a picker: during a turn Up/Down scroll the transcript
- * (which is the point -- reading what went past is why they are bound
- * there), so there is no selection to move and Enter runs what was typed.
- * Without this a command was invisible AND unavailable while an answer
- * streamed; `/model` went to the model as the word "/model". */
+ * A hint list, not a picker: there is no selection to move, and Enter runs
+ * what was typed. Without this a command was invisible AND unavailable while
+ * an answer streamed; `/model` went to the model as the word "/model". */
 export function waitingPalette(this: TerminalHarnessPrompter, turn: WaitingTurn) {
-  const found = turn.command ? commandPaletteMatches(turn.draft, this.paletteCommands) : [];
+  const draft = this.composer.text;
+  const found = turn.command ? commandPaletteMatches(draft, this.paletteCommands) : [];
   // Commands while nothing has been typed past the name; the argument's
   // own values once it has. A bare hint row is not worth the space mid-turn.
-  return !turn.draft.includes(' ') || found[0]?.completes ? found : [];
+  return !draft.includes(' ') || found[0]?.completes ? found : [];
 }
 
+/** The composer as a turn shows it: a secret answer (a question's, a sign-in's key) as dots, the palette's hints under a `/`. */
 export function paintWaiting(this: TerminalHarnessPrompter, turn: WaitingTurn): void {
+  const { text, cursor } = this.composer;
   const asking = this.pendingApproval?.question?.state;
   if (asking?.typing && asking.question.secret && asking.question.maskInput !== false) {
-    this.paint('•'.repeat(turn.draft.length), [], 0, '› ', turn.cursor);
+    this.paint('•'.repeat(text.length), [], 0, '› ', cursor);
     return;
   }
-  if (this.signInInput && (!this.signInInput.alongside || isKeyShaped(turn.draft))) {
-    this.paint(this.signInInput.secret ? '•'.repeat(turn.draft.length) : turn.draft, [], 0, '› ', turn.cursor);
+  if (this.signInInput && (!this.signInInput.alongside || isKeyShaped(this.composer.expanded()))) {
+    this.paint(this.signInInput.secret ? '•'.repeat(text.length) : text, [], 0, '› ', cursor);
     return;
   }
   const matches = this.waitingPalette(turn);
   if (!matches.length) {
-    this.paint(turn.draft, [], 0, '› ', turn.cursor);
+    this.paint(text, [], 0, '› ', cursor);
     return;
   }
-  this.paint(turn.draft, matches, 0, '› ', turn.cursor, {
+  this.paint(text, matches, 0, '› ', cursor, {
     capacity: Math.min(matches.length, 8) + 2,
     hint: `${keyHint('apply')} · ${keyHintFor('esc', 'close')} · ${keyHint('stop')}`,
   });
 }
 
-/** Repaint with the composer exactly as the last paint left it -- with its
- * palette, or (`keepPalette: false`) without, since paint() reads an absent
- * palette as "there is none".
- *
- *  - KEEP the palette for an incremental repaint of an edit still in
- *    progress -- a resize, a coalesced paint, a scroll, a reading-direction
- *    change. The user is mid-`/command`; taking their palette away as the
- *    terminal reflows would be the bug.
- *  - CLEAR it where the composer is being re-established fresh and a stale
- *    palette would be wrong: a panel opening (paint() draws a panel only
- *    when no palette is up, so they are mutually exclusive), a turn ending,
- *    and resume() after a vendor has had the TTY -- the composer it repaints
- *    is a new one. In all three the palette belongs to a command that has
- *    already run. */
-export function repaint(this: TerminalHarnessPrompter, options: { keepPalette: boolean } = { keepPalette: true }): void {
-  const { text, options: listed, selected, prompt, cursor, palette } = this.composer;
-  this.paint(text, listed, selected, prompt, cursor, options.keepPalette ? palette : undefined);
+/** The chat as it is now, drawn: the one way every path that is not a single edit's echo repaints -- a coalesced paint, a scroll,
+ * a selection, a notice expiring, a snapshot, the return from Ctrl+Z or a vendor's login. A turn's band (its draft masked where
+ * it is a secret, its palette); the prompt open at rest (its draft, palette and selection); else the draft alone. Nothing is
+ * drawn from a copy of what a frame once showed, so nothing stale -- a finished prompt's draft, a secret in plain text -- can come
+ * back. Only while the chat has the screen: an open picker draws its own frames. */
+export function paintCurrent(this: TerminalHarnessPrompter): void {
+  if (!this.canPaint()) return;
+  if (this.turn) this.paintWaiting(this.turn);
+  else if (this.restingPrompt) this.restingPrompt.draw();
+  else this.paint(this.composer.text, [], 0, '› ', this.composer.cursor);
+}
+
+/** The screen drawn again by whoever has it (a resize): an open picker's frame as it last drew it, else the chat (paintCurrent). */
+export function redrawScreen(this: TerminalHarnessPrompter): void {
+  if (this.screenOwner !== 'picker') { this.paintCurrent(); return; }
+  const { text, options, selected, prompt, cursor, palette } = this.drawnComposer;
+  this.paint(text, options, selected, prompt, cursor, palette);
+}
+
+/** Ctrl+L: the terminal lost cells (a mobile resize, a remote redraw). The screen is cleared and the current state drawn whole
+ * from what this program keeps -- the turn and the draft untouched. */
+export function repairScreen(this: TerminalHarnessPrompter): void {
+  this.requestRedraw('repair');
+  this.forgetScreenPosition();
+  this.redrawScreen();
 }

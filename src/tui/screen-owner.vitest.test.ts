@@ -44,7 +44,7 @@ describe('screen owner', () => {
       const frames = vi.fn();
       const flush = vi.spyOn(rl, 'flushFrame').mockImplementation(frames);
       rl.schedulePaint(0);
-      rl.redrawSelection();
+      rl.paintCurrent();
       rl.render(session);
       vi.advanceTimersByTime(50);
       expect(frames).not.toHaveBeenCalled();
@@ -60,7 +60,7 @@ describe('screen owner', () => {
     rl.render(session);
     const paint = vi.spyOn(rl, 'paint');
     rl.selecting = true;
-    rl.redrawSelection();
+    rl.paintCurrent();
     rl.render(session);
     rl.schedulePaint(0);
     vi.advanceTimersByTime(50);

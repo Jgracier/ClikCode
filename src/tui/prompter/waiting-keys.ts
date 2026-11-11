@@ -2,6 +2,7 @@
 import { isKeyShaped } from '../../gateway/login/vendor-sign-in.js';
 import { backslashNewline } from '../composer-edit.js';
 import { approvalKey } from './approvals.js';
+import { draftKey } from './composer.js';
 import { waitingEnterAction, waitingInputAction } from '../input-decoder.js';
 import { SWIPE_ROWS } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
@@ -17,26 +18,18 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
 }
 
 function waitingKey(this: TerminalHarnessPrompter, turn: NonNullable<TerminalHarnessPrompter['turn']>, key: string, source: ArrowSource): void {
+  const draft = this.composer;
   // The terminal can lose cells during a mobile resize or a remote redraw.
-  // Rebuild the whole viewport from our retained state, including the live
-  // answer and any approval, without changing the turn or the draft.
-  if (key === '\u000c') {
-    this.requestRedraw('repair');
-    this.forgetScreenPosition();
-    this.paintWaiting(turn);
-    return;
-  }
+  if (key === '\u000c') { this.repairScreen(); return; }
   // A sub-agent open in full view takes every key; none of them reaches the
   // main turn (Esc and Ctrl+C go back to the main chat, they do not stop it).
   if (this.subView) { this.subViewKey(key); return; }
   // Right on an empty composer opens a running sub-agent's own screen.
-  if (key === '\u001b[C' && !turn.draft && !this.pendingApproval && this.openSubView()) return;
+  if (key === '\u001b[C' && !draft.text && !this.pendingApproval && this.openSubView()) return;
   // Otherwise Right on an empty composer opens the command menu, as it does when no turn runs.
-  if (key === '\u001b[C' && !turn.draft && !this.pendingApproval && turn.command && !this.signInInput) {
-    turn.draft = '/';
-    turn.cursor = 1;
-    this.updateWaiting();
-    this.flushPaint();
+  if (key === '\u001b[C' && !draft.text && !this.pendingApproval && turn.command && !this.signInInput) {
+    draft.set('/');
+    this.echoDraft();
     return;
   }
   // Before approvals and before the draft: a turn running is when someone
@@ -52,7 +45,7 @@ function waitingKey(this: TerminalHarnessPrompter, turn: NonNullable<TerminalHar
   // A plain approval (no list, no text being typed to it) has no use for the arrows and Home/End, so they scroll.
   if (this.pendingApproval && !this.pendingApproval.question && !this.tellingInstead) {
     if (key === '\u001b[A' || key === '\u001b[B') {
-      if (!this.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS) && key === '\u001b[B') this.noteReadingDirection();
+      this.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS);
       return;
     }
     if (key === '\u0001' || key === '\u0005') {
@@ -73,10 +66,8 @@ function waitingKey(this: TerminalHarnessPrompter, turn: NonNullable<TerminalHar
   // The command menu is an overlay: Esc closes it (and the slash line with
   // it) and goes no further. Only with nothing open does Esc reach the turn.
   if (!this.pendingApproval && !this.signInInput && key === '\u001b' && this.waitingPalette(turn).length) {
-    turn.draft = '';
-    turn.cursor = 0;
-    this.updateWaiting();
-    this.flushPaint();
+    draft.clear();
+    this.echoDraft();
     return;
   }
   if (this.pendingApproval?.question) {
@@ -96,19 +87,9 @@ function waitingKey(this: TerminalHarnessPrompter, turn: NonNullable<TerminalHar
     approvalKey.call(this, turn, this.pendingApproval, key);
     return;
   }
-  // Up and Down with nothing typed read the conversation, as they do at
-  // the prompt. A phone sends a swipe as arrow keys and nothing else once
-  // its keyboard is up, so without this a running turn was the one time
-  // the conversation could not be scrolled at all -- recorded: a long turn,
-  // the keyboard came up, and every swipe after that did nothing.
-  if ((key === '\u001b[A' || key === '\u001b[B') && (!turn.draft || this.scrolledBack)) {
-    if (this.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS)) return;
-    if (key === '\u001b[B') this.noteReadingDirection();
-    return;
-  }
   // Left with nothing typed steps away from the turn -- to the conversation
   // board -- and leaves it running: the worker owns it, not this window.
-  if (key === '\u001b[D' && !turn.draft && turn.leave) {
+  if (key === '\u001b[D' && !draft.text && turn.leave) {
     turn.leave();
     return;
   }
@@ -142,55 +123,52 @@ function waitingKey(this: TerminalHarnessPrompter, turn: NonNullable<TerminalHar
     if (!turn.submit && !turn.early) { turn.cancelled = true; turn.stopLabel = 'stopping…'; this.scheduleWaitingTick(); this.updateWaiting(); }
     // A turn that did nothing yet gives its prompt back to edit -- unless
     // something is already typed, which keeps the composer.
-    const restoreDraft = !turn.draft.trim();
+    const restoreDraft = !draft.text.trim();
     if (turn.early) turn.early.interrupt = { restoreDraft, trigger: 'ctrl-c' };
     turn.cancel?.(restoreDraft, 'ctrl-c');
   } else if (key === '\u001a') {
     this.suspendToShell();
-  } else if (key === '\r' && this.signInInput && (!this.signInInput.alongside || isKeyShaped(turn.draft.trim()) || (!turn.draft.trim() && this.signInInput.optional))) {
+  } else if (key === '\r' && this.signInInput && (!this.signInInput.alongside || isKeyShaped(draft.expanded().trim()) || (!draft.text.trim() && this.signInInput.optional))) {
     // A key pasted beside the vendor's sign-in is the sign-in's; anything
     // else typed there is the user's next message (the branch below).
-    const text = turn.draft.trim();
+    const text = draft.expanded().trim();
     // A stray Enter answers nothing -- unless the question takes none (a
     // key-first sign-in's Enter for the vendor's own providers).
     if (!text && !this.signInInput.optional) return;
-    turn.draft = '';
-    turn.cursor = 0;
+    draft.clear();
     this.signInInput.submit(text);
     this.updateWaiting();
   } else if (this.signingIn && !turn.submit && (key === '\r' || this.typedAhead.length)) {
     // Sent under a sign-in: the message stays in the composer, on screen,
-    // and only its Enter waits -- for the turn or prompt that comes next,
-    // which the draft is handed on to.
-    if (key === '\r' && !this.typedAhead.length && !turn.draft.trim()) return;
+    // and only its Enter waits -- for the turn or prompt that comes next.
+    if (key === '\r' && !this.typedAhead.length && !draft.text.trim()) return;
     this.typedAhead.push(key);
   } else if (key === '\r') {
-    const continued = turn.submit ? backslashNewline(turn.draft, turn.cursor) : undefined;
+    const continued = turn.submit ? backslashNewline(draft.text, draft.cursor) : undefined;
     if (continued) {
-      turn.draft = continued.value;
-      turn.cursor = continued.cursor;
-      this.updateWaiting();
-      this.flushPaint();
+      draft.set({ value: continued.value, cursor: continued.cursor, held: draft.held });
+      this.echoDraft();
       return;
     }
     if (!turn.submit) return;
     // Enter again, nothing typed, on a message already waiting: it goes
     // into the chat at the next pause. The turn, and any sub-agent it
     // started, keeps running.
-    const enter = waitingEnterAction(turn.draft, this.enterAgainReady(), Boolean(turn.sendWaiting) && !turn.cancelled);
+    const enter = waitingEnterAction(draft.text, this.enterAgainReady(), Boolean(turn.sendWaiting) && !turn.cancelled);
     if (enter === 'send-waiting') {
       turn.sendWaiting!();
       return;
     }
     if (enter !== 'deliver') return;
-    const text = turn.draft.trim();
-    turn.draft = '';
-    turn.cursor = 0;
+    const text = draft.expanded().trim();
+    draft.clear();
     this.submitWaiting(text);
-  } else if (turn.submit || turn.early || this.signInInput || this.signingIn) {
-    // A sign-in's wait keeps what is typed under it too: the composer that
-    // opens after it starts with that text (stopWaiting hands it on), where
-    // dropping it lost the start of a message typed as a sign-in finished.
-    this.editTurnDraft(turn, key);
+  } else if (this.signInInput && !this.signInInput.alongside) {
+    // A sign-in's code or key, typed in the composer the draft was set aside from: plain text, a paste as it is.
+    this.editTurnDraft(key);
+  } else if (turn.submit || turn.early || this.signingIn) {
+    // The draft, by the composer's own rules (composer.ts draftKey): the same keys as at rest. A sign-in's wait keeps what is
+    // typed under it too: it is the composer's, and still there when the next prompt or turn opens.
+    if (draftKey(this, draft, key) === 'edit') this.echoDraft();
   }
 }
