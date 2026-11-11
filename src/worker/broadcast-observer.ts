@@ -121,7 +121,18 @@ export class BroadcastObserver implements TurnObserver {
    * nobody watching waited forever, and reattaching showed nothing to answer. */
   private readonly pendingApprovals = new Map<string, { resolve: (approved: boolean | 'always') => void; event: WorkerEvent; place?: Place }>();
   private readonly pendingQuestions = new Map<string, { resolve: (result: HarnessQuestionResult) => void; event: WorkerEvent; place?: Place }>();
-  private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent }>();
+  /** Each sign-in runs in ONE window: its `owner`. Every window it reached
+   * started its own vendor login, so one turn put two links and two codes
+   * on two screens, of which only one could work. */
+  private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent; owner: Socket }>();
+  /** The window that sent the running turn: a sign-in it needs is that
+   * window's to run. Undefined for a turn the worker started itself (a
+   * queued message drained after its window closed). */
+  private turnSender?: Socket;
+
+  noteTurnSender(socket: Socket | undefined): void {
+    this.turnSender = socket;
+  }
 
   /** Told when the oldest approval still waiting changes (undefined: none
    * waits). The worker records it beside its runtime record, so another
@@ -160,7 +171,13 @@ export class BroadcastObserver implements TurnObserver {
 
   /** Sent to a client that just attached, after its snapshot. */
   reofferPending(socket: Socket): void {
-    for (const pending of [...this.pendingApprovals.values(), ...this.pendingQuestions.values(), ...this.pendingSignIns.values()]) sendEvent(socket, pending.event);
+    for (const pending of [...this.pendingApprovals.values(), ...this.pendingQuestions.values()]) sendEvent(socket, pending.event);
+    // A sign-in goes to a window only when the one running it is gone.
+    for (const pending of this.pendingSignIns.values()) {
+      if (this.clients.has(pending.owner) && pending.owner !== socket) continue;
+      pending.owner = socket;
+      sendEvent(socket, pending.event);
+    }
   }
 
   get pendingRequestCount(): number {
@@ -170,6 +187,14 @@ export class BroadcastObserver implements TurnObserver {
   detach(socket: Socket): void {
     this.lastActivityAt = Date.now();
     this.clients.delete(socket);
+    if (this.turnSender === socket) this.turnSender = undefined;
+    // Its window closed mid sign-in: another window still attached runs it.
+    const next = this.clients.values().next().value as Socket | undefined;
+    for (const pending of this.pendingSignIns.values()) {
+      if (pending.owner !== socket || !next) continue;
+      pending.owner = next;
+      sendEvent(next, pending.event);
+    }
   }
 
   get attachedCount(): number {
@@ -322,6 +347,7 @@ export class BroadcastObserver implements TurnObserver {
     if (hadApprovals) this.announceAwaiting();
     for (const pending of this.pendingSignIns.values()) pending.reject(new Error('the turn ended'));
     this.pendingSignIns.clear();
+    this.turnSender = undefined;
     this.userWaitChanged();
   }
 
@@ -592,12 +618,14 @@ export class BroadcastObserver implements TurnObserver {
     if (signal?.aborted) return Promise.reject(new Error('stopped'));
     const id = randomUUID();
     const event: WorkerEvent = { type: 'sign-in-request', id, ...request };
+    const owner = this.turnSender && this.clients.has(this.turnSender) ? this.turnSender : this.clients.values().next().value as Socket;
     return new Promise((resolve, reject) => {
-      this.pendingSignIns.set(id, { resolve, reject, event });
+      this.pendingSignIns.set(id, { resolve, reject, event, owner });
       // Stop ends a sign-in the user left waiting.
       signal?.addEventListener('abort', () => this.resolveSignIn(id, 'stopped'), { once: true });
       this.userWaitChanged();
-      this.broadcast(event);
+      this.lastActivityAt = Date.now();
+      sendEvent(owner, event);
     });
   }
 

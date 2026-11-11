@@ -89,7 +89,7 @@ export function createWorkerQueue(ctx: WorkerContext) {
         ctx.queuedUserTurn = runnable;
         if (!runnable) { broadcastQueueChanged(); return; }
       }
-      startTurn({ type: 'submit', text: head.text, echo: true, queuedTurnId: head.id });
+      if (startTurn({ type: 'submit', text: head.text, echo: true, queuedTurnId: head.id })) observer.noteTurnSender(undefined);
       ctx.queuedUserTurn = false;
     } finally {
       ctx.draining = false;
@@ -131,7 +131,7 @@ export function createWorkerQueue(ctx: WorkerContext) {
     // The shutdown began while this was being read: the turn would run on a vendor that is being closed and be lost. Refused, so the sender takes it
     // to the replacement (worker-commands.ts answers `submit-rejected` with `retry`).
     if (ctx.shuttingDown) throw new Error('This conversation\'s worker is being replaced.');
-    if (startTurn(command)) return;
+    if (startTurn(command)) { observer.noteTurnSender(socket); return; }
     let queuedTurnId = command.queuedTurnId;
     if (!queuedTurnId) {
       queuedTurnId = randomUUID();
