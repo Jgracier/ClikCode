@@ -47,7 +47,7 @@ export class ParentChainIndex {
 
   holds(): boolean {
     if (!this.chained || !this.lastMessage) return false;
-  const seen = new Set<string>();
+    const seen = new Set<string>();
     let current = this.lastMessage;
     while (current) {
       if (seen.has(current)) return false;
@@ -57,14 +57,7 @@ export class ParentChainIndex {
       if (parent === null) return true;
       if (typeof parent !== 'string') return false;
       current = parent;
+    }
+    return false;
   }
-  return false;
-  }
-}
-
-export function parentChainHolds(jsonl: string): boolean {
-  const index = new ParentChainIndex();
-  index.append(jsonl);
-  index.finish();
-  return index.holds();
 }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { liveWorkers, liveWorkerSessions, livePendingTurns, sessionActivity } from './liveness.js';
+import { liveWorkers, livePendingTurns, sessionActivity } from './liveness.js';
 import type { HarnessSession } from './model.js';
 import { ensureWorkersDirectory, listWorkerRecords, takeConversation, writeWorkerRecord } from '../worker/registry.js';
 
@@ -16,7 +16,7 @@ afterEach(async () => {
   root = undefined;
 });
 
-describe('liveWorkerSessions reads the worker directory once', () => {
+describe('liveWorkers reads the worker directory once', () => {
   it('reports only workers whose process is still alive', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-live-workers-'));
     process.env.CLIKCODE_HOME = root;
@@ -40,7 +40,7 @@ describe('liveWorkerSessions reads the worker directory once', () => {
       build: 'test',
       startedAt: new Date().toISOString(),
     });
-    const live = await liveWorkerSessions();
+    const live = (await liveWorkers()).isLive;
     expect(live('alive')).toBe(true);
     expect(live('dead')).toBe(false);
     expect(live('chat-0')).toBe(false);

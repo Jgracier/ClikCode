@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { parentChainHolds } from './parent-chain.js';
+import { ParentChainIndex } from './parent-chain.js';
+
+/** A whole transcript read at once, as a fresh index does. */
+function parentChainHolds(jsonl: string): boolean {
+  const index = new ParentChainIndex();
+  index.append(jsonl);
+  index.finish();
+  return index.holds();
+}
 
 const line = (record: Record<string, unknown>): string => JSON.stringify(record);
 

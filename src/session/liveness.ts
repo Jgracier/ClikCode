@@ -54,18 +54,14 @@ export function sessionIsLive(
   return isOpen(session.id) || workerIsLive(session.id);
 }
 
-/** Which sessions still have a worker process behind them.
+/** Which sessions still have a worker process behind them, and which of those
+ * have an approval waiting on the user: the record a worker keeps beside its
+ * pid (onAwaitingApproval), so a list can say a conversation needs the user
+ * without attaching to it.
  *
  * Reads the worker directory once and checks those leases. Passing every chat
  * and opening each chat's record was O(conversations) for a handful of live
  * workers; the directory is O(workers). */
-export async function liveWorkerSessions(): Promise<(sessionId: string) => boolean> {
-  return (await liveWorkers()).isLive;
-}
-
-/** The same pass, and which live workers have an approval waiting on the
- * user: the record a worker keeps beside its pid (onAwaitingApproval), so a
- * list can say a conversation needs the user without attaching to it. */
 export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: WorkerLiveness; awaitingYou: (sessionId: string) => boolean; awaitingApproval: (sessionId: string) => WorkerRuntimeRecord['awaitingApproval']; background: BackgroundOf; runningTurn: RunningTurnLookup }> {
   const [records, isOpen] = await Promise.all([liveWorkerRecords().catch(() => []), liveOpenConversations().catch(() => () => false)]);
   const bySession = new Map(records.map((record) => [record.sessionId, record]));

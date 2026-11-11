@@ -42,10 +42,6 @@ const RECIPES: readonly Recipe[] = [
   { host: /^github\.com$/, service: 'GitHub', rejects: [401], request: bearer('https://api.github.com/user') },
 ];
 
-export function keyCheckService(pageUrl: string): string | undefined {
-  try { const host = new URL(pageUrl).hostname; return RECIPES.find(recipe => recipe.host.test(host))?.service; } catch { return undefined; }
-}
-
 async function status(recipe: Recipe, key: string, fetcher: typeof fetch): Promise<number | undefined> {
   const { url, headers } = recipe.request(key);
   try { return (await fetcher(url, { headers, signal: AbortSignal.timeout(8_000) })).status; } catch { return undefined; }
