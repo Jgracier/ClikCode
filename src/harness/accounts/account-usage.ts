@@ -25,10 +25,19 @@ import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.j
  * concurrently at every start. A second ask while one runs gets its answer. */
 const probesInFlight = new Map<string, Promise<UsageReading | undefined>>();
 
-function probeOnce(key: string, probe: () => Promise<UsageReading | undefined>): Promise<UsageReading | undefined> {
+/** The longest any one usage read is waited for, every vendor process and
+ * HTTP call in it included. Each has its own deadline (vendor-probe.ts);
+ * this one is the backstop, so a probe that never settles cannot hold the
+ * account's slot below -- and every later ask for it -- forever. */
+export const USAGE_PROBE_DEADLINE_MS = 60_000;
+
+export function probeOnce(key: string, probe: () => Promise<UsageReading | undefined>, deadlineMs = USAGE_PROBE_DEADLINE_MS): Promise<UsageReading | undefined> {
   const running = probesInFlight.get(key);
   if (running) return running;
-  const asked = probe().catch(quiet('harness/accounts/account-usage')).finally(() => probesInFlight.delete(key));
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<undefined>((resolve) => { timer = setTimeout(resolve, deadlineMs, undefined); timer.unref(); });
+  const asked = Promise.race([probe().catch(quiet('harness/accounts/account-usage')), deadline])
+    .finally(() => { clearTimeout(timer); if (probesInFlight.get(key) === asked) probesInFlight.delete(key); });
   probesInFlight.set(key, asked);
   return asked;
 }
