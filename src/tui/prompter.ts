@@ -648,7 +648,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     else this.repaint();
   }
 
-  /** The last frame's live rows made safe, by the row as built and the width. */
+  /** The last frame's live rows and live conversation made safe, by the row as built and the width. */
   safeLiveRows = { limit: 0, rows: new Map<string, string>() };
 
   /** How much of a pending scroll to apply now, carrying the rest.

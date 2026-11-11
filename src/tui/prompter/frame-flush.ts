@@ -44,14 +44,17 @@ export function renderFrame(
   // cannot reintroduce it.
   const limit = Math.max(1, (output.columns || 100) - 1);
   // Most live rows are the same from one frame to the next (the footer, the
-  // answer's settled lines), so each is made safe once while it stays.
+  // answer's settled lines, the live conversation above the screen), so each
+  // is made safe once while it stays.
   const known = this.safeLiveRows.limit === limit ? this.safeLiveRows.rows : new Map<string, string>();
   const rows = new Map<string, string>();
-  const safeLive = live.map((row) => {
-    const safe = known.get(row) ?? safeRow(row, limit);
-    rows.set(row, safe);
-    return safe;
-  });
+  const safe = (row: string): string => {
+    const made = rows.get(row) ?? known.get(row) ?? safeRow(row, limit);
+    rows.set(row, made);
+    return made;
+  };
+  const safeLive = live.map(safe);
+  const safeTail = tail && { rows: tail.rows.map(safe), tags: [...tail.tags] };
   this.safeLiveRows = { limit, rows };
   // Frames that coalesce while a write drains accumulate their finished rows
   // instead of replacing them. A live row dropped here is drawn again by the
@@ -59,7 +62,7 @@ export function renderFrame(
   this.pendingFinished.push(...finished.map((row) => safeRow(row, limit)));
   this.pendingLive = {
     live: safeLive, cursorRow, cursorColumn, hideCursor, tags: [...liveTags],
-    ...(tail ? { tail: { rows: tail.rows.map((row) => safeRow(row, limit)), tags: [...tail.tags] } } : {}),
+    ...(safeTail ? { tail: safeTail } : {}),
   };
   if (!this.frameInFlight) this.flushFrame();
 }
