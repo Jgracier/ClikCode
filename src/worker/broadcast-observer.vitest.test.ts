@@ -1,6 +1,12 @@
 import type { Socket } from 'node:net';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MarkSequencer } from '../turn/turn-marks';
+
+/** Where a history stands in its log: every one placed, but the ones a test marks as not. */
+const unplaced = vi.hoisted(() => new WeakSet<object>());
+vi.mock('../session/store/transcripts.js', () => ({
+  transcriptPosition: (messages: unknown[]) => unplaced.has(messages) ? undefined : { gen: 'g1', end: messages.length },
+}));
 import { BroadcastObserver, windowReadsSaved } from './broadcast-observer';
 
 function fakeClient(): { socket: Socket; frames: Record<string, unknown>[] } {
@@ -481,52 +487,51 @@ describe("a turn that is the vendor's own background work", () => {
   });
 });
 
-describe('a snapshot taken after the turn\'s record is saved', () => {
-  const session = { id: 's', route: 'local', messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'done' }] } as never;
+describe('a snapshot taken while a turn runs', () => {
+  const before = [{ role: 'user', content: 'earlier' }];
+  const folded = { id: 's', route: 'local', messages: [...before, { role: 'user', content: 'go' }, { role: 'assistant', content: 'done' }] } as never;
+  const unsaved = { id: 's', route: 'local', messages: before } as never;
+  const journal = (session: { messages: unknown[]; pendingTurn?: unknown }) => ({ sequencer: new MarkSequencer(), recordMark: () => undefined, setThought: () => undefined, steerOrder: () => undefined, session });
 
-  it('carries the live turn while the record is still being written', () => {
+  it('carries the live turn before its journal exists', () => {
     const observer = new BroadcastObserver();
     const window = fakeClient();
     observer.startTurn('thinking', 'go');
-    observer.snapshotFor(window.socket, session);
+    observer.snapshotFor(window.socket, unsaved);
     expect(window.frames.at(-1)).toMatchObject({ type: 'snapshot', live: expect.any(Object) });
   });
 
-  it('says the turn is over, so a window never draws the saved turn and its live rows both', () => {
+  it('is the journal\'s own record, whatever the disk read said, and not live once the turn is folded into it', () => {
     const observer = new BroadcastObserver();
     const window = fakeClient();
     observer.startTurn('thinking', 'go');
-    observer.turnRecordFinal();
-    // A queue change landing between the record being saved and the worker telling windows the turn ended.
-    observer.snapshotFor(window.socket, session);
+    const record = { messages: before, pendingTurn: { prompt: 'go', response: 'do' } as unknown };
+    observer.bindJournal(journal(record) as never);
+    // The journal's start write has not landed: the disk read has no turn. The snapshot still has it, with the live view.
+    observer.snapshotFor(window.socket, unsaved);
+    expect(window.frames.at(-1)).toMatchObject({ session: { pendingTurn: { prompt: 'go' }, messages: before }, live: expect.any(Object) });
+    // Folded in memory; the disk read is from before the fold landed (or after): either way the record is the folded one.
+    record.messages = [...before, { role: 'user', content: 'go' }, { role: 'assistant', content: 'done' }];
+    delete record.pendingTurn;
+    observer.snapshotFor(window.socket, { id: 's', route: 'local', messages: before, pendingTurn: { prompt: 'go' } } as never);
     expect(window.frames.at(-1)).not.toHaveProperty('live');
-    // The next turn is live again.
+    expect(window.frames.at(-1)).toMatchObject({ session: { messages: record.messages } });
+    expect((window.frames.at(-1) as { session: object }).session).not.toHaveProperty('pendingTurn');
+    // Once the turn is told over, a snapshot is the conversation as read, and the next turn is live again.
+    observer.endTurn(folded);
+    observer.snapshotFor(window.socket, folded);
+    expect(window.frames.at(-1)).toMatchObject({ session: { messages: (folded as { messages: unknown[] }).messages } });
     observer.startTurn('thinking', 'again');
-    observer.snapshotFor(window.socket, session);
+    observer.snapshotFor(window.socket, folded);
     expect(window.frames.at(-1)).toHaveProperty('live');
   });
-});
 
-describe('a snapshot and the journal it was read against', () => {
-  const folded = { id: 's', route: 'local', messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'done' }] } as never;
-  const journaled = { id: 's', route: 'local', messages: [], pendingTurn: { prompt: 'go', response: 'do' } } as never;
-  const journal = (finished: boolean) => ({ sequencer: new MarkSequencer(), recordMark: () => undefined, setThought: () => undefined, steerOrder: () => undefined, finished });
-
-  it('is live while the journal is unfinished, and over once the folded record is what it holds', () => {
+  it('keeps the vendor\'s own work live: it has no journal of its own', () => {
     const observer = new BroadcastObserver();
     const window = fakeClient();
-    observer.startTurn('thinking', 'go');
-    let finished = false;
-    observer.bindJournal({ ...journal(false), get finished() { return finished; } } as never);
-    observer.snapshotFor(window.socket, journaled);
-    expect(window.frames.at(-1)).toHaveProperty('live');
-    finished = true;
-    // Read before the final write landed: still the journal, still consistent with a live view.
-    observer.snapshotFor(window.socket, journaled);
-    expect(window.frames.at(-1)).toHaveProperty('live');
-    // Read after it: the finished turn, which must not also be drawn live.
+    observer.startTurn('working', undefined, true);
     observer.snapshotFor(window.socket, folded);
-    expect(window.frames.at(-1)).not.toHaveProperty('live');
+    expect(window.frames.at(-1)).toHaveProperty('live');
   });
 });
 
@@ -544,7 +549,7 @@ describe('a snapshot for a window that reads the saved conversation itself', () 
     const slim = reads.frames[0] as { session: Record<string, unknown>; saved?: { count: number } };
     expect(slim.session.messages).toBeUndefined();
     expect(slim.session).toMatchObject({ id: 's', model: 'm' });
-    expect(slim.saved).toEqual({ count: 3 });
+    expect(slim.saved).toEqual({ count: 3, gen: 'g1', end: 3 });
     // An older window is sent all of it, as before.
     const whole = older.frames[0] as { session: { messages: unknown[] }; saved?: unknown };
     expect(whole.session.messages).toHaveLength(3);
@@ -559,6 +564,18 @@ describe('a snapshot for a window that reads the saved conversation itself', () 
     const large = { id: 's', messages: Array.from({ length: 20 }, () => ({ role: 'user', content: 'x'.repeat(1_000_000) })) };
     observer.render(large as never);
     expect(JSON.stringify(reads.frames[0]).length).toBeLessThan(1_000);
+  });
+
+  it('sends a history it cannot place in the log whole, rather than one a window would read wrong', () => {
+    const observer = new BroadcastObserver();
+    const reads = fakeClient();
+    windowReadsSaved(reads.socket);
+    observer.attach(reads.socket);
+    const messages = [{ role: 'user', content: 'a' }];
+    unplaced.add(messages);
+    observer.render({ id: 's', messages } as never);
+    expect(reads.frames[0]).toMatchObject({ session: { messages } });
+    expect((reads.frames[0] as { saved?: unknown }).saved).toBeUndefined();
   });
 
   it('sends a conversation with no messages as it is', () => {

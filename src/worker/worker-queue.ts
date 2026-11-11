@@ -9,6 +9,7 @@ import { diagnostic } from '../runtime/lifecycle-log.js';
 import { turnNeedsWindow } from '../session/queue-next.js';
 import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
+import { markTurnRunning, markTurnOver, releaseTurnControls } from './worker-turn.js';
 import type { ClientCommand } from './protocol.js';
 import type { Socket } from 'node:net';
 import type { WorkerContext } from './worker-context.js';
@@ -41,22 +42,16 @@ export function createWorkerQueue(ctx: WorkerContext) {
   const startTurn = (command: Extract<ClientCommand, { type: 'submit' }>): boolean => {
     // A shutting-down worker starts nothing: what is queued waits for the worker that replaces it.
     if (ctx.turnRunning || ctx.shuttingDown) return false;
-    ctx.turnRunning = true;
-    ctx.turnStartedAt = new Date().toISOString();
-    void ctx.onTurnRunningChange?.(ctx.turnStartedAt);
+    markTurnRunning(ctx);
     ctx.lastTurnStopped = false;
     ctx.activeQueuedTurnId = command.queuedTurnId;
     // runTurn settles its own end; this is for a throw it did not foresee,
     // which must still end the turn on every window rather than leave it open.
     void ctx.runTurn(command).catch((error: unknown) => {
-      ctx.turnRunning = false;
-      ctx.turnStartedAt = undefined;
-      void ctx.onTurnRunningChange?.(undefined);
-      ctx.activeController = undefined; ctx.activeLiveInput = undefined; ctx.activeSubmissions = undefined; ctx.activeRestoreDraft = undefined;
+      releaseTurnControls(ctx);
+      markTurnOver(ctx);
       ctx.activeQueuedTurnId = undefined;
-      ctx.stopAnnounced = false; ctx.pendingCancel = undefined; ctx.turnWorkDone = false; ctx.forceStop = undefined;
-      if (ctx.stopEscalation) clearTimeout(ctx.stopEscalation);
-      ctx.stopEscalation = undefined;
+      ctx.pendingCancel = undefined;
       observer.broadcast({ type: 'turn-error', message: error instanceof Error ? error.message : String(error) });
       observer.endTurn();
       ctx.idle.scheduleIdleExit();

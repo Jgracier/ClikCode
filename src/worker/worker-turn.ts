@@ -44,6 +44,39 @@ async function takeUnsentHeldSteers(sessionId: string): Promise<string[]> {
   return held.map((entry) => entry.text);
 }
 
+/** A turn is running from here: the one place that says so (the worker's
+ * flag, and its record for lists). Set synchronously by whoever starts it
+ * (worker-queue.ts startTurn), so nothing slips a second turn in between. */
+export function markTurnRunning(ctx: WorkerContext): void {
+  ctx.turnRunning = true;
+  ctx.turnStartedAt = new Date().toISOString();
+  void ctx.onTurnRunningChange?.(ctx.turnStartedAt);
+}
+
+/** What a turn holds to be stopped or steered, let go when it ends -- its own
+ * end (finalizeTurn) or a throw the runner did not foresee (worker-queue.ts). */
+export function releaseTurnControls(ctx: WorkerContext): void {
+  ctx.activeController = undefined;
+  ctx.activeLiveInput = undefined;
+  ctx.activeSubmissions = undefined;
+  ctx.activeRestoreDraft = undefined;
+  ctx.stopAnnounced = false;
+  ctx.turnWorkDone = false;
+  if (ctx.stopEscalation) clearTimeout(ctx.stopEscalation);
+  ctx.stopEscalation = undefined;
+  ctx.forceStop = undefined;
+}
+
+/** No turn is running from here. Its record's write is not awaited: nothing
+ * may sit between the turn being over and its end being told (a message typed
+ * in that gap is queued and announced by the order of the caller's next two
+ * lines); the record's writes are chained, so this one lands after the start's. */
+export function markTurnOver(ctx: WorkerContext): void {
+  ctx.turnRunning = false;
+  ctx.turnStartedAt = undefined;
+  void ctx.onTurnRunningChange?.(undefined);
+}
+
 export function createTurnRunner(ctx: WorkerContext) {
   const { observer, sessionId, config, agentSession } = ctx;
   const { currentSessionAndAccount } = ctx.io;
@@ -111,15 +144,7 @@ export function createTurnRunner(ctx: WorkerContext) {
    * told it ended, and whatever is owed or queued next started. */
   const finalizeTurn = async (turnId: string, turnStarted: number, turnOutcome: string, lastHarness: string | undefined, liveInput: LiveTurnInputBroker, submissions: Set<Promise<void>>): Promise<void> => {
     liveInput.close();
-    ctx.activeController = undefined;
-    ctx.activeLiveInput = undefined;
-    ctx.activeSubmissions = undefined;
-    ctx.activeRestoreDraft = undefined;
-    ctx.stopAnnounced = false;
-    ctx.turnWorkDone = false;
-    if (ctx.stopEscalation) clearTimeout(ctx.stopEscalation);
-    ctx.stopEscalation = undefined;
-    ctx.forceStop = undefined;
+    releaseTurnControls(ctx);
     // A message typed as the turn ended may still be on its way into the
     // queue (the broker falls back to it once steering has closed). The
     // final snapshot, the queue drained below and its answer to the window
@@ -134,12 +159,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     // a window waits on it, and a worker that never sent it would hold the
     // turn open on every window for ever.
     const ended = await currentSessionAndAccount().catch(quiet('worker/worker-turn'));
-    ctx.turnRunning = false;
-    ctx.turnStartedAt = undefined;
-    // Not awaited: nothing may sit between the turn being over and its end being told (a message
-    // typed in that gap is queued and announced by the order of these two lines). The record's
-    // writes are chained, so this one still lands after the start's.
-    void ctx.onTurnRunningChange?.(undefined);
+    markTurnOver(ctx);
     ctx.lastTurnStopped = turnOutcome === 'cancelled';
     observer.endTurn(ended?.session, ended?.account, turnOutcome === 'cancelled');
     lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
@@ -165,9 +185,8 @@ export function createTurnRunner(ctx: WorkerContext) {
     void ctx.resumeWaiter.check();
   };
 
+  /** Runs one turn. The caller has marked it running (markTurnRunning). */
   return async (command: SubmitCommand): Promise<void> => {
-    ctx.turnRunning = true;
-    if (!ctx.turnStartedAt) { ctx.turnStartedAt = new Date().toISOString(); void ctx.onTurnRunningChange?.(ctx.turnStartedAt); }
     const turnStarted = Date.now();
     let turnOutcome = 'completed';
     lifecycle('worker.turn.start', { queued: Boolean(command.queuedTurnId), clients: observer.attachedCount });
@@ -265,8 +284,6 @@ export function createTurnRunner(ctx: WorkerContext) {
         observer.broadcast({ type: 'turn-error', message: settleError instanceof Error ? settleError.message : String(settleError) });
       }
     } finally {
-      // Saved (answered, failed or cancelled and settled): what a snapshot sent from here on holds is final.
-      observer.turnRecordFinal();
       await finalizeTurn(turnId, turnStarted, turnOutcome, lastHarness, liveInput, submissions);
     }
   };

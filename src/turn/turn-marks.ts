@@ -13,7 +13,7 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { appendThought, type Thought } from '../harness/protocol/activity-view.js';
 import { FAILURE_TEXT_LIMIT } from '../harness/protocol/stderr-line.js';
 import { reasoningHeading } from '../harness/protocol/turn-flow.js';
-import type { OpenThought, TurnMark } from '../session/model.js';
+import type { HarnessSession, OpenThought, TurnMark } from '../session/model.js';
 
 /** Bounds on what a turn's saved marks keep. They are guards against a
  * runaway, not a display width: other machines and clients read the saved
@@ -222,6 +222,9 @@ export interface TurnMarkJournal {
   setThought(thought: OpenThought | undefined): void;
   /** Where the steer `id` was placed, once the turn took it. */
   steerOrder(id: string): { seq: number; responseOffset: number } | undefined;
-  /** The turn's durable record is final: saved, its journal folded into the conversation. */
-  readonly finished?: boolean;
+  /** The turn's record as it is now, in memory: the conversation it runs in
+   * and its journal (absent once folded in). A snapshot taken while the turn
+   * runs is this, so the history and the live turn it is sent with always
+   * agree -- never a disk read from before or after one of its writes. */
+  readonly session?: Pick<HarnessSession, 'messages' | 'pendingTurn'>;
 }
