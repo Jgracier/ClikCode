@@ -74,8 +74,8 @@ export async function showLogs(options: LogsOptions): Promise<void> {
     process.stderr.write(existsSync(path) ? 'No lifecycle records match.\n' : `No lifecycle log yet (${path}).\n`);
   }
   if (options.check) {
-    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
-    const report = healthReport(entries, alive);
+    const { pidIsAlive } = await import('../session/store/locks.js');
+    const report = healthReport(entries, pidIsAlive);
     process.stdout.write(`${json ? JSON.stringify(report) : formatHealth(report)}\n`);
     return;
   }
