@@ -15,6 +15,7 @@ import type { HarnessSession, TurnActivity, TurnMark } from '../session/model.js
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
+import type { SignInOutcome } from '../turn/observer.js';
 import type { LiveSettingsFields } from '../turn/live-settings.js';
 import { swallowed } from '../runtime/lifecycle-log.js';
 
@@ -90,8 +91,9 @@ export type ClientCommand =
    * (the MCP server's one connection to its chat). Absent: from an attached client. */
   | { type: 'computer-tool'; id: string; tool: string; args: Record<string, unknown>; token?: string }
   /** The vendor sign-in a `sign-in-request` asked for has finished, on the
-   * client's own terminal; `error` when it failed. */
-  | { type: 'sign-in-response'; id: string; error?: string }
+   * client's own terminal. `error` when it did not sign in, with how it ended
+   * (`outcome`; a client from before it is taken as `failed`). */
+  | { type: 'sign-in-response'; id: string; error?: string; outcome?: SignInOutcome }
   /** This window shows the conversation a `sign-in-pending` names and will run
    * it. The first claim of a sign-in no window runs is answered with its
    * `sign-in-request`; any other is ignored. */

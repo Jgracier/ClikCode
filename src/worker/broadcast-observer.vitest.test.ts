@@ -38,7 +38,7 @@ describe('sign-in from a worker', () => {
     observer.attach(client.socket);
     observer.noteTurnSender(client.socket);
     const signedIn = observer.signIn(request);
-    observer.answerSignIn(requests(client)[0]!.id, client.socket, 'hermes exited with status 1');
+    observer.answerSignIn(requests(client)[0]!.id, client.socket, { error: 'hermes exited with status 1' });
     await expect(signedIn).rejects.toThrow('hermes exited with status 1');
   });
 

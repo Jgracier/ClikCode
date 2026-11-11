@@ -149,7 +149,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
         // sign-in fails as 'not signed in', an approval is refused, a
         // question is cancelled -- never answered on the user's behalf.
         case 'sign-in-request':
-          if (ours) client.send({ type: 'sign-in-response', id: event.id, error: `${event.name} is not signed in; run "clikcode accounts login <harness>" in a terminal` });
+          if (ours) client.send({ type: 'sign-in-response', id: event.id, outcome: 'unavailable', error: `${event.name} is not signed in; run "clikcode accounts login <harness>" in a terminal` });
           return;
         case 'approval-request':
           if (ours) {

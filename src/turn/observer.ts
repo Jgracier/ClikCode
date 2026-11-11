@@ -63,6 +63,17 @@ export interface TurnObserver {
   signIn?(request: SignInRequest, signal?: AbortSignal): Promise<void>;
 }
 
+/** How a sign-in run for a worker ended without signing in. `unavailable`:
+ * nobody here can sign in (no window open, a script), so nothing was
+ * attempted. `cancelled`, `failed`: the window that ran it said so. */
+export type SignInOutcome = 'cancelled' | 'failed' | 'unavailable';
+
+/** A sign-in that ended without signing in (TurnObserver.signIn), its
+ * outcome already said wherever it needed saying. */
+export class SignInEnded extends Error {
+  constructor(message: string, readonly outcome: SignInOutcome) { super(message); }
+}
+
 export interface SignInRequest {
   /** Harness command, resolved again where the sign-in runs. */
   command: string;
