@@ -29,6 +29,7 @@ import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { acpDiscoverySession, queryAcp } from './acp-query.js';
 import { type UsageReading, type UsageWindow, usageReading, usageWindow } from './usage-reading.js';
 import { planIsFree } from './free-plan.js';
+import { stripAnsi } from '../../tui/render/width.js';
 
 type Json = Record<string, any>;
 type Environment = Readonly<Record<string, string>>;
@@ -39,8 +40,6 @@ class AntigravityInvalidCredentialError extends Error {
     this.name = 'AntigravityInvalidCredentialError';
   }
 }
-
-const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 
 function catalogBinary(command: string, fallback: string): string {
   try { return localHarnessForCommand(command)?.binary ?? fallback; } catch { return fallback; } // fail-open-ok: the catalog default is the documented binary

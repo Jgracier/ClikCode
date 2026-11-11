@@ -152,10 +152,8 @@ export async function outputFile(pid: number, platform: NodeJS.Platform = proces
   return target?.startsWith('/') && !target.startsWith('/dev/') && !target.startsWith('/proc/') ? target.replace(/ \(deleted\)$/, '') : undefined;
 }
 
-/** Whether process `pid` is still alive. */
-export function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
-}
+/** Whether process `pid` is still alive: the one check (session/store/locks.ts). */
+export { pidIsAlive as processAlive } from '../../session/store/locks.js';
 
 /** Live processes whose environment holds `name=value`: whatever a child
  * started, wherever it went -- a daemon that moved to a session of its own

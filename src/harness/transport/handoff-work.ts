@@ -48,12 +48,6 @@ export interface FailureEvidence {
   text?: string;
 }
 
-/** A Claude background agent's answer: the last assistant text in its transcript (its task's
- * output file), not a synthetic API error. Empty when there is none. */
-export async function agentResult(file: string | undefined): Promise<string> {
-  return (await agentTranscriptResult(file)).tail;
-}
-
 /** The agent's answer, and, when its last record is one the vendor itself marked as a failed API call
  * (`isApiErrorMessage`, `error: 'rate_limit'`, the synthetic model), that failure as evidence:
  * structured, so nothing of the words is needed to know the agent was cut off. */

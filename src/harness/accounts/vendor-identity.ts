@@ -52,9 +52,9 @@ import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { captureMistralVibeCredential, mistralVibeAccountEmail } from './mistral-vibe-identity.js';
 import { droidAccountEmail } from './droid-identity.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
+import { stripAnsi } from '../../tui/render/width.js';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const ANSI = /\u001b\[[0-9;]*m/g;
 
 function email(value: unknown): string | undefined {
   return typeof value === 'string' && EMAIL.test(value.trim()) ? value.trim() : undefined;
@@ -62,7 +62,7 @@ function email(value: unknown): string | undefined {
 
 /** First `<label> <email>` line in human-readable status output. */
 function emailAfter(text: string, label: RegExp): string | undefined {
-  for (const line of text.replace(ANSI, '').split(/\r?\n/)) {
+  for (const line of stripAnsi(text).split(/\r?\n/)) {
     const match = label.exec(line);
     if (match) return email(line.slice(match.index + match[0].length).trim().split(/\s+/)[0]);
   }

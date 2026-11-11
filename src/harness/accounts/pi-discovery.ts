@@ -2,6 +2,7 @@ import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { AiLocalHarnessDefinition, ModelCatalogConnect } from '../definition.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
+import { stripAnsi } from '../../tui/render/width.js';
 
 /** Pi's models and the providers it can sign in to.
  *
@@ -18,7 +19,7 @@ import { resolveBinaryPath } from '../transport/native/binary.js';
 
 export function piModels(listing: string): string[] {
   const models: string[] = [];
-  const lines = listing.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/);
+  const lines = stripAnsi(listing).split(/\r?\n/);
   const header = lines.findIndex((line) => /^\s*provider\s+model\b/.test(line));
   if (header < 0) return models;
   for (const line of lines.slice(header + 1)) {
