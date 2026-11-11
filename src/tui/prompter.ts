@@ -195,15 +195,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   chromeRows = 0;
   usageResetLabel?: string;
   selecting = false;
-  /** True while the slash palette (inside question()) has its own fixed-capacity
-   * footer band open. usage()/activity() are called from fire-and-forget async
-   * work (a background usage refresh, a turn's tool-call log) that has no idea
-   * the palette owns a specific row layout right now; an unguarded repaint from
-   * either recomputes capacity from whatever composer.options happens to be, which
-   * doesn't match the palette's own fixed capacity — the two disagree on where
-   * the footer starts, and the status line gets drawn at both rows. Guarded the
-   * same way `selecting` already guards this for select() pickers. */
-  paletteActive = false;
   /** A mouse selection in progress, in conversation lines, not screen rows
    * (see lineAtRow): a drag that scrolls the view keeps what it selected, and
    * one longer than the screen copies whole. */
@@ -701,10 +692,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return this.focus.focused === false;
   }
 
-  /** Nothing is using this terminal: no turn, no picker, no palette, and no
-   * typed or queued draft. A newer build may replace the process here. */
+  /** Nothing is using this terminal: no turn, no picker, and no typed or
+   * queued draft (an open palette is a typed `/`). A newer build may replace the process here. */
   idleForBuildReplace(): boolean {
-    return !this.closed && !this.suspended && !this.selecting && !this.paletteActive
+    return !this.closed && !this.suspended && !this.selecting
       && !this.turn && !this.composer.text && !this.queuedDraft;
   }
 
