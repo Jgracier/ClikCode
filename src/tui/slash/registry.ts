@@ -18,18 +18,22 @@ const SLASH_GROUP_ORDER: readonly SlashGroup[] = [
 ];
 
 /** The commands worth reaching without scrolling, always in this order:
- * resume a conversation, pick a provider, an account on it, then its model.
- * The terminal palette omits resume -- ← is the conversation board -- so
- * Common opens there as provider, account, model, and model is the third
- * row. Then the ones used mid-conversation most -- starting over,
- * changing what needs approval -- and the settings, sessions, status and
- * help screens. Fixed, not ranked by use: a list that reorders itself moves
- * the row the user's hand already knows.
+ * resume a conversation; choose a provider, an account on it, its model;
+ * hosted models and the machine the chat runs on; then the ones used
+ * mid-conversation most -- starting over, changing what needs approval --
+ * and the settings, sessions, status and help screens. Fixed, not ranked by
+ * use: a list that reorders itself moves the row the user's hand already
+ * knows. A pinned command the session cannot run is not pinned (it stays in
+ * its own group, marked unavailable).
+ *
+ * The terminal's palette leaves /resume out (BOARD_OWNS: ← on an empty
+ * prompt is the conversation board, and typed /resume opens it too), so
+ * there Common starts at provider; the editor's palette keeps it first.
  *
  * Palette only. `/help` keeps its own grouping, because a reference reads
  * better by topic than by frequency. The palette draws a header whenever the
- * group changes, so these carry one shared group rather than their real one:
- * otherwise the top of the list flips between four headers and prints
+ * group changes, so these carry one shared group (Common) rather than their
+ * real ones: otherwise the top of the list flips between headers and prints
  * "Settings" twice. */
 export const SLASH_PALETTE_PINNED: readonly string[] = [
   'resume', 'provider', 'account', 'model', 'hosted', 'machine', 'new', 'permissions', 'settings', 'sessions', 'status', 'help',

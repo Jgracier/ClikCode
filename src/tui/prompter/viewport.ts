@@ -130,7 +130,6 @@ export function clearTranscript(this: TerminalHarnessPrompter): void {
   this.secondLastFinishedRow = undefined;
   this.alternateScrollback = 0;
   // The dump's place is by message (dumpCursor), so it is kept as it is.
-  this.dumpedThrough = undefined;
   // Inline: the terminal's own scrollback holds the old conversation too.
   if (inlineHistoryMode()) inlineBlock.clearNext = true;
   this.messageLines.clear();
