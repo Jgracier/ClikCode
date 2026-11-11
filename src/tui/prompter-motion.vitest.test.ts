@@ -102,7 +102,6 @@ describe('the status line motion', () => {
     const { rl, line } = open();
     try {
       rl.response('x'.repeat(4000));
-      (rl as unknown as { setTurnUsage(u: { output: number }): void }).setTurnUsage({ output: 3400 });
       vi.advanceTimersByTime(SPIN_MS * 60);
       expect(line()).toMatch(/(thinking|writing) · \d+s · esc stop$/);
       expect(line()).not.toContain('tokens');
