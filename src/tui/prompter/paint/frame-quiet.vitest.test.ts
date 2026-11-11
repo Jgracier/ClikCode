@@ -88,7 +88,7 @@ describe('frames', () => {
     expect(frame.lastIndexOf('?25h')).toBeGreaterThan(frame.indexOf('[2J'));
   });
 
-  it('a resize burst: the first size is drawn whole at once, the rest settle into one more frame, and keys echo meanwhile', () => {
+  it('a resize burst: the first size is drawn whole at once without a clear, keys echo meanwhile, and the settled frame clears once', () => {
     vi.useFakeTimers();
     const prompter = open();
     prompter.render(session());
@@ -97,7 +97,7 @@ describe('frames', () => {
     prompter.onResize();
     // The composer is on the last row of the first size straight away, not after the burst.
     const first = written.join('');
-    expect(first.match(/\u001b\[2J/g)).toHaveLength(1);
+    expect(first).not.toContain('\u001b[2J');
     expect(first).toContain('\u001b[30;1H');
     expect(first).toContain('Grok Build');
     written.length = 0;
@@ -121,17 +121,38 @@ describe('frames', () => {
     expect(settled).not.toMatch(/\?100[0236]h/);
   });
 
-  it('one size change is drawn once: the settle timer adds no second frame', () => {
+  it('one size change clears the screen once, in the settled frame', () => {
     vi.useFakeTimers();
     const prompter = open();
     prompter.render(session());
     written.length = 0;
     Object.assign(process.stdout, { rows: 54 });
     prompter.onResize();
-    expect(written.join('').match(/\u001b\[2J/g)).toHaveLength(1);
+    expect(written.join('')).toContain('Grok Build');
+    expect(written.join('')).not.toContain('\u001b[2J');
     written.length = 0;
     vi.advanceTimersByTime(RESIZE_SETTLE_MS + 80);
-    expect(written.join('')).toBe('');
+    expect(written.join('').match(/\u001b\[2J/g)).toHaveLength(1);
+  });
+
+  it('draws a turn\'s streaming and typing during a resize settle as they come, not dropped for the settled frame', () => {
+    vi.useFakeTimers();
+    const prompter = open();
+    prompter.render(session());
+    prompter.startWaiting('thinking', () => undefined, async () => ({ disposition: 'queued' }) as never);
+    vi.advanceTimersByTime(300);
+    Object.assign(process.stdout, { rows: 24 });
+    prompter.onResize();
+    Object.assign(process.stdout, { rows: 20 });
+    prompter.onResize();
+    written.length = 0;
+    prompter.response('streamed during the settle');
+    vi.advanceTimersByTime(50);
+    expect(written.join('')).toContain('streamed during the settle');
+    prompter.onWaitingKey('k');
+    const meanwhile = written.join('');
+    expect(meanwhile).toContain('› k');
+    expect(meanwhile).not.toContain('\u001b[2J');
   });
 
   it('the opt-in mouse is asked for again with the settled frame', () => {
@@ -142,6 +163,7 @@ describe('frames', () => {
     written.length = 0;
     Object.assign(process.stdout, { rows: 54 });
     prompter.onResize();
+    vi.advanceTimersByTime(RESIZE_SETTLE_MS + 80);
     expect(written.join('').match(/\?1000h/g)).toHaveLength(1);
     vi.unstubAllEnvs();
   });

@@ -15,34 +15,29 @@ export function viewportRows(this: TerminalHarnessPrompter): number {
   return Math.max(5, output.rows || 30);
 }
 
+/** A size change. A phone sends several while its keyboard moves, and the burst is ONE resize to the screen:
+ *  - Full-screen, the first size is drawn at once, every row rewritten at its address but nothing cleared (the client moved or cut
+ *    its own rows when it resized, and a frame waiting for the burst leaves the composer off the last row meanwhile). The sizes
+ *    after it draw nothing of their own; a frame asked for meanwhile (a key's echo, a streaming row) is an ordinary frame, never
+ *    held back or dropped.
+ *  - Once the size has stopped changing for RESIZE_SETTLE_MS, the settled frame is drawn whole, and only it carries the clear and
+ *    (where the program asks for the mouse) the mouse sequence (redrawPreamble): the screen is blanked once per burst, after its
+ *    last size.
+ *  - Inline, nothing is drawn until the settle: the block's place on the screen is the terminal's to say (anchorBlock), and frames
+ *    wait for it (flushFrame).
+ * No height probe here: it jumps the cursor to the bottom-right corner and asks, at exactly the moment a swipe is being recognised.
+ * The size the terminal announces is what the layout uses. */
 export function onResize(this: TerminalHarnessPrompter): void {
-  if (!this.closed) {
-    // The settled repaint redraws everything at the new size, and a change
-    // of width wraps the transcript again from its source first. Until then
-    // a frame asked for (a key's echo, the spinner) is a diff against what
-    // was drawn: a full frame per signal is what swallowed swipes.
-    logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
-    // A phone sends several size changes while its keyboard moves. The first
-    // is drawn at once (below); the ones that follow inside the settle window
-    // are coalesced into ONE settled repaint: the clear and, where opted in, the
-    // mouse sequence go out once, inside that frame (redrawPreamble), so the
-    // screen is not blanked at every intermediate size. A frame asked for
-    // meanwhile (a keystroke's echo, a streaming row) is an ordinary diff and
-    // is not held back.
-    this.requestRedraw('resize');
-    // Full-screen: the first size of a burst is drawn at once (the client moved or cut its own rows when it resized, and a frame
-    // waiting for the burst to settle leaves the composer off the last row for as long as that takes); the ones that follow while
-    // the timer runs coalesce into one settled frame. Every frame is a whole repaint at absolute addresses, so each is right by itself.
-    if (!inlineHistoryMode() && !this.suspended && !this.resizePaintTimer) {
-      this.rewrapIfWidthChanged();
-      this.forgetScreenPosition();
-      this.redrawScreen();
-      this.resizeSettled = true;
-    } else this.resizeSettled = false;
-    // No height probe here: it jumps the cursor to the bottom-right corner
-    // and asks, at exactly the moment a swipe is being recognised. The size
-    // the terminal announces is what the layout uses.
-    this.repaintAfterResize();
+  if (this.closed) return;
+  logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
+  this.requestRedraw('resize');
+  const first = !this.resizePaintTimer;
+  // The settle timer runs from here, so the first size's frame knows it is not the settled one (it does not clear).
+  this.repaintAfterResize();
+  if (first && !inlineHistoryMode() && !this.suspended) {
+    this.rewrapIfWidthChanged();
+    this.forgetScreenPosition();
+    this.redrawScreen();
   }
 }
 
@@ -52,11 +47,6 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
     this.resizePaintTimer = undefined;
     lifecycle('window.resize', { cols: output.columns, rows: output.rows });
     if (!this.canPaint('picker')) return;
-    // One size in the burst, already drawn whole when it arrived: nothing more to draw -- unless a paint (a streamed delta, a
-    // spinner tick) came due while the timer ran and was dropped for it; that change is on no screen yet.
-    const dropped = this.paintDropped;
-    this.paintDropped = false;
-    if (this.resizeSettled && !inlineHistoryMode()) { if (dropped) this.redrawScreen(); return; }
     const rewritten = this.rewrapIfWidthChanged();
     // Whole: the preamble this frame carries clears the screen, once.
     this.forgetScreenPosition();

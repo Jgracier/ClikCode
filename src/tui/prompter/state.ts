@@ -8,12 +8,11 @@ import type { PaletteLayout } from '../option-picker.js';
 export const EXIT_CONFIRM_MS = 2000;
 
 /** How long a resize burst is given to finish before the settled redraw: the redraw waits this long after the LAST size
- * change. Full-screen, onResize has already drawn the FIRST size of the burst whole, and the settled redraw is the one that
- * follows the rest (and is skipped when nothing came after the first). Inline, onResize draws nothing, and the settled step
- * asks the terminal where its cursor is and draws the live block once. It only has to span the gap between the sizes of one
- * gesture: a dragged window sends them a few milliseconds apart, a phone's keyboard one size per change. A keystroke typed
- * during the wait is not held back, so this is not echo latency; inline, what a resize costs the person is this plus the
- * cursor report's round trip. */
+ * change (viewport.ts onResize). Full-screen, the FIRST size of the burst is drawn at once without a clear, and the settled
+ * frame -- the burst's one clear -- follows the last. Inline, nothing is drawn until the settled step asks the terminal where its
+ * cursor is and draws the live block once. It only has to span the gap between the sizes of one gesture: a dragged window sends
+ * them a few milliseconds apart, a phone's keyboard one size per change. Full-screen, a keystroke typed during the wait is not
+ * held back, so this is not echo latency; inline, what a resize costs the person is this plus the cursor report's round trip. */
 export const RESIZE_SETTLE_MS = 100;
 
 /** Inline only: how long the cursor report after a settled resize is waited for. A report that has not come by then is lost: the block is
