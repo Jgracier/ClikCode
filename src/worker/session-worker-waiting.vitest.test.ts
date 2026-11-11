@@ -648,9 +648,10 @@ describe('a message sent while another window\'s turn runs', () => {
     expect(await sent).toEqual({});
     expect(rl.calls).toContain('submitted("the other window asks")');
     expect(rl.calls.filter((entry) => entry.startsWith('response(')).join('')).toContain('the other answer');
-    expect(await workerTurn(session.id)).toBeUndefined();
+    // The worker may already be sending the queued message itself (e54caca4).
+    expect([undefined, 'my message']).toContain((await workerTurn(session.id))?.prompt);
 
-    // The loop then sends the queued message, once, and it runs.
+    // The loop then sends the queued message too; it runs once.
     const mine = runTurnThroughWorker(session.id, recordingPrompter(), 'my message', { echo: true, queuedTurnId: queued[0]!.id });
     const request = await gateway!.next();
     expect(JSON.stringify(request.items)).toContain('my message');
