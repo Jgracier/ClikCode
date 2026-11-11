@@ -552,11 +552,13 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   async restart(): Promise<void> {
-    const session = this.model.sessionId;
     const previous = this.bridge;
     this.bridge = undefined;
     previous?.dispose();
-    const starting = this.start(session).finally(() => { if (this.starting === starting) this.starting = undefined; });
+    // The chat on screen, as a reconnect resumes it: start reads it, and a
+    // blank one never stored opens new (naming it here resumed it, which
+    // failed with "no chat matches" and left no conversation open).
+    const starting = this.start().finally(() => { if (this.starting === starting) this.starting = undefined; });
     this.starting = starting;
     await starting;
   }

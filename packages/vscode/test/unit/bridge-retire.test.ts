@@ -54,7 +54,8 @@ import { IDE_PROTOCOL } from '../../src/compat';
 /** A bridge that answers an `open` with the chat, and is told to leave or crash. */
 class FakeBridge extends BridgeEndpoint {
   readonly requests: IdeRequest[] = [];
-  constructor(crashesBeforeReady?: string) {
+  /** blank: the chat it opens has nothing in it (a new chat, never stored). */
+  constructor(crashesBeforeReady?: string, private readonly blank = false) {
     super({ node: 'node', entry: '/fake/index.js', env: {}, nodeSource: 'path', entrySource: 'path' }, 'build-1');
     if (crashesBeforeReady !== undefined) {
       setTimeout(() => { this.emit('log', crashesBeforeReady); this.markExited(137, null); }, 0);
@@ -66,7 +67,7 @@ class FakeBridge extends BridgeEndpoint {
     this.requests.push(request);
     if (request.type === 'open') {
       setTimeout(() => {
-        this.receive({ type: 'session', session: { id: 's1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Chat', createdAt: '', updatedAt: '', status: 'active', messages: [{ role: 'user', content: 'hi' }] } as never });
+        this.receive({ type: 'session', session: { id: 's1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Chat', createdAt: '', updatedAt: '', status: 'active', messages: this.blank ? [] : [{ role: 'user', content: 'hi' }] } as never });
         this.receive({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId: 's1' } });
       }, 0);
     } else if ('requestId' in request) {
@@ -91,8 +92,8 @@ const until = async (check: () => boolean, ms = 3_000): Promise<void> => {
 const controllers: Array<{ dispose(): void }> = [];
 afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); machine.connects = []; });
 
-const startChat = async () => {
-  machine.next = () => new FakeBridge();
+const startChat = async (blank = false) => {
+  machine.next = () => new FakeBridge(undefined, blank);
   const log: string[] = [];
   const host = { log: { appendLine: (line: string) => log.push(line) }, diffs: {}, openInTab: async () => undefined, reveal: async () => undefined, chats: () => [] };
   const controller = new ClikCodeController(host as never, undefined, 'chat');
@@ -140,6 +141,24 @@ describe('the chat when its bridge leaves for a newer build', () => {
     await until(() => controller.state.connection === 'error');
     expect(controller.state.connectionError).toContain('exited before it was ready (exit 137)');
     expect(controller.state.connectionError).toContain('Killed: out of memory (exit code 137)');
+  });
+});
+
+describe('clikcode.restart', () => {
+  it('opens a blank chat new, since it was never stored to resume', async () => {
+    const { controller, bridges } = await startChat(true);
+    await controller.restart();
+    await until(() => bridges.length === 2 && controller.state.connection === 'ready');
+    expect(bridges[1]!.requests.find((request) => request.type === 'open')).toMatchObject({ type: 'open', mode: 'new' });
+    expect(bridges[1]!.requests.find((request) => request.type === 'open')).not.toHaveProperty('sessionId');
+    expect(controller.state.connectionError).toBeUndefined();
+  });
+
+  it('resumes a chat with something in it', async () => {
+    const { controller, bridges } = await startChat();
+    await controller.restart();
+    await until(() => bridges.length === 2 && controller.state.connection === 'ready');
+    expect(bridges[1]!.requests.find((request) => request.type === 'open')).toMatchObject({ type: 'open', mode: 'resume', sessionId: 's1' });
   });
 });
 
