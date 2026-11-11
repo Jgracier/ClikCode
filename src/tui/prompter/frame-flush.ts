@@ -19,6 +19,17 @@ import { anchoredScrollback } from './group-actions.js';
 /** More rows than this in one frame and the caret is hidden for it. */
 const BULK_ROWS = 8;
 
+/** What a frame writes around its rows for the caret, the same rule on every screen: it changes state only when it has to --
+ * hidden by a clear (so shown again after it), hidden because the frame asks, never shown yet. A frame that draws many rows hides
+ * it while it does and shows it after, inside the same synchronized update (a client without synchronized output -- GNU screen,
+ * an older tmux -- would otherwise show it hopping down the screen row by row). A few rows -- a streamed line, a keystroke -- leave
+ * a visible caret alone: hiding and showing it every frame made it blink under the user's typing. */
+function caretAround(drawnRows: number, showCursor: boolean, visibleBefore: boolean | undefined): { hide: string; show: string } {
+  const hide = (!showCursor || drawnRows > BULK_ROWS) && visibleBefore !== false ? '\u001b[?25l' : '';
+  const show = showCursor && (visibleBefore !== true || hide !== '') ? '\u001b[?25h' : '';
+  return { hide, show };
+}
+
 /** A row as the terminal may be given it: only SGR escapes, one line, no hyperlink left open, and
  * never the last column. The one place a row is made safe. */
 export function safeRow(row: string, limit: number): string {
@@ -288,16 +299,8 @@ export function flushAlternateFrame(
   const redraw = this.resizePaintTimer && this.pendingRedraw === 'resize' ? undefined : this.pendingRedraw;
   const draw = updates.length ? `${redrawPreamble(redraw)}${updates.join('')}` : '';
   if (updates.length && redraw === this.pendingRedraw) this.pendingRedraw = undefined;
-  // The caret changes state only when it has to: hidden by a clear (so shown
-  // again after it), by a list that asks for it, or never shown yet. A
-  // frame that merely moves rows under a visible caret does not touch it.
-  const visibleBefore = updates.length > 0 && redraw !== undefined ? false : this.cursorShown;
-  // A frame that draws many rows hides the caret while it does (and shows it after, inside the same synchronized update): a client
-  // without synchronized output (GNU screen, an older tmux) would otherwise show it hopping down the screen row by row. A few
-  // rows -- a streamed line, a keystroke -- leave it alone, as above.
-  const bulk = drawnRows > BULK_ROWS;
-  const hideFirst = (!showCursor || bulk) && visibleBefore !== false ? '\u001b[?25l' : '';
-  const cursor = showCursor && (visibleBefore !== true || hideFirst !== '') ? '\u001b[?25h' : '';
+  // A clear (the redraw preamble) hides the caret itself.
+  const { hide: hideFirst, show: cursor } = caretAround(drawnRows, showCursor, updates.length > 0 && redraw !== undefined ? false : this.cursorShown);
   // One synchronized update (DEC 2026): a terminal that supports it shows
   // the frame whole or not at all, never half-drawn; one that does not
   // ignores the two sequences. restoreTerminal closes it on any exit.
@@ -412,6 +415,7 @@ export function flushInlineFrame(
   const diff = anchored && !resized && !retired.length && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
   let lead = '';
   let text = '';
+  let drawnRows = 0;
   let park: string;
   let nextPad = resized ? 0 : inlineBlock.pad;
   let top = inlineBlock.top;
@@ -434,12 +438,12 @@ export function flushInlineFrame(
     }
     const common = Math.min(previous.length, live.length);
     for (let index = 0; index < common; index += 1) {
-      if (previous[index] !== live[index]) text += `${move(index)}\r${live[index]}\u001b[K`;
+      if (previous[index] !== live[index]) { text += `${move(index)}\r${live[index]}\u001b[K`; drawnRows += 1; }
     }
     if (live.length > previous.length) {
       // New rows below: the newline scrolls the screen when the block is at its bottom edge.
       text += move(previous.length - 1);
-      for (let index = previous.length; index < live.length; index += 1) text += `\r\n${live[index]}\u001b[K`;
+      for (let index = previous.length; index < live.length; index += 1) { text += `\r\n${live[index]}\u001b[K`; drawnRows += 1; }
       at = live.length - 1;
       top = Math.min(top, height - live.length);
     } else if (live.length < previous.length) {
@@ -479,6 +483,7 @@ export function flushInlineFrame(
     // Where the block's first row is now: where it was drawn, or the rows it ends on when printing scrolled the screen.
     top = Math.min(top + body.length - live.length, height - live.length);
     text = body.map((row, index) => `${row}\u001b[K${index < body.length - 1 ? '\r\n' : ''}`).join('');
+    drawnRows = body.length;
     // The cursor is on the block's last row; walk up to the composer's.
     const back = lastRow - cursorRow;
     park = `${back ? `\u001b[${back}A` : ''}\u001b[${Math.max(1, pending.cursorColumn)}G`;
@@ -492,9 +497,10 @@ export function flushInlineFrame(
   inlineBlock.liveRows = [...live];
   inlineBlock.columns = columns;
   this.pendingRedraw = undefined;
+  const caret = caretAround(drawnRows, showCursor, this.cursorShown);
   this.lastPark = park;
   this.cursorShown = showCursor;
-  const frame = `${syncBegin()}${modes}${signals}\u001b[?25l\u001b[?7l${lead}${text}${park}${showCursor ? '\u001b[?25h' : ''}${syncEnd()}`;
+  const frame = `${syncBegin()}${modes}${signals}${caret.hide}\u001b[?7l${lead}${text}${park}${caret.show}${syncEnd()}`;
   this.frameInFlight = true;
   terminalModes.painted = true;
   logCursorEvent(`inline frame: block=${live.length} finished=${retired.length} composer=${cursorRow} col=${pending.cursorColumn}`);
@@ -551,7 +557,8 @@ function flushInlinePage(
   if (!fresh && !modes && !signals && signature === inlineBlock.last) return;
   const previous = fresh ? [] : inlineBlock.liveRows;
   let text = '';
-  for (const [index, row] of rows.entries()) if (previous[index] !== row) text += `\u001b[${index + 1};1H${row}\u001b[K`;
+  let drawnRows = 0;
+  for (const [index, row] of rows.entries()) if (previous[index] !== row) { text += `\u001b[${index + 1};1H${row}\u001b[K`; drawnRows += 1; }
   const lead = opening ? ENTER_PAGE_SCREEN : fresh ? CLEAR_SCREEN : '';
   const park = `\u001b[${cursorRow + 1};${Math.max(1, pending.cursorColumn)}H`;
   this.frameLayout = { live: [...rows], tags: [] };
@@ -568,9 +575,11 @@ function flushInlinePage(
   inlineBlock.found = undefined;
   inlineBlock.lost = false;
   this.pendingRedraw = undefined;
+  // Entering the page screen or clearing it: the caret's state there is not known.
+  const caret = caretAround(drawnRows, showCursor, lead ? undefined : this.cursorShown);
   this.lastPark = park;
   this.cursorShown = showCursor;
-  const frame = `${syncBegin()}${modes}${signals}\u001b[?25l\u001b[?7l${lead}${text}${park}${showCursor ? '\u001b[?25h' : ''}${syncEnd()}`;
+  const frame = `${syncBegin()}${modes}${signals}${caret.hide}\u001b[?7l${lead}${text}${park}${caret.show}${syncEnd()}`;
   this.frameInFlight = true;
   terminalModes.painted = true;
   logCursorEvent(`inline page: rows=${rows.length} list=${list.length} composer=${cursorRow}`);
