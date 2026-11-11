@@ -9,6 +9,7 @@ import path from 'node:path';
 import type { BrowserContext, BrowserType } from 'playwright-core';
 import { pidIsAlive } from '../../session/store/locks.js';
 import { stripAnsi } from '../../tui/render/width.js';
+import { atomicWriteFile } from '../../session/store/files.js';
 
 /** Chrome first; Edge (same engine, preinstalled on Windows) when Chrome is not installed. */
 export const BROWSER_CHANNELS = ['chrome', 'msedge'] as const;
@@ -56,10 +57,7 @@ export const hostStatusFile = (stateDir: string): string => path.join(stateDir, 
 export async function writeHostStatus(stateDir: string, status: HostStatus): Promise<void> {
   const file = hostStatusFile(stateDir);
   try {
-    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    const temp = `${file}.${process.pid}.tmp`;
-    await fs.writeFile(temp, JSON.stringify(status), { mode: 0o600 });
-    await fs.rename(temp, file);
+    await atomicWriteFile(file, JSON.stringify(status), { durable: false });
   } catch { /* the status is a courtesy; starting the browser does not depend on it */ }
 }
 

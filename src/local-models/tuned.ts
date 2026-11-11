@@ -6,7 +6,7 @@
  * context come from its own GGUF header, by the same reading a discovered Hugging Face model gets (discover.ts remoteModelFromHeader).
  * The record is `tuned-models.json`; catalog.ts reads it with the built-in and discovered models. */
 
-import { copyFile, link, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readFile, rm, rmdir, stat } from 'node:fs/promises';
 import { quiet } from '../runtime/lifecycle-log.js';
 import { basename, dirname, relative, isAbsolute } from 'node:path';
 import { remoteModelFromHeader } from './discover.js';
@@ -14,6 +14,7 @@ import { sha256File } from './download.js';
 import { modelFilePath } from './models.js';
 import { modelsDir, tunedModelsFile } from './paths.js';
 import { TUNED_ID_PREFIX, TUNED_REPO_PREFIX, type CatalogModel } from './catalog.js';
+import { atomicWriteFile } from '../session/store/files.js';
 
 type Header = Awaited<ReturnType<typeof import('@huggingface/gguf').gguf>>;
 
@@ -44,10 +45,7 @@ async function readRecord(): Promise<CatalogModel[]> {
 }
 
 async function writeRecord(models: readonly CatalogModel[]): Promise<void> {
-  await mkdir(dirname(tunedModelsFile()), { recursive: true });
-  const temporary = `${tunedModelsFile()}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify({ models }, null, 2)}\n`);
-  await rename(temporary, tunedModelsFile());
+  await atomicWriteFile(tunedModelsFile(), `${JSON.stringify({ models }, null, 2)}\n`);
 }
 
 /** The id a tuned model is chosen by (`/model tuned:<name>`). */

@@ -21,12 +21,12 @@
  * Everything here is synchronous and reads small files: the slash-command
  * list is built synchronously, and a plugin is a handful of entries. */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { HookConfig } from './hooks.js';
 import { parseMcpServerEntry, type McpServerSpec } from './mcp/config.js';
 import { parseFrontmatter } from './skills.js';
+import { atomicWriteFile } from '../session/store/files.js';
 
 const PLUGIN_MANIFEST = path.join('.claude-plugin', 'plugin.json');
 const REGISTRY_FILE = 'plugins.json';
@@ -150,11 +150,7 @@ export async function setPluginEnabled(roots: PluginRoots, query: string, enable
   const plugin = findPlugin(roots, query);
   const registry = readPluginRegistry(roots.stateDir);
   registry.claude[plugin.id] = { enabled };
-  const file = pluginRegistryPath(roots.stateDir);
-  await mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`);
-  await rename(temporary, file);
+  await atomicWriteFile(pluginRegistryPath(roots.stateDir), `${JSON.stringify(registry, null, 2)}\n`);
   return { ...plugin, enabled };
 }
 

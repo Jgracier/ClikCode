@@ -1,6 +1,6 @@
 /** The real ports of the connector loop: ClikDeploy's queue through its CLI, the ClikCode browser in one named tab per vendor, /proc/pressure, the
  * log (~/.clikcode/connector-loop.log) and the state file the `connectors status` command reads. */
-import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rename, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { quiet } from '../../runtime/lifecycle-log.js';
@@ -11,6 +11,7 @@ import { budgeted, stalledBy, tabName, type LoopPorts, type LoopState, type Work
 import { liveDriver, WORKER } from './connector-runner-live.js';
 import { memoryPressure } from './connector-resource-pressure.js';
 import { microTab } from './connector-micro-agent.js';
+import { atomicWriteFile } from '../../session/store/files.js';
 
 export const loopDir = (): string => join(homedir(), '.clikcode');
 export const loopLogPath = (): string => join(loopDir(), 'connector-loop.log');
@@ -98,10 +99,7 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       await closeComputerPage(stateDir, microTab(id)).catch(quiet('agent/computer/connector-loop-live'));
     },
     async saveState(state) {
-      await mkdir(loopDir(), { recursive: true });
-      const tmp = `${loopStatePath()}.${process.pid}.tmp`;
-      await writeFile(tmp, `${JSON.stringify(state, null, 1)}\n`, { mode: 0o600 });
-      await rename(tmp, loopStatePath());
+      await atomicWriteFile(loopStatePath(), `${JSON.stringify(state, null, 1)}\n`, { durable: false });
     },
     async loadCooldown() { return (await readLoopState())?.cooldown; },
   };

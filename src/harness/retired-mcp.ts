@@ -16,12 +16,13 @@
  * another list here. Files the catalog does not name are still found by their
  * usual names under the profiles.
  */
-import { copyFile, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { copyFile, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stripJsonc, vendorConfigFiles, vendorSources } from '../agent/mcp/import.js';
 import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
+import { atomicWriteFile } from '../session/store/files.js';
 
 const RETIRED = new Set(['conversations-mcp', 'npx-mcp', 'swarm-mcp']);
 /** Bumped when what is looked at or recognized widens, so a state directory
@@ -142,10 +143,7 @@ async function walkConfigs(directory: string, depth = 0): Promise<string[]> {
 
 /** Written beside, then renamed over: a vendor reading the file never sees half of it. */
 async function rewrite(path: string, text: string): Promise<void> {
-  const mode = (await stat(path)).mode & 0o777;
-  const temporary = `${path}.${process.pid}.retired.tmp`;
-  await writeFile(temporary, text, { encoding: 'utf8', mode });
-  await rename(temporary, path);
+  await atomicWriteFile(path, text, { directory: 'vendor', mode: (await stat(path)).mode & 0o777 });
 }
 
 /** What to look at: the catalog's files for every vendor under the user's

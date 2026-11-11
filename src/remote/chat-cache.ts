@@ -7,11 +7,12 @@
  * held of nothing: the open sends it whole, as before. */
 import { quiet } from '../runtime/lifecycle-log.js';
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { stateDirectory } from '../session/store/paths.js';
 import type { HarnessSession } from '../session/model.js';
+import { atomicWriteFile } from '../session/store/files.js';
 
 type Messages = NonNullable<HarnessSession['messages']>;
 
@@ -36,11 +37,7 @@ export async function readChatCache(machineId: string, chatId: string): Promise<
 /** Keeps `messages` of `chatId` on `machineId` for the next open. Written whole beside and renamed over: a crash leaves the old one. */
 export async function writeChatCache(machineId: string, chatId: string, messages: Messages, gen?: string): Promise<void> {
   try {
-    await mkdir(directory(), { recursive: true });
-    const path = fileOf(machineId, chatId);
-    const temporary = `${path}.${process.pid}.tmp`;
-    await writeFile(temporary, gzipSync(JSON.stringify({ v: VERSION, chatId, ...(gen ? { gen } : {}), messages })), { mode: 0o600 });
-    await rename(temporary, path);
+    await atomicWriteFile(fileOf(machineId, chatId), gzipSync(JSON.stringify({ v: VERSION, chatId, ...(gen ? { gen } : {}), messages })), { durable: false });
     await prune();
   } catch {
     // fail-open-ok: nothing kept; the next open sends the chat whole.
