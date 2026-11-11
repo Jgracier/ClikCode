@@ -9,7 +9,7 @@
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,7 +19,7 @@ const repo = join(root, '..', '..');
 /** The ClikCode that ships inside the extension, so one Marketplace install works with nothing
  * else on the machine (src/runtime.ts uses it only when no ClikCode is installed).
  *
- *   bundled/clikcode/dist/                         the CLI build (pnpm build output)
+ *   bundled/clikcode/dist/                         the CLI build (pnpm build output), its chunks in cli.js
  *   bundled/clikcode/package.json                  "type": "module", so dist/index.js loads as ESM
  *   bundled/clikcode/node_modules/<name>/index.mjs each package dist/ imports at runtime, bundled
  *                                                  with its own dependencies into ONE file
@@ -47,6 +47,14 @@ async function stageClikcode() {
 
   const rootRequire = createRequire(join(repo, 'package.json'));
   const esbuild = rootRequire('esbuild');
+  // dist/cli.js loads each command's chunk when it runs (scripts/build.mjs): a few hundred files,
+  // past vsce's 100. The copy shipped here is cli.js with every chunk in it.
+  const dist = join(target, 'dist');
+  await esbuild.build({
+    entryPoints: [join(dist, 'cli.js')], outfile: join(dist, 'cli.js'), allowOverwrite: true,
+    bundle: true, splitting: false, format: 'esm', platform: 'node', target: 'node22', packages: 'external', logLevel: 'warning',
+  });
+  for (const file of readdirSync(dist)) if (/^chunk-.*\.js$/.test(file)) rmSync(join(dist, file));
   const staged = [];
   for (const name of Object.keys(rootPackage.dependencies ?? {})) {
     const entry = rootRequire.resolve(name);
