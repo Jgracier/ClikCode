@@ -25,6 +25,9 @@ export function parseAnchor(value: unknown): { session?: string; messageIndex: n
   return { ...(match[1] ? { session: match[1] } : {}), messageIndex: Number(match[2]) };
 }
 
+/** `4m ago` for an agent: coarser than the screen's relativeTime, and past
+ * two months an ISO date, never a locale-formatted one a model reads as
+ * ambiguous. */
 export function ago(atMs: number, now = Date.now()): string {
   if (!Number.isFinite(atMs)) return 'unknown';
   const seconds = Math.max(0, Math.round((now - atMs) / 1000));
@@ -35,19 +38,6 @@ export function ago(atMs: number, now = Date.now()): string {
   if (hours < 36) return `${hours}h ago`;
   const days = Math.round(hours / 24);
   return days < 60 ? `${days}d ago` : new Date(atMs).toISOString().slice(0, 10);
-}
-
-/** How long, compactly: `40s`, `12m`, `3h 5m`, `2d 4h`. */
-export function duration(ms: number): string {
-  if (!Number.isFinite(ms)) return 'unknown';
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
 }
 
 /** `claude · sonnet`: who ran it. */

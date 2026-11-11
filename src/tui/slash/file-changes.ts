@@ -9,7 +9,8 @@ import { expandHomePath } from '../../session/attachments.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import { fileTurnRow, turnsThatEdited, type FileTurn } from '../../session/turn-changes.js';
 import { conversationTitle } from '../../search/conversations.js';
-import { ago, shortId } from '../../search/format.js';
+import { shortId } from '../../search/format.js';
+import { relativeTime } from '../../harness/protocol/format.js';
 
 interface FileTurnRow extends FileTurn { label: string; detail: string }
 
@@ -27,7 +28,7 @@ export async function fileTurnRows(state: Pick<HarnessState, 'sessions'>, file: 
   const byId = new Map(state.sessions.map((session) => [session.id, session]));
   return (await turnsThatEdited(stateDirectory(), state.sessions, file)).map((turn) => {
     const session = byId.get(turn.sessionId)!;
-    return { ...turn, ...fileTurnRow(turn, `${conversationTitle(session, 40)} ${shortId(session.id)}`, ago(Date.parse(turn.record.at), now)) };
+    return { ...turn, ...fileTurnRow(turn, `${conversationTitle(session, 40)} ${shortId(session.id)}`, relativeTime(turn.record.at, now)) };
   });
 }
 
