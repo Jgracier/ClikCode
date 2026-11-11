@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { DEFAULT_GATEWAY_URL } from '../constants.js';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 import { atomicWriteFile } from '../session/store/files.js';
 import snapshot from './catalog.snapshot.json' with { type: 'json' };
 import { catalogCacheFile } from './paths.js';
@@ -149,6 +150,8 @@ async function writeCache(file: string, cache: CatalogCache): Promise<void> {
 
 let current: LoadedCatalog | undefined;
 let refreshing: Promise<void> | undefined;
+/** Why this process's refresh failed, when it did: the catalog in use is then an older one. */
+let refreshProblem: string | undefined;
 
 /** The pinned models of the catalog in use, read once per process and replaced after a refresh. */
 export function catalogModels(): readonly CatalogModel[] {
@@ -156,22 +159,24 @@ export function catalogModels(): readonly CatalogModel[] {
   return current.catalog.models;
 }
 
+/** Why the catalog in use may not be the newest: a cache that was refused, a refresh that failed. `clikcode doctor` shows them. */
 export function catalogDiagnostics(): readonly string[] {
   current ??= loadCatalog();
-  return current.diagnostics;
+  return refreshProblem ? [...current.diagnostics, refreshProblem] : current.diagnostics;
 }
 
 /** Starts the daily refresh once per process, without waiting for it.
  * CLIKCODE_LOCAL_CATALOG_REFRESH=0 turns it off (tests, and air-gapped installs that want no request). */
 export function startCatalogRefresh(): void {
   if (process.env.CLIKCODE_LOCAL_CATALOG_REFRESH === '0') return;
-  refreshing ??= refreshCatalog().then((result) => {
-    if (result.status === 'updated') current = loadCatalog();
-  });
+  refreshing ??= refreshCatalog().then(noteRefresh);
 }
 
-/** For tests: forget what this process loaded. */
-export function resetCatalogForTests(): void {
-  current = undefined;
-  refreshing = undefined;
+/** Takes up a refresh's result: a newer catalog is loaded, a failure is logged and kept for `doctor`. */
+export function noteRefresh(result: RefreshResult): void {
+  if (result.status === 'updated') current = loadCatalog();
+  if (result.status === 'offline' || result.status === 'refused') {
+    refreshProblem = result.status === 'refused' ? `Model catalog update refused: ${result.diagnostic}` : result.diagnostic;
+    diagnostic('local-models.catalog-refresh', refreshProblem);
+  } else refreshProblem = undefined;
 }
