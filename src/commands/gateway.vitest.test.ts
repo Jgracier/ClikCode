@@ -77,7 +77,7 @@ describe('gateway-credentials', () => {
   });
 });
 
-describe('gatewayLogin (embedded)', () => {
+describe('gatewayLogin', () => {
   it('runs the PKCE device flow, verifies the key, and stores it per URL', async () => {
     const config = makeConfig();
     const calls: Array<{ url: string; body: any; headers: Record<string, string> }> = [];
@@ -97,7 +97,7 @@ describe('gatewayLogin (embedded)', () => {
     }) as never as typeof fetch;
     const opened: string[] = [];
 
-    const user = await gatewayLogin(config, { github: true, embedded: true }, {
+    const user = await gatewayLogin(config, { github: true }, {
       fetch: fetchMock, openBrowser: (u) => opened.push(u), sleep: async () => {}, log: () => {},
     });
 
@@ -121,7 +121,7 @@ describe('gatewayLogin (embedded)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/device/init')
       ? jsonResponse({ flowId: 'f', authUrl: 'https://a' })
       : jsonResponse({ status: 'expired' })) as never as typeof fetch;
-    await expect(gatewayLogin(config, { embedded: true }, { fetch: fetchMock, openBrowser: () => {}, sleep: async () => {}, log: () => {} }))
+    await expect(gatewayLogin(config, {}, { fetch: fetchMock, openBrowser: () => {}, sleep: async () => {}, log: () => {} }))
       .rejects.toMatchObject({ code: 'AUTH_EXPIRED' });
     expect(config._store.apiKey).toBeUndefined();
   });
@@ -131,14 +131,49 @@ describe('gatewayLogin (embedded)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/device/init')
       ? jsonResponse({ flowId: 'f', authUrl: 'https://a' })
       : jsonResponse({ status: 'pending' })) as never as typeof fetch;
-    await expect(gatewayLogin(makeConfig(), { embedded: true }, {
+    await expect(gatewayLogin(makeConfig(), {}, {
       fetch: fetchMock, openBrowser: () => {}, sleep: async () => { t += 60_000; }, now: () => t, log: () => {},
     })).rejects.toThrow(/timed out/);
   });
 
   it('surfaces a failed init', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ error: { message: 'provider disabled' } }, 400)) as never as typeof fetch;
-    await expect(gatewayLogin(makeConfig(), { embedded: true }, { fetch: fetchMock, openBrowser: () => {}, sleep: async () => {}, log: () => {} }))
+    await expect(gatewayLogin(makeConfig(), {}, { fetch: fetchMock, openBrowser: () => {}, sleep: async () => {}, log: () => {} }))
       .rejects.toThrow('provider disabled');
+  });
+
+  it('stops at the first poll the Gateway refuses for good (400, 404), instead of polling out the five minutes', async () => {
+    for (const status of [400, 404]) {
+      let polls = 0;
+      const fetchMock = vi.fn(async (url: string | URL | Request) => {
+        if (String(url).endsWith('/device/init')) return jsonResponse({ flowId: 'f', authUrl: 'https://a' });
+        polls += 1;
+        return jsonResponse({ error: 'unknown flow' }, status);
+      }) as never as typeof fetch;
+      await expect(gatewayLogin(makeConfig(), {}, { fetch: fetchMock, openBrowser: () => {}, sleep: async () => {}, log: () => {} })).rejects.toThrow('unknown flow');
+      expect(polls).toBe(1);
+    }
+  });
+
+  it('keeps polling through no answer, a 5xx and a 429, and stops at a verify the Gateway refuses', async () => {
+    let polls = 0;
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith('/device/init')) return jsonResponse({ flowId: 'f', authUrl: 'https://a' });
+      if (String(url).endsWith('/auth/me')) return jsonResponse({ error: 'key revoked' }, 403);
+      polls += 1;
+      if (polls === 1) throw new TypeError('fetch failed');
+      if (polls === 2) return jsonResponse({}, 503);
+      if (polls === 3) return jsonResponse({}, 429);
+      return jsonResponse({ status: 'complete', apiKey: 'k' });
+    }) as never as typeof fetch;
+    await expect(gatewayLogin(makeConfig(), {}, { fetch: fetchMock, openBrowser: () => {}, sleep: async () => {}, log: () => {} })).rejects.toThrow('key revoked');
+    expect(polls).toBe(4);
+  });
+
+  it('a refused sign-in says which Gateway to check, and throws for the command error handler instead of exiting', async () => {
+    const exit = vi.spyOn(process, 'exit');
+    const fetchMock = vi.fn(async () => jsonResponse({ error: 'bad key' }, 401)) as never as typeof fetch;
+    await expect(gatewayLogin(makeConfig(), {}, { fetch: fetchMock, openBrowser: () => {}, sleep: async () => {}, log: () => {} })).rejects.toThrow(/bad key \(CLIKCODE_GATEWAY_URL/);
+    expect(exit).not.toHaveBeenCalled();
   });
 });
