@@ -14,7 +14,7 @@ const responseOf = (...line: Parameters<typeof parseHarnessLine>) => parseHarnes
 
 describe('native harness response streams', () => {
   // The stream shape is the one the catalog declares for that command.
-  const harness = (command: string): AiLocalHarnessDefinition => ({ ...codex, command, displayName: command, parser: localHarnessForCommand(command)?.parser });
+  const harness = (command: string): AiLocalHarnessDefinition => ({ ...codex, command, displayName: command, parser: localHarnessForCommand(command)?.parser }) as AiLocalHarnessDefinition;
 
   it('extracts documented Antigravity deltas and conversation ids', () => {
     const line = JSON.stringify({ event: 'step_update', step_update: { conversation_id: 'c3b66b04-872b-4fbe-a3a4-058a026ef20a', step_type: 'agent_response', text_delta: 'chunk' } });

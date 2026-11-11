@@ -4,7 +4,7 @@ import type { AiHarnessAccount } from '../definition.js';
 
 const now = Date.parse('2026-10-26T01:00:00Z');
 const reset = '2026-10-28T07:00:00Z';
-const account = (): AiHarnessAccount => ({ id: 'a', provider: 'anthropic', label: 'test', authKind: 'vendor-cli', models: [], status: 'ready' });
+const account = (): AiHarnessAccount => ({ id: 'a', provider: 'anthropic', label: 'test', authKind: 'vendor-cli', credentialRef: 'a', models: [], status: 'ready' });
 
 describe('usage display at the limit', () => {
   it.each([99.6, 100, 101])('shows 1%% until refusal without changing the vendor reading (%s)', (usedPct) => {

@@ -112,9 +112,9 @@ describe('ACP model catalog refresh', () => {
       acp: { argv: [] },
     } as unknown as AiLocalHarnessDefinition;
     const account = (id: string): AiHarnessAccount => ({
-      id, provider: 'test', label: id, models: [], status: 'ready',
+      id, provider: 'test', label: id, authKind: 'vendor-cli', credentialRef: id, models: [], status: 'ready',
       nativeProfile: { env: 'HOME', path: `/tmp/clikcode-model-${id}` },
-    }) as AiHarnessAccount;
+    });
     queryAcp.mockImplementation(async (_binary, _argv, environment) => ({
       models: [environment.HOME.endsWith('first') ? 'first-model' : 'second-model'], labels: {},
     }));

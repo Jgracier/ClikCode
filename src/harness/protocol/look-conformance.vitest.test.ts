@@ -51,7 +51,6 @@ interface HarnessTurn {
 
 const claude = { command: 'claude', parser: 'claude-stream-json' } as never;
 const opencode = { command: 'opencode', parser: 'opencode-json' } as never;
-const codex = { command: 'codex', parser: 'codex-items' } as never;
 
 const claudeTurn = (): HarnessTurn => {
   const use = (id: string, name: string, input: Record<string, unknown>, parent?: string) => parseNativeActivityEventsFromValue(claude, {
@@ -255,9 +254,10 @@ describe('one look for every harness', () => {
         try { expect(renderActivityLine(normalizeActivityEvent(turn.thought[0]!))[0]).toContain('\u001b[3m'); } finally { chalk.level = level; }
       });
 
-      if (turn.child) {
+      const child = turn.child;
+      if (child) {
         it("draws a sub-agent's child under it, as any other call", () => {
-          const activities = settle([...turn.agent, ...turn.child]);
+          const activities = settle([...turn.agent, ...child]);
           expect(rowsOf(activities, true)).toEqual(EXPECTED.child);
           expect(activities.find((activity) => activity.event.agent)?.event.childTools).toBe(1);
         });

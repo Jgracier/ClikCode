@@ -60,7 +60,7 @@ describe('native harness turn results', () => {
       { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Hello ' }] } },
       { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'world.' }] } },
       { type: 'complete' },
-    ].map(JSON.stringify).join('\n');
+    ].map((line) => JSON.stringify(line)).join('\n');
     expect(nativeTurnResult(goose, stdout).text).toBe('Hello world.');
   });
 

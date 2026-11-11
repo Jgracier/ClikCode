@@ -18,7 +18,6 @@ vi.mock('./usage-probes.js', async (original) => ({
 vi.mock('../../session/state/write.js', () => ({ writeState: vi.fn(async () => undefined) }));
 
 const { cachedAccountUsageLabel, nativeUsageReading } = await import('./account-usage.js');
-const { recordQuotaRefusal } = await import('../../turn/account-outcome.js');
 const { nativeUsageCache } = await import('./usage-reading.js');
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 

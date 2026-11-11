@@ -1,6 +1,6 @@
 import { changed } from '../../agent/line-diff.test-support.js';
 import { describe, expect, it } from 'vitest';
-import { activityOutput, fileChangeActivity, parseNativeActivityEventsFromValue } from './activity-events.js';
+import { fileChangeActivity, parseNativeActivityEventsFromValue } from './activity-events.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { renderActivityLine } from './activity-line.js';
 import { codex } from './vendor-fixtures.vitest.js';

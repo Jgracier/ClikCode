@@ -91,7 +91,7 @@ function recorder(): { observed: Observed; observer: HarnessTurnObserver } {
 /** A structured CLI's stdout lines through the real line reader. */
 function cliFixture(
   id: string, name: string, harness: Partial<AiLocalHarnessDefinition> & { command: string; parser: string },
-  records: Array<Json | string>, extra: Omit<Fixture, 'name' | 'run'>,
+  records: Array<Json | string>, extra: Omit<Fixture, 'id' | 'name' | 'run'>,
 ): Fixture {
   return {
     id, name, ...extra,
@@ -513,7 +513,6 @@ function produced(observed: Observed): AiHarnessFlowCapabilities {
 
 // ----------------------------------------------------------------- tests
 
-const NONE = caps(false, false, false, false, false);
 const union = (list: readonly AiHarnessFlowCapabilities[]): AiHarnessFlowCapabilities =>
   Object.fromEntries(CAPABILITIES.map((capability) => [capability, list.some((item) => item[capability])])) as unknown as AiHarnessFlowCapabilities;
 

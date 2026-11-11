@@ -1,7 +1,7 @@
 /** How many background agents a vendor says are still running, from the wire
  * shapes it publishes (docs/TURN_FLOW_STANDARD.md section 10). */
 import { describe, expect, it } from 'vitest';
-import { backgroundWork, mergeBackgroundWork, backgroundWorkOf } from './background-agents.js';
+import { backgroundWork, mergeBackgroundWork, backgroundWorkOf, type BackgroundWorkUpdate } from './background-agents.js';
 import { createStreamState } from '../events/adapters.js';
 import { reportStructuredLine } from '../events/structured.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
@@ -100,7 +100,7 @@ describe('recorded vendor streams (src/harness/transport/native/fixtures)', () =
   const fixture = (name: string): Array<Record<string, unknown>> =>
     readFileSync(join(__dirname, '..', 'transport', 'native', 'fixtures', `${name}.jsonl`), 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
   const play = (name: string, harness: { command: string; parser: string }) => {
-    const seen: Array<Record<string, number | undefined>> = [];
+    const seen: BackgroundWorkUpdate[] = [];
     const state = createStreamState();
     for (const record of fixture(name)) {
       reportStructuredLine(harness as unknown as AiLocalHarnessDefinition, JSON.stringify(record), { onBackgroundWork: (work) => seen.push({ ...work }) }, state);

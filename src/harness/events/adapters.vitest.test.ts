@@ -11,7 +11,7 @@ const harness = (command: string, output: 'text' | 'json' | 'json-lines' = 'json
   command, provider: command, displayName: command, localAuth: ['vendor-cli'], binary: command,
   parser: AI_LOCAL_HARNESSES.find((entry) => entry.command === command)?.parser,
   turn: { startArgv: [], output },
-});
+}) as unknown as AiLocalHarnessDefinition;
 
 const update = (command: string, value: unknown, output: 'text' | 'json' | 'json-lines' = 'json-lines') =>
   responseOf(harness(command, output), typeof value === 'string' ? value : JSON.stringify(value), createStreamState());
