@@ -3,7 +3,8 @@ import { stdout as output } from 'node:process';
 import type { HarnessSession } from '../../session/model.js';
 import { rowOfOccurrence, type MentionFocus } from '../render/search-focus.js';
 import { takeTerminalKeys } from '../input-decoder.js';
-import { enterInputModes, popReadModes } from '../modes.js';
+import { SWIPE_ROWS, enterInputModes, popReadModes } from '../modes.js';
+import type { ArrowSource } from '../swipe-arrows.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { jumpTo } from './history-window.js';
 
@@ -22,18 +23,26 @@ export function showMention(this: TerminalHarnessPrompter, session: HarnessSessi
 export function mentionKey(this: TerminalHarnessPrompter): Promise<'next' | 'previous' | 'chat' | 'done'> {
   return new Promise((resolve) => {
     let stop: () => void = () => {};
+    let done = false;
+    const onKey = (key: string, source: ArrowSource): void => {
+      if (done) return;
+      // A swipe reads the conversation, as everywhere (swipe-arrows.ts); Up and Down pressed as keys step between mentions.
+      if (source === 'swipe') { this.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS); return; }
+      const action = key === '\u001b[A' ? 'previous' as const : key === '\u001b[B' ? 'next' as const : key === '\t' ? 'chat' as const
+        : key === '\u001b' || key === '\r' || key === '\u0003' ? 'done' as const : undefined;
+      if (!action) {
+        if (key === '\u000c') { this.repairScreen(); return; }
+        this.handleScrollKey(key);
+        return;
+      }
+      done = true;
+      stop();
+      output.write(popReadModes());
+      resolve(action);
+    };
     const listen = (): void => {
       stop = takeTerminalKeys((key) => {
-        const action = key === '\u001b[A' ? 'previous' as const : key === '\u001b[B' ? 'next' as const : key === '\t' ? 'chat' as const
-          : key === '\u001b' || key === '\r' || key === '\u0003' ? 'done' as const : undefined;
-        if (!action) {
-          if (key === '\u000c') { this.repairScreen(); return; }
-          this.handleScrollKey(key);
-          return;
-        }
-        stop();
-        output.write(popReadModes());
-        resolve(action);
+        if (!this.swipeArrows.route(key, onKey)) onKey(key, 'key');
       }, () => { stop(); listen(); });
       output.write(enterInputModes());
     };
