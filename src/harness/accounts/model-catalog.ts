@@ -322,26 +322,28 @@ export async function nativeModelCatalogForPicker(
 /** The model a session will actually run with, resolved to one the harness
  * really publishes.
  *
- * Resolution order: what the harness itself is currently configured to use,
- * then the first model it publishes. There is deliberately no placeholder at
- * the end of that chain -- "default" and "automatic" are not models, and a
- * session displaying one is a session whose real model nobody knows. That was
- * a real bug twice: the picker showed "automatic", which no harness accepts,
- * and replacing it with "default" only renamed the same lie.
+ * Resolution order: what the user configured the harness itself to use
+ * (Claude's settings.json `model`, Codex's config.toml, an ACP agent's
+ * current model), then the catalog's `defaultModel` when the harness lists
+ * it, then the first model it publishes. The user's own setting wins over a
+ * catalog default: it is the one choice made deliberately. `configured` is
+ * taken even when it is not in `models`, because a vendor reporting its own
+ * current setting is better evidence than a list its discovery command may
+ * have truncated. A free plan then moves off any choice it cannot run.
  *
- * Returns undefined ONLY when the harness publishes nothing at all (not
- * installed, or its discovery command failed). Callers must then show nothing
- * rather than invent a name -- an absent model is honest, a fabricated one is
- * not. `configured` is preferred even when it is not in `models`, because a
- * vendor reporting its own current setting is better evidence than a list its
- * discovery command may have truncated. */
+ * There is deliberately no placeholder at the end of that chain -- "default"
+ * and "automatic" are not models, and a session displaying one is a session
+ * whose real model nobody knows. Returns undefined ONLY when the harness
+ * publishes nothing at all (not installed, or its discovery command failed);
+ * callers then show nothing rather than invent a name. */
 export async function resolveNativeModel(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
 ): Promise<string | undefined> {
   const catalog = await nativeModelCatalog(harness, account);
   const free = freePlanModels(harness, account, catalog);
-  const chosen = harness.defaultModel && catalog.models.includes(harness.defaultModel) ? harness.defaultModel : catalog.configured?.trim();
+  const chosen = catalog.configured?.trim()
+    || (harness.defaultModel && catalog.models.includes(harness.defaultModel) ? harness.defaultModel : undefined);
   // A free plan starts on a model it runs, not on a default it refuses
   // (Cursor's ACP session opens on a named model a Free plan cannot use).
   if (planIsFree(account?.plan) && free.size && !(chosen && free.has(chosen))) return preferredFreeModel(free);

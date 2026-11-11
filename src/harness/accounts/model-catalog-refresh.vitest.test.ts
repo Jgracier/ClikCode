@@ -7,7 +7,7 @@ vi.mock('./acp-query.js', async (original) => ({
   queryAcp,
 }));
 
-const { nativeModelCatalog, recordLiveModelCatalog, resetModelCatalogMemo } = await import('./model-catalog.js');
+const { nativeModelCatalog, recordLiveModelCatalog, resetModelCatalogMemo, resolveNativeModel } = await import('./model-catalog.js');
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -193,5 +193,22 @@ describe('ACP model catalog refresh', () => {
     resetModelCatalogMemo();
     await nativeModelCatalog(second);
     expect(queryAcp).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs the model the user configured the harness with ahead of the catalog default', async () => {
+    const harness = (command: string) => ({
+      command, binary: `missing-${command}`, transport: 'acp', defaultModel: 'catalog-default',
+      acp: { argv: [], listsModels: true },
+    } as unknown as AiLocalHarnessDefinition);
+    const offered = (current?: string) => ({
+      models: { availableModels: [{ modelId: 'catalog-default' }, { modelId: 'users-choice' }], ...(current ? { currentModelId: current } : {}) },
+    });
+    const configured = harness('test-resolve-configured');
+    await recordLiveModelCatalog(configured, undefined, offered('users-choice'), true);
+    expect(await resolveNativeModel(configured)).toBe('users-choice');
+    // Nothing configured: the catalog default, since the harness lists it.
+    const unconfigured = harness('test-resolve-unconfigured');
+    await recordLiveModelCatalog(unconfigured, undefined, offered(), true);
+    expect(await resolveNativeModel(unconfigured)).toBe('catalog-default');
   });
 });
