@@ -132,3 +132,26 @@ it('keeps the main turn alive and reports a rejected remote subagent read', asyn
     expect(cancel).not.toHaveBeenCalled();
   } finally { rl.closeSubView(); rl.close(); }
 });
+
+it('reads the open agent again when it does something, not on a timer, and closing redraws without clearing the screen', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+  const { rl, key } = follow();
+  const read = vi.fn(async () => [{ kind: 'text', text: 'agent prose' }] as never);
+  rl.subAgentRead = read;
+  try {
+    open(rl, 'a1'); key('\u001b[C');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    // Nothing happened: nothing is read again.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(read).toHaveBeenCalledTimes(1);
+    read.mockClear();
+    rl.activityEvent({ kind: 'tool-start', label: '$ cat notes', id: 'c2', parentId: 'a1' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    written = '';
+    key('\u001b[D');
+    expect(written).not.toContain('\u001b[2J');
+    expect(screen()).toContain('Agent explore');
+  } finally { rl.closeSubView(); rl.close(); vi.useRealTimers(); }
+});

@@ -48,7 +48,7 @@ import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, flushP
 import { Composer } from './prompter/composer.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
 import { SwipeArrowGate } from './swipe-arrows.js';
-import { openSubView, closeSubView, subViewKey, paintSubView, type SubView } from './prompter/subagent-host.js';
+import { openSubView, closeSubView, subViewKey, paintSubView, subAgentActed, type SubView } from './prompter/subagent-host.js';
 import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, anchorBlock, clearTranscript } from './prompter/viewport.js';
 import { signInScreen } from './prompter/sign-in.js';
 import { renderFrame, flushFrame, flushAlternateFrame, flushInlineFrame } from './prompter/frame-flush.js';
@@ -722,6 +722,7 @@ const methods = {
   closeSubView,
   subViewKey,
   paintSubView,
+  subAgentActed,
   editTurnDraft,
   echoDraft,
   waitingUserMessages,

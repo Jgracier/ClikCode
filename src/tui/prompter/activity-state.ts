@@ -85,6 +85,7 @@ export function activityEvent(this: TerminalHarnessPrompter, event: HarnessActiv
     // And how much it has done, as Claude Code counts it: the agent row
     // ends "(12 tool uses, 1m 5s)". Once per call, not once per frame.
     if (event.kind !== 'thinking') this.childEntries = capChildEntries(upsertActivityEvent(this.childEntries, 0, offset, event, 0), event.parentId);
+    this.subAgentActed(event.parentId);
     if (counted) {
       this.activityEntries = this.activityEntries.map((entry) => {
         const parent = entry.event;
