@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { HarnessSession, OpenThought, TurnMark } from '../session/model.js';
+import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { MarkSequencer, MAX_TURN_MARKS, readTurnMarks, settledThought, stepThought, THOUGHT_MARK_CHARS, upsertMark } from './turn-marks.js';
 
 describe('MarkSequencer: one number per row, assigned once', () => {
@@ -34,7 +35,7 @@ describe('MarkSequencer: one number per row, assigned once', () => {
 
   it('stamps the event in place, so the next to see it has the same number', () => {
     const sequencer = new MarkSequencer();
-    const event = { kind: 'tool-start' as const, label: 'x', id: 'x' };
+    const event: HarnessActivityEvent = { kind: 'tool-start', label: 'x', id: 'x' };
     sequencer.stamp(event);
     expect(event).toMatchObject({ seq: 1 });
     expect(new MarkSequencer().stamp(event).seq).toBe(1);

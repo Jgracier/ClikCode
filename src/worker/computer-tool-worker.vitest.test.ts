@@ -13,10 +13,9 @@ import { createInterface } from 'node:readline';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
-import { lockCredentialVault, readNamedSecret, saveNamedSecret } from '../agent/computer/credential-vault.js';
+import { lockCredentialVault, saveNamedSecret } from '../agent/computer/credential-vault.js';
 import { WorkerClient } from './client.js';
 import { listWorkerRecords } from './registry.js';
-import type { WorkerEvent } from './protocol.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const distEntry = join(repoRoot, 'dist', 'index.js');
@@ -61,13 +60,6 @@ async function session(): Promise<{ id: string; home: string }> {
 }
 
 async function attach(id: string): Promise<WorkerClient> { const client = await WorkerClient.attach(id); clients.push(client); return client; }
-function next<T extends WorkerEvent['type']>(client: WorkerClient, type: T, timeoutMs = 20_000): Promise<Extract<WorkerEvent, { type: T }>> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { client.off('event', onEvent); reject(new Error(`timed out waiting for "${type}"`)); }, timeoutMs);
-    const onEvent = (event: WorkerEvent): void => { if (event.type !== type) return; clearTimeout(timer); client.off('event', onEvent); resolve(event as Extract<WorkerEvent, { type: T }>); };
-    client.on('event', onEvent);
-  });
-}
 
 /** The MCP server, spawned the way a harness spawns it: stdio, with the worker named in its environment. */
 async function mcpServer(workerId: string): Promise<{ call(method: string, params?: unknown): Promise<any> }> {

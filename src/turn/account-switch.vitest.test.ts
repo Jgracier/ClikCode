@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount } from '../harness/definition.js';
+import type { AccountFailureKind } from './failover.js';
 
 const lifecycle = vi.hoisted(() => vi.fn());
 vi.mock('../runtime/lifecycle-log.js', () => ({ lifecycle, quiet: () => () => undefined, swallowed: () => undefined }));
@@ -29,7 +30,7 @@ describe('switchAccountAfterFailure', () => {
   });
 
   it('classifies the failure itself when the caller did not', async () => {
-    const accounts = { after: vi.fn(async () => account('b')), switchTo: vi.fn(async () => undefined) };
+    const accounts = { after: vi.fn(async (_failure: unknown, _kind: AccountFailureKind) => account('b')), switchTo: vi.fn(async () => undefined) };
     const { kind } = await switchAccountAfterFailure({ accounts, from: account('a'), failure: new Error('Rate limit reached: 429'), harness: 'direct' });
     expect(accounts.after.mock.calls[0]![1]).toBe(kind);
   });

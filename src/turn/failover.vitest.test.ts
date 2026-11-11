@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, interactiveLoginPrompt, quotaRetryHint } from './failover.js';
+import { accountFailureReason, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, quotaRetryHint } from './failover.js';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';

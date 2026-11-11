@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
-import { turnCancelledError } from '../agent/cancellation.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 

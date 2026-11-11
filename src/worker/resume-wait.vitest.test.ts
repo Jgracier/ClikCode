@@ -83,7 +83,7 @@ describe('the worker waiting for the reset', () => {
     const restored: string[] = [];
     const waiter = createResumeWaiter({
       sessionId: 's1', turnRunning: overrides.running ?? (() => false),
-      send: (prompt) => sent.push(prompt), notice: (message) => notices.push(message), restore: (prompt) => { restored.push(prompt); }, changed: () => undefined,
+      send: (prompt) => { sent.push(prompt); }, notice: (message) => notices.push(message), restore: (prompt) => { restored.push(prompt); }, changed: () => undefined,
     });
     return { waiter, sent, notices, restored };
   };

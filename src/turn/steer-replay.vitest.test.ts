@@ -3,7 +3,6 @@
 import { describe, expect, it } from 'vitest';
 import { beginPendingTurn, finishPendingTurn, recordPendingSteer, sessionTranscriptMessages, updatePendingResponse } from './checkpoint.js';
 import { TurnTranscript } from './transcript.js';
-import { splitIntoBlocks } from '../tui/render/markdown.js';
 import type { MessageBlock } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 

@@ -28,7 +28,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const client of clients.splice(0)) client.close();
-  await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); })));
+  await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => { server.close(resolve); })));
   if (previousHome === undefined) delete process.env.CLIKCODE_HOME;
   else process.env.CLIKCODE_HOME = previousHome;
   await rm(root, { recursive: true, force: true });
