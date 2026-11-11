@@ -395,11 +395,12 @@ interface ActiveTurn extends Stream {
   fail: (error: Error) => void;
 }
 
-/** How long a `systemError` waits for the error notification Codex sends
- * next. The usage-limit sequence is status, then `error`, then
- * `turn/completed`, inside the same second (openai/codex#47728). Completing
- * on the status alone reported "a system error" and the account never
- * switched. A second covers that burst when the event loop is busy. */
+/** A fallback, not the ordering: a `systemError` turn ends on the `error`
+ * notification that says why, or on its `turn/completed` (openai/codex#47728:
+ * status, then `error`, then `turn/completed`, inside the same second).
+ * Codex has also left a thread at `systemError` with neither following
+ * ("a turn/completed may never follow", settleSystemError); only that case
+ * waits this long. */
 const SYSTEM_ERROR_WAIT_MS = 1000;
 
 interface BackgroundRun extends Stream {
@@ -1119,8 +1120,12 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         // system error and the account did not switch.
         if (turn.systemError) {
           if (this.knownFailure(turn)) return this.finishSystemError(turn);
-          if (!turn.systemErrorTimer) this.noteSystemError(turn);
-          return;
+          // turn/completed closes the turn. A reason Codex sends after it
+          // (it has, in the same burst) is read before the answer to the
+          // rate-limit request settleSystemError sends now.
+          if (turn.systemErrorTimer) clearTimeout(turn.systemErrorTimer);
+          turn.systemErrorTimer = undefined;
+          return this.settleSystemError(turn);
         }
         return turn.complete(this.vendorFailure(turn, 'Codex turn failed', { codexTurnFailed: true }));
       }

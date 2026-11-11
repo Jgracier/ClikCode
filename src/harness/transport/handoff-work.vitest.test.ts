@@ -198,6 +198,24 @@ describe.skipIf(process.platform !== 'linux')('a process the conversation leaves
     } finally { await session.close(); }
   }, 20_000);
 
+  it('an agent the SDK ends with a patch alone ends at the next frame, not after a wait', async () => {
+    const ended: EndedWork[] = [];
+    const patchOnly = agent(join(dir, 'e.output'), { status: 'completed', summary: 'Agent "Open B5" completed' })
+      .replace("subtype: 'task_notification',", "subtype: 'task_updated', patch: { status: 'completed' },")
+      .replace("output_file: '/nonexistent' });", "output_file: '/nonexistent' });\n          sdk({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });");
+    const session = createAcpSession({ workEnded: (work) => { ended.push(...work); }, outOfTurn: () => undefined });
+    try {
+      await session.runTurn({
+        binary: process.execPath, command: 'fake', argv: ['-e', patchOnly], cwd: process.cwd(), prompt: 'start the checks', environment: {}, permissionMode: 'ask',
+      });
+      // The patch comes ~900ms after the answer; the fallback would add a second to that.
+      const answered = Date.now();
+      await vi.waitFor(() => expect(ended.some((work) => work.kind === 'agent')).toBe(true), { timeout: 5_000, interval: 10 });
+      expect(Date.now() - answered).toBeLessThan(1_600);
+      expect(ended.find((work) => work.kind === 'agent')).toMatchObject({ id: 'a1', outcome: 'finished' });
+    } finally { await session.close(); }
+  }, 20_000);
+
   it('a deliberate close reports nothing here: the worker records interrupted agents itself, awaited', async () => {
     const ended: EndedWork[] = [];
     const session = createAcpSession({ workEnded: (work) => { ended.push(...work); }, outOfTurn: () => undefined });

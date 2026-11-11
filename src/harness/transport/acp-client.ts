@@ -42,9 +42,11 @@ const READ_LIKE_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search', 'th
 const DETAIL_LINE_CAP = 12;
 /** How long an agent may take to answer before the wait is named. */
 const START_NOTICE_MS = 1_000;
-/** How long a task whose terminal `task_updated` patch came waits for its `task_notification`. The SDK
- * sends them one behind the other, from one step; a second is long past that, and short against the
- * work being waited on. */
+/** A fallback, not the ordering: a task whose terminal `task_updated` patch came is ended by the
+ * next SDK frame (its own `task_notification`, which the SDK sends right behind the patch from the
+ * same step, or any other frame, which says none is coming). Only a patch with nothing at all
+ * after it -- the SDK versions that send the patch alone, on a session that then goes quiet --
+ * waits this long. */
 const TASK_NOTIFICATION_WAIT_MS = 1_000;
 
 /** The raw SDK frames claude-agent-acp is asked to forward as
@@ -707,7 +709,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // Tasks are the process's: they go when it does, not when a turn ends.
     if (!this.live) {
       this.vendorTasks.clear();
-      for (const timer of this.endingTasks.values()) clearTimeout(timer);
+      for (const { timer } of this.endingTasks.values()) clearTimeout(timer);
       this.endingTasks.clear();
     }
     this.work.clear();
@@ -1604,7 +1606,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   /** Tasks whose terminal `task_updated` patch arrived and whose `task_notification` has not yet,
    * by task id, each with the timer that ends it from the patch alone. */
-  private readonly endingTasks = new Map<string, NodeJS.Timeout>();
+  private readonly endingTasks = new Map<string, { timer: NodeJS.Timeout; message: Json }>();
 
   /** A background task's start or end (handoff-work.ts). An agent's end is told with its result or,
    * when it stopped short, why -- in the fields of the vendor's own envelope.
@@ -1613,21 +1615,28 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * `task_notification` that carries the summary and the transcript (the order of
    * native/fixtures/claude-background-bash.jsonl). The patch says only the status, so it ends
    * nothing here: read as the end, it dropped the notification that said the agent died on the usage
-   * limit (2026-10-30). Some SDK versions send the patch alone; a task still open
-   * TASK_NOTIFICATION_WAIT_MS after its patch is ended by the patch. `sent` is the frame as the SDK
-   * sent it, `message` the same as a notification. */
+   * limit (2026-10-30). Some SDK versions send the patch alone: any frame after a patch other than
+   * its notification ends the task by the patch (TASK_NOTIFICATION_WAIT_MS if none comes). `sent`
+   * is the frame as the SDK sent it, `message` the same as a notification. */
   private taskFrame(sent: Json, message: Json): void {
     const id = typeof message.task_id === 'string' ? message.task_id : undefined;
+    const ownNotification = id !== undefined && sent.subtype === 'task_notification';
+    for (const [waiting, entry] of [...this.endingTasks]) {
+      if (waiting === id && (ownNotification || sent.subtype === 'task_updated')) continue;
+      clearTimeout(entry.timer);
+      this.endingTasks.delete(waiting);
+      this.settleTask(entry.message);
+    }
     if (id && sent.subtype === 'task_updated') {
       if (this.endingTasks.has(id)) return;
       const timer = setTimeout(() => { this.endingTasks.delete(id); this.settleTask(message); }, TASK_NOTIFICATION_WAIT_MS);
       timer.unref?.();
-      this.endingTasks.set(id, timer);
+      this.endingTasks.set(id, { timer, message });
       return;
     }
     if (id) {
       const waiting = this.endingTasks.get(id);
-      if (waiting) clearTimeout(waiting);
+      if (waiting) clearTimeout(waiting.timer);
       this.endingTasks.delete(id);
     }
     this.settleTask(message);

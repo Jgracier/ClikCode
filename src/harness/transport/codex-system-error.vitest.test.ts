@@ -126,6 +126,17 @@ describe('a Codex thread that ends in systemError', () => {
     expect(classifyAccountFailure(error)).toBe('quota-exhausted');
   });
 
+  it('ends on turn/completed without waiting out the fallback when no reason comes', async () => {
+    const started = Date.now();
+    const error = await run([
+      { send: systemError },
+      { send: { method: 'turn/completed', params: { turn: { id: 'U1', status: 'completed' } } } },
+    ]).catch((caught: Error) => caught) as Error;
+    expect(error.message).toBe('Codex reported a system error on this thread');
+    // The fallback alone is a second after the systemError, on top of the start.
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it('lets a retried turn finish after systemError', async () => {
     const result = await run([
       { send: systemError },
