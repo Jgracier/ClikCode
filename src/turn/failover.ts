@@ -1,4 +1,5 @@
 import { zonedResetTime } from '../harness/accounts/usage-reading.js';
+import type { AccountSwitch } from '../session/model.js';
 
 /** `request-invalid` is the odd one out and the reason it exists: every other
  *  kind describes something about the ACCOUNT, so trying the next account is a
@@ -257,32 +258,24 @@ export function verificationNotice(verification: { url?: string }): string {
     : `Verification needed: ${verification.url}`;
 }
 
-/** One account switch, worded the same way wherever it happens.
- *
- * There are four switch sites -- native and api-key, each with a pre-turn
- * check and a reactive one -- and every one of them had written this line for
- * itself. They had drifted into two different wordings for the same event:
- * the pre-turn pair said "quota exhausted … switching to X" while the
- * reactive pair said "<reason> … retrying…". Running out of usage is not a
- * retry, and saying so made a spent plan read like a flaky one.
- *
- * `from` is deliberately a LABEL. The api-key sites were passing an account
- * ID into the same `accountSwitchedFrom` output field the native sites filled
- * with a label, so a headless consumer got a UUID from one path and a name
- * from the other. */
-/** The line a turn that moved accounts keeps: `Switched to work: personal is
- * out of usage`. */
-export function accountSwitchLine(change: { from: string; to: string; reason: string }): string {
-  const why = change.reason === 'quota-exhausted' ? 'is out of usage'
-    : change.reason === 'low-room' ? 'was nearly out of usage' : `failed (${accountFailureReason(change.reason as AccountFailureKind)})`;
-  return `Switched to ${change.to}: ${change.from} ${why}`;
+/** Why a turn left an account, in the words every surface uses: the line
+ * under the answer, the live phase, and the note the agent is given. Each
+ * used to map the reason itself and they drifted ("is out of usage", "out
+ * of usage", "ran out of usage"). */
+export function accountMoveReasonText(reason: AccountMoveReason): string {
+  return reason === 'low-room' ? 'usage nearly exhausted' : accountFailureReason(reason);
 }
 
-export function accountSwitchNotice(kind: AccountMoveReason, to: string): string {
-  if (kind === 'low-room') return `nearly out of usage, switching to ${to}`;
-  return kind === 'quota-exhausted'
-    ? `out of usage, switching to ${to}`
-    : `${accountFailureReason(kind)}, switching to ${to}`;
+/** The line a turn that moved accounts keeps: `Switched to work (personal:
+ * usage exhausted)`. `from` is a label, never an account id. */
+export function accountSwitchLine(change: AccountSwitch): string {
+  return `Switched to ${change.to} (${change.from}: ${accountMoveReasonText(change.reason)})`;
+}
+
+/** The live phase while the move happens. A switch, never a "retry": a spent
+ * plan is not a flaky one. */
+export function accountSwitchNotice(reason: AccountMoveReason, to: string): string {
+  return `${accountMoveReasonText(reason)}, switching to ${to}`;
 }
 
 /** A failed turn of ClikCode's own agent on the Gateway (agent/run-turn.ts) as the account

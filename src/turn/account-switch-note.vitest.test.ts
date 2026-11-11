@@ -5,12 +5,12 @@ import { accountSwitchNoteText, noteAccountSwitch, withAccountSwitchNote } from 
 import { stripResourceNotes } from './resource-note-text.js';
 import { withMoveNote } from './resource-notes.js';
 
-const spent = { from: 'personal', to: 'work', reason: 'quota-exhausted' };
+const spent = { from: 'personal', to: 'work', reason: 'quota-exhausted' } as const;
 
 describe('the note the agent gets when a turn moves to another account', () => {
   it('says who it left, why, and how much the new account has', () => {
     const note = accountSwitchNoteText(spent, '5h 100% left · Weekly 68% left');
-    expect(note).toContain('personal ran out of usage');
+    expect(note).toContain('(personal: usage exhausted)');
     expect(note).toContain('continues on work');
     expect(note).toContain('work has 5h 100% left · Weekly 68% left');
     expect(note).toContain("a limit or error mentioned earlier was personal's");
@@ -18,7 +18,7 @@ describe('the note the agent gets when a turn moves to another account', () => {
 
   it('names the failure when it was not a spent plan, and leaves usage out when none is known', () => {
     const note = accountSwitchNoteText({ from: 'a', to: 'b', reason: 'authentication-required' });
-    expect(note).toMatch(/a failed \(.+\)/);
+    expect(note).toContain('(a: sign-in needed)');
     expect(note).not.toContain('b has');
   });
 

@@ -52,7 +52,7 @@ const spare = { id: 'acct-b', provider: 'fake', label: 'b', status: 'ready', mod
 const REFUSAL = "You've hit your session limit · resets 3:50pm (America/Denver)";
 
 /** What the account a turn moves to is sent: the note that the account changed (account-switch-note.ts), then the user's own request unchanged. */
-const afterSwitch = (request: string): string => `<clikcode_resource_note>\nThe account changed: a ran out of usage, so this conversation continues on b. The conversation, files and tools are unchanged; a limit or error mentioned earlier was a's, not this account's.\n</clikcode_resource_note>\n\n${request}`;
+const afterSwitch = (request: string): string => `<clikcode_resource_note>\nThe account changed (a: usage exhausted), so this conversation continues on b. The conversation, files and tools are unchanged; a limit or error mentioned earlier was a's, not this account's.\n</clikcode_resource_note>\n\n${request}`;
 
 describe('a failover standby', () => {
   const previousHome = process.env.CLIKCODE_HOME;

@@ -6,18 +6,12 @@
  * label they have (the cached reading, never a network call at the moment a turn is retrying). */
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { cachedAccountUsageLabel } from '../harness/accounts/account-usage.js';
-import type { HarnessSession, HarnessState } from '../session/model.js';
-import { accountFailureReason, type AccountFailureKind } from './failover.js';
+import type { AccountSwitch, HarnessSession, HarnessState } from '../session/model.js';
+import { accountMoveReasonText } from './failover.js';
 import { wrapResourceNote } from './resource-note-text.js';
 
-interface AccountSwitch { from: string; to: string; reason: string }
-
 export function accountSwitchNoteText(change: AccountSwitch, usage?: string): string {
-  const why = change.reason === 'quota-exhausted'
-    ? `${change.from} ran out of usage`
-    : change.reason === 'low-room' ? `${change.from} was nearly out of usage`
-    : `${change.from} failed (${accountFailureReason(change.reason as AccountFailureKind)})`;
-  return `The account changed: ${why}, so this conversation continues on ${change.to}.`
+  return `The account changed (${change.from}: ${accountMoveReasonText(change.reason)}), so this conversation continues on ${change.to}.`
     + (usage ? ` ${change.to} has ${usage}.` : '')
     + ` The conversation, files and tools are unchanged; a limit or error mentioned earlier was ${change.from}'s, not this account's.`;
 }
