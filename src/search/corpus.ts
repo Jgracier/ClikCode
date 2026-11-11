@@ -20,10 +20,9 @@ import { readTurnActivities } from '../turn/turn-activities.js';
 
 export interface MessageDoc {
   role: 'user' | 'assistant';
-  /** Content, then one block per tool call. */
+  /** Content, then one block per tool call. Matched case-insensitively
+   * (indexOfWord, the query's `i` pattern), so no lower-cased copy is kept. */
   text: string;
-  /** `text` lower-cased, once, for matching. */
-  lower: string;
   /** Where the tool calls start in `text` (its length when there are none). */
   contentLength: number;
   /** Identifies this message's text across a conversation's branches, which
@@ -58,13 +57,53 @@ function messageDoc(message: TranscriptMessage): MessageDoc {
   const content = message.content ?? '';
   const calls = message.role === 'assistant' ? readTurnActivities(message.activities, content.length) : [];
   const text = calls.length ? `${content}\n${calls.map((activity) => activityText(activity.event)).join('\n')}` : content;
-  return { role: message.role, text, lower: text.toLowerCase(), contentLength: content.length, fingerprint: fingerprintOf(message.role, text) };
+  return { role: message.role, text, contentLength: content.length, fingerprint: fingerprintOf(message.role, text) };
 }
 
-interface CacheEntry { key: string; doc: SessionDoc }
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const wordPatterns = new Map<string, RegExp>();
 
-/** By session file path, so two state directories (tests) never share. */
+/** Where `word` (lower-cased) next appears in `text`, ignoring case; -1 when it does not. */
+export function indexOfWord(text: string, word: string, from = 0): number {
+  let pattern = wordPatterns.get(word);
+  if (!pattern) {
+    if (wordPatterns.size >= 256) wordPatterns.clear();
+    pattern = new RegExp(escapeRegExp(word), 'gi');
+    wordPatterns.set(word, pattern);
+  }
+  pattern.lastIndex = from;
+  return pattern.exec(text)?.index ?? -1;
+}
+
+interface CacheEntry { key: string; doc: SessionDoc; chars: number }
+
+/** By session file path, so two state directories (tests) never share. In
+ * least-recently-used order (a Map keeps insertion order; a hit re-inserts),
+ * bounded by the characters it holds: every transcript the machine has is
+ * searched, and none of them needs to stay in memory for good. */
 const cache = new Map<string, CacheEntry>();
+let cacheChars = 32 * 1024 * 1024;
+let cachedChars = 0;
+/** Built views, likewise least recently used first; each holds its docs. */
+const MAX_VIEWS = 32;
+
+function uncache(path: string): void {
+  const entry = cache.get(path);
+  if (!entry) return;
+  cache.delete(path);
+  cachedChars -= entry.chars;
+}
+
+function remember(path: string, entry: CacheEntry): void {
+  uncache(path);
+  cache.set(path, entry);
+  cachedChars += entry.chars;
+  // The newest entry stays even alone over the budget: it is being searched now.
+  for (const [oldest] of cache) {
+    if (cachedChars <= cacheChars || oldest === path) break;
+    uncache(oldest);
+  }
+}
 
 const STATS = { builds: 0 };
 
@@ -75,8 +114,15 @@ export function corpusBuilds(): number {
 
 export function resetCorpusCache(): void {
   cache.clear();
+  cachedChars = 0;
   views.clear();
 }
+
+/** For tests: how many transcripts are held, and their characters; and the budget. */
+export function corpusCacheSize(): { docs: number; chars: number } {
+  return { docs: cache.size, chars: cachedChars };
+}
+export function setCorpusCacheCharsForTests(chars: number): void { cacheChars = chars; }
 
 /** One session's searchable messages, read only when its files changed. */
 export async function sessionDoc(id: string): Promise<SessionDoc | undefined> {
@@ -85,9 +131,12 @@ export async function sessionDoc(id: string): Promise<SessionDoc | undefined> {
   // Taken before the read: a write landing during it changes the identity,
   // so the next query reads again rather than keeping a stale copy.
   const key = await transcriptIdentity(id);
-  if (cached && key !== undefined && key === cached.key) return cached.doc;
+  if (cached && key !== undefined && key === cached.key) {
+    remember(path, cached);
+    return cached.doc;
+  }
   if (key === undefined) {
-    cache.delete(path);
+    uncache(path);
     return undefined;
   }
   // A conversation whose log is gone has nothing to search; the listing and the audit say so.
@@ -96,12 +145,12 @@ export async function sessionDoc(id: string): Promise<SessionDoc | undefined> {
     throw error;
   });
   if (!transcript) {
-    cache.delete(path);
+    uncache(path);
     return undefined;
   }
   STATS.builds += 1;
   const doc: SessionDoc = { id, messages: (transcript.messages ?? []).map(messageDoc) };
-  cache.set(path, { key, doc });
+  remember(path, { key, doc, chars: doc.messages.reduce((sum, message) => sum + message.text.length, 0) });
   return doc;
 }
 
@@ -179,8 +228,16 @@ export async function conversationView(group: Pick<ConversationGroup, 'id' | 'br
   const key = sessionFilePath(group.id);
   const ids = group.branches.map((branch) => branch.id).join(',');
   const cached = views.get(key);
-  if (cached?.ids === ids && cached.docs.every((doc, index) => doc === docs[index])) return cached.view;
+  views.delete(key);
+  if (cached?.ids === ids && cached.docs.every((doc, index) => doc === docs[index])) {
+    views.set(key, cached);
+    return cached.view;
+  }
   const view = buildView(group.branches.map((branch, index) => ({ id: branch.id, doc: docs[index] })));
   views.set(key, { ids, docs, view });
+  for (const [oldest] of views) {
+    if (views.size <= MAX_VIEWS) break;
+    views.delete(oldest);
+  }
   return view;
 }

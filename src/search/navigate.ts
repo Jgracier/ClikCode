@@ -3,7 +3,7 @@
  * conversation. Pure state; the terminal draws it (tui/prompter.ts
  * showMention) and the editor opens the first mention. */
 
-import { sessionDoc } from './corpus.js';
+import { indexOfWord, sessionDoc } from './corpus.js';
 import type { ConversationHit, Mention, ParsedQuery, SearchResult } from './engine.js';
 import { ago, runsOn, shortId } from './format.js';
 import { maskSecrets } from './secrets.js';
@@ -70,7 +70,7 @@ export async function mentionOccurrence(mention: Mention, query: ParsedQuery): P
   const word = query.words[0];
   if (!message || !word) return 0;
   let count = 0;
-  for (let at = message.lower.indexOf(word); at >= 0 && at < mention.offset; at = message.lower.indexOf(word, at + word.length)) count += 1;
+  for (let at = indexOfWord(message.text, word); at >= 0 && at < mention.offset; at = indexOfWord(message.text, word, at + word.length)) count += 1;
   return count;
 }
 

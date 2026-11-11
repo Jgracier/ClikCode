@@ -16,7 +16,7 @@
  * numbering (corpus.ts conversationView), so a shared message counts once. */
 
 import { conversationGroups, conversationTitle, type ConversationGroup } from './conversations.js';
-import { conversationView, type MessageDoc } from './corpus.js';
+import { conversationView, indexOfWord, type MessageDoc } from './corpus.js';
 
 export interface Mention {
   /** The chat (branch) the message is stored in, and where in it: what the
@@ -52,7 +52,7 @@ export interface ConversationHit {
 export interface ParsedQuery {
   text: string;
   words: string[];
-  /** The phrase, as a pattern over lower-cased text: the words in order with
+  /** The phrase, as a case-insensitive pattern: the words in order with
    * any whitespace, hyphens or underscores between them ("self-improvement"
    * is the phrase "self improvement"). */
   phrase: RegExp;
@@ -83,7 +83,7 @@ export function parseQuery(text: string): ParsedQuery | undefined {
   const words = [...new Set(cleaned.toLowerCase().split(/\s+/).filter(Boolean))];
   if (!words.length) return undefined;
   const ordered = cleaned.toLowerCase().split(/\s+/).filter(Boolean);
-  return { text: cleaned, words, phrase: new RegExp(ordered.map(escapeRegExp).join('[\\s_-]+'), 'g') };
+  return { text: cleaned, words, phrase: new RegExp(ordered.map(escapeRegExp).join('[\\s_-]+'), 'gi') };
 }
 
 /** `7d`, `12h`, `30m`, `2w`, or a date. Undefined when it is neither. */
@@ -112,14 +112,14 @@ function messageMentions(message: MessageDoc, query: ParsedQuery): Array<{ offse
   const found: Array<{ offset: number; length: number; exact: boolean }> = [];
   const phrase = query.phrase;
   phrase.lastIndex = 0;
-  for (let match = phrase.exec(message.lower); match; match = phrase.exec(message.lower)) {
+  for (let match = phrase.exec(message.text); match; match = phrase.exec(message.text)) {
     found.push({ offset: match.index, length: match[0].length, exact: true });
     if (match[0].length === 0) phrase.lastIndex += 1;
   }
   if (found.length || query.words.length < 2) return found;
-  if (!query.words.every((word) => message.lower.includes(word))) return found;
+  if (!query.words.every((word) => indexOfWord(message.text, word) >= 0)) return found;
   const first = query.words[0]!;
-  return [{ offset: message.lower.indexOf(first), length: first.length, exact: false }];
+  return [{ offset: indexOfWord(message.text, first), length: first.length, exact: false }];
 }
 
 /** How a title matches: it is the query, or it holds every word. */

@@ -379,12 +379,12 @@ const hindsightTool: ConversationTool = {
     const note = 'This is the stored chat, not the current tree.';
     if (query) {
       const needle = query.toLowerCase().replace(/\s+/g, ' ');
-      const pattern = new RegExp(needle.split(' ').map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'));
+      const pattern = new RegExp(needle.split(' ').map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'), 'i');
       const view = await conversationView(found.group);
       const hits: string[] = [];
       for (const message of messages) {
         const doc = view.entries[message.index]?.message;
-        const haystack = doc?.lower ?? message.content.toLowerCase();
+        const haystack = doc?.text ?? message.content;
         const at = haystack.search(pattern);
         if (at < 0) continue;
         const line = doc ? snippetLine(message.index, doc, at) : `#${message.index} ${message.role}: ${oneLine(message.content, 160)}`;
@@ -392,7 +392,7 @@ const hindsightTool: ConversationTool = {
         if (hits.length >= QUERY_CAP) break;
       }
       if (!hits.length) return { text: maskSecrets(`${header}\n"${oneLine(query, 80)}" does not come up in this chat.\n${note}`) };
-      const more = messages.filter((message) => (view.entries[message.index]?.message.lower ?? message.content.toLowerCase()).search(pattern) >= 0).length;
+      const more = messages.filter((message) => (view.entries[message.index]?.message.text ?? message.content).search(pattern) >= 0).length;
       const extra = more > hits.length ? `\n(${more - hits.length} more)` : '';
       return { text: maskSecrets(`${header}\n"${oneLine(query, 80)}" in this chat:\n${hits.map((hit) => `  ${hit}`).join('\n')}${extra}\n${note}`) };
     }
@@ -453,7 +453,7 @@ const hindsightTool: ConversationTool = {
   },
 };
 
-function snippetLine(index: number, message: { role: string; text: string; lower: string; contentLength: number }, at: number): string {
+function snippetLine(index: number, message: { role: string; text: string; contentLength: number }, at: number): string {
   const source = message.text;
   const start = Math.max(0, at - 40);
   const excerpt = source.slice(start, at + 80).replace(/\s+/g, ' ').trim();
