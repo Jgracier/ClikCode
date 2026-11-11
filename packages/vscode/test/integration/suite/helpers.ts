@@ -149,8 +149,20 @@ export async function activate(): Promise<ClikCodeApi> {
 
 /** The composer's Provider menu, open on its list of providers. */
 export async function openProviderList(api: ClikCodeApi): Promise<void> {
-  if (!(await query(api, '#provider-picker')).count) await click(api, '#provider-button');
-  await waitFor(api, '#provider-picker [data-key^="p:"]', 'the provider list');
+  // A click as the panel redraws for a chat that has just opened (a restart
+  // opens a blank chat new) goes with the old drawing: clicked again while no
+  // menu is up, until the list is.
+  const deadline = Date.now() + 90_000;
+  let clickedAt = 0;
+  for (;;) {
+    if ((await query(api, '#provider-picker [data-key^="p:"]')).count) return;
+    if (Date.now() > deadline) throw new Error('timed out waiting for the provider list');
+    if (Date.now() - clickedAt > 1_000 && !(await query(api, '#provider-picker')).count) {
+      await click(api, '#provider-button');
+      clickedAt = Date.now();
+    }
+    await sleep(250);
+  }
 }
 
 /** Chooses a provider and model the way a user does: the Provider button,
