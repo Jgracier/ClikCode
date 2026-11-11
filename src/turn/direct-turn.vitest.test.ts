@@ -98,7 +98,7 @@ describe('a direct API-key turn', () => {
     expect(lastUser(0)).toBe('hello');
     expect(stream).toHaveBeenCalledTimes(2);
     expect(lastUser(1)).toContain('<clikcode_resource_note>');
-    expect(lastUser(1)).toMatch(/The account changed: first (ran out of usage|failed \(.+\)), so this conversation continues on second\./);
+    expect(lastUser(1)).toMatch(/The account changed \(first: [a-z -]+\), so this conversation continues on second\./);
     expect(lastUser(1).endsWith('\n\nhello')).toBe(true);
   });
 

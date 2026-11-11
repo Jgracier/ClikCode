@@ -7,6 +7,7 @@ import type { ShellNote } from '../commands/ai/shell-run.js';
 import type { ConversationSummary, PreviousNativeThread } from './conversation-summary.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import type { AccountMoveReason } from '../turn/failover.js';
 
 /** One tool call of a turn: the harness's own event, merged frame by frame
  * into one record per call (activity-view.ts mergeActivity), and how much of
@@ -81,12 +82,12 @@ export type TranscriptMessage = {
    * terminal is never part of the end line). */
   turnEnd?: { ms: number; stopped?: true; usage?: TurnUsage; pendingBackground?: number; background?: BackgroundWork };
   /** On the answer a turn ended on: the account it moved to on the way,
-   * from which, and why ("Switched to work: personal is out of usage"). */
+   * from which, and why (turn/failover.ts accountSwitchLine). */
   accountSwitch?: AccountSwitch;
 };
 
 /** A turn moved to another account of the same provider (turn/account-routing.ts). */
-type AccountSwitch = { from: string; to: string; reason: string };
+export type AccountSwitch = { from: string; to: string; reason: AccountMoveReason };
 
 /** The harness (or, for ClikCode's own agent, the route) and model that
  * produced a message. */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, quotaRetryHint } from './failover.js';
+import { accountSwitchNoteText } from './account-switch-note.js';
+import { accountFailureReason, accountMoveReasonText, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, quotaRetryHint } from './failover.js';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
@@ -179,12 +180,24 @@ describe('one wording for an account switch, wherever it happens', () => {
   // retrying…". Running out of usage is not a retry.
   it('says running out plainly, and calls it a switch rather than a retry', () => {
     expect(accountSwitchNotice('quota-exhausted', 'work@example.com'))
-      .toBe('out of usage, switching to work@example.com');
+      .toBe('usage exhausted, switching to work@example.com');
   });
 
   it('keeps the switch as one line: where it went, and why it left', () => {
-    expect(accountSwitchLine({ from: 'personal', to: 'work', reason: 'quota-exhausted' })).toBe('Switched to work: personal is out of usage');
-    expect(accountSwitchLine({ from: 'personal', to: 'work', reason: 'temporarily-throttled' })).toBe('Switched to work: personal failed (rate limited)');
+    expect(accountSwitchLine({ from: 'personal', to: 'work', reason: 'quota-exhausted' })).toBe('Switched to work (personal: usage exhausted)');
+    expect(accountSwitchLine({ from: 'personal', to: 'work', reason: 'temporarily-throttled' })).toBe('Switched to work (personal: rate limited)');
+  });
+
+  it('words a move the same way under the answer, in the live phase and in the agent\'s note', () => {
+    const reasons = ['quota-exhausted', 'low-room', 'temporarily-throttled', 'authentication-required',
+      'account-ineligible', 'native-thread-invalid', 'other'] as const;
+    for (const reason of reasons) {
+      const why = accountMoveReasonText(reason);
+      expect(accountSwitchLine({ from: 'a', to: 'b', reason }), reason).toContain(`(a: ${why})`);
+      expect(accountSwitchNotice(reason, 'b'), reason).toBe(`${why}, switching to b`);
+      expect(accountSwitchNoteText({ from: 'a', to: 'b', reason }), reason).toContain(`(a: ${why})`);
+    }
+    expect(accountMoveReasonText('low-room')).toBe('usage nearly exhausted');
   });
 
   it('never calls a switch a retry, for any failure kind', () => {
