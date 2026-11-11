@@ -209,7 +209,7 @@ describe('choosing a Gateway model', () => {
 
   it('refuses a model the Gateway does not offer, and suggests near ones', async () => {
     await expect(chooseGatewayModel('gpt-5.6')).rejects.toThrow('Did you mean: gpt-5.6-sol');
-    await expect(chooseGatewayModel('nothing-like-it')).rejects.toThrow('gateway models');
+    await expect(chooseGatewayModel('nothing-like-it')).rejects.toThrow('models --gateway');
   });
 });
 

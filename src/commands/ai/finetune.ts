@@ -1,4 +1,4 @@
-/** `clikcode gateway finetune`: teach a model from the user's own data on ClikDeploy, on a GPU (billed), or on a CPU: their own
+/** `clikcode finetune --cloud`: teach a model from the user's own data on ClikDeploy, on a GPU (billed), or on a CPU: their own
  * connected machine first (no charge), else a rented one (billed). The weights are stored with ClikDeploy and are the user's.
  *
  * It uploads the dataset, asks ClikDeploy for a quote, and only with --yes starts the job at that price and follows it to its end:

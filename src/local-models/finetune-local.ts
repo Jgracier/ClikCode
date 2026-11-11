@@ -220,7 +220,7 @@ function runDocker(args: string[], onLine: (line: string) => void): Promise<numb
     };
     child.stdout.on('data', feed);
     child.stderr.on('data', feed);
-    child.once('error', (error: NodeJS.ErrnoException) => reject(error.code === 'ENOENT' ? new Error('Docker is needed to fine-tune on this computer and was not found. Install Docker, or fine-tune in the cloud with `gateway finetune`.') : error));
+    child.once('error', (error: NodeJS.ErrnoException) => reject(error.code === 'ENOENT' ? new Error('Docker is needed to fine-tune on this computer and was not found. Install Docker, or fine-tune in the cloud with `finetune --cloud`.') : error));
     child.once('close', (code) => { if (carry.trim()) onLine(carry); resolve(code ?? 1); });
   });
 }
