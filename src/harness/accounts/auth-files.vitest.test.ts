@@ -49,6 +49,39 @@ describe('vendor credential files', () => {
     expect(await readdir(root)).toHaveLength(2);
   });
 
+  it('Claude is signed in by its own OAuth tokens, never by the MCP servers\' OAuth kept in the same file', async () => {
+    const claude = AI_LOCAL_HARNESSES.find((entry) => entry.command === 'claude')!;
+    const environment = { CLAUDE_CONFIG_DIR: root };
+    const file = join(root, '.credentials.json');
+    const mcpOnly = (token: string) => JSON.stringify({ mcpOAuth: { 'stripe|x': { accessToken: token } } });
+    await writeFile(file, mcpOnly('m1'));
+    expect(await authEvidencePresent(claude, environment, {})).toBe(false);
+    // Signed out with MCP servers connected: the file is the vendor's, never set aside.
+    await prepareAuthFilesForLogin(claude, environment, {});
+    expect(await readFile(file, 'utf8')).toBe(mcpOnly('m1'));
+    const signedIn = (access: string, mcp: string) => JSON.stringify({ claudeAiOauth: { accessToken: access, refreshToken: 'r', expiresAt: 1 }, mcpOAuth: { 'stripe|x': { accessToken: mcp } } });
+    await writeFile(file, signedIn('a1', 'm1'));
+    expect(await authEvidencePresent(claude, environment, {})).toBe(true);
+    const before = await authFilesStamp(claude, environment, {});
+    // An MCP server's token refreshed: not a sign-in.
+    await writeFile(file, signedIn('a1', 'm2'));
+    expect(await authFilesStamp(claude, environment, {})).toBe(before);
+    await writeFile(file, signedIn('a2', 'm2'));
+    expect(await authFilesStamp(claude, environment, {})).not.toBe(before);
+  });
+
+  it('a credential file rewritten with the same content is not a new credential', async () => {
+    const vendor = harness({ authFiles: [{ path: '~/auth.json' }] });
+    const file = join(root, 'auth.json');
+    await writeFile(file, '{"token":"t"}');
+    const before = await authFilesStamp(vendor, { HOME: root }, {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await writeFile(file, '{"token":"t"}');
+    expect(await authFilesStamp(vendor, { HOME: root }, {})).toBe(before);
+    await writeFile(file, '{"token":"u"}');
+    expect(await authFilesStamp(vendor, { HOME: root }, {})).not.toBe(before);
+  });
+
   it('expands ~ and ${VAR:-default} against the profile environment', () => {
     expect(expandAuthPath('~/.grok/auth.json', {}, '/home/u')).toBe('/home/u/.grok/auth.json');
     expect(expandAuthPath('${GEMINI_CLI_HOME:-~}/.gemini/oauth_creds.json', {}, '/home/u')).toBe('/home/u/.gemini/oauth_creds.json');

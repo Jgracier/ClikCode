@@ -7,7 +7,7 @@
  * (`authEnv`); this reads those, so ClikCode knows before a turn fails. */
 
 import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
@@ -48,16 +48,18 @@ async function present(entry: AuthFile, environment: Environment): Promise<boole
   return false;
 }
 
+/** The values of an entry's `jsonFields` in `data`, in order. */
+function jsonFieldValues(data: unknown, fields: readonly string[]): unknown[] {
+  return fields.map((field) => field.split('.').reduce<unknown>((value, key) =>
+    value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, data));
+}
+
 async function presentAt(path: string, entry: AuthFile): Promise<boolean> {
   try {
     if (path.endsWith('/')) return (await readdir(path)).length > 0;
     if (entry.jsonFields) {
       const data: unknown = JSON.parse(await readFile(path, 'utf8'));
-      return entry.jsonFields.every((field) => {
-        const value = field.split('.').reduce<unknown>((value, key) =>
-          value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, data);
-        return typeof value === 'string' && value.trim().length > 0;
-      });
+      return jsonFieldValues(data, entry.jsonFields).every((value) => typeof value === 'string' && value.trim().length > 0);
     }
     if (entry.contains === undefined) return (await stat(path)).size > 0;
     return (await readFile(path, 'utf8')).includes(entry.contains);
@@ -67,8 +69,10 @@ async function presentAt(path: string, entry: AuthFile): Promise<boolean> {
 }
 
 /** Only during an explicitly requested sign-in: let the vendor start even
- * when an old JSON credential is corrupt. Preserve it for recovery instead
- * of deleting it or guessing which trailing bytes were intended. */
+ * when an old JSON credential is corrupt (does not parse). Preserve it for
+ * recovery instead of deleting it or guessing which trailing bytes were
+ * intended. A file that parses but holds no credential is the vendor's own
+ * (Claude's keeps MCP servers' OAuth beside its own) and is left alone. */
 export async function prepareAuthFilesForLogin(
   harness: Pick<AiLocalHarnessDefinition, 'authFiles'>,
   profileEnvironment: Readonly<Record<string, string>>,
@@ -78,19 +82,35 @@ export async function prepareAuthFilesForLogin(
   for (const entry of harness.authFiles ?? []) {
     if (!entry.jsonFields) continue;
     for (const path of await expandAuthPaths(entry.path, environment)) {
-      if (await presentAt(path, entry)) continue;
-      try { await stat(path); } catch (error) {
+      let text: string;
+      try { text = await readFile(path, 'utf8'); } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw error;
       }
+      try { JSON.parse(text); continue; } catch { /* corrupt: set aside below */ }
       await rename(path, `${path}.invalid-${randomUUID()}.bak`);
     }
   }
 }
 
-/** What the credential files are now -- which exist, their size and
- * time, whether they hold the credential -- to tell a sign-in that just
- * wrote one from a credential that was already there (a reauthentication). */
+/** What a credential file holds, by content: an entry's `jsonFields` values
+ * where it names them (Claude's file is rewritten for every MCP server's
+ * OAuth refresh too), else the file's bytes, or a directory's files'. Never
+ * size or time: a file rewritten with the same credential is not a new one. */
+async function credentialDigest(path: string, entry: AuthFile): Promise<string> {
+  const hash = (text: string | Buffer): string => createHash('sha256').update(text).digest('hex');
+  if (path.endsWith('/')) {
+    const names = (await readdir(path)).sort();
+    return hash((await Promise.all(names.map(async (name) => `${name}:${hash(await readFile(`${path}${name}`).catch(() => ''))}`))).join('\n'));
+  }
+  const text = await readFile(path);
+  if (!entry.jsonFields) return hash(text);
+  try { return hash(JSON.stringify(jsonFieldValues(JSON.parse(text.toString('utf8')), entry.jsonFields))); } catch { return 'invalid'; }
+}
+
+/** What the credentials on disk are now -- which exist, whether each holds
+ * one, and what it holds -- to tell a sign-in that wrote a credential from
+ * a file that was only rewritten. */
 export async function authFilesStamp(
   harness: Pick<AiLocalHarnessDefinition, 'authFiles'>,
   profileEnvironment: Readonly<Record<string, string>>,
@@ -102,8 +122,7 @@ export async function authFilesStamp(
     if (!paths.length) return `${entry.path}:-`;
     return (await Promise.all(paths.map(async (path) => {
       try {
-        const info = await stat(path);
-        return `${path}:${info.size}:${info.mtimeMs}:${await presentAt(path, entry)}`;
+        return `${path}:${await presentAt(path, entry)}:${await credentialDigest(path, entry)}`;
       } catch { return `${path}:-`; }
     }))).join('|');
   }));
