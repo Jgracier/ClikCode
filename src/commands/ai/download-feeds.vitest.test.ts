@@ -14,7 +14,12 @@ function fetchWeights() {
     report = progress;
     return new Promise<void>((resolve, reject) => { finish = resolve; signal?.addEventListener('abort', () => reject(new Error('cancelled'))); });
   };
-  return { fetch, report: (bytes: number, total: number) => report({ stage: 'download', message: 'downloading gemma-4-12b-it-Q4_0.gguf (6.7 GB)', bytes, totalBytes: total }), finish: () => finish() };
+  /** The fetch is called once the download lease is held: on a loaded machine that is not 30 ms. */
+  const started = async (): Promise<void> => {
+    const deadline = Date.now() + 10_000;
+    while (!report && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  };
+  return { fetch, started, report: (bytes: number, total: number) => report({ stage: 'download', message: 'downloading gemma-4-12b-it-Q4_0.gguf (6.7 GB)', bytes, totalBytes: total }), finish: () => finish() };
 }
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 30));
 
@@ -33,6 +38,7 @@ describe('the words', () => {
     expect([...downloadsByChat()]).toEqual([]);
     job.ask('s1');
     job.ask('s1');
+    await weights.started();
     await tick();
     weights.report(1_000, 10_000);
     expect([...downloadsByChat()]).toEqual([['s1', 'Downloading Qwen3.5 9B 10%']]);
@@ -64,6 +70,7 @@ describe('a terminal window', () => {
     const weights = fetchWeights();
     const job = startModelDownload('qwen3.5-9b', weights.fetch);
     job.ask('s1');
+    await weights.started();
     await tick();
     weights.report(1_000, 10_000);
     weights.report(5_000, 10_000);
@@ -88,6 +95,7 @@ describe('a terminal window', () => {
     const second = fetchWeights();
     const a = startModelDownload('qwen3.5-9b', first.fetch); a.ask('s1');
     const b = startModelDownload('gemma-4-12b', second.fetch); b.ask('s2');
+    await first.started();
     await tick();
     first.report(5_000, 10_000);
     calls.length = 0;
@@ -96,6 +104,7 @@ describe('a terminal window', () => {
     // s1's row is cleared and s2's is never cleared: only the chat whose download ended loses its row.
     expect(calls.filter((call) => call.startsWith('transfer'))).toContain('transfer s1 -');
     expect(calls.filter((call) => call === 'transfer s2 -')).toEqual([]);
+    await second.started();
     second.finish();
     await b.done;
     stop();
@@ -125,6 +134,7 @@ describe('the editor', () => {
     const weights = fetchWeights();
     const job = startModelDownload('qwen3.5-9b', weights.fetch);
     job.ask('s1');
+    await weights.started();
     await tick();
     weights.report(5_000, 10_000);
     weights.finish();
