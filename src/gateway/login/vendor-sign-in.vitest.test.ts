@@ -311,6 +311,33 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
+  it('a sign-in taken down is cancelled, though its credential changed meanwhile (another process refreshed it)', async () => {
+    const controller = new AbortController();
+    const vendor = await script('echo "  https://accounts.example/oauth2/device?user_code=AB12-CD34"\nsleep 30\n');
+    let polled = 0;
+    const run = runVendorSignIn({
+      binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: ui({}, controller.signal).value,
+      // The file says "signed in" the moment it is first asked; the window
+      // withdraws the sign-in before the vendor's grace runs out.
+      signedIn: async () => { if (++polled === 1) setTimeout(() => controller.abort(), 20); return true; },
+      timings: { pollMs: 50, graceMs: 500 },
+    });
+    await expect(run).rejects.toThrow(/cancelled/);
+  });
+
+  it('a ClikCode told to stop (SIGHUP) cancels the sign-in, never a failure or a success', async () => {
+    const vendor = await script('trap "exit 0" HUP TERM\necho "  https://accounts.example/oauth2/device?user_code=AB12-CD34"\nwhile :; do sleep 0.1; done\n');
+    const screen = ui();
+    // A handler of the process's own, as a worker has: the signal does not end the test run.
+    const keep = (): void => undefined;
+    process.on('SIGHUP', keep);
+    try {
+      screen.value.show = () => { setTimeout(() => process.emit('SIGHUP', 'SIGHUP'), 20); };
+      await expect(runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: screen.value }))
+        .rejects.toThrow(/cancelled/);
+    } finally { process.off('SIGHUP', keep); }
+  });
+
   it('says what the vendor said when its sign-in fails', async () => {
     const vendor = await script('echo "token rejected"\nexit 3\n');
     await expect(runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: ui().value }))

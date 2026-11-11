@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from '../../harness/transport/spawn.js';
 import { runInPty, SIGN_IN_COLUMNS, SIGN_IN_ROWS } from './pty.js';
+import { forwardParentSignals } from '../../harness/transport/parent-signals.js';
 import { Screen, type ScreenState } from './screen.js';
 import { completeLoginUrl, extractLoginUrl } from './url.js';
 import { stripAnsi } from '../../tui/render/width.js';
@@ -539,10 +540,20 @@ export async function runVendorSignIn(input: {
     },
   };
   if (ui.signal?.aborted) throw cancelled();
-  // Cancel and a cancelled choice both end the vendor through this.
+  // Ends the vendor: `cancel` for a stop (Cancel, a withdrawn screen, a
+  // cancelled choice, ClikCode itself told to stop), `finish` once it has
+  // signed in. A stop always wins: a login taken down is never a success,
+  // whatever its credential file did meanwhile.
   const controller = new AbortController();
-  const abort = (): void => controller.abort();
-  ui.signal?.addEventListener('abort', abort, { once: true });
+  let stopped = false;
+  const cancel = (): void => {
+    if (controller.signal.aborted) return;
+    stopped = true;
+    controller.abort();
+  };
+  const finish = (): void => controller.abort();
+  ui.signal?.addEventListener('abort', cancel, { once: true });
+  const releaseSignals = forwardParentSignals(cancel, ['SIGTERM', 'SIGHUP']);
   const standIns = process.platform === 'win32' ? undefined : await openerStandIns();
   const env: Record<string, string> = {
     ...input.env,
@@ -586,7 +597,7 @@ export async function runVendorSignIn(input: {
     try {
       const keys = await work();
       if (exited) return;
-      if (keys === undefined) { abort(); return; }
+      if (keys === undefined) { cancel(); return; }
       answeredAt = raw.length;
       changed = false;
       // One key at a time: an Ink app takes a burst like `sk-123\r` as
@@ -623,7 +634,7 @@ export async function runVendorSignIn(input: {
     void answer(async () => {
       // Signed in already: what the vendor asks next (Cline's model pick
       // after its browser sign-in) is its own setup, never put to the user.
-      if (await landed()) { await sleep(timings.graceMs); return undefined; }
+      if (await landed()) { await sleep(timings.graceMs); finish(); return ''; }
       if (prompt.kind === 'input') return `${await ui.ask(prompt.prompt, prompt.secret, prompt.optional)}\r`;
       const choices = prompt.searchable ? [...prompt.choices, SEARCH_CHOICE] : prompt.choices;
       const index = await ui.choose(prompt.title, choices, prompt.selected);
@@ -666,7 +677,7 @@ export async function runVendorSignIn(input: {
   };
   const watch = input.signedIn ? setInterval(() => {
     if (succeeded) return;
-    void landed().then((done) => { if (done) setTimeout(abort, timings.graceMs); });
+    void landed().then((done) => { if (done) setTimeout(finish, timings.graceMs); });
   }, timings.pollMs) : undefined;
   const poll = standIns ? setInterval(() => {
     void readFile(standIns.log, 'utf8').then((text) => {
@@ -685,15 +696,16 @@ export async function runVendorSignIn(input: {
     exitCode = teed.teed ? teed.exitCode : await runPiped(input.binary, input.args, env, onOutput, (send) => { write = send; }, controller.signal);
   } finally {
     exited = true;
-    ui.signal?.removeEventListener('abort', abort);
+    ui.signal?.removeEventListener('abort', cancel);
+    releaseSignals();
     if (poll) clearInterval(poll);
     if (watch) clearInterval(watch);
     if (settle) clearTimeout(settle);
     if (deadline) clearTimeout(deadline);
     if (standIns) await rm(standIns.dir, { recursive: true, force: true }).catch(quiet('gateway/login/vendor-sign-in'));
   }
+  if (stopped) throw cancelled();
   if (succeeded) return;
-  if (controller.signal.aborted) throw cancelled();
   if (exitCode !== 0) {
     throw new Error(`${input.displayName} sign-in exited with status ${exitCode}${failureReason(raw, secrets)}`);
   }
