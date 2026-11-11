@@ -8,7 +8,7 @@
 
 export interface HealthEntry { t: string; pid: number; role: string; event: string; [field: string]: unknown }
 
-export interface HealthReport {
+interface HealthReport {
   window: { from?: string; to?: string; entries: number };
   processes: { started: number; exited: number; abnormal: Array<{ what: string; code: number; parent?: string; count: number }>; signals: Record<string, number>; vanished: number };
   retiredLaunches: Array<{ command: string; parent?: string; count: number }>;

@@ -3,8 +3,8 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { EXTRA_PHRASES, ENTERPRISE_API, GATED_BY_PLAN, INTEGRATE_UPGRADE, NEGATION_AFTER, NEGATION_BEFORE, PLAN_HEADING, SERVER_PHRASES, SLACK_ONBOARDING } from './connector-qualify-phrases.js';
 
-export type QualifyKind = 'captcha' | 'sms' | 'card' | 'paid-plan' | 'sales' | 'enterprise' | 'work-email' | 'free-mail' | 'slack-only' | 'approval' | 'no-api' | 'dead-host';
-export type Lane = 'auto' | 'human' | 'dead' | 'research';
+type QualifyKind = 'captcha' | 'sms' | 'card' | 'paid-plan' | 'sales' | 'enterprise' | 'work-email' | 'free-mail' | 'slack-only' | 'approval' | 'no-api' | 'dead-host';
+type Lane = 'auto' | 'human' | 'dead' | 'research';
 export type PageRole = 'home' | 'signup' | 'pricing' | 'docs';
 export interface RenderedPage {
   role: PageRole; url: string; status?: number; text: string;
@@ -14,8 +14,8 @@ export interface RenderedPage {
   links?: Array<{ href: string; text: string }>;
   /** The page could not be loaded: the reason. */ error?: string;
 }
-export interface QualifyEvidence { kind: QualifyKind; phrase: string; url: string }
-export interface QualifyResult { id: string; lane: Lane; kinds: QualifyKind[]; evidence: QualifyEvidence[]; /** Things seen that are not walls. */ hints?: string[]; pages: Array<{ role: PageRole; url: string; ok: boolean; error?: string }> }
+interface QualifyEvidence { kind: QualifyKind; phrase: string; url: string }
+interface QualifyResult { id: string; lane: Lane; kinds: QualifyKind[]; evidence: QualifyEvidence[]; /** Things seen that are not walls. */ hints?: string[]; pages: Array<{ role: PageRole; url: string; ok: boolean; error?: string }> }
 
 const norm = (text: string): string => text.toLowerCase().replace(/[‘’]/g, "'").replace(/[ \t\r\f\v ]+/g, ' ');
 

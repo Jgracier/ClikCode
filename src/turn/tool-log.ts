@@ -19,7 +19,7 @@ export function firstErrorLine(output: string | readonly string[] | undefined): 
   return line ? redactForLog(line).slice(0, ERROR_LINE) : undefined;
 }
 
-export interface ToolLogFields {
+interface ToolLogFields {
   name: string;
   ok: boolean;
   id?: string;

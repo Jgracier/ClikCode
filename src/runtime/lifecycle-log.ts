@@ -157,7 +157,7 @@ function errnoOf(error: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
-export function parentProcessName(): string | undefined {
+function parentProcessName(): string | undefined {
   try { return readFileSync(`/proc/${process.ppid}/comm`, 'utf8').trim().slice(0, 40) || undefined; } catch { return undefined; }
 }
 

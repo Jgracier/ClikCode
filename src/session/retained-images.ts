@@ -6,7 +6,7 @@ import { extname, join } from 'node:path';
 import { embeddedImageReferences } from './attachments.js';
 import { safeRecordFileName, stateDirectory } from './store/paths.js';
 
-export function conversationImagesDirectory(sessionId: string): string {
+function conversationImagesDirectory(sessionId: string): string {
   return join(stateDirectory(), 'attachments', safeRecordFileName(sessionId));
 }
 

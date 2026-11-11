@@ -20,9 +20,9 @@ import { BUILD_WATCH_MS, RETIRE_QUIET_MS } from '../worker/build-retire.js';
 import { currentWorkerBuild } from '../worker/registry.js';
 
 /** The lifecycle log's reason for a bridge that left for a newer build. */
-export const BRIDGE_RETIRE_REASON = 'replaced by a newer ClikCode build';
+const BRIDGE_RETIRE_REASON = 'replaced by a newer ClikCode build';
 
-export interface BridgeRetireOptions {
+interface BridgeRetireOptions {
   /** What holds the bridge where it is (undefined: nothing does). */
   blocker(): string | undefined;
   /** When anything last happened in it (ms since the epoch). */
@@ -37,7 +37,7 @@ export interface BridgeRetireOptions {
   now?: () => number;
 }
 
-export interface BridgeRetireWatch {
+interface BridgeRetireWatch {
   /** Looks now (the timer looks every watchMs). */
   check(): void;
   stop(): void;

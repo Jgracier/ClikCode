@@ -32,7 +32,7 @@ import { atomicWriteFile } from './store/files.js';
 import { withFileLock } from './store/locks.js';
 import { safeRecordFileName } from './store/paths.js';
 
-export type TurnChangeStore = 'agent' | 'reported';
+type TurnChangeStore = 'agent' | 'reported';
 
 export interface TurnChangeRecord {
   /** When the turn ended. */

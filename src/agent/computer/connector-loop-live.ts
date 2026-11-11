@@ -14,9 +14,9 @@ import { microTab } from './connector-micro-agent.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { sleep } from '../../runtime/sleep.js';
 
-export const loopDir = (): string => join(homedir(), '.clikcode');
+const loopDir = (): string => join(homedir(), '.clikcode');
 export const loopLogPath = (): string => join(loopDir(), 'connector-loop.log');
-export const loopStatePath = (): string => join(loopDir(), 'connector-loop.json');
+const loopStatePath = (): string => join(loopDir(), 'connector-loop.json');
 
 export async function readLoopState(): Promise<LoopState | undefined> {
   try { return JSON.parse(await readFile(loopStatePath(), 'utf8')) as LoopState; } catch { return undefined; }

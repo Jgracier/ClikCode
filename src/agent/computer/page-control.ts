@@ -15,7 +15,7 @@ import { keyFieldValues, maskSensitive, pageSecrets, SENSITIVE, sensitiveValues 
 export const PAGE_ACTIONS = ['back', 'forward', 'reload', 'tabs', 'switch', 'evaluate', 'screenshot', 'console'] as const;
 export type PageAction = typeof PAGE_ACTIONS[number];
 export type ScrollDirection = 'up' | 'down' | 'left' | 'right' | 'top' | 'bottom';
-export type MouseButton = 'left' | 'right' | 'middle';
+type MouseButton = 'left' | 'right' | 'middle';
 
 /** What a step can carry beyond the original click/fill/choose/press/scroll/wait/upload fields. */
 export type StepExtras = {
@@ -25,7 +25,7 @@ export type StepExtras = {
 export type PageArgs = StepExtras & { index?: number; expression?: string; with_screenshot?: boolean; level?: string; limit?: number; clear?: boolean; new_tab?: boolean };
 
 /** What this module needs from the tool around it (kept as parameters so there is no import cycle with computer-web). */
-export type PageDeps = {
+type PageDeps = {
   stateDir: string; tab?: string; acceptsImages: boolean;
   locate(page: Page, target: string | undefined): Promise<Locator>;
   view(page: Page, compact?: boolean): Promise<ToolRunResult>;
@@ -281,7 +281,7 @@ function setValueInPage(node: unknown, value: string): string {
   return el.value;
 }
 
-export const MAX_FILL = 100_000;
+const MAX_FILL = 100_000;
 
 /** Put `text` into a field in the way that field takes it: a dropdown by its label, a date by its machine format, a rich-text editor by
  * insertion (a line break is Shift+Enter, so a chat box does not send), a short plain box key by key (forms that check each press), and a
@@ -335,7 +335,7 @@ function encodedForms(value: string): string[] {
 }
 
 /** Hide every value in `text` that a credential field or key-like text box on the page holds, in the forms a script could return it in. */
-export async function hideFieldValues(page: Page, text: string, extra: readonly string[] = []): Promise<string> {
+async function hideFieldValues(page: Page, text: string, extra: readonly string[] = []): Promise<string> {
   let out = await maskSensitive(page, text);
   for (const value of [...extra].sort((a, b) => b.length - a.length)) for (const form of encodedForms(value)) out = out.split(form).join('[hidden]');
   return hideKeyLikeText(scrubSecrets(out)).text;
@@ -400,7 +400,7 @@ export async function evaluateOnPage(page: Page, args: { expression?: string; ta
 // ---------------------------------------------------------------------------------------------------- screenshot
 
 /** True while the page shows a typed credential, a saved secret or a key: a picture would show it too. */
-export async function credentialShowing(page: Page): Promise<boolean> {
+async function credentialShowing(page: Page): Promise<boolean> {
   if ((await sensitiveValues(page)).length || (await keyFieldValues(page)).length) return true;
   const snapshot = scrubSecrets(await maskSensitive(page, await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never).catch(() => '') as string));
   if (hideKeyLikeText(snapshot).hidden) return true;
@@ -412,7 +412,7 @@ export async function credentialShowing(page: Page): Promise<boolean> {
 }
 
 /** A picture of the page, or of one element; withheld while a credential shows. `output` is the sentence that goes with it. */
-export async function takeScreenshot(page: Page, options: { target?: Locator; full?: boolean; label?: string }): Promise<{ output: string; images?: ToolRunResult['images'] }> {
+async function takeScreenshot(page: Page, options: { target?: Locator; full?: boolean; label?: string }): Promise<{ output: string; images?: ToolRunResult['images'] }> {
   if (await credentialShowing(page)) return { output: '[Screenshot withheld: the page holds a typed credential or a saved secret.]' };
   const shoot = (quality: number): Promise<Buffer> => options.target
     ? options.target.screenshot({ type: 'jpeg', quality, animations: 'disabled', timeout: 10_000 })
@@ -456,7 +456,7 @@ export async function listTabs(deps: Pick<PageDeps, 'stateDir' | 'tab' | 'displa
 const displayTabUrl = (url: string, deps: Pick<PageDeps, 'displayUrl'>): string => scrubSecrets(deps.displayUrl(url));
 
 /** The own tab `index` (0-based, as listed) or the one whose title or address contains `text`. Never another chat's tab. */
-export async function pickTab(args: TabArgs, deps: Pick<PageDeps, 'stateDir' | 'tab'>): Promise<Page> {
+async function pickTab(args: TabArgs, deps: Pick<PageDeps, 'stateDir' | 'tab'>): Promise<Page> {
   const open = ownedPages(deps.stateDir, deps.tab).pages.filter(page => !page.isClosed());
   if (args.index !== undefined) {
     if (!Number.isInteger(args.index) || args.index < 0 || args.index >= open.length) throw new Error(`No tab ${args.index}: this chat has ${open.length} (0 to ${Math.max(0, open.length - 1)}). Use tabs to list them.`);

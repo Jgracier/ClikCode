@@ -13,7 +13,7 @@ const label = (s: RecipeStep): string => `${s.do}${s.target ? ` "${s.target}"` :
 const afterSelector = (steps: readonly RecipeStep[], i: number): boolean => i > 0 && steps[i - 1]!.do === 'click' && selectorsOf([{ name: steps[i - 1]!.target ?? '' }], new Set()).length > 0;
 
 /** Retry laps: where two or more steps in a row repeat an earlier run, the steps from the earlier run up to the repeat are dropped. */
-export function dropLaps(steps: RecipeStep[]): RecipeStep[] {
+function dropLaps(steps: RecipeStep[]): RecipeStep[] {
   const out = steps.map(s => ({ ...s }));
   for (let i = 1; i + 1 < out.length; i++) {
     for (let j = 0; j < i; j++) {
@@ -25,7 +25,7 @@ export function dropLaps(steps: RecipeStep[]): RecipeStep[] {
 
 /** Consecutive identical clicks: an even run toggled something and back, so it goes; an odd run keeps one click. After a selector
  * ("Select a team", then the option twice) the run is one selection, so one click is kept. */
-export function dropToggles(steps: RecipeStep[]): RecipeStep[] {
+function dropToggles(steps: RecipeStep[]): RecipeStep[] {
   const out: RecipeStep[] = [];
   for (let i = 0; i < steps.length;) {
     const s = steps[i]!;
@@ -45,7 +45,7 @@ const danglingAt = (steps: readonly RecipeStep[]): boolean => {
 };
 /** A click at the end that goes back to where the sequence began, right after the submit ("Generate key", then "Add API key" again),
  * reopens what is done. A lone repeated press in the middle of a journey (Next, ..., Next) is never cut. */
-export function dropTrailingClicks(steps: RecipeStep[]): RecipeStep[] {
+function dropTrailingClicks(steps: RecipeStep[]): RecipeStep[] {
   const out = steps.map(s => ({ ...s }));
   while (danglingAt(out)) out.pop();
   return out;
@@ -54,14 +54,14 @@ export function dropTrailingClicks(steps: RecipeStep[]): RecipeStep[] {
 /** The recorder's earlier name for the lap rule alone. */
 export const compactSteps = dropLaps;
 
-export interface Compacted { steps: RecipeStep[]; removed: number }
+interface Compacted { steps: RecipeStep[]; removed: number }
 /** The recipe's steps without retry laps, toggle pairs and a trailing click back to the start. Idempotent. */
 export function compactRecipeSteps(steps: RecipeStep[]): Compacted {
   const out = dropTrailingClicks(dropToggles(dropLaps(steps)));
   return { steps: out, removed: steps.length - out.length };
 }
 
-export interface LintFinding { code: 'repeated-lap' | 'duplicate-click' | 'trailing-click' | 'no-capture'; message: string; steps?: number[] }
+interface LintFinding { code: 'repeated-lap' | 'duplicate-click' | 'trailing-click' | 'no-capture'; message: string; steps?: number[] }
 export function lintRecipe(recipe: Pick<Recipe, 'steps' | 'keyPage' | 'captureHint'>): LintFinding[] {
   const steps = recipe.steps;
   const found: LintFinding[] = [];
@@ -78,7 +78,7 @@ export function lintRecipe(recipe: Pick<Recipe, 'steps' | 'keyPage' | 'captureHi
 
 const recipeFile = (stateDir: string, host: string): string => path.join(stateDir, 'computer', 'recipes', `${normalizeHost(host)}.json`);
 
-export interface CompactReport { host: string; route: string; before: RecipeStep[]; after: RecipeStep[]; removed: number; backup?: string; findings: LintFinding[] }
+interface CompactReport { host: string; route: string; before: RecipeStep[]; after: RecipeStep[]; removed: number; backup?: string; findings: LintFinding[] }
 
 /** Compacts the saved recipe of a host (the named route, else every route), keeping the file as it was in `<host>.json.bak`. A recipe with
  * nothing to compact is left untouched and gets no backup. The recipe keeps its verification date. */
@@ -114,7 +114,7 @@ export interface DryRunPort {
   /** Pause between looks while the page loads (default 1.5 s; tests pass 0). */
   settleMs?: number;
 }
-export interface DryStep { index: number; step: string; status: 'found' | 'missing' | 'not-checked'; note?: string }
+interface DryStep { index: number; step: string; status: 'found' | 'missing' | 'not-checked'; note?: string }
 export interface DryRunReport { host: string; ok: boolean; steps: DryStep[]; opened: string; /** When a target was missing: where the page ended up, so the cause is visible (a sign-in page, a moved button). */ landed?: { controls: string[]; text: string } }
 
 const norm = (t: string): string => t.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -122,7 +122,7 @@ const SUBMITS = /^\W*(?:create|generate|save|submit|confirm|finish|register|sign
 const NEVER = /\b(?:delete|revoke|remove|rotate|regenerate|cancel|deactivate|destroy)\b/i;
 
 /** Is the step's target on the page: a pressable or text box with that name (exact, else containing it). */
-export function targetOnPage(step: RecipeStep, view: DryView): boolean {
+function targetOnPage(step: RecipeStep, view: DryView): boolean {
   if (step.do === 'wait') return !step.text || (norm(view.text).includes(norm(step.text)) === !step.gone);
   if (step.do === 'press' || step.do === 'scroll') return true;
   const t = norm(step.target ?? '');

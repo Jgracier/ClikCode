@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import type { AiLocalHarnessDefinition } from '../../definition.js';
 import { ampMcpConfig, globalMcpServers } from '../acp-mcp-servers.js';
 
-export interface NativeMcpConfig {
+interface NativeMcpConfig {
   /** The flag and its file, to go before the turn's own argv; empty for none. */
   argv: string[];
   /** Removes the file. Safe to call more than once. */

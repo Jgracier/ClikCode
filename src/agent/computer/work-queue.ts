@@ -4,16 +4,16 @@
 import { createHash } from 'node:crypto';
 import { readVaultRecords, writeVaultRecord } from './credential-vault.js';
 
-export const TASK_STATUSES = ['queued', 'working', 'done', 'needs-human', 'blocked', 'no-self-serve'] as const;
-export type TaskStatus = typeof TASK_STATUSES[number];
+const TASK_STATUSES = ['queued', 'working', 'done', 'needs-human', 'blocked', 'no-self-serve'] as const;
+type TaskStatus = typeof TASK_STATUSES[number];
 /** Why a person is needed, so the waiting list can be worked through by kind (all the captchas at once). */
 // no-logo: the platform has no usable logo; unsupported-protocol: it is only gRPC, websocket/streaming or another protocol a spec cannot describe.
-export const TASK_REASONS = ['captcha', 'sms', 'email', 'payment', 'identity', 'review', 'two-factor', 'no-logo', 'unsupported-protocol', 'other'] as const;
+const TASK_REASONS = ['captcha', 'sms', 'email', 'payment', 'identity', 'review', 'two-factor', 'no-logo', 'unsupported-protocol', 'other'] as const;
 export type TaskReason = typeof TASK_REASONS[number];
-export const TASK_KINDS = ['oauth-app', 'api-key', 'test-account', 'webhook', 'connector-proof', 'other'] as const;
-export type TaskKind = typeof TASK_KINDS[number];
+const TASK_KINDS = ['oauth-app', 'api-key', 'test-account', 'webhook', 'connector-proof', 'other'] as const;
+type TaskKind = typeof TASK_KINDS[number];
 
-export type Task = {
+type Task = {
   vendor: string; kind: TaskKind; status: TaskStatus; reason?: TaskReason; note?: string;
   /** The account the vendor's app or key is registered under. */
   owner?: string;

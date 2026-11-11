@@ -22,9 +22,9 @@ export async function ensurePrivateDirectory(directory: string): Promise<void> {
  * - `private` (the default): ClikCode's own; created 0700, and an existing one's mode repaired.
  * - `vendor`: a vendor's (~/.claude, an account profile); created 0700 when missing, an existing one left as it is.
  * - `user`: the user's project; created with the default mode, never changed. */
-export type WriteDirectory = 'private' | 'vendor' | 'user';
+type WriteDirectory = 'private' | 'vendor' | 'user';
 
-export interface AtomicWriteOptions {
+interface AtomicWriteOptions {
   /** `false` skips the two fsyncs (file and directory) and keeps the rename: readers still never
    * see a torn file, and a crash can only lose this last write. For data that is rewritten every
    * few hundred ms, a cache, or a file the user's agent edits. Measured 2026-10-18 on this machine:

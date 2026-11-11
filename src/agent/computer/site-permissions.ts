@@ -6,15 +6,15 @@ import type { BrowserContext, CDPSession, Page } from 'playwright-core';
 import { sharedState } from './shared-state.js';
 
 /** The names the agent uses, and the browser permissions each stands for. */
-export const SITE_PERMISSIONS = {
+const SITE_PERMISSIONS = {
   camera: ['camera'],
   microphone: ['microphone'],
   geolocation: ['geolocation'],
   notifications: ['notifications'],
   clipboard: ['clipboard-read', 'clipboard-write'],
 } as const;
-export type SitePermission = keyof typeof SITE_PERMISSIONS;
-export const SITE_PERMISSION_NAMES = Object.keys(SITE_PERMISSIONS) as SitePermission[];
+type SitePermission = keyof typeof SITE_PERMISSIONS;
+const SITE_PERMISSION_NAMES = Object.keys(SITE_PERMISSIONS) as SitePermission[];
 
 type Setting = 'granted' | 'denied';
 const states = sharedState('site-permissions', () => new WeakMap<BrowserContext, Map<string, Map<SitePermission, Setting>>>());

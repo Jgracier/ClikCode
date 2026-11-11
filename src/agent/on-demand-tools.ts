@@ -3,7 +3,7 @@
 import { defineTool, type ToolDefinition } from './tool-contract.js';
 import type { ConversationItem } from './model-client.js';
 
-export const LOAD_TOOLS = 'load_tools';
+const LOAD_TOOLS = 'load_tools';
 export const CORE_TOOLS = new Set(['read_file', 'grep', 'glob', 'bash', 'apply_patch', 'edit_file', 'write_file', 'ask_user', 'skill', 'read_context', 'list_dir', 'multi_edit', 'todo_write', 'enter_plan_mode', 'exit_plan_mode', 'notebook_edit']);
 
 export function exposeSpecialists(tools: readonly ToolDefinition[], smallWindow = false) {

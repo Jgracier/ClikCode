@@ -7,7 +7,7 @@ import type { Page, Request } from 'playwright-core';
 import { hideKeyLikeText } from './secret-finder.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
-export type NetworkCall = {
+type NetworkCall = {
   method: string; url: string; status?: number; type: string;
   requestHeaders: string[]; contentType?: string; body?: string; answer?: string; jsonShape?: string;
 };

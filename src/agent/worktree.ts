@@ -43,7 +43,7 @@ export async function canCreateAgentWorktree(cwd: string): Promise<boolean> {
 
 /** Repositories (with a commit) among a directory's immediate children: what a session rooted in a folder
  * of repositories can name as `repo`. Bounded: a huge folder is not scanned whole. */
-export async function findChildRepositories(parent: string, limit = 12): Promise<string[]> {
+async function findChildRepositories(parent: string, limit = 12): Promise<string[]> {
   let names: string[];
   try {
     names = (await fs.readdir(parent, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort();

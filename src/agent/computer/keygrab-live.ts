@@ -90,7 +90,7 @@ export async function lookAt(page: Page): Promise<KeyView> {
   return { url: page.url(), text, controls, fields, hasPassword, ...(seen.captchaFrame ? { captchaFrame: true } : {}) };
 }
 
-export interface LiveKeygrabOptions { stateDir: string; id: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; /** The named tab this run works in (default 'connectors'). */ tab?: string; /** Leave the browser connection open when done: other vendors' tabs share it. */ keepBrowser?: boolean }
+interface LiveKeygrabOptions { stateDir: string; id: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; /** The named tab this run works in (default 'connectors'). */ tab?: string; /** Leave the browser connection open when done: other vendors' tabs share it. */ keepBrowser?: boolean }
 
 export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<KeygrabPort> {
   const { computerWebTool } = await import('../tools/computer-web.js');
@@ -147,7 +147,7 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
   };
 }
 
-export interface KeygrabBudget { maxMs: number; alternates?: string[]; maxSteps?: number; /** A resumed run: the tab is already attached; carry on with what the parked record knew. */ resume?: ParkedRecord }
+interface KeygrabBudget { maxMs: number; alternates?: string[]; maxSteps?: number; /** A resumed run: the tab is already attached; carry on with what the parked record knew. */ resume?: ParkedRecord }
 
 /** The `keygrab` driver method: runs the policy, then says whether a recipe was recorded for the host. A run that cannot finish leaves its
  * hidden tab open on the last page (parked, with a record of the trail) so `clikcode connectors resume <id>` can carry on from there. */

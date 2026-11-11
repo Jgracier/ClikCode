@@ -27,7 +27,7 @@ const ACTIONS = {
   apply: { verb: 'apply', key: 'Enter' },
 } as const;
 
-export type Action = keyof typeof ACTIONS;
+type Action = keyof typeof ACTIONS;
 
 /** The notice once a turn has been stopped. */
 export const STOPPED = 'Stopped';

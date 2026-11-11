@@ -4,7 +4,7 @@ import { saveTask, type SavedTask } from './work-queue.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-export type ConnectorProof = {
+type ConnectorProof = {
   id: string;
   ready: boolean;
   specVersion: string;

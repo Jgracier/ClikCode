@@ -4,7 +4,7 @@ import { readState } from '../session/state/read.js';
 import { AGENT_SLICE } from '../worker/own-scope.js';
 import { reap, reapTargets, renderScopeReport, scanSlice } from '../worker/scope-report.js';
 
-export function agentSliceFor(uid: number): string {
+function agentSliceFor(uid: number): string {
   return `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/${AGENT_SLICE}`;
 }
 

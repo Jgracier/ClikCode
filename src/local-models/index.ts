@@ -392,7 +392,7 @@ export function releaseLocalModelsOnExit(): void {
   process.once('exit', removeAllOwnLeasesSync);
 }
 
-export interface LocalModelChoice {
+interface LocalModelChoice {
   id: string;
   label: string;
   /** The Hugging Face repo its weights come from: ClikDeploy can plan and price the same model from it. */

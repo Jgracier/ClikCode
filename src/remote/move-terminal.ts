@@ -112,9 +112,9 @@ const discoveredValue = (machine: DiscoveredMachine): string => `tailscale:${mac
  * one whose install did not finish is offered again, and adding it goes on
  * with it. `found` fills in when Tailscale answers; with no Tailscale here it
  * stays empty. */
-export interface Tailnet { found: DiscoveredMachine[]; landed: Promise<void> }
+interface Tailnet { found: DiscoveredMachine[]; landed: Promise<void> }
 
-export function readTailnet(added: readonly RemoteMachine[]): Tailnet {
+function readTailnet(added: readonly RemoteMachine[]): Tailnet {
   const tailnet: Tailnet = { found: [], landed: Promise.resolve() };
   tailnet.landed = readTailscaleStatus().then(({ status }) => {
     tailnet.found = status ? notYetAdded(discoverMachines(status), added) : [];
@@ -218,7 +218,7 @@ export async function movedChatPlace(movedTo: ChatMovedTo): Promise<Here | undef
 }
 
 /** How the terminal learns whether an added machine answers now. */
-export type MachineReach = (machineId: string) => Promise<boolean>;
+type MachineReach = (machineId: string) => Promise<boolean>;
 
 /** Over the window's connection to it (the board's): it answers once a chat
  * channel opens on it -- one still connecting is waited for. */
@@ -232,7 +232,7 @@ const windowReach: MachineReach = async (machineId) => {
 };
 
 /** Where a moved chat is live now. */
-export interface LiveChat {
+interface LiveChat {
   here: Here;
   /** Said only when nothing could be reached and the copy opened goes on (`reclaim`). */
   notice?: string;

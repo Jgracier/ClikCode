@@ -4,7 +4,7 @@
  * answered with neutral defaults. */
 import type { ChildProcess } from 'node:child_process';
 
-export interface JsonRpcMessage {
+interface JsonRpcMessage {
   jsonrpc: '2.0';
   id?: number | string | null;
   method?: string;

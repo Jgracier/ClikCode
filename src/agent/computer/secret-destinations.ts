@@ -32,7 +32,7 @@ type Template = { run: string[]; stdin?: string; about?: string; vaultSlots?: st
 /** `{{secret|json}}` is the key as it must sit inside a JSON string. */
 const JSON_ARGS = (fields: string): string => `{${fields}}`;
 
-export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
+const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   'clikdeploy-secret': { about: 'a ClikDeploy platform secret (key)',
     run: ['clikdeploy', 'tools', 'run', 'admin_platform_set_secret', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"key":"{{key}}","value":"{{secret|json}}"') },
   'clikdeploy-app-secret': { about: 'a ClikDeploy app secret (app, key)',
@@ -118,7 +118,7 @@ const takesConnectionValues = (template: Template): boolean => template.verify =
 
 const SLOT = /\{\{([a-z][a-z0-9_]*)(\|json)?\}\}/g;
 
-export const destinationsFile = (stateDir: string): string => path.join(stateDir, 'computer', 'destinations.json');
+const destinationsFile = (stateDir: string): string => path.join(stateDir, 'computer', 'destinations.json');
 
 export async function loadDestinations(stateDir: string): Promise<Record<string, Template>> {
   let own: Record<string, Template> = {};
@@ -182,7 +182,7 @@ export async function declaredConnectionValues(integration: string, signal?: Abo
 const ACCEPTS: Record<string, string[]> = { 'api-key': ['clikdeploy-connection'], basic: ['clikdeploy-connection-basic', 'clikdeploy-connection-basic-key'], custom: [], 'aws-sigv4': ['clikdeploy-connection'], oauth: ['clikdeploy-connection'] };
 
 /** One message listing the shapes a connector's declared auth accepts. */
-export function describeShapes(integration: string, kind: string): string {
+function describeShapes(integration: string, kind: string): string {
   const shapes: Record<string, string> = {
     'api-key': `{"to":"clikdeploy-connection","with":{"integration":"${integration}"}} (the captured key is the API key)`,
     oauth: `{"to":"clikdeploy-connection","with":{"integration":"${integration}"}} (the captured key is a token; the connector may prefer oauth_connect)`,

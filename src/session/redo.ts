@@ -19,7 +19,7 @@ import { turnIsRunning, undoTurnsBack } from './undo-turn.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { userMessageIndexes } from '../tui/slash/fork-at.js';
 
-export interface Redo {
+interface Redo {
   /** The prompt, for the composer. */
   prompt: string;
   /** What the user must hear about: a file that was left alone, or edits that could not be put back. Empty when it all

@@ -17,7 +17,7 @@ export interface HindsightMessage {
   tools?: readonly string[];
 }
 
-export interface TopicSpan {
+interface TopicSpan {
   /** Array position of the first message, inclusive. */
   start: number;
   /** Array position of the last message, inclusive. */
@@ -70,7 +70,7 @@ export function oneLine(text: string, max = 90): string {
 }
 
 /** Who answered inside a span, from the stamps on its messages. */
-export function originLabel(messages: readonly HindsightMessage[], fallback: string): string {
+function originLabel(messages: readonly HindsightMessage[], fallback: string): string {
   const labels = new Set<string>();
   for (const message of messages) {
     const origin = message.origin;
@@ -81,7 +81,7 @@ export function originLabel(messages: readonly HindsightMessage[], fallback: str
   return labels.size ? [...labels].join(', ') : fallback;
 }
 
-export interface TurnLike {
+interface TurnLike {
   at: string;
   prompt?: string;
   changes: readonly { path?: string; additions?: number; removals?: number }[];
@@ -120,7 +120,7 @@ export interface PresentedTopic {
   unfinished?: string;
 }
 
-export interface PendingAsk {
+interface PendingAsk {
   prompt: string;
   startedAt?: string;
   tools?: readonly string[];

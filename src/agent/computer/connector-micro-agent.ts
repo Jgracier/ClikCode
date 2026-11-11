@@ -36,7 +36,7 @@ export function microPrompt(id: string, stop: StopInfo, maxCalls: number): strin
   ].filter(l => l !== '').join('\n');
 }
 
-export type MicroResult = { kind: 'captured' } | { kind: 'wall'; wall: string; why: string } | { kind: 'gave-up'; why: string };
+type MicroResult = { kind: 'captured' } | { kind: 'wall'; wall: string; why: string } | { kind: 'gave-up'; why: string };
 
 export function parseMicroResult(text: string): MicroResult {
   const lines = scrubSecrets(text).split('\n').map(l => l.trim()).filter(Boolean);

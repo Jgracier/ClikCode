@@ -5,8 +5,8 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import type { DeployClient, VendorOutcome } from './connector-runner.js';
 
-export const WALL_KINDS = ['captcha', 'sms', 'card', 'paid-plan', 'sales', 'app-review', 'oauth-app', 'free-mail', 'work-email', 'no-api', 'dead-host', 'budget'] as const;
-export type WallKind = typeof WALL_KINDS[number];
+const WALL_KINDS = ['captcha', 'sms', 'card', 'paid-plan', 'sales', 'app-review', 'oauth-app', 'free-mail', 'work-email', 'no-api', 'dead-host', 'budget'] as const;
+type WallKind = typeof WALL_KINDS[number];
 const isWall = (v: unknown): v is WallKind => typeof v === 'string' && (WALL_KINDS as readonly string[]).includes(v);
 
 /** Each vendor works in its own named tab, never the default one. */
@@ -115,7 +115,7 @@ export interface LoopPorts {
   stopRequested?(): boolean;
   pid?: number;
 }
-export interface LoopSummary { vendors: number; done: Record<string, number>; walls: Record<string, number>; pauses: number; restarts: number; renewals: number }
+interface LoopSummary { vendors: number; done: Record<string, number>; walls: Record<string, number>; pauses: number; restarts: number; renewals: number }
 
 /** The browser (not the vendor) failed the task: by what the error is when it says -- Playwright's TargetClosedError, a refused or reset
  * connection to the browser -- else by its words, for an error our own code wrapped in a plain one. */

@@ -23,7 +23,7 @@ const BEGIN = '*** Begin Patch';
 const END = '*** End Patch';
 
 /** The patch as operations. Throws ToolInputError naming the line it could not read. */
-export function parsePatch(patch: string): PatchOp[] {
+function parsePatch(patch: string): PatchOp[] {
   const lines = patch.replace(/\r\n/g, '\n').split('\n');
   while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop();
   if (lines[0]?.trim() !== BEGIN) throw new ToolInputError(`The patch must start with "${BEGIN}".`);

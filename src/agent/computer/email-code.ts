@@ -30,7 +30,7 @@ export function looksLikeLinkEmail(mail: { subject: string; text: string; links:
   return mail.links.length > 0 && LINK_WORDS.test(`${mail.subject} ${mail.text.slice(0, 300)}`);
 }
 
-export type EmailedCode = { code: string } | { hold: string };
+type EmailedCode = { code: string } | { hold: string };
 
 export async function emailedCode(stateDir: string, options: { site: string; since: number; signal?: AbortSignal; passes?: number; passMs?: number; pollMs?: number; endpoints?: GoogleEndpoints }): Promise<EmailedCode> {
   const passes = options.passes ?? 3, passMs = options.passMs ?? 30_000;

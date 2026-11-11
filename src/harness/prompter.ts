@@ -90,7 +90,7 @@ export interface HarnessActivityEvent {
 /** "No, and tell it what to do instead": a denial, and text the caller
  * sends into the turn once its own denial has gone out, so the text never
  * overtakes it. */
-export interface ToldInstead { readonly told: string }
+interface ToldInstead { readonly told: string }
 
 /** An approval's answer: allow, allow always, deny, or deny with text. */
 export type ApprovalAnswer = boolean | 'always' | ToldInstead;

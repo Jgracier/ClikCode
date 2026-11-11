@@ -42,14 +42,14 @@ export interface CatalogCache {
   document: unknown;
 }
 
-export interface LoadedCatalog {
+interface LoadedCatalog {
   catalog: LocalCatalog;
   source: 'cache' | 'bundled';
   /** Why a source earlier in the read order was not used. */
   diagnostics: string[];
 }
 
-export interface CatalogSourceOptions {
+interface CatalogSourceOptions {
   cacheFile?: string;
   keys?: readonly TrustedCatalogKey[];
   /** The bundled signed document. */
@@ -98,14 +98,14 @@ export function loadCatalog(options: CatalogSourceOptions = {}): LoadedCatalog {
   return { catalog: bundled, source: 'bundled', diagnostics };
 }
 
-export interface RefreshOptions extends CatalogSourceOptions {
+interface RefreshOptions extends CatalogSourceOptions {
   fetch?: typeof fetch;
   url?: string;
   now?: number;
   timeoutMs?: number;
 }
 
-export type RefreshResult =
+type RefreshResult =
   | { status: 'fresh' }
   | { status: 'updated' | 'not-modified'; version: number }
   | { status: 'offline' | 'refused'; diagnostic: string };

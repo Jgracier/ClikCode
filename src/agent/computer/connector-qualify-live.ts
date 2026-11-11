@@ -3,8 +3,8 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import type { DeployClient } from './connector-runner.js';
 import type { PageRole, QualifyPorts, RenderedPage } from './connector-qualify.js';
 
-export const PAGE_BUDGET_MS = 20_000;
-export const qualifyTab = (id: string): string => `qualify-${id.replace(/[^a-z0-9-]/g, '-')}`;
+const PAGE_BUDGET_MS = 20_000;
+const qualifyTab = (id: string): string => `qualify-${id.replace(/[^a-z0-9-]/g, '-')}`;
 
 /** The addresses in a connector_discover answer. */
 export function addressesFrom(data: unknown): { homepage?: string; signupUrl?: string; pricingUrl?: string } {

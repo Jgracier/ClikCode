@@ -5,10 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runCli } from './run-cli.js';
 
-export const STDIN_ARGS_JSON_MIN_VERSION = '1.0.35';
+const STDIN_ARGS_JSON_MIN_VERSION = '1.0.35';
 
 /** `1.0.35-g0123abcd` -> [1, 0, 35]; undefined when no version is in the text. The build hash suffix is ignored. */
-export function parseCliVersion(text: string): number[] | undefined {
+function parseCliVersion(text: string): number[] | undefined {
   const match = /(\d+)\.(\d+)\.(\d+)/.exec(text);
   return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
 }

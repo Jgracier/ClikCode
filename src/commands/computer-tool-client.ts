@@ -29,7 +29,7 @@ function chatOfWorker(workerPid: number): Promise<string | undefined> {
 
 /** The chat a call belongs to: the one whose worker started this process, or
  * the one named. A running chat can use only its own. */
-export async function callerSession(chat?: string): Promise<string> {
+async function callerSession(chat?: string): Promise<string> {
   const workerPid = Number(process.env.CLIKCODE_WORKER_PID);
   const fromTurn = Number.isSafeInteger(workerPid) && workerPid > 0 ? await chatOfWorker(workerPid) : undefined;
   const sessionId = chat ? await resolveChat(chat) : fromTurn;

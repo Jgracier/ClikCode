@@ -53,7 +53,7 @@ export interface RemoteMachine {
  * here (remote/peer.ts). Adding it again by hand clears it. */
 export interface ForgottenMachine { installationId?: string; nodeId?: string; at: string }
 
-export type UpdatePolicy = 'auto' | 'ask';
+type UpdatePolicy = 'auto' | 'ask';
 
 export function updatePolicy(machine: Pick<RemoteMachine, 'updates'>): UpdatePolicy {
   return machine.updates === 'ask' ? 'ask' : 'auto';

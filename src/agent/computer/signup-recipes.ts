@@ -8,7 +8,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { keyShaped } from './secret-finder.js';
 
-export const LOGIN_ROUTES = ['google', 'github', 'email'] as const;
+const LOGIN_ROUTES = ['google', 'github', 'email'] as const;
 export type LoginRoute = typeof LOGIN_ROUTES[number];
 export type RecipeStep = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 export interface Recipe { host: string; loginRoute: LoginRoute; steps: RecipeStep[]; keyPage?: string; captureHint?: string; verifiedAt: string }
@@ -27,7 +27,7 @@ export function normalizeHost(host: string): string {
 const file = (stateDir: string, host: string): string => path.join(stateDir, 'computer', 'recipes', `${normalizeHost(host)}.json`);
 
 /** Why a step may not be saved, or undefined when it is fine. */
-export function stepProblem(step: unknown, index: number): string | undefined {
+function stepProblem(step: unknown, index: number): string | undefined {
   const at = `Step ${index + 1}`;
   if (!step || typeof step !== 'object') return `${at} is not a step.`;
   const s = step as RecipeStep;
@@ -111,7 +111,7 @@ export function detectBlocker(pageText: string): string | undefined {
   return undefined;
 }
 
-export interface Replay { output: string; isError?: boolean; completed: boolean; blocker?: string }
+interface Replay { output: string; isError?: boolean; completed: boolean; blocker?: string }
 
 /** Replays a recipe through `run` (the existing steps runner, which calls `guard` after each step and stops
  * when it returns text). Stops at the first failure or at a blocker page and says what to do from there. */

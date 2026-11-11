@@ -12,7 +12,7 @@ export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 /** Names that hold a secret whatever folder they sit in. */
 const SECRET_NAME = /^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx|kdbx|keystore|jks)|credentials(?:\.[a-z]+)?|.*secrets?\.(?:json|ya?ml|toml))$/i;
 
-export type UploadScope = Pick<PathScope, 'cwd' | 'stateDir' | 'homeDir'> & { sessionId?: string };
+type UploadScope = Pick<PathScope, 'cwd' | 'stateDir' | 'homeDir'> & { sessionId?: string };
 
 /** True when the upload text is a path rather than the name of a profile file detail. */
 export function isUploadPath(text: string | undefined): boolean {

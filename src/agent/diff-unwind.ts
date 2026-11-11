@@ -7,7 +7,7 @@ import type { FileDiff } from './line-diff.js';
 
 /** A file's change as hunks of before and after lines: unchanged context on
  * both sides, `gap` (unchanged lines left out) between hunks. */
-export type Hunk = { before: string[]; after: string[] };
+type Hunk = { before: string[]; after: string[] };
 
 export function fileHunks(file: FileDiff): Hunk[] {
   const hunks: Hunk[] = [];

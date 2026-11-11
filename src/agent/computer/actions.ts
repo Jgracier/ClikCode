@@ -9,9 +9,9 @@
  * parameter is defined. */
 
 export type ToolKind = 'browser' | 'account';
-export type Group = 'Look' | 'Go' | 'Act' | 'Browser' | 'People' | 'Sign in' | 'Email' | 'Keys' | 'Work';
+type Group = 'Look' | 'Go' | 'Act' | 'Browser' | 'People' | 'Sign in' | 'Email' | 'Keys' | 'Work';
 
-export interface ActionSpec {
+interface ActionSpec {
   readonly name: string;
   readonly kind: ToolKind;
   readonly group: Group;
@@ -85,7 +85,7 @@ export const ACTIONS: readonly ActionSpec[] = [
 ];
 
 /** `help` is part of both tools. */
-export const HELP = 'help';
+const HELP = 'help';
 
 export const actionsOf = (kind: ToolKind): readonly ActionSpec[] => ACTIONS.filter(spec => spec.kind === kind);
 export const specOf = (name: string): ActionSpec | undefined => ACTIONS.find(spec => spec.name === name);

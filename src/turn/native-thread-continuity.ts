@@ -90,7 +90,7 @@ export async function nativeThreadHoldsConversation(
 
 /** The newest request a Claude thread was asked, with when, read from the end of its file: the thread's
  * own account of how far it got, which ClikCode's record of the conversation cannot vouch for. */
-export async function newestClaudeRequest(path: string): Promise<{ text: string; at?: string } | undefined> {
+async function newestClaudeRequest(path: string): Promise<{ text: string; at?: string } | undefined> {
   const { size } = await stat(path);
   // The newest request is near the end; a longer tail only when the end is all tool traffic.
   for (const window of [256 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024]) {

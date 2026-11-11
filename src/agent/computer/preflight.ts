@@ -19,7 +19,7 @@ import { runCli } from './run-cli.js';
 import { defaultProfile, listProfiles } from './profiles.js';
 import { firstJsonObject } from './secret-destinations.js';
 
-export type PreflightResult = {
+type PreflightResult = {
   browserOk: boolean; googleSignedIn: boolean; gmailReadable: boolean; buildId: string; depsLinkOk: boolean;
   /** All four checks pass. */
   ok: boolean;
@@ -77,12 +77,12 @@ export function checkDepsLink(releaseDir: string | undefined, temp: string = tmp
 }
 
 /** The installed release (where the `clikcode` command lives), if there is one. */
-export function installedReleaseDir(): string | undefined {
+function installedReleaseDir(): string | undefined {
   const dir = process.env.CLIKCODE_RELEASE_DIR || path.join(homedir(), '.local', 'share', 'clikcode', 'release');
   return existsSync(dir) ? dir : undefined;
 }
 
-export type PreflightDeps = {
+type PreflightDeps = {
   stateDir: string;
   /** A tab for the check, closed by it. */
   openPage: () => Promise<PreflightPage>;

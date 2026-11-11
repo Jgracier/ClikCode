@@ -33,15 +33,15 @@ import { homedir } from 'node:os';
 import { runSsh, sshFailure, sshFailureMessage, type SshResult } from './ssh.js';
 import { shellQuote } from './shell.js';
 
-export const REMOTE_REPO_URL = 'https://github.com/Jgracier/ClikCode.git';
-export const NODE_MIRROR = 'https://nodejs.org/dist';
-export const MACPORTS_MIRROR = 'https://packages.macports.org';
+const REMOTE_REPO_URL = 'https://github.com/Jgracier/ClikCode.git';
+const NODE_MIRROR = 'https://nodejs.org/dist';
+const MACPORTS_MIRROR = 'https://packages.macports.org';
 /** package.json `engines.node`. */
-export const MIN_NODE: readonly [number, number] = [22, 12];
+const MIN_NODE: readonly [number, number] = [22, 12];
 
 /** One MacPorts binary archive, pinned: `<mirror>/<port>/<file>` must have this SHA-256. */
-export interface MacPortsArchive { port: string; file: string; sha256: string }
-export interface MacPortsNode { version: string; node: MacPortsArchive; libs: readonly MacPortsArchive[]; npm: MacPortsArchive }
+interface MacPortsArchive { port: string; file: string; sha256: string }
+interface MacPortsNode { version: string; node: MacPortsArchive; libs: readonly MacPortsArchive[]; npm: MacPortsArchive }
 
 /** MacPorts' prebuilt Node for the macOS versions nodejs.org's builds no
  * longer run on, by Darwin major (19 = macOS 10.15). MacPorts builds
@@ -63,12 +63,12 @@ export const MACPORTS_NODE: Readonly<Record<number, MacPortsNode>> = {
 };
 
 /** Where Node comes from for a machine (nodeSource). */
-export type NodeSource =
+type NodeSource =
   | { kind: 'nodejs'; line: 'latest-v24.x' | 'latest-v22.x'; os: string; arch: string }
   | { kind: 'macports'; darwin: number; pinned: MacPortsNode }
   | { kind: 'refused'; message: string };
 /** pnpm, when package.json names no `packageManager`. */
-export const PNPM_FALLBACK = '10';
+const PNPM_FALLBACK = '10';
 
 /** Where everything ClikCode Remote installs lives on the other machine,
  * relative to its $HOME (shell expressions, never user input). */
@@ -86,7 +86,7 @@ function macportsPins(): Readonly<Record<number, MacPortsNode>> {
   return json ? JSON.parse(json) as Record<number, MacPortsNode> : MACPORTS_NODE;
 }
 
-export const INSTALL_STEPS = ['Checking the machine', 'Node.js', 'git', 'Getting ClikCode from GitHub', 'Building and installing', 'Checking the install'] as const;
+const INSTALL_STEPS = ['Checking the machine', 'Node.js', 'git', 'Getting ClikCode from GitHub', 'Building and installing', 'Checking the install'] as const;
 export type InstallStep = typeof INSTALL_STEPS[number];
 
 export interface InstallReporter {
@@ -176,13 +176,13 @@ export function parseProbe(stdout: string): Probe | undefined {
 }
 
 /** What a machine whose shell is cmd.exe or PowerShell prints for `sh -c`. */
-export function looksLikeWindows(result: SshResult, probe?: Probe): boolean {
+function looksLikeWindows(result: SshResult, probe?: Probe): boolean {
   if (probe) return /^(MINGW|MSYS|CYGWIN|Windows)/i.test(probe.os);
   return /is not recognized as an internal or external command|The term 'sh' is not recognized|CommandNotFoundException|Windows/i.test(`${result.stdout}\n${result.stderr}`);
 }
 
 /** nodejs.org's names for an OS and a CPU. */
-export function nodePlatform(probe: Probe): { os: string; arch: string } | undefined {
+function nodePlatform(probe: Probe): { os: string; arch: string } | undefined {
   const os = probe.os === 'Linux' ? 'linux' : probe.os === 'Darwin' ? 'darwin' : undefined;
   const arch = ({ x86_64: 'x64', amd64: 'x64', aarch64: 'arm64', arm64: 'arm64' } as Record<string, string>)[probe.arch];
   return os && arch ? { os, arch } : undefined;
@@ -221,7 +221,7 @@ export function nodeSource(probe: Probe, machine: string, pins: Readonly<Record<
 }
 
 /** What a source is called in the step's line. */
-export function nodeSourceText(source: Exclude<NodeSource, { kind: 'refused' }>): string {
+function nodeSourceText(source: Exclude<NodeSource, { kind: 'refused' }>): string {
   return source.kind === 'nodejs' ? `nodejs.org ${source.line}` : `MacPorts ${source.pinned.node.port} ${source.pinned.version}`;
 }
 
@@ -252,7 +252,7 @@ const NODE_SCRIPT_END = [
 /** Downloads Node's tarball for this OS and CPU from nodejs.org's `line`,
  * checks its SHA-256 against the SHASUMS256.txt published beside it, and
  * unpacks it into ~/.local/share/clikcode/node. */
-export function nodeInstallScript(source: Extract<NodeSource, { kind: 'nodejs' }>, mirror = nodeMirror()): string {
+function nodeInstallScript(source: Extract<NodeSource, { kind: 'nodejs' }>, mirror = nodeMirror()): string {
   return [
     ...NODE_SCRIPT_START,
     `base=${shellQuote(`${mirror}/${source.line}`)}`,
@@ -279,7 +279,7 @@ export function nodeInstallScript(source: Extract<NodeSource, { kind: 'nodejs' }
  * every file changed ad-hoc signed again (`codesign -f -s -`); npm beside it
  * as bin/npm and bin/npx. Nothing goes in /opt/local, nothing needs sudo.
  * The tools are Apple's command line tools, which a Mac with Apple's git has. */
-export function macportsInstallScript(source: Extract<NodeSource, { kind: 'macports' }>, mirror = macportsMirror()): string {
+function macportsInstallScript(source: Extract<NodeSource, { kind: 'macports' }>, mirror = macportsMirror()): string {
   const { node, libs, npm } = source.pinned;
   return [
     ...NODE_SCRIPT_START,
@@ -400,7 +400,7 @@ export function buildScript(pinned = false): string {
   ].join('\n');
 }
 
-export function verifyScript(): string {
+function verifyScript(): string {
   return [
     'set -eu',
     withOwnNode,
@@ -429,7 +429,7 @@ export function remoteTerminalScript(spec: string): string {
  * Node, and the ~/.local/bin/clikcode link when it points into them. The
  * machine's own ClikCode data (~/.clikcode: its chats, accounts) only when
  * `data` -- the user ticked that too. */
-export function uninstallScript(data: boolean): string {
+function uninstallScript(data: boolean): string {
   return [
     `d=${SHARE}`,
     'rm -rf "$d/src" "$d/release" "$d/node"',
@@ -456,7 +456,7 @@ function stepError(result: SshResult): string {
   return said ?? (lastLines(result.stderr) || lastLines(result.stdout) || `exit ${result.code}`);
 }
 
-export async function probeMachine(target: string): Promise<{ probe?: Probe; failed?: Extract<InstallOutcome, { ok: false }> }> {
+async function probeMachine(target: string): Promise<{ probe?: Probe; failed?: Extract<InstallOutcome, { ok: false }> }> {
   const step: InstallStep = 'Checking the machine';
   const result = await runSsh(target, probeScript(), { timeoutMs: 60_000 });
   const failure = sshFailure(result);
@@ -471,7 +471,7 @@ export async function probeMachine(target: string): Promise<{ probe?: Probe; fai
   return { probe };
 }
 
-export interface InstallOptions {
+interface InstallOptions {
   /** Update: the source, build and check only (steps 4-6). */
   update?: boolean;
   /** The commit to install (fetched by sha); the tip of GitHub main when absent. */
@@ -563,7 +563,7 @@ async function nodeStep(target: string, probe: Probe, source: NodeSource | undef
  * local `sh` for /update on this machine. Never throws: `code` says. */
 export type ScriptRunner = (script: string, options: { timeoutMs: number }) => Promise<SshResult>;
 
-export const sshRunner = (target: string): ScriptRunner => (script, options) => runSsh(target, script, options);
+const sshRunner = (target: string): ScriptRunner => (script, options) => runSsh(target, script, options);
 
 /** `script` in this machine's `sh`, in $HOME, without blocking. */
 export const localRunner: ScriptRunner = (script, options) => new Promise((resolve) => {
@@ -587,7 +587,7 @@ export const localRunner: ScriptRunner = (script, options) => new Promise((resol
 /** The steps of updating the managed clone, wherever it is. */
 export const UPDATE_STEPS = ['Getting ClikCode from GitHub', 'Building and installing', 'Checking the install'] as const satisfies readonly InstallStep[];
 
-export interface Progress {
+interface Progress {
   begin(step: InstallStep): void;
   done(step: InstallStep, detail: string): void;
 }
@@ -601,7 +601,7 @@ export function stepper(reporter: InstallReporter, total: number): Progress {
   };
 }
 
-export type ManagedUpdateOutcome =
+type ManagedUpdateOutcome =
   | { ok: true; info: RemoteInfo; from?: string; to: string; upToDate?: false }
   /** The clone was already at the target and so is the running build:
    * nothing was built. */

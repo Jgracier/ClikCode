@@ -14,8 +14,8 @@ export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'ap
 /** `reasonCode` says what the wall is, set by whoever read the page (keygrab, humanStepFor, qualify); a step ClikDeploy sent without one
  * gets its kind (planFor). The loop types walls from it alone (connector-loop.ts wallOf). */
 export interface HumanStep { kind: HumanKind | 'retire'; url?: string; instructions?: string; reasonCode: string; prefill?: string[] }
-export interface AgentCall { tool: string; args: Record<string, unknown> }
-export type Next =
+interface AgentCall { tool: string; args: Record<string, unknown> }
+type Next =
   | { kind: 'call'; task: string }
   | { kind: 'agent'; task: string; then?: string; call?: AgentCall; orElse?: AgentCall }
   | { kind: 'human'; task: string; humanStep: HumanStep; then?: string }
@@ -71,7 +71,7 @@ export interface BrowserDriver {
   keygrab(id: string, url: string, budget: { maxMs: number; /** The task's other addresses (homepage, sign-up, docs): where to start if `url` is no web page. */ alternates?: string[] }): Promise<DriveOutcome>;
 }
 
-export interface RunnerOptions {
+interface RunnerOptions {
   ids?: string[]; limit?: number; parallel?: number;
   /** With `ids`: connect only. Each id is sent straight to the consent driver, never through onboarding (which refuses a connector already published to users and developers). */
   published?: boolean;
@@ -85,10 +85,10 @@ export interface RunnerOptions {
   log?: (line: string) => void;
 }
 
-export type VendorStatus = 'published' | 'blocked' | 'human' | 'handoff' | 'budget' | 'waiting' | 'error';
+type VendorStatus = 'published' | 'blocked' | 'human' | 'handoff' | 'budget' | 'waiting' | 'error';
 export interface VendorOutcome { id: string; status: VendorStatus; /** Runner steps (one onboard or browser job each). */ steps: number; /** Browser actions taken inside those steps (opens, clicks, fills, captures); the action trail below lists them. */ browserActions: number; stage: string; summary: string; actions: string[]; humanStep?: HumanStep; handoff?: { file?: string; request: HandoffRequest }; recorded?: string; attention?: { kind: string; owner: string };
   /** The command that reattaches to the parked hidden tab and carries on. */ resume?: string; /** Set when a captcha put this vendor on a back-off. */ backoffUntil?: string; /** A key was captured and a recipe was recorded for the next run. */ recipe?: boolean }
-export interface HandoffRequest {
+interface HandoffRequest {
   id: string; why: string; /** The whole task text. */ task: string; url?: string; pageText?: string; controls?: string[]; screenshot?: string;
   call?: AgentCall; orElse?: AgentCall; attention?: unknown; /** The last 3 evidence lines. */ evidence?: string[];
   /** Deterministic spec work (the auth probe ended path-wrong or placement), not browser work. */ specFix?: boolean;
@@ -97,7 +97,7 @@ export interface HandoffRequest {
 }
 
 /** The task kinds the runner knows. */
-export type Plan =
+type Plan =
   | { do: 'done'; status: 'published' | 'blocked' }
   | { do: 'wait'; ms: number }
   | { do: 'oauth' }
@@ -109,7 +109,7 @@ export type Plan =
   | { do: 'handoff'; why: string };
 
 /** Tools the runner may call on ClikDeploy's behalf, because they only advance or read the pipeline. */
-export const RUNNABLE_TOOLS: ReadonlySet<string> = new Set(['connector_finish', 'connector_test_job_status', 'connector_proof', 'connector_pipeline_status']);
+const RUNNABLE_TOOLS: ReadonlySet<string> = new Set(['connector_finish', 'connector_test_job_status', 'connector_proof', 'connector_pipeline_status']);
 
 const URL_IN_TEXT = /https:\/\/[^\s"'<>)]+/;
 const URLS_IN_TEXT = /https:\/\/[^\s"'<>)]+/g;
@@ -128,7 +128,7 @@ export function narrowTask(id: string, stop: StopInfo): string {
 const WALL_STATES = new Set(['needs-human']);
 /** The auth probe ended with the key in the wrong place or on the wrong path: deterministic spec work for the gate/enrich tools. */
 const SPEC_FIX = /\bpath[- ]wrong\b|auth probe[^.\n]{0,80}(?:wrong|ended|mismatch|placement|path)|(?:key|token|credential|auth)[^.\n]{0,30}placement|placement[^.\n]{0,30}(?:wrong|mismatch)/i;
-export const isSpecFix = (text: string): boolean => SPEC_FIX.test(text);
+const isSpecFix = (text: string): boolean => SPEC_FIX.test(text);
 
 /** The vendor address in a task: an https address, or a bare domain after "at" or "from". */
 export function siteUrl(task: string): string | undefined {
@@ -139,12 +139,12 @@ export function siteUrl(task: string): string | undefined {
 }
 
 /** For a judgement task (its `call` is a connector_work_report): the report that blocks the item, with its reason ready. Any other task's `orElse` is only a way out, never run. */
-export function blockedCall(next: Next): AgentCall | undefined {
+function blockedCall(next: Next): AgentCall | undefined {
   if (next.kind !== 'agent' || next.call?.tool !== 'connector_work_report') return undefined;
   return [next.call, next.orElse].find(c => c?.tool === 'connector_work_report' && c.args.outcome === 'blocked');
 }
 
-export function waitMs(task: string, fallback = 5_000): number {
+function waitMs(task: string, fallback = 5_000): number {
   const m = /(\d+)\s*(?:s\b|sec)/i.exec(task);
   return Math.min(Math.max(m ? Number(m[1]) * 1000 : fallback, 1_000), 60_000);
 }
@@ -489,7 +489,7 @@ export async function runConnectors(client: DeployClient, driver: BrowserDriver,
   return { outcomes, skipped: batch.skipped };
 }
 
-export interface PlanLine { id: string; reason: string; plan: string }
+interface PlanLine { id: string; reason: string; plan: string }
 
 /** The dry run: what each waiting vendor's current task would get, with nothing changed at ClikDeploy or in the browser. */
 export async function dryRun(client: DeployClient, driver: BrowserDriver, options: RunnerOptions = {}): Promise<PlanLine[]> {
@@ -507,7 +507,7 @@ export async function dryRun(client: DeployClient, driver: BrowserDriver, option
   return lines;
 }
 
-export function describePlan(plan: Plan): string {
+function describePlan(plan: Plan): string {
   switch (plan.do) {
     case 'oauth': return 'connect the test account: ClikDeploy authorization URL, then press the consent screens in the ClikCode browser (Google sign-in first); confirm an active connection; call onboard again';
     case 'capture': return plan.generic

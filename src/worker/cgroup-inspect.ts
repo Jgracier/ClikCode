@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { groupPids } from './command-groups.js';
 
 /** A command whose command line carries this text is never ended for its age (harness/transport/background-commands.ts KEEP_MARK). */
-export const KEEP = 'clikcode:keep';
+const KEEP = 'clikcode:keep';
 
 /** Never ended for its age: the keep mark, or ClikCode's own browser host (an older host still lives in the worker scope that
  * started it, its group holding xvfb-run, the host and Chrome; ending that group would close the user's signed-in browser). */

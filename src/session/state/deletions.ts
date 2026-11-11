@@ -18,7 +18,7 @@ import { hidden } from '../store/data.js';
 import { loadIndex } from './index-file.js';
 
 /** Conversations deleted through this state object since it was last written. */
-export const DELETIONS = Symbol('clikcode.deletions');
+const DELETIONS = Symbol('clikcode.deletions');
 type Deleting = HarnessState & { [DELETIONS]?: Set<string> };
 
 /** Deletes conversations from `state`: gone from its list now, and their files removed by the
@@ -45,7 +45,7 @@ export function clearDeletions(state: HarnessState, written: ReadonlySet<string>
 
 /** Tombstones older than this are dropped: a process that has held a conversation open this long
  * has been told "gone" by its own read of the index long since. */
-export const TOMBSTONE_KEEP_MS = 90 * 24 * 60 * 60_000;
+const TOMBSTONE_KEEP_MS = 90 * 24 * 60 * 60_000;
 
 /** The tombstones after a write: the index's own, those it adds, minus any for a conversation that
  * is listed again, minus the old. */

@@ -154,7 +154,7 @@ export async function setPluginEnabled(roots: PluginRoots, query: string, enable
   return { ...plugin, enabled };
 }
 
-export function enabledPlugins(roots: PluginRoots): InstalledPlugin[] {
+function enabledPlugins(roots: PluginRoots): InstalledPlugin[] {
   return listPlugins(roots).filter((plugin) => plugin.enabled && existsSync(plugin.root));
 }
 

@@ -15,7 +15,7 @@ import { safeRecordFileName, sessionFilePath, sessionLegacyBackupPath, sessionTu
 
 /** A fork shares its parent's history up to an offset instead of storing a
  * second copy of it (`<id>.json` only: a log holds its own copy). */
-export interface TranscriptRef { sessionId: string; uptoIndex: number }
+interface TranscriptRef { sessionId: string; uptoIndex: number }
 
 export interface SessionFile {
   v: 1;
@@ -239,7 +239,7 @@ export async function removeLegacyFiles(id: string): Promise<void> {
 /** `name` is one of the copies migration kept of `id`'s `<id>.json`: exactly
  * `<id>.json-v1` or `<id>.json-v1-<n>`. Exact on purpose: no other name a
  * store makes ends like that, and a prefix match could reach another chat. */
-export function isLegacyBackupOf(id: string, name: string): boolean {
+function isLegacyBackupOf(id: string, name: string): boolean {
   const base = sessionLegacyBackupPath(id).slice(sessionsDirectory().length + 1);
   return name === base || (name.startsWith(`${base}-`) && /^\d+$/.test(name.slice(base.length + 1)));
 }

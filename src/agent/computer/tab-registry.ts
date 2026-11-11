@@ -35,7 +35,7 @@ export interface TabRecord {
 
 export interface BrowserTarget { id: string; type: string; url: string; title?: string }
 
-export interface TabLimits { idleMs: number; maxTabs: number }
+interface TabLimits { idleMs: number; maxTabs: number }
 
 const envNumber = (name: string, fallback: number, env: NodeJS.ProcessEnv): number => {
   const value = Number(env[name]);
@@ -47,11 +47,11 @@ export function tabLimits(env: NodeJS.ProcessEnv = process.env): TabLimits {
   return { idleMs: envNumber('CLIKCODE_BROWSER_TAB_IDLE_MS', 20 * 60_000, env), maxTabs: Math.floor(envNumber('CLIKCODE_BROWSER_MAX_TABS', 12, env)) };
 }
 
-export const PARKED_MS = 6 * 3_600_000;
+const PARKED_MS = 6 * 3_600_000;
 /** A tab used this recently is never evicted for the cap. */
 export const ACTIVE_MS = 10_000;
 
-export const tabsDirectory = (stateDir: string): string => path.join(stateDir, 'computer', 'tabs');
+const tabsDirectory = (stateDir: string): string => path.join(stateDir, 'computer', 'tabs');
 const tabFile = (stateDir: string, id: string): string => path.join(tabsDirectory(stateDir), `${id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
 
 export async function writeTabRecord(stateDir: string, record: TabRecord): Promise<void> {
@@ -60,7 +60,7 @@ export async function writeTabRecord(stateDir: string, record: TabRecord): Promi
   } catch (error) { quiet('agent/computer/tab-registry')(error); }
 }
 
-export async function removeTabRecord(stateDir: string, id: string): Promise<void> {
+async function removeTabRecord(stateDir: string, id: string): Promise<void> {
   await fs.unlink(tabFile(stateDir, id)).catch(quiet('agent/computer/tab-registry'));
 }
 
@@ -77,8 +77,8 @@ export async function readTabRecords(stateDir: string): Promise<TabRecord[]> {
   return records;
 }
 
-export type CloseReason = 'owner ended' | 'idle' | 'over the tab cap' | 'asked to close';
-export interface Closure { id: string; reason: CloseReason }
+type CloseReason = 'owner ended' | 'idle' | 'over the tab cap' | 'asked to close';
+interface Closure { id: string; reason: CloseReason }
 
 /** Which tabs to close, and which records to forget (their page is gone). Pure.
  * `records` should already include a stand-in record for each page Chrome has that no worker recorded. */
@@ -119,7 +119,7 @@ async function devToolsBase(stateDir: string): Promise<string | undefined> {
 }
 
 /** The pages Chrome has open, by its DevTools endpoint. Undefined when the browser is not running. */
-export async function listBrowserTargets(stateDir: string): Promise<BrowserTarget[] | undefined> {
+async function listBrowserTargets(stateDir: string): Promise<BrowserTarget[] | undefined> {
   const base = await devToolsBase(stateDir);
   if (!base) return undefined;
   try {
@@ -130,7 +130,7 @@ export async function listBrowserTargets(stateDir: string): Promise<BrowserTarge
   } catch { return undefined; }
 }
 
-export async function closeBrowserTarget(stateDir: string, id: string): Promise<boolean> {
+async function closeBrowserTarget(stateDir: string, id: string): Promise<boolean> {
   const base = await devToolsBase(stateDir);
   if (!base) return false;
   try { return (await fetch(`${base}/json/close/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(5_000) })).ok; }
@@ -140,7 +140,7 @@ export async function closeBrowserTarget(stateDir: string, id: string): Promise<
 /** Pages first seen without a record, by target id: how long a tab no one recorded has been there, for this process. */
 const firstSeen = new Map<string, number>();
 
-export interface SweepDeps {
+interface SweepDeps {
   now?: number;
   limits?: TabLimits;
   alive?: (pid: number) => boolean;
@@ -148,7 +148,7 @@ export interface SweepDeps {
   close?: (id: string) => Promise<boolean>;
 }
 
-export interface TabView extends TabRecord { title?: string; recorded: boolean }
+interface TabView extends TabRecord { title?: string; recorded: boolean }
 
 /** Every page in the shared Chrome with its owner, joined from the records and the browser's own list. */
 export async function allTabs(stateDir: string, deps: Pick<SweepDeps, 'now' | 'list'> = {}): Promise<TabView[] | undefined> {
@@ -172,7 +172,7 @@ function logName(view: TabRecord): { tab: string; owner: string; url: string } {
 }
 
 /** Close one tab and log it. */
-export async function closeTabLogged(stateDir: string, view: TabRecord, reason: CloseReason, deps: SweepDeps = {}): Promise<boolean> {
+async function closeTabLogged(stateDir: string, view: TabRecord, reason: CloseReason, deps: SweepDeps = {}): Promise<boolean> {
   const now = deps.now ?? Date.now();
   const closed = await (deps.close ?? (id => closeBrowserTarget(stateDir, id)))(view.id);
   if (closed) {

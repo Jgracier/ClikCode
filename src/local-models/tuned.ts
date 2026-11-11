@@ -31,7 +31,7 @@ export interface RegisterTunedInput {
   quality?: number;
 }
 
-export interface TunedDeps {
+interface TunedDeps {
   readHeader?: (path: string) => Promise<Header>;
 }
 

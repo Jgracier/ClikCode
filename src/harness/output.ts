@@ -23,7 +23,7 @@ import { sessionSandboxMode } from '../agent/sandbox.js';
 import { summaryHeadline } from '../session/conversation-summary.js';
 import { stripAnsi } from '../tui/render/width.js';
 
-export function line(label: string, value: unknown): string {
+function line(label: string, value: unknown): string {
   return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
 }
 

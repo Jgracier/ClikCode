@@ -6,8 +6,8 @@ import type { DriveOutcome } from './connector-runner.js';
 import { liveKeygrab, liveKeygrabPort } from './keygrab-live.js';
 import { loadParked, markerFor, type ParkedRecord } from './keygrab-park.js';
 
-export interface ResumeOptions { stateDir: string; id: string; click?: string; goto?: string; /** Press or go, then report the page without running keygrab (a form that needs several plain presses). */ only?: boolean; maxMs?: number; maxSteps?: number; signal?: AbortSignal; screenshotDir?: () => Promise<string> }
-export interface ResumeResult { id: string; reattached: 'tab' | 'reopened'; pressed?: string; outcome: DriveOutcome; record: ParkedRecord }
+interface ResumeOptions { stateDir: string; id: string; click?: string; goto?: string; /** Press or go, then report the page without running keygrab (a form that needs several plain presses). */ only?: boolean; maxMs?: number; maxSteps?: number; signal?: AbortSignal; screenshotDir?: () => Promise<string> }
+interface ResumeResult { id: string; reattached: 'tab' | 'reopened'; pressed?: string; outcome: DriveOutcome; record: ParkedRecord }
 
 export async function resumeKeygrab(options: ResumeOptions): Promise<ResumeResult> {
   const record = await loadParked(options.stateDir, options.id);

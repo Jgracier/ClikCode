@@ -57,7 +57,7 @@ const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
 
 /** A Gateway refusal with what to do about it added: the Gateway's own
  * message names the model or the limit, and the hint says where to go next. */
-export function gatewayErrorMessage(error: { status?: number; code?: string; message: string; retryAfter?: number }): string | undefined {
+function gatewayErrorMessage(error: { status?: number; code?: string; message: string; retryAfter?: number }): string | undefined {
   const command = harnessCommand();
   const wait = error.retryAfter === undefined ? 'Try again in a minute.'
     : `Try again in ${error.retryAfter < 90 ? `${Math.ceil(error.retryAfter)}s` : `${Math.ceil(error.retryAfter / 60)} min`}.`;

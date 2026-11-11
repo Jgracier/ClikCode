@@ -31,7 +31,7 @@ export const ABANDONED_WORK_MS = 24 * 60 * 60 * 1000;
  * (a level, a task); a tool the vendor never settled has no one left to settle it, and until this the
  * only thing that ended its run was ABANDONED_WORK_MS -- a day -- so every window drew a turn's
  * spinner, clock and "esc stop" long after the answer was in. */
-export const ORPHANED_TOOL_MS = 30 * 1000;
+const ORPHANED_TOOL_MS = 30 * 1000;
 /** How much of a finished command's output goes to the conversation. */
 const OUTPUT_TAIL_CHARS = 4_000;
 
@@ -53,7 +53,7 @@ export const CANCEL_SETTLE_MS = 2000;
  * slowest whole setup took 11s and the slowest thread load 7.5s; five minutes
  * of total silence is far past anything a live agent does. The prompt turn
  * itself has no clock: an agent legitimately works for hours. */
-export const SETUP_IDLE_MS = 5 * 60_000;
+const SETUP_IDLE_MS = 5 * 60_000;
 
 type PersistentSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
@@ -84,7 +84,7 @@ export interface PersistentSessionOptions {
 
 /** How often the commands a vendor left running are looked at: their age, cpu and output for a status line,
  * and the stale policy that ends the ones that outlived their use. */
-export const COMMAND_WATCH_MS = 60_000;
+const COMMAND_WATCH_MS = 60_000;
 
 /** What a persistent session's owner reads of the work its vendor left running (vendor-process.ts). */
 export interface VendorWorkSession {

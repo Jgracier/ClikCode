@@ -15,7 +15,7 @@ export const DESKTOP_SERVICE_LABEL = 'com.clikcode.cua-driver';
 const run = (command: string, args: string[], timeoutMs = 10_000): Promise<{ ok: boolean; stdout: string }> =>
   new Promise((resolve) => execFile(command, args, { timeout: timeoutMs }, (error, stdout) => resolve({ ok: !error, stdout: String(stdout ?? '') })));
 
-export type DesktopServiceStep = 'none' | 'kickstart' | 'bootstrap';
+type DesktopServiceStep = 'none' | 'kickstart' | 'bootstrap';
 
 /** What to do before connecting: nothing inside the desktop session or with no one logged in at the screen,
  * start the agent again when it is loaded but stopped, else load it (after stopping a daemon from the wrong session). */

@@ -100,7 +100,7 @@ export function siteName(urlOrOrigin: string): string {
   return own.charAt(0).toUpperCase() + own.slice(1);
 }
 
-export interface LoginRecord { id: string; name: string; site: string; method: string; account: string; complete: boolean; rejected: boolean }
+interface LoginRecord { id: string; name: string; site: string; method: string; account: string; complete: boolean; rejected: boolean }
 function loginRecord(id: string, item: Item): LoginRecord {
   const fields = itemFields(item);
   const method = item.method ?? (fields.password ? 'password' : 'unknown');
@@ -271,7 +271,7 @@ async function nearNames(stateDir: string, name: string): Promise<string[]> {
 }
 
 /** What a secret is for and who owns it, kept beside the value so a long list of credentials can be audited and rotated. */
-export type SecretMeta = { vendor?: string; owner?: string; env?: string; url?: string; createdAt: string; rotatedAt?: string };
+type SecretMeta = { vendor?: string; owner?: string; env?: string; url?: string; createdAt: string; rotatedAt?: string };
 /** A website's base URL (https, or http for a local test page); nothing else, and never with a login in it. */
 function webOrigin(value: string | undefined): string | undefined {
   try { const url = new URL(value ?? ''); return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password ? url.origin : undefined; } catch { return undefined; }
@@ -397,7 +397,7 @@ export async function backfillSecretMeta(stateDir: string, owner?: string): Prom
 }
 
 /** What is untidy in the vault, by name only. Nothing here changes anything. */
-export interface VaultAudit { twins: string[][]; oddNames: string[]; noOwner: string[]; noUrl: string[]; incompleteLogins: { site: string; label: string; method: string }[]; rejectedLogins: { site: string; label: string }[] }
+interface VaultAudit { twins: string[][]; oddNames: string[]; noOwner: string[]; noUrl: string[]; incompleteLogins: { site: string; label: string; method: string }[]; rejectedLogins: { site: string; label: string }[] }
 export async function auditVault(stateDir: string): Promise<VaultAudit> {
   const info = await namedSecretInfo(stateDir);
   const groups = new Map<string, string[]>();

@@ -46,7 +46,7 @@ export interface ShellNotification {
 
 /** A prompt the model scheduled for itself (schedule_wakeup). Held in this
  * process only: it does not outlive the worker that holds it. */
-export interface PendingWakeup {
+interface PendingWakeup {
   id: string;
   prompt: string;
   reason: string;

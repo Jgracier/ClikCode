@@ -7,7 +7,7 @@ import type { HostedAdapter, HostedList, HostedPlan, HostedRow, HostedTarget } f
 
 export * from './types.js';
 
-export const HOSTED_ADAPTERS: readonly HostedAdapter[] = [thisComputer, clikdeploy];
+const HOSTED_ADAPTERS: readonly HostedAdapter[] = [thisComputer, clikdeploy];
 
 /** Words in a search that choose where a model runs instead of naming one. */
 const TARGET_WORDS: Readonly<Record<string, HostedTarget>> = {

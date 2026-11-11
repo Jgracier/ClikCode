@@ -41,7 +41,7 @@ function aiderCount(text: string | undefined): number | undefined {
  * `Cost: $0.0026 message, $0.0026 session.` -- on the same line, or on the
  * next one when both cache counts are present. `sent` is the prompt Aider
  * paid for (it adds cache writes in, and excludes cache hits). */
-export function aiderFooterUsage(lineText: string): TurnUsage | undefined {
+function aiderFooterUsage(lineText: string): TurnUsage | undefined {
   const line = lineText.trim().replace(/^> /, '');
   if (!FOOTER.test(line)) return undefined;
   const count = (label: string): number | undefined => aiderCount(new RegExp(`([\\d.]+k?) ${label}\\b`).exec(line)?.[1]);

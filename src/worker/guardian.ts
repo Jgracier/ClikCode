@@ -19,7 +19,7 @@ import { liveWorkerRecords, workersDirectory } from './registry.js';
  * free, and the guardian checks it still holds it. */
 const GUARDIAN_CHECK_MS = 10_000;
 
-export function guardianLeasePath(): string {
+function guardianLeasePath(): string {
   return join(workersDirectory(), 'guardian.lease');
 }
 

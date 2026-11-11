@@ -12,9 +12,9 @@ export const PROFILE_KEYS = ['given_name', 'family_name', 'email', 'phone', 'add
 export type ProfileKey = typeof PROFILE_KEYS[number];
 /** A field an agent asked the user for beyond the standard ones: an OAuth app's name and description, its
  * privacy-policy address, a company's legal name. `match` is the words a form's label may use for it. */
-export type CustomField = { label: string; value: string; match?: string[] };
+type CustomField = { label: string; value: string; match?: string[] };
 /** A secret kept with a profile: its name and the words a form may label it with. The value is never here. */
-export type SecretField = { label: string; match?: string[] };
+type SecretField = { label: string; match?: string[] };
 /** The secret that fills any password box on a sign-up or sign-in the profile is used for. */
 export const PASSWORD_SECRET = 'password';
 export type Profile = { label: string; fields: Partial<Record<ProfileKey, string>>; custom?: Record<string, CustomField>; secrets?: Record<string, SecretField> };
@@ -263,7 +263,7 @@ export function birthdayFor(value: string, words = ''): string {
 const GENERIC_LABEL_WORDS = new Set(['admin', 'personal', 'work', 'main', 'default', 'account', 'profile', 'home', 'business', 'company', 'bot', 'the', 'and', 'for']);
 
 /** True when this profile declares the page's site: its website detail is on the host, or a word of its label (Railway, AWS) is part of it. */
-export function profileDeclaresHost(profile: SavedProfile, host: string | undefined): boolean {
+function profileDeclaresHost(profile: SavedProfile, host: string | undefined): boolean {
   if (!host) return false;
   const bare = host.toLowerCase().replace(/^www\./, '');
   const site = profile.fields.website ? plain(profile.fields.website).replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0] : '';

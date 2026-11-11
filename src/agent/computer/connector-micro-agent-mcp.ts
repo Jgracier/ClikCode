@@ -11,9 +11,9 @@ import type { ToolContext, ToolDefinition } from '../tool-contract.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
 type Rpc = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: Record<string, any> };
-export interface AgentMcpOptions { tab: string; maxCalls: number; counter?: string; tools?: readonly ToolDefinition[]; stateDir?: string; connector?: string }
+interface AgentMcpOptions { tab: string; maxCalls: number; counter?: string; tools?: readonly ToolDefinition[]; stateDir?: string; connector?: string }
 
-export const CONNECTOR_TASK_TOOLS = ['connector_spec_get', 'connector_spec_put', 'connector_discover', 'connector_build', 'connector_build_apply', 'connector_copy_task', 'connector_copy_apply', 'connector_proof', 'connector_finish', 'connector_seed_plan', 'connector_seed_apply', 'connector_spec_patch', 'connector_enrich', 'connector_onboard', 'connector_work_note', 'connector_scope_check', 'connector_test', 'connector_test_job_status', 'connector_test_job_step', 'connector_harvest_fixtures'] as const;
+const CONNECTOR_TASK_TOOLS = ['connector_spec_get', 'connector_spec_put', 'connector_discover', 'connector_build', 'connector_build_apply', 'connector_copy_task', 'connector_copy_apply', 'connector_proof', 'connector_finish', 'connector_seed_plan', 'connector_seed_apply', 'connector_spec_patch', 'connector_enrich', 'connector_onboard', 'connector_work_note', 'connector_scope_check', 'connector_test', 'connector_test_job_status', 'connector_test_job_step', 'connector_harvest_fixtures'] as const;
 
 /** Each micro-task can edit only its own connector through validated platform tools. No audiences or gate settings surface here. */
 export function connectorTaskTool(id: string, ports?: { describe(tool: string): Promise<unknown>; call(tool: string, args: Record<string, unknown>): Promise<unknown> }): ToolDefinition {

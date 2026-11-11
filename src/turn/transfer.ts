@@ -26,7 +26,7 @@ import { fullRecordNote } from '../session/full-record.js';
 import { escapeFailoverContent, FAILOVER_PREAMBLE } from './failover-prompt.js';
 
 /** Smallest budget: what every handoff had before it was sized to a model. */
-export const TRANSFER_MIN_BYTES = 48 * 1024;
+const TRANSFER_MIN_BYTES = 48 * 1024;
 /** The budget when nothing has reported the model's window: the same
  * assumption a written thread makes (thread-start.ts NATIVE_DEFAULT_BYTES),
  * not the minimum. An unknown window is not a small one -- a vendor whose

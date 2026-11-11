@@ -10,7 +10,7 @@
  * shutdown), which then decides. SIGINT is Ctrl+C: it stops the vendor's
  * work, and what follows is the caller's to say. */
 
-export type ParentSignal = 'SIGINT' | 'SIGTERM' | 'SIGHUP';
+type ParentSignal = 'SIGINT' | 'SIGTERM' | 'SIGHUP';
 
 type Stop = (signal: ParentSignal) => void;
 

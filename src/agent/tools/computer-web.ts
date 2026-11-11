@@ -68,7 +68,7 @@ type WebArgs = {
 function chosenNote(pick: LinkPick, opened: string): string {
   return `${opened} Chose ${pick.chosen.text.trim() ? `"${pick.chosen.text.trim().slice(0, 60)}" ` : ''}(${describeLink(pick.chosen)})${pick.others.length ? `; other links: ${pick.others.map(t => `"${t.slice(0, 40)}"`).join(', ')}. Pass link: "words" to open another` : ''}.`;
 }
-export function webAddress(value: string | undefined): string {
+function webAddress(value: string | undefined): string {
   if (!value) throw new Error('Open needs a website URL.');
   const parsed = new URL(value);
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Open needs an HTTP or HTTPS website URL without credentials.');
@@ -1022,7 +1022,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
 }
 
 /** An error or alert the page is showing right now (a line that names an error, failure or a needed payment), for a failure report. */
-export async function pageProblem(page: Page | undefined): Promise<string> {
+async function pageProblem(page: Page | undefined): Promise<string> {
   if (!page) return '';
   try {
     const text = await page.evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText);
@@ -1032,7 +1032,7 @@ export async function pageProblem(page: Page | undefined): Promise<string> {
 }
 
 /** Why a form will not go on: fields the browser or the page marks invalid, and a main button that is disabled. */
-export async function formProblems(page: Page): Promise<string[]> {
+async function formProblems(page: Page): Promise<string[]> {
   try {
     return await page.evaluate(() => {
       type El = { getAttribute(name: string): string | null; labels?: ArrayLike<{ textContent: string | null }>; validationMessage?: string; checkValidity?: () => boolean; disabled?: boolean; textContent: string | null; value?: string };

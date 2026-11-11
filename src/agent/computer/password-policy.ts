@@ -19,7 +19,7 @@ export type PasswordPolicy = {
 };
 
 /** What a site said about repeats, sequences and required classes ("no repeated or sequential characters"). */
-export type PasswordRules = {
+type PasswordRules = {
   /** No two equal characters side by side (case-insensitive: "aA" counts). */
   noRepeat?: boolean;
   /** No abc / cba / 123 / 321 runs, and no keyboard runs such as qwe or asd. */
@@ -36,7 +36,7 @@ const NEGATION = String.raw`(?:\bno\b|\bnot\b|\bwithout\b|\bavoid\b|\bcannot\b|c
 const FORBIDS_SYMBOLS = /(?:no|without|not (?:allow|support|accept)|don'?t (?:use|include)|avoid|exclud\w*)\s+(?:any\s+)?(?:special|symbols?|punctuation)|(?:letters?|alphanumeric|alpha-numeric)\s*(?:and|&|or|\+)\s*(?:numbers?|digits?)\s*only|only\s+(?:letters?|alphanumeric)|alphanumeric\s+(?:characters\s+)?only|special (?:characters?|symbols?) (?:are )?not allowed/i;
 
 /** Reads repeat, sequence and required-symbol rules out of free text. */
-export function parseRules(text: string): PasswordRules | undefined {
+function parseRules(text: string): PasswordRules | undefined {
   const t = text.replace(/\s+/g, ' ');
   const rules: PasswordRules = {};
   if (new RegExp(`${NEGATION}[^.;]{0,60}\\b(?:repeat\\w*|duplicat\\w*|identical|same (?:character|letter|digit))`, 'i').test(t)) rules.noRepeat = true;
@@ -55,7 +55,7 @@ const mergeRules = (a: PasswordRules | undefined, b: PasswordRules | undefined):
   return { ...(a.noRepeat || b.noRepeat ? { noRepeat: true } : {}), ...(a.noSequence || b.noSequence ? { noSequence: true } : {}), ...(maxIdentical ? { maxIdentical } : {}), ...(a.inRow || b.inRow ? { inRow: true } : {}), ...(a.requireSymbol || b.requireSymbol ? { requireSymbol: true } : {}) };
 };
 
-export const DEFAULT_SYMBOLS = '!@#$%^*-_';
+const DEFAULT_SYMBOLS = '!@#$%^*-_';
 const HARD_MAX = 128;
 export const DEFAULT_POLICY: PasswordPolicy = { length: 24, minLength: 8, maxLength: HARD_MAX, symbols: DEFAULT_SYMBOLS, patterns: [] };
 export const MAX_PASSWORD_ATTEMPTS = 3;
@@ -121,7 +121,7 @@ const shuffle = <T,>(items: T[]): T[] => {
 
 const KEYBOARD_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm', '1234567890'];
 /** Three keys in a row on a keyboard, either direction ("qwe", "ewq", "asd"), case-insensitive. */
-export function hasKeyboardRun(password: string): boolean {
+function hasKeyboardRun(password: string): boolean {
   const lowered = password.toLowerCase();
   for (let i = 2; i < lowered.length; i++) {
     const three = lowered.slice(i - 2, i + 1);
@@ -132,7 +132,7 @@ export function hasKeyboardRun(password: string): boolean {
 }
 
 /** More uses of one character (case-insensitive) than allowed; with `inRow`, more in a row. */
-export function hasTooManyIdentical(password: string, limit: number, inRow = false): boolean {
+function hasTooManyIdentical(password: string, limit: number, inRow = false): boolean {
   const lowered = password.toLowerCase();
   if (inRow) { let run = 1; for (let i = 1; i < lowered.length; i++) { run = lowered[i] === lowered[i - 1] ? run + 1 : 1; if (run > limit) return true; } return false; }
   const counts = new Map<string, number>();

@@ -29,7 +29,7 @@ const probesInFlight = new Map<string, Promise<UsageReading | undefined>>();
  * HTTP call in it included. Each has its own deadline (vendor-probe.ts);
  * this one is the backstop, so a probe that never settles cannot hold the
  * account's slot below -- and every later ask for it -- forever. */
-export const USAGE_PROBE_DEADLINE_MS = 60_000;
+const USAGE_PROBE_DEADLINE_MS = 60_000;
 
 export function probeOnce(key: string, probe: () => Promise<UsageReading | undefined>, deadlineMs = USAGE_PROBE_DEADLINE_MS): Promise<UsageReading | undefined> {
   const running = probesInFlight.get(key);

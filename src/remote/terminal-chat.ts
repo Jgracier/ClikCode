@@ -321,7 +321,7 @@ export function outdatedNotice(machine: Pick<RemoteMachine, 'name' | 'updates' |
  * REJOIN_PAUSES_MS. A chat that cannot be opened at all is RemoteUnavailable. */
 /** How a chat on another machine was left: a local chat to show (its id),
  * nothing (back to the one it was opened from), or the window closing (/exit). */
-export type RemoteChatEnd = string | { exit: true } | undefined;
+type RemoteChatEnd = string | { exit: true } | undefined;
 
 /** The pauses before each reconnect of a chat's own ssh after a drop: the start of the one reconnect
  * schedule (connection.ts BACKOFF_MS), given up after its first five, half a minute apart at the end. */

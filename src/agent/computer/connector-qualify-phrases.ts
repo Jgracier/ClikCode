@@ -28,7 +28,7 @@ export const NEGATION_BEFORE = /(?:\bno|\bnot|\bwithout|\bnever|\bzero|\bdon'?t 
 export const NEGATION_AFTER = /^\s*(?:is |are )?(?:not |never |no longer )(?:required|needed|necessary)|^\s*(?:is |are )?(?:optional|unnecessary)|^\s*\bnot (?:required|needed)/;
 
 /** An API named near a plan name: the API is gated by a paid plan. */
-export const PLAN_NAMES = '(?:paid|premium|pro|professional|business|enterprise|advanced|growth|scale|team|teams|plus|elite|ultimate|unlimited|standard|starter|essential|essentials|agency|corporate|higher|upper|top)';
+const PLAN_NAMES = '(?:paid|premium|pro|professional|business|enterprise|advanced|growth|scale|team|teams|plus|elite|ultimate|unlimited|standard|starter|essential|essentials|agency|corporate|higher|upper|top)';
 export const GATED_BY_PLAN = new RegExp(
   [
     `\\bapi\\b[^.\\n]{0,80}\\b(?:available|included|offered|accessible|only|restricted|limited|requires?|reserved|unlock(?:ed)?|enabled)\\b[^.\\n]{0,60}\\b${PLAN_NAMES}\\b[^.\\n]{0,24}\\b(?:plans?|tiers?|subscriptions?|accounts?|customers?|users?|packages?|editions?)\\b`,

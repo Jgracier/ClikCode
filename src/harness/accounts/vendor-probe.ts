@@ -25,7 +25,7 @@ type Environment = Readonly<Record<string, string>>;
  * `/usage` takes ~4s; Kimi's web server ~2s to start. */
 export const PROBE_DEADLINE_MS = 30_000;
 /** The longest one HTTP call of a probe may take. */
-export const PROBE_FETCH_MS = 15_000;
+const PROBE_FETCH_MS = 15_000;
 
 /** The names a CLI opens a browser through. */
 const OPENERS = ['xdg-open', 'open', 'gio', 'sensible-browser', 'x-www-browser', 'www-browser'];
@@ -73,7 +73,7 @@ export async function mayRunSignInCapable(
   return hasAuthEvidence(harness) && await authEvidencePresent(harness, environment);
 }
 
-export interface VendorProbeSpec {
+interface VendorProbeSpec {
   binary: string;
   argv: readonly string[];
   environment: Environment;

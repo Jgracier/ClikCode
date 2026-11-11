@@ -19,7 +19,7 @@ let loaded: Loaded | undefined;
 
 /** The explicit development check: CLIKCODE_HOT_TOOLS=1 or 0 decides; otherwise only a program built in a source checkout
  * (a `.git` beside its dist/) reloads. A published or installed build never does. */
-export function hotReloadEnabled(): boolean {
+function hotReloadEnabled(): boolean {
   const forced = process.env.CLIKCODE_HOT_TOOLS;
   if (forced === '1' || forced === '0') return forced === '1';
   try { return existsSync(fileURLToPath(new URL('../.git', import.meta.url))); } catch { return false; }

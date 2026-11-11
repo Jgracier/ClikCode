@@ -13,7 +13,7 @@ import type { HarnessSession } from './model.js';
 
 type Queued = NonNullable<HarnessSession['queuedTurns']>[number];
 
-export type QueuedNext = { kind: 'command' | 'message'; entry: Queued } | undefined;
+type QueuedNext = { kind: 'command' | 'message'; entry: Queued } | undefined;
 
 export function queuedNext(session: Pick<HarnessSession, 'queuedTurns'>, options: { stopped?: boolean; justRan?: string } = {}): QueuedNext {
   const entry = session.queuedTurns?.[0];

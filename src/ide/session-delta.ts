@@ -70,18 +70,18 @@ export interface HeldChat {
 }
 
 /** What `messages` of chat `sessionId` come to, for an `open` to say what the client already has. */
-export function claimOf(sessionId: string, messages: Messages, gen?: string): HeldChat | undefined {
+function claimOf(sessionId: string, messages: Messages, gen?: string): HeldChat | undefined {
   if (!messages.length) return undefined;
   return { sessionId, count: messages.length, first: fingerprint(messages[0]), last: fingerprint(messages[messages.length - 1]), ...(gen ? { gen } : {}) };
 }
 
 /** A message as the client is sent it, by how many messages come after it (0: the newest). */
-export type MessageShape = (message: Messages[number], after: number) => Messages[number];
+type MessageShape = (message: Messages[number], after: number) => Messages[number];
 
 /** How the running turn is sent to a client, where it is not the conversation's messages: the journal in the session
  * (`pendingTurn`) and the calls a worker's snapshot says the turn has made (`live.activities`). The same tool calls are in
  * all three -- 1.3 MB for a turn with eight sub-agents, against 0.3 KB for a chat with nothing running. */
-export interface TurnShape {
+interface TurnShape {
   pendingTurn?: (turn: NonNullable<HarnessSession['pendingTurn']>) => NonNullable<HarnessSession['pendingTurn']>;
   liveActivities?: <A>(activities: A[]) => A[];
 }

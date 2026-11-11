@@ -40,20 +40,20 @@ export interface KeygrabPort {
   profileEmail(): Promise<string | undefined>;
 }
 
-export interface KeygrabOptions { id: string; url: string; /** Continue from the page the browser is on (a resumed run): no start page is opened. */ resume?: { visited?: string[]; menus?: string[]; signedIn?: boolean }; /** Most pages post-login exploration follows (default 8). */ exploreMax?: number; /** Other starting points to try when `url` is no web page (the spec's homepage, sign-up and docs addresses). */ alternates?: string[]; maxSteps?: number; maxMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void }
-export type KeygrabResult = { ok: true; note: string; steps: number; route: string } | { ok: false; stop: StopInfo; steps: number };
+interface KeygrabOptions { id: string; url: string; /** Continue from the page the browser is on (a resumed run): no start page is opened. */ resume?: { visited?: string[]; menus?: string[]; signedIn?: boolean }; /** Most pages post-login exploration follows (default 8). */ exploreMax?: number; /** Other starting points to try when `url` is no web page (the spec's homepage, sign-up and docs addresses). */ alternates?: string[]; maxSteps?: number; maxMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void }
+type KeygrabResult = { ok: true; note: string; steps: number; route: string } | { ok: false; stop: StopInfo; steps: number };
 
-export const KEY_NAME = 'ClikDeploy';
-export const KEY_PATHS = ['/settings/api-keys', '/account/api', '/dashboard/api', '/developers', '/developer', '/api-keys', '/keys', '/settings/tokens'] as const;
+const KEY_NAME = 'ClikDeploy';
+const KEY_PATHS = ['/settings/api-keys', '/account/api', '/dashboard/api', '/developers', '/developer', '/api-keys', '/keys', '/settings/tokens'] as const;
 
-export const GOOGLE_BUTTON = /^(?:[\w ]{0,24}?\s)?(?:with|using|via)\s+google\b|^google$/i;
-export const GITHUB_BUTTON = /^(?:[\w ]{0,24}?\s)?(?:with|using|via)\s+github\b|^github$/i;
+const GOOGLE_BUTTON = /^(?:[\w ]{0,24}?\s)?(?:with|using|via)\s+google\b|^google$/i;
+const GITHUB_BUTTON = /^(?:[\w ]{0,24}?\s)?(?:with|using|via)\s+github\b|^github$/i;
 /** A social or share link to the provider's own site (a footer icon), not a sign-in button. */
 const SOCIAL_HOST = /(^|\.)(github\.com|google\.com|plus\.google\.com)$/i;
 /** "Continue with Google" style first, a bare provider name last. */
 const providerRank = (c: KeyControl): number => /\b(continue|sign ?in|sign ?up|log ?in|login|register|connect|start)\b/i.test(c.name) ? 0 : /\b(with|using|via)\b/i.test(c.name) ? 1 : 2;
 /** The brief's link test first; plain "Developers" and "API" menu items rank below it. */
-export const API_LINK = /api (keys?|tokens?|credentials|developers?)/i;
+const API_LINK = /api (keys?|tokens?|credentials|developers?)/i;
 /** "Word Associations API Account", "API console": the way into the vendor's API area, ranked between the key links and the bare ones. */
 const API_LINK_AREA = /\bapi\b[^.]{0,30}\b(?:account|portal|console|dashboard|access|sign ?up|register)\b|\b(?:developer|api) (?:portal|console|dashboard|account)\b/i;
 const API_LINK_WEAK = /^(developers?|api|api access|developer portal|for developers|credentials|keys|tokens?|developer settings)$/i;

@@ -10,7 +10,7 @@ import type { VendorTurnContext } from './vendor-turn-context.js';
  * script or pipe answers the worker's sign-in request with "X is not signed
  * in; run ... in a terminal" (worker/scripted-send.ts), and a worker with no
  * window attached says "sign in to X needs an open ClikCode window". */
-export function signInNotPossibleHere(error: unknown): boolean {
+function signInNotPossibleHere(error: unknown): boolean {
   return error instanceof Error && /is not signed in; run |needs an open ClikCode window/.test(error.message);
 }
 

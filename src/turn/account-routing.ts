@@ -48,7 +48,7 @@ export function providerHasAccountForTurn(
  * it, from the vendor's reading while it is current. Undefined when the
  * vendor reports none. Ranking only: whether the account may be tried at all
  * is accountQuotaSpent. */
-export function reportedRoom(account: AiHarnessAccount, now: number = Date.now()): number | undefined {
+function reportedRoom(account: AiHarnessAccount, now: number = Date.now()): number | undefined {
   const windows = vendorWindows(account).filter((window) => !window.advisory);
   if (!windows.length || !usageReadingIsCurrent({ windows }, now)) return undefined;
   return Math.min(...windows.map((window) => Math.max(0, 100 - window.usedPct)));

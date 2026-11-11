@@ -18,7 +18,7 @@ const RETRY_AFTER_CAP_SECONDS = 120;
  * has no clock here -- the Gateway ends that on its side, by answering something other than MODEL_STARTING --
  * and the user's Stop ends any wait. A client with no status at all (nothing reports the start) spends the
  * step retry budget instead. MEASURED 2026-10-22: a 0.5B vLLM model on ClikDeploy capacity took 11-16 min cold. */
-export const START_OVERRUN_FACTOR = 2;
+const START_OVERRUN_FACTOR = 2;
 
 /** What the Gateway last said of a starting model, and when it was read. */
 export interface StartReading { start: OwnModelStart; at: number }

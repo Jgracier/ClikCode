@@ -18,7 +18,7 @@ import type { ConversationItem, TokenUsage } from './model-client.js';
 import { OUTPUT_CAPS, readDenyReason, resolvePath } from './security.js';
 import { CONVERSATION_TOOLS_NOTE } from '../search/tools.js';
 
-export const DEFAULT_CONTEXT_WINDOW = 128_000;
+const DEFAULT_CONTEXT_WINDOW = 128_000;
 const MEMORY_CAP_BYTES = 32 * 1024;
 
 // The instructions, by section. Lean and full send all of them, joined by a

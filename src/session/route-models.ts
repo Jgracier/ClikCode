@@ -9,7 +9,7 @@
 import type { HarnessSession, HarnessState } from './model.js';
 
 /** `gateway`, `clikcode-local`, or the vendor harness's command; undefined for a conversation on none. */
-export function routeKeyOf(session: Pick<HarnessSession, 'route' | 'nativeHarness'>): string | undefined {
+function routeKeyOf(session: Pick<HarnessSession, 'route' | 'nativeHarness'>): string | undefined {
   if (session.route === 'gateway') return 'gateway';
   if (session.route === 'clikcode-local') return 'clikcode-local';
   return session.nativeHarness;

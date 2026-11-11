@@ -12,7 +12,7 @@ import { scrubSecrets } from './secret-scrubber.js';
 export const WORKER = 'cc-runner';
 
 /** An error message in full (every line, whitespace folded), scrubbed of secrets; cut only at a length no real message reaches. */
-export const fullMessage = (text: string): string => scrubSecrets(text.trim().replace(/\s+/g, ' ')).slice(0, 4_000);
+const fullMessage = (text: string): string => scrubSecrets(text.trim().replace(/\s+/g, ' ')).slice(0, 4_000);
 
 /** A ClikDeploy tool's refusal, with the platform's error code when it sent one (`LEASE_REQUIRED`). */
 export class ClikDeployToolError extends Error {
@@ -95,7 +95,7 @@ export function findOnboard(value: unknown): OnboardResult | undefined {
   return undefined;
 }
 
-export interface LiveDriverOptions { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; /** The named tab this driver works in (default 'connectors'). The loop gives each vendor its own. */ tab?: string; /** Leave the browser connection open when a job ends: other vendors' tabs share it. */ keepBrowser?: boolean }
+interface LiveDriverOptions { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; /** The named tab this driver works in (default 'connectors'). The loop gives each vendor its own. */ tab?: string; /** Leave the browser connection open when a job ends: other vendors' tabs share it. */ keepBrowser?: boolean }
 
 /** Page text and the names of what can be pressed, for a stop that has no detail of its own. */
 async function look(page: Page): Promise<{ text: string; controls: string[] }> {
