@@ -1,8 +1,6 @@
 import { ResponseReveal } from '../tui/render/response-reveal.js';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { access, mkdtemp, rm } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,8 +35,6 @@ async function terminateSpawnedWorkers(): Promise<void> {
 
 beforeAll(async () => {
   process.env.CLIKCODE_WORKER_ENTRY = distEntry;
-  const alreadyBuilt = await access(distEntry).then(() => true, () => false);
-  if (!alreadyBuilt) await promisify(execFile)('node', ['scripts/build.mjs'], { cwd: repoRoot });
 }, 30_000);
 
 afterAll(() => {

@@ -3,8 +3,7 @@
  * private prompt and the approval, and no secret value comes back. Uses dist/index.js. */
 import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +27,6 @@ const VALUE = 'salad_live_9f8e7d6c5b4a39281706';
 
 beforeAll(async () => {
   process.env.CLIKCODE_WORKER_ENTRY = distEntry;
-  await promisify(execFile)('node', ['scripts/build.mjs'], { cwd: repoRoot });
 }, 60_000);
 afterAll(() => { for (const key of ENV_KEYS) { if (savedEnv[key] === undefined) delete process.env[key]; else process.env[key] = savedEnv[key]; } });
 afterEach(async () => {

@@ -2,9 +2,7 @@
  * goes even with a terminal attached, and that terminal's next attach (its
  * next message) starts it again. Real spawned workers, in a home of their own. */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { access, mkdtemp, rm } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +26,6 @@ const sessions: string[] = [];
 
 beforeAll(async () => {
   process.env.CLIKCODE_WORKER_ENTRY = distEntry;
-  if (!await access(distEntry).then(() => true, () => false)) await promisify(execFile)('node', ['scripts/build.mjs'], { cwd: repoRoot });
 }, 30_000);
 afterAll(() => {
   restore('CLIKCODE_WORKER_ENTRY', saved.entry);
