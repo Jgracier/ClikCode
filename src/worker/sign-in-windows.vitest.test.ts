@@ -75,7 +75,7 @@ describe('a sign-in across windows and conversations', () => {
     // The second window opens A too: it is already running in the first.
     other.open();
     expect(other.running.size).toBe(0);
-    observer.resolveSignIn([...elsewhere.running][0]!);
+    observer.answerSignIn([...elsewhere.running][0]!, elsewhere.socket);
     await signedIn;
     expect(elsewhere.running.size).toBe(0);
     expect(elsewhere.tracker.signIns.size).toBe(0);

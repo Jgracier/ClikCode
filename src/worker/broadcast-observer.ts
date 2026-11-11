@@ -128,7 +128,7 @@ export class BroadcastObserver implements TurnObserver {
    * one could answer it. The turn's sender runs it first; a runner that stops
    * showing the conversation releases it, and the first window showing it to
    * claim it runs it next (`sign-in-pending`, `sign-in-claim`). */
-  private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent & { type: 'sign-in-request' }; runner?: Socket }>();
+  private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent & { type: 'sign-in-request' }; runner?: Socket; unwatch: () => void }>();
   /** The window that sent the running turn: a sign-in it needs is offered to
    * it first. Undefined for a turn the worker started itself (a queued
    * message drained after its window closed). */
@@ -333,14 +333,15 @@ export class BroadcastObserver implements TurnObserver {
 
   private dropPending(): void {
     const hadApprovals = this.pendingApprovals.size > 0 || this.pendingQuestions.size > 0;
-    for (const id of [...this.pendingApprovals.keys(), ...this.pendingQuestions.keys()]) this.broadcast({ type: 'request-closed', id });
+    // A sign-in too: the window running it takes it down, and none still holds it.
+    for (const id of [...this.pendingApprovals.keys(), ...this.pendingQuestions.keys(), ...this.pendingSignIns.keys()]) this.broadcast({ type: 'request-closed', id });
     for (const pending of this.pendingApprovals.values()) pending.resolve(false);
     this.pendingApprovals.clear();
     for (const pending of this.pendingQuestions.values()) pending.resolve({ kind: 'cancelled' });
     this.pendingQuestions.clear();
     this.awaitingSince.clear();
     if (hadApprovals) this.announceAwaiting();
-    for (const pending of this.pendingSignIns.values()) pending.reject(new Error('the turn ended'));
+    for (const pending of this.pendingSignIns.values()) { pending.unwatch(); pending.reject(new Error('the turn ended')); }
     this.pendingSignIns.clear();
     this.turnSender = undefined;
     this.userWaitChanged();
@@ -615,9 +616,10 @@ export class BroadcastObserver implements TurnObserver {
     const event = { type: 'sign-in-request' as const, id, ...request };
     const runner = this.turnSender && this.clients.has(this.turnSender) ? this.turnSender : undefined;
     return new Promise((resolve, reject) => {
-      this.pendingSignIns.set(id, { resolve, reject, event, runner });
       // Stop ends a sign-in the user left waiting.
-      signal?.addEventListener('abort', () => this.resolveSignIn(id, 'stopped'), { once: true });
+      const stop = (): void => this.settleSignIn(id, 'stopped');
+      signal?.addEventListener('abort', stop, { once: true });
+      this.pendingSignIns.set(id, { resolve, reject, event, runner, unwatch: () => signal?.removeEventListener('abort', stop) });
       this.userWaitChanged();
       this.broadcast(signInPending(event));
       if (runner) sendEvent(runner, event);
@@ -641,10 +643,19 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast(signInPending(pending.event), socket);
   }
 
-  resolveSignIn(id: string, error?: string): void {
+  /** The window running the sign-in says how it ended. Only that window's
+   * word counts: another window, or one that has since released it, is
+   * ignored. */
+  answerSignIn(id: string, socket: Socket, error?: string): void {
+    if (this.pendingSignIns.get(id)?.runner !== socket) return;
+    this.settleSignIn(id, error);
+  }
+
+  private settleSignIn(id: string, error?: string): void {
     const pending = this.pendingSignIns.get(id);
     if (!pending) return;
     this.pendingSignIns.delete(id);
+    pending.unwatch();
     this.userWaitChanged();
     // Every other window attached asked the same question: it is over for them too.
     this.broadcast({ type: 'request-closed', id });
