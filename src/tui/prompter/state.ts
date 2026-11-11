@@ -4,7 +4,6 @@ import type { PickerOption } from '../../harness/prompter.js';
 import type { CancelTrigger } from '../../worker/protocol.js';
 import type { TurnClock } from '../../harness/protocol/activity-view.js';
 import type { PaletteLayout } from '../option-picker.js';
-import type { TurnUsage } from '../../harness/protocol/turn-usage.js';
 
 export const EXIT_CONFIRM_MS = 2000;
 
@@ -66,10 +65,6 @@ export type WaitingTurn = {
   writingAt?: number;
   /** When the latest call started (a statusOrder tick). */
   callAt?: number;
-  /** The usage this turn has reported so far, and the token count the
-   * status line shows (stepped toward it each tick, never down). */
-  usage?: TurnUsage;
-  tokens?: number;
   /** The composer typed into while the turn runs. */
   draft: string;
   cursor: number;

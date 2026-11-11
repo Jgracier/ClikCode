@@ -542,7 +542,6 @@ export async function runRemoteChat(
           else if (worker.type === 'note') terminal.activity(worker.message, worker.seq === undefined ? undefined : `notice:${worker.seq}`);
           else if (worker.type === 'phase') terminal.phase(worker.message);
           else if (worker.type === 'plan') terminal.setPlan(worker.entries);
-          else if (worker.type === 'usage') terminal.setTurnUsage(worker.usage);
           else if (worker.type === 'restore-draft') terminal.restoreDraft(worker.text);
           else if (worker.type === 'waiting-stop') { if (worker.stopped) terminal.turnStopped(); running = false; waitingInput = false; terminal.stopWaiting(); finishTurn?.(); }
           else if (worker.type === 'turn-error' && !worker.said) terminal.activity(worker.message);

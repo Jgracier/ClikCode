@@ -10,12 +10,11 @@ import type { LiveTurnInputResult, TakeBackOutcome } from '../../turn/live-input
 import type { ToolCategory } from '../../harness/prompter.js';
 import { stopEntries } from '../render/activity-log.js';
 import { openToolsStatus, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, type TurnWaits } from '../../harness/protocol/activity-view.js';
-import { isApprovalWaitPhase, liveTokenTarget, smoothTokens } from '../../harness/protocol/turn-flow.js';
+import { isApprovalWaitPhase } from '../../harness/protocol/turn-flow.js';
 import type { CancelTrigger } from '../../worker/protocol.js';
 import type { BackgroundWork } from '../../harness/protocol/background-agents.js';
 import { enterAgainSends, type WaitingMessage } from '../render/steer-rows.js';
 import { commandLineTypedDuringTurn } from '../waiting-slash.js';
-import type { TurnUsage } from '../../harness/protocol/turn-usage.js';
 import { takeTerminalKeys } from '../input-decoder.js';
 import { enterInputModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
@@ -336,32 +335,12 @@ export function scheduleWaitingTick(this: TerminalHarnessPrompter): void {
     turn.timer = undefined;
     if (this.turn !== turn || this.closed) return;
     if (this.waitingTickFast) this.waitingFrame++;
-    this.stepTokens(turn);
     // A tick that changes only the clock costs that one row: the frame
     // writes only the rows that differ from the last.
     this.updateWaiting();
     this.scheduleWaitingTick();
   }, delay);
   turn.timer.unref();
-}
-
-/** The status line's token count takes a step toward what the turn has
- * produced (see smoothTokens). Stepped on the tick, not on paint, so the
- * speed does not depend on how many frames were drawn. */
-export function stepTokens(this: TerminalHarnessPrompter, turn: WaitingTurn): void {
-  // Reasoning is tokens too: the thought being had and the ones settled
-  // this turn (a settled mark copy carries its id as its label, not text).
-  const thoughtChars = (this.thought?.text.length ?? 0) + this.activityEntries.reduce((sum, entry) => (
-    entry.anchor === this.activityAnchor && entry.event?.kind === 'thinking' && entry.event.id === undefined
-      ? sum + (entry.event.label?.length ?? 0) : sum), 0);
-  const target = liveTokenTarget({ ...(turn.usage ? { usage: turn.usage } : {}), responseChars: this.liveResponse.length, thoughtChars });
-  turn.tokens = smoothTokens(turn.tokens ?? 0, target);
-}
-
-/** The usage the vendor has reported for the running turn (a running
- * total). It feeds the status line's meter; nothing is drawn for it here. */
-export function setTurnUsage(this: TerminalHarnessPrompter, usage: TurnUsage): void {
-  if (this.turn) this.turn.usage = usage;
 }
 
 /** What the vendor says runs in the background, by kind (standard section

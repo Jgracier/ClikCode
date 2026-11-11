@@ -427,11 +427,6 @@ async function driveWorkerTurn(
           case 'plan':
             rl.setPlan(event.entries);
             return;
-          // The status line's `↓ N tokens` meter reads the turn's usage so
-          // far; the worker records it on the session (lastUsage) too.
-          case 'usage':
-            rl.setTurnUsage(event.usage);
-            return;
           // The end line says agents and workflows from the saved turn
           // (turnEnd.background); a background terminal is a footer
           // indicator, drawn from here while any runs.

@@ -13,7 +13,6 @@ import { isTranscriptActivity, type LiveActivity, type LiveThought, type WorkerE
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { TurnMark } from '../session/model.js';
-import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { backgroundWorkOf, type BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessSession } from '../session/model.js';
 import { joinedAnswerText } from '../turn/live-answer.js';
@@ -32,7 +31,6 @@ export interface JoinedTurn {
   unsequenced?: readonly string[];
   thought?: LiveThought;
   phase?: string;
-  usage?: TurnUsage;
   /** What the vendor says runs in the background, by kind (a level). */
   background?: BackgroundWork;
 }
@@ -50,7 +48,6 @@ export interface LiveTurnState {
   unsequenced: string[];
   thought?: LiveThought;
   phase?: string;
-  usage?: TurnUsage;
   background?: BackgroundWork;
   /** The followed turn is the vendor's own background work (waiting-start `vendorWork`). */
   vendorWork?: boolean;
@@ -71,7 +68,7 @@ function joinLive(state: LiveTurnState, live: NonNullable<Snapshot['live']>, ses
     running: true, prompt: live.prompt ?? state.prompt,
     liveText: joinedAnswerText(sameTurn ? journal.response : undefined, live.text),
     ...(live.activities ? { activities: [...live.activities] } : {}), ...(live.plan ? { plan: live.plan } : {}),
-    marks: live.marks ? [...live.marks] : [], unsequenced: [], thought: live.thought, phase: live.phase, usage: live.usage,
+    marks: live.marks ? [...live.marks] : [], unsequenced: [], thought: live.thought, phase: live.phase,
     background: backgroundWorkOf(live), vendorWork: live.vendorWork === true,
   });
 }
@@ -113,9 +110,6 @@ export function applyLiveEvent(state: LiveTurnState, event: WorkerEvent): void {
     case 'phase':
       if (state.running) state.phase = event.message;
       return;
-    case 'usage':
-      if (state.running) state.usage = event.usage;
-      return;
     case 'background':
       if (state.running) state.background = backgroundWorkOf({ background: event.work, pendingBackground: event.pending });
       return;
@@ -145,7 +139,6 @@ export interface JoinedTurnSurface {
   joinThought(thought: LiveThought): void;
   setPlan(entries: readonly PlanEntry[]): void;
   phase(message: string): void;
-  setTurnUsage(usage: TurnUsage): void;
   /** Optional: a surface with no footer indicator has nothing to draw. */
   setBackgroundWork?(work: BackgroundWork | undefined): void;
 }
@@ -168,6 +161,5 @@ export function drawJoinedTurn(rl: JoinedTurnSurface, turn: JoinedTurn): void {
   if (turn.thought) rl.joinThought(turn.thought);
   if (turn.plan.length) rl.setPlan(turn.plan);
   if (turn.phase && !isApprovalWaitPhase(turn.phase)) rl.phase(turn.phase);
-  if (turn.usage) rl.setTurnUsage(turn.usage);
   if (turn.background) rl.setBackgroundWork?.(turn.background);
 }

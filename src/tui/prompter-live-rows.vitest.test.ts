@@ -215,7 +215,6 @@ describe('the running turn carries no token meter', () => {
     rl.render({ id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [] } as never);
     rl.startWaiting('thinking', () => undefined, async () => ({ kind: 'sent' }) as never);
     try {
-      rl.setTurnUsage({ output: 8 });
       rl.response('word '.repeat(2000));
       vi.advanceTimersByTime(3000);
       const text = strip(written.join(''));
