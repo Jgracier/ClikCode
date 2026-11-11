@@ -13,9 +13,11 @@ it('a stdio server ends when its client closes stdin', async () => {
 it('a stdio server ends when the process is told to stop, with stdin still open', async () => {
   const input = new PassThrough();
   const lines = createInterface({ input });
+  let closed = false;
+  lines.on('close', () => { closed = true; });
   const controller = new AbortController();
   const ended = untilInputEnds(lines, controller.signal);
   controller.abort();
   await expect(ended).resolves.toBeUndefined();
-  expect(lines.closed).toBe(true);
+  expect(closed).toBe(true);
 });

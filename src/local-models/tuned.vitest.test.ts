@@ -19,7 +19,7 @@ const header = {
     { name: 'output.weight', shape: [1000n], dtype: GGMLQuantizationType.Q8_0 },
     { name: 'blk.0.attn_norm.weight', shape: [64n], dtype: GGMLQuantizationType.F32 },
   ],
-} as GGUFParseOutput;
+} as unknown as GGUFParseOutput;
 
 let home: string;
 let source: string;

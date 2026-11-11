@@ -10,9 +10,12 @@ vi.mock('../../runtime/lazy-bridge.js', async (importOriginal) => ({
   isDirectModelProvider: (provider: string) => provider === 'anthropic',
 }));
 
-const harness = (command: string, provider: string, tier: number): AiLocalHarnessDefinition & { tier: number } => ({
-  command, provider, displayName: command, localAuth: ['vendor-cli'], binary: command, tier,
-} as never);
+/** The rank each fake harness is given, by command. */
+const tiers = new Map<string, number>();
+const harness = (command: string, provider: string, tier: number): AiLocalHarnessDefinition => {
+  tiers.set(command, tier);
+  return { command, provider, displayName: command, localAuth: ['vendor-cli'], binary: command } as unknown as AiLocalHarnessDefinition;
+};
 const account = (id: string, provider: string, fields: Partial<AiHarnessAccount> = {}): AiHarnessAccount => ({
   id, provider, label: id, authKind: 'vendor-cli', models: [], status: 'ready', ...fields,
 } as AiHarnessAccount);
@@ -52,7 +55,7 @@ describe('resume in', () => {
       account('o2', 'openai'),
       account('n1', 'nous', { status: 'needs_login' }),
     ];
-    const candidates = resumeInCandidates(harnesses, accounts, 'claude', (item) => (item as { tier: number }).tier);
+    const candidates = resumeInCandidates(harnesses, accounts, 'claude', (item) => tiers.get(item.command)!);
     expect(candidates.map((candidate) => [candidate.harness.command, candidate.accounts.map((item) => item.id)])).toEqual([
       ['codex', ['o2']], ['gemini', ['g1']],
     ]);

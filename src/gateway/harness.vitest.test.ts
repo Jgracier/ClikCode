@@ -108,7 +108,7 @@ describe('a headless turn', () => {
       await runAgentSessionTurn({
         session: session(workspace()), prompt: 'status?', prompter: { activity, activityEvent: () => undefined, phase: () => undefined } as never,
         modelClient: new ScriptedModelClient([{ text: 'ok' }]) as never,
-        mcpServers: [{ name: 'silas', transport: 'http', url: `http://127.0.0.1:${port}/mcp?toolmode=deferred&turn=chat` }],
+        mcpServers: [{ name: 'silas', transport: 'http', url: `http://127.0.0.1:${port}/mcp?toolmode=deferred&turn=chat`, headers: {} }],
       });
     } finally {
       spy.mockRestore();

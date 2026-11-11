@@ -197,7 +197,7 @@ describe('the supervisor\'s embedded copies', () => {
     // Evaluated alone, as the supervisor does, with no module scope around them.
     const embedded = new Function(`${SUPERVISOR_SCRIPT.slice(SUPERVISOR_SCRIPT.indexOf('const memoryStep'), SUPERVISOR_SCRIPT.indexOf('const config'))}
       return { memoryStep, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmstatSwapOut, parseVmStatMac, mergeFootprint };`)() as {
-      memoryStep: typeof memoryStep; parseMeminfo: typeof parseMeminfo; parseProcStatus: typeof parseProcStatus;
+      memoryStep: typeof memoryStep; parseMeminfo: typeof parseMeminfo; parseMemoryPressure: typeof parseMemoryPressure; parseProcStatus: typeof parseProcStatus;
     };
     let state: WatchState = {};
     let last: WatchDecision | undefined;

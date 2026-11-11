@@ -44,7 +44,7 @@ class FakeRemoteBridge extends EventEmitter {
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
-  readonly requests: Array<{ type: string; mode?: string; sessionId?: string; text?: string; query?: string; action?: string; parentId?: string; requestId?: string }> = [];
+  readonly requests: Array<{ type: string; id?: string; mode?: string; sessionId?: string; text?: string; query?: string; action?: string; parentId?: string; requestId?: string }> = [];
   private chat = '';
   /** How a `send` is answered: done at once unless a test says otherwise. */
   onSend: (request: { id: string; text: string }) => void = (request) => this.say({ type: 'send-complete', id: request.id });

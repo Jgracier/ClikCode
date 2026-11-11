@@ -17,7 +17,7 @@ const { withArgValues } = await import('./arg-values.js');
 
 const harness = {
   command: 'grok', provider: 'xai', displayName: 'Grok', localAuth: ['vendor-cli'], loginArgv: ['login'],
-} as AiLocalHarnessDefinition;
+} as unknown as AiLocalHarnessDefinition;
 const session = {
   id: 'chat', route: 'local', accountId: null, provider: 'grok', nativeHarness: 'grok', model: null,
   effort: 'medium', createdAt: '', updatedAt: '', status: 'active',
@@ -45,7 +45,7 @@ describe('/account palette values', () => {
   it('lists nothing when the chat has no provider yet', () => {
     const entries = withArgValues(
       [{ label: '/account', value: '/account' }],
-      { ...session, provider: undefined, nativeHarness: undefined },
+      { ...session, provider: null, nativeHarness: undefined },
       undefined,
       { accounts: [account('work', 'xai'), account('personal', 'openai')], sessions: [] },
     );

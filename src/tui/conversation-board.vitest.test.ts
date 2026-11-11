@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { PickerOption } from '../harness/prompter.js';
 import { boardCapacity, boardHint, boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board.js';
 

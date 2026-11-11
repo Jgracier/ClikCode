@@ -25,7 +25,7 @@ const HEADER = {
     { name: 'token_embd.weight', shape: [100n], dtype: GGMLQuantizationType.F16 },
     { name: 'blk.0.ffn_up_exps.weight', shape: [1024n], dtype: GGMLQuantizationType.Q4_K },
   ],
-} as GGUFParseOutput;
+} as unknown as GGUFParseOutput;
 const ID = `hf:example/model-GGUF:${SHA.slice(0, 12)}:${FILE.rfilename}`;
 const CAPACITY = 64e9;
 const DAY = 24 * 60 * 60 * 1000;
