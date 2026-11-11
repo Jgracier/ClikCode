@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,6 +11,18 @@ async function freshModule(): Promise<typeof import('./json-file.js')> {
 }
 
 describe('updateJsonFile', () => {
+  it('copies a file that is not JSON aside before starting it over, so nothing in it is lost', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'cc-json-file-'));
+    const file = join(dir, 'shared.json');
+    await writeFile(file, '{"kept": 1, "broken', 'utf8');
+    const { updateJsonFile, objectOrEmpty } = await freshModule();
+    await updateJsonFile(file, objectOrEmpty, (current) => ({ ...current, added: true }));
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ added: true });
+    const aside = (await readdir(dir)).filter((name) => name.startsWith('shared.json.damaged-'));
+    expect(aside).toHaveLength(1);
+    expect(await readFile(join(dir, aside[0]!), 'utf8')).toBe('{"kept": 1, "broken');
+  });
+
   it('keeps every change when two processes write the same file at once', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'cc-json-file-'));
     const file = join(dir, 'shared.json');

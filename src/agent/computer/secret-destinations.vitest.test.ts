@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -478,4 +478,14 @@ it('a connection value the connect route does not demand (not in the base URL, o
   const knack = await withShow({ base_url: 'https://api.knack.com/{app_id}', variables: { app_id: { label: 'App' }, region: { default: 'us' }, opt: { optional: true } } });
   expect(Object.fromEntries(Object.entries(knack!).map(([k, v]) => [k, v.required]))).toEqual({ app_id: true, region: false, opt: false });
   expect(await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' } })!, async () => knack)).toContain('needs a value for app_id');
+});
+
+it('keeps a damaged destinations file aside instead of overwriting every saved destination with the new one', async () => {
+  await mkdir(join(dir, 'computer'), { recursive: true });
+  await writeFile(join(dir, 'computer', 'destinations.json'), '{"my-vault": {"run": ["vault"', 'utf8');
+  await addDestination(dir, 'other', { run: ['store', '{{secret}}'] });
+  const kept = (await readdir(join(dir, 'computer'))).filter((name) => name.startsWith('destinations.json.damaged-'));
+  expect(kept).toHaveLength(1);
+  expect(await readFile(join(dir, 'computer', kept[0]!), 'utf8')).toContain('my-vault');
+  expect(Object.keys(JSON.parse(await readFile(join(dir, 'computer', 'destinations.json'), 'utf8')) as object)).toEqual(['other']);
 });

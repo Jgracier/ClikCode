@@ -17,6 +17,7 @@ import { cliReadsArgsJsonFromStdin } from './cli-stdin-support.js';
 import { namedSecretNames, readNamedSecret } from './credential-vault.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import { sleep } from '../../runtime/sleep.js';
+import { objectOrEmpty, updateJsonFile } from '../../session/store/json-file.js';
 
 /** `connectionValues`: for the two ClikDeploy connection destinations, the per-account values a connector's base URL needs
  * ({app_id: "WJUQDEJ3SG"}); sent to ClikDeploy's connect route as `baseUrlVariables`. Not secrets. */
@@ -144,20 +145,18 @@ export async function addDestination(stateDir: string, name: string, template: T
   if (!NAME.test(name)) throw new Error('A destination name is lower-case letters, digits and dashes, such as my-vault.');
   if (!template.run.length || !template.run[0]) throw new Error('A destination needs a command to run.');
   if (!carriesSecret(template)) throw new Error('A destination needs {{secret}} in its command (or its stdin), or the key is never sent.');
-  let own: Record<string, Template> = {};
-  try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch (error) { /* first one */ swallowed('agent/computer/secret-destinations', error); }
-  own[name] = template;
-  await fs.mkdir(path.dirname(destinationsFile(stateDir)), { recursive: true, mode: 0o700 });
-  await fs.writeFile(destinationsFile(stateDir), `${JSON.stringify(own, null, 2)}\n`, { mode: 0o600 });
+  await updateJsonFile(destinationsFile(stateDir), (raw) => objectOrEmpty(raw) as Record<string, Template>, (own) => ({ ...own, [name]: template }));
 }
 
 export async function removeDestination(stateDir: string, name: string): Promise<boolean> {
-  let own: Record<string, Template> = {};
-  try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch { return false; }
-  if (!(name in own)) return false;
-  delete own[name];
-  await fs.writeFile(destinationsFile(stateDir), `${JSON.stringify(own, null, 2)}\n`, { mode: 0o600 });
-  return true;
+  let removed = false;
+  await updateJsonFile(destinationsFile(stateDir), (raw) => objectOrEmpty(raw) as Record<string, Template>, (own) => {
+    if (!(name in own)) return undefined;
+    removed = true;
+    const { [name]: _gone, ...rest } = own;
+    return rest;
+  });
+  return removed;
 }
 
 export const describeKnown = (all: Readonly<Record<string, Template>>): string =>
