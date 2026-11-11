@@ -116,10 +116,8 @@ class PromptSession {
       const hint = options[0]?.completes ? [keyHintFor('↑↓', 'choose'), keyHintFor('tab', 'fill in'), keyHint('apply'), keyHintFor('esc', 'clear')].join(' · ')
         : value.includes(' ') ? `${keyHintFor('enter', 'run')} · ${keyHintFor('esc', 'clear')}` : undefined;
       p.paint(value, options, this.selected, prompt, this.cursor, { capacity: this.paletteCapacity, ...(hint ? { hint } : {}) });
-      p.paletteActive = true;
       return;
     }
-    p.paletteActive = false;
     // Palette closure and ordinary typing are both complete frames, so
     // the transcript immediately reclaims any previously reserved rows.
     // A secret (an API key typed into a sign-in) is drawn as dots.
@@ -131,7 +129,6 @@ class PromptSession {
   private release(): boolean {
     if (this.finished) return false;
     this.finished = true;
-    this.p.paletteActive = false;
     this.stopInput();
     output.write(`${popReadModes()}\u001b[?25h`);
     this.p.cursorShown = true;
