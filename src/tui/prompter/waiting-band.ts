@@ -17,6 +17,7 @@ import { formatElapsed } from '../../harness/protocol/format.js';
 import { keyHint, keyHintFor } from '../../harness/protocol/wording.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { WaitingTurn } from './state.js';
+import { inlineHistoryMode } from '../inline.js';
 
 /** The line under the composer, fitted to `width`: a narrow screen
  * shortens the directory from the left (`…/clikcode`) before anything. */
@@ -189,10 +190,17 @@ export function redrawScreen(this: TerminalHarnessPrompter): void {
   this.paint(text, options, selected, prompt, cursor, palette);
 }
 
-/** Ctrl+L: the terminal lost cells (a mobile resize, a remote redraw). The screen is cleared and the current state drawn whole
- * from what this program keeps -- the turn and the draft untouched. */
-export function repairScreen(this: TerminalHarnessPrompter): void {
+/** The next frame repairs the screen: it is cleared and drawn whole from what this program keeps. Inline, where the conversation
+ * is in the terminal's own scrollback, that is the conversation written again (as a new width writes it). */
+export function repairNext(this: TerminalHarnessPrompter): void {
   this.requestRedraw('repair');
   this.forgetScreenPosition();
+  if (inlineHistoryMode()) this.emitted.requestReseed();
+}
+
+/** Ctrl+L: the terminal lost cells (a mobile resize, a remote redraw). The screen is drawn again whole, now -- the turn and the
+ * draft untouched. */
+export function repairScreen(this: TerminalHarnessPrompter): void {
+  this.repairNext();
   this.redrawScreen();
 }
