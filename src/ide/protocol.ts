@@ -394,10 +394,9 @@ export function decodeTerminalSpec(encoded: string): IdeTerminalSpec {
 }
 
 /** One `ide-bridge` process serving every chat of an editor window
- * (bridge-mux.ts), asked for with CLIKCODE_IDE_MULTIPLEX=1. Each chat speaks
- * the protocol above unchanged, inside an envelope naming it. A ClikCode from
- * before this sends a plain `ready` and ignores these requests: the editor
- * then gives each chat a process of its own, as before. */
+ * (bridge-mux.ts): each chat speaks the protocol above unchanged, inside an
+ * envelope naming it. Every bridge does this from revision 11; an older one
+ * answers a plain `ready` unless asked, and is refused (protocol-version.ts). */
 export type IdeHostRequest =
   /** A chat joins: it is answered by its own `ready`, inside the envelope. */
   | { type: 'chat-attach'; chat: string }

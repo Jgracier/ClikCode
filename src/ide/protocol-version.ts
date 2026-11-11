@@ -41,6 +41,9 @@
  *  10  `activity-details`: retrieve shortened call detail on expansion
  *   9  Hosted AI: `query hosted` / `hosted-plan` and `choose hosted` (hosted-models/): models that run on
  *      this computer or on ClikDeploy, in one list
+ *  11  every bridge serves its chats inside the `{ chat }` envelope (bridge-mux.ts) without being asked:
+ *      the one-chat mode and CLIKCODE_IDE_MULTIPLEX are gone. The oldest revision accepted, since an
+ *      older bridge started without that variable would answer as a one-chat bridge
  *
  * ClikCode and the extension are published separately (the CLI first, in the
  * same ClikDeploy run), so a bump reaches npm before the extension that
@@ -48,7 +51,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 10,
+  revision: 11,
   oldestSupported: 1,
-  oldestRevision: 2,
+  oldestRevision: 11,
 } as const;

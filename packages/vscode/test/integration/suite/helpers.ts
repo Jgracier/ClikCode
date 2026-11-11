@@ -141,7 +141,10 @@ export async function activate(): Promise<ClikCodeApi> {
   withoutClikcodeOnPath();
   const extension = vscode.extensions.all.find((item) => item.packageJSON?.name === 'clikcode');
   if (!extension) throw new Error('the extension is not installed in the test instance');
-  return await extension.activate() as ClikCodeApi;
+  const api = await extension.activate() as ClikCodeApi;
+  // A hidden idle chat lets its bridge go after 4 s here, not 10 minutes: the parking test waits for it.
+  api.setParkAfter(4_000);
+  return api;
 }
 
 /** The composer's Provider menu, open on its list of providers. */

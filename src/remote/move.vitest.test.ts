@@ -4,7 +4,7 @@
  * bridge in a HOME, user and folders of its own. Nothing connects to a real
  * machine or runs a vendor CLI. */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 // @ts-expect-error -- a plain .mjs fixture module
@@ -20,9 +20,11 @@ import type { HarnessPrompter } from '../harness/prompter.js';
 import { readMachines } from './machines.js';
 
 const REPO = resolve(__dirname, '..', '..');
+/** Whether this checkout's build has the code (the program is cli.js and its chunks). */
+const builtIncludes = (text: string): boolean => readdirSync(join(REPO, 'dist')).some((file) => file.endsWith('.js') && readFileSync(join(REPO, 'dist', file), 'utf8').includes(text));
 const FAKES = join(REPO, 'scripts', 'tui-e2e');
 const entry = join(REPO, 'dist', 'index.js');
-const built = existsSync(entry) && readFileSync(join(REPO, 'dist', 'cli.js'), 'utf8').includes('export-chat');
+const built = existsSync(entry) && builtIncludes('export-chat');
 const savedEnv = { ...process.env };
 let root: string;
 let prod: { home: string; bin: string };

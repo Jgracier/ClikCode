@@ -32,6 +32,8 @@ export interface ClikCodeApi {
   tabStates(): ChatModel[];
   /** Integration tests: read or drive the active chat's page. */
   probe(action: 'query' | 'click' | 'type' | 'key' | 'paste', selector: string, text?: string): Promise<unknown>;
+  /** Integration tests: how long a hidden idle chat keeps its bridge (10 minutes otherwise). */
+  setParkAfter(ms: number): void;
 }
 
 /** The status bar item: ClikCode's name and what it is doing; provider,
@@ -366,6 +368,10 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     probe: (action, selector, text) => {
       if (!testing) return Promise.reject(new Error('probes run only under the extension test host'));
       return active().probe(action, selector, text);
+    },
+    setParkAfter: (ms) => {
+      if (!testing) throw new Error('the parking delay is set only under the extension test host');
+      host.parkAfterMs = ms;
     },
   };
 }

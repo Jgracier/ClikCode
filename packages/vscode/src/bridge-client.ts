@@ -112,11 +112,10 @@ export class BridgeClient extends MultiplexBridge {
     child.on('exit', (code, signal) => this.markExited(code, signal));
   }
 
-  /** `extraEnv`: what the pool adds to ask for a shared process. */
-  static start(runtime: Runtime, cwd: string | undefined, extraEnv: Readonly<Record<string, string>> = {}): BridgeClient {
+  static start(runtime: Runtime, cwd: string | undefined): BridgeClient {
     const child = spawn(runtime.node, [runtime.entry, 'ide-bridge'], {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-      env: { ...bridgeEnvironment(process.env, runtime.env), ...extraEnv },
+      env: bridgeEnvironment(process.env, runtime.env),
       ...(cwd ? { cwd } : {}),
       windowsHide: true,
     });

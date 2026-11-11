@@ -62,6 +62,8 @@ export interface ControllerHost {
   reveal(controller: ClikCodeController, keepFocus?: boolean): Promise<void>;
   /** Every open chat: the side bar's and each tab's. */
   chats(): readonly ClikCodeController[];
+  /** How long a chat stays hidden and idle before its bridge is let go (see park); absent: PARK_AFTER_MS. */
+  parkAfterMs?: number;
 }
 
 /** The bridge revision that answers a move (export-chat, import-chat, mark-moved). */
@@ -105,7 +107,7 @@ export function channelEnd(channel: LinkChannel, name: string): MoveEnd {
 }
 
 /** How long a chat stays hidden and idle before its bridge process is let go (see park). */
-const PARK_AFTER_MS = Number(process.env.CLIKCODE_PARK_AFTER_MS) > 0 ? Number(process.env.CLIKCODE_PARK_AFTER_MS) : 10 * 60 * 1000;
+const PARK_AFTER_MS = 10 * 60 * 1000;
 
 export class ClikCodeController implements vscode.Disposable {
   private bridge: BridgeEndpoint | undefined;
@@ -201,7 +203,7 @@ export class ClikCodeController implements vscode.Disposable {
     this.bridge.send({ type: 'visible', visible });
   }
 
-  /** A chat hidden for PARK_AFTER_MS with nothing running in it lets its bridge go: it kept
+  /** A chat hidden for PARK_AFTER_MS (host.parkAfterMs) with nothing running in it lets its bridge go: it kept
    * reading and writing the shared state (usage, presence) for a chat nobody was looking at, and
    * -- before the window's chats shared one process (bridge-pool.ts) -- held a ClikCode process
    * of its own (200-500 MB each, seven in one window, measured 2026-10-18). The conversation
@@ -212,7 +214,7 @@ export class ClikCodeController implements vscode.Disposable {
     if (this.parkTimer) clearTimeout(this.parkTimer);
     this.parkTimer = undefined;
     if (visible || this.disposed) return;
-    this.parkTimer = setTimeout(() => this.park(), PARK_AFTER_MS);
+    this.parkTimer = setTimeout(() => this.park(), this.host.parkAfterMs ?? PARK_AFTER_MS);
     this.parkTimer.unref?.();
   }
   private park(): void {
