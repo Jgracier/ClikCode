@@ -6,16 +6,14 @@ import { quiet } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
-import { createInterface } from 'node:readline';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { HarnessSession } from '../session/model.js';
-import type { IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeRequest, IdeSlashCommand, IdeUiResult } from '../ide/protocol.js';
+import type { IdeEvent, IdeFeature, IdeRequest, IdeSlashCommand, IdeUiResult } from '../ide/protocol.js';
 import { SessionDeltaReceiver } from '../ide/session-delta.js';
 import { ChatKeeper, readChatCache } from './chat-cache.js';
 import { RemoteImages } from './attach.js';
 import { drawHarnessOutput } from '../harness/output.js';
 import { copyToClipboard } from '../session/attachments.js';
-import { decodeWireLine } from '../ide/wire-gzip.js';
 import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, recordDecision } from '../worker/joined-turn.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
 import { isTranscriptActivity, type WorkerEvent } from '../worker/protocol.js';
@@ -27,15 +25,13 @@ import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { BOARD_LINE, BOARD_OWNS } from '../commands/ai/interactive/board.js';
 import { remoteTerminalScript } from './install.js';
 import { replaceWindowBuild } from '../commands/ai/interactive/build-replace.js';
-import { startBridge } from './peer.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
 import { readState } from '../session/state/read.js';
 import { sendModeOf } from '../turn/send-mode.js';
 import { remoteRowValue } from './board-rows.js';
 import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
-import { BACKOFF_MS, needsUpdate, reachWindowMachine, reconnectWindowMachine, tapWindowMachine, type LinkTap, type LinkTapHandlers } from './connection.js';
+import { BACKOFF_MS, reachWindowMachine, RemoteLink, reconnectWindowMachine, REQUEST_TIMEOUT_MS, tapWindowMachine, type LinkTap, type LinkTapHandlers } from './connection.js';
 import { sshArgv } from './ssh.js';
-import { failureText } from '../harness/protocol/stderr-line.js';
 import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { parseSlashInput, resolveSlashCommand, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
@@ -65,26 +61,18 @@ const REMOTE_FEATURES: readonly IdeFeature[] = ['session-delta', 'copy'];
 
 /** Starts the machine's bridge (`ide-bridge --stdio` over ssh); a test's own. */
 export type RemoteBridgeStarter = (target: string) => ChildProcessWithoutNullStreams;
-const sshBridge: RemoteBridgeStarter = (target) => startBridge(target);
-
-/** A request the machine never answers is a hang: kept because a link ssh has
- * not noticed is dead looks exactly like this. */
-const REQUEST_TIMEOUT_MS = 60_000;
-/** How much of the bridge's stderr is held for the reason it closed: the end, where the cause is. */
-const STDERR_KEEP = 16_000;
 
 /** One chat channel into a machine's ClikCode (its multiplexed bridge, over ssh): a chat on the window's connection to that machine
  * (`link`: no new ssh, no new process there -- the host is already running), or, where there is no window connection to use (a
- * test, a caller that names its own `start`), over an ssh of its own. */
+ * test, a caller that names its own `start`), on a connection of its own -- a RemoteLink that carries this chat only, ended with it. */
 export class TerminalBridge {
-  private child: ChildProcessWithoutNullStreams | undefined;
+  private own: RemoteLink | undefined;
   private tap: LinkTap | undefined;
   private readonly chat = randomUUID();
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private ready: Promise<void>;
   private stopped = false;
   private closing = false;
-  private error = '';
   /** Its ClikCode is another build than this one (connection.ts needsUpdate). */
   outdated = false;
   /** Which additive requests it answers (protocol-version.ts); 1 when it did not say. */
@@ -102,7 +90,7 @@ export class TerminalBridge {
   onClose: (error: Error) => void = () => undefined;
 
   constructor(
-    private readonly target: string, start: RemoteBridgeStarter = sshBridge, private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS,
+    private readonly target: string, start?: RemoteBridgeStarter, private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS,
     link?: (chat: string, handlers: LinkTapHandlers) => LinkTap | undefined,
   ) {
     this.ready = new Promise<void>((resolve, reject) => {
@@ -127,40 +115,30 @@ export class TerminalBridge {
         reject(failure);
         for (const waiter of this.pending.values()) waiter.reject(failure);
         this.pending.clear();
+        void this.own?.stop();
         if (!this.closing) { this.dropped = failure; this.onClose(failure); }
       };
-      this.tap = link?.(this.chat, {
+      const handlers: LinkTapHandlers = {
         event: chatEvent,
         ended: (failure, retiring) => { if (retiring) this.retiring = true; ended(failure); },
-      });
-      if (link) {
-        // On the window's connection or not at all: one that dropped since it was asked is a connection that ended (the chat is opened
-        // again once it is back), not a reason to start an ssh of its own at a machine that may be down.
-        if (!this.tap) { ended(new Error(`The connection to ${target} is not up`)); return; }
-        this.outdated = this.tap.outdated;
-        this.revision = this.tap.revision;
-        return;
-      }
-      const child = start(target);
-      this.child = child;
-      child.stderr.on('data', (chunk: Buffer) => { this.error = `${this.error}${chunk.toString('utf8')}`.slice(-STDERR_KEEP); });
-      child.stdin.on('error', () => undefined);
-      const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-      lines.on('line', (line) => {
-        let message: IdeHostEvent;
-        try { message = JSON.parse(decodeWireLine(line)) as IdeHostEvent; } catch { return; }
-        if (message.type === 'host-ready') {
-          this.outdated = needsUpdate(message);
-          this.revision = message.revision ?? 1;
-          this.send({ type: 'chat-attach', chat: this.chat });
-          return;
-        }
-        if (message.type === 'host-retiring') { this.retiring = true; return; }
-        if (message.type !== 'chat' || message.chat !== this.chat) return;
-        chatEvent(message.event);
-      });
-      child.once('close', () => ended(new Error(failureText(this.error) || `Connection to ${target} closed`)));
-      child.once('error', (error) => { this.error = error.message; });
+      };
+      const attach = (tap: LinkTap | undefined): void => {
+        this.tap = tap;
+        // On a connection or not at all: one that dropped since it was asked is a connection that ended (the chat is opened again once
+        // it is back), not a reason to start an ssh of its own at a machine that may be down.
+        if (!tap) { ended(new Error(`The connection to ${target} is not up`)); return; }
+        this.outdated = tap.outdated;
+        this.revision = tap.revision;
+      };
+      if (link) { attach(link(this.chat, handlers)); return; }
+      // Not retried (`wanted`) and never updated from here: the caller decides what a failure means.
+      const own = new RemoteLink({ id: `own-${this.chat}`, name: target, sshTarget: target, addedAt: '' }, () => {
+        if (this.tap || this.stopped) return;
+        if (own.view.state === 'connected') attach(own.tap(this.chat, handlers));
+        else if (own.view.state === 'offline') ended(new Error(own.view.error ?? `The connection to ${target} ended`));
+      }, { board: false, autoUpdate: false, wanted: () => false, ...(start ? { spawn: (to: string) => start(to) } : {}) });
+      this.own = own;
+      own.start();
     });
   }
 
@@ -176,16 +154,10 @@ export class TerminalBridge {
     this.delta.generation(sessionId, opened?.gen);
     return opened;
   }
-  private send(message: IdeHostRequest): void {
-    if (this.stopped) throw new Error('Remote connection closed');
-    if (this.tap) {
-      if (message.type === 'chat') this.tap.post(message.request);
-      return;
-    }
-    if (!this.child || this.child.stdin.destroyed) throw new Error('Remote connection closed');
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
+  post(request: IdeRequest): void {
+    if (this.stopped || !this.tap) throw new Error('Remote connection closed');
+    this.tap.post(request);
   }
-  post(request: IdeRequest): void { this.send({ type: 'chat', chat: this.chat, request }); }
   request<T = unknown>(request: Answered): Promise<T> {
     const requestId = randomUUID();
     const result = new Promise<unknown>((resolve, reject) => {
@@ -202,16 +174,13 @@ export class TerminalBridge {
   close(): void {
     if (this.stopped) return;
     this.closing = true;
-    this.post({ type: 'close' });
     if (this.tap) {
-      // The connection stays for the next chat: only this chat leaves it.
+      this.post({ type: 'close' });
+      // Only this chat leaves the window's connection; one of its own ends with it.
       this.tap.detach();
-      this.stopped = true;
-      return;
     }
-    const child = this.child!;
-    child.stdin.end();
-    setTimeout(() => { if (!this.stopped) child.kill(); }, 3_000).unref();
+    this.stopped = true;
+    void this.own?.stop();
   }
 }
 

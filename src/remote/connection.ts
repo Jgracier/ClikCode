@@ -61,7 +61,7 @@ const CHAT = 'clikcode-remote-board';
 const READY_TIMEOUT_MS = 30_000;
 /** A request the other machine never answers is a hang, not a pending request:
  * kept because a dropped link that ssh has not noticed yet looks exactly like this. */
-const REQUEST_TIMEOUT_MS = 60_000;
+export const REQUEST_TIMEOUT_MS = 60_000;
 /** How much of a bridge's stderr is held for the reason it ended; the end of it, where the cause is. */
 const STDERR_KEEP = 16_000;
 /** A machine that does not answer is tried quickly at first (a blip) and then ever less: 30 s, doubling to 10 minutes. One that was
@@ -97,6 +97,9 @@ interface LinkOptions {
   autoUpdates?: AutoUpdates;
   /** This machine, told to the one connected to (remote/peer.ts); tests give their own. */
   self?: () => Promise<PeerMachine | undefined>;
+  /** Keep the machine's conversation list (the board's own chat on the connection). Off for a connection that carries one chat
+   * only (remote/terminal-chat.ts TerminalBridge): it asks nothing else there and writes nothing to machines.json. */
+  board?: boolean;
 }
 
 /** A request answered by a `result`, without its id (the channel gives it one). */
@@ -212,9 +215,12 @@ export class RemoteLink {
     child.once('close', (code) => {
       clearTimeout(this.readyTimer);
       if (this.child === child) this.child = undefined;
-      this.dropChannels(new Error(`The connection to ${machine.name} ended`));
       const retired = this.retiring;
-      this.dropTaps(new Error(`The connection to ${machine.name} ended`), retired || this.reconnecting);
+      // Why it ended, in ssh's or the bridge's own words, for the chats on it too -- unless it was ended on purpose.
+      const said = failureText(stderr);
+      const gone = new Error(said && !retired && !this.reconnecting ? said : `The connection to ${machine.name} ended`);
+      this.dropChannels(gone);
+      this.dropTaps(gone, retired || this.reconnecting);
       this.retiring = false;
       if (this.stopped) return;
       if (this.reconnecting || retired) {
@@ -223,7 +229,6 @@ export class RemoteLink {
         this.connect();
         return;
       }
-      const said = failureText(stderr);
       this.lost(said ? `${said} (exit ${code ?? '?'})` : `the connection ended (exit ${code ?? '?'})`);
     });
   }
@@ -310,7 +315,7 @@ export class RemoteLink {
       this.revision = event.revision ?? 1;
       lifecycle('remote.ready', { machine: machine.name, ms: Date.now() - this.connectedAt, revision: this.revision, outdated, ...(event.commit ? { commit: event.commit.slice(0, 8) } : {}) });
       this.set({ state: 'connected', needsUpdate: outdated, error: undefined, ...(outdated ? {} : { updateError: undefined }) });
-      this.send({ type: 'chat-attach', chat: CHAT });
+      if (this.options.board !== false) this.send({ type: 'chat-attach', chat: CHAT });
       if (outdated && this.updatesAllowed()) this.autoUpdate(localCommit);
       return;
     }

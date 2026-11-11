@@ -102,4 +102,26 @@ describe('a chat on the connection to a machine', () => {
     const link = new RemoteLink(newMachineRecord({ name: 'devbox', sshTarget: 'devbox', ready: true }), () => undefined, { spawn: () => new FakeHost() as unknown as ChildProcess, autoUpdate: false });
     expect(link.tap('c', { event: () => undefined, ended: () => undefined })).toBeUndefined();
   });
+
+  it('ends with the reason ssh gave, for a chat on the connection as for one of its own', async () => {
+    const { link, hosts, open } = await connected();
+    try {
+      const bridge = open({ onClose: () => undefined });
+      await bridge.connected();
+      hosts[0]!.stderr.write('client_loop: send disconnect: Broken pipe\n');
+      hosts[0]!.drop();
+      await until(() => bridge.dropped !== undefined);
+      expect(bridge.dropped!.message).toContain('Broken pipe');
+    } finally { await link.stop(); }
+  });
+
+  it('on a connection of its own, opens its chat and nothing else there, and ends the connection with it', async () => {
+    const hosts: FakeHost[] = [];
+    const bridge = new TerminalBridge('devbox', () => { const host = new FakeHost(); hosts.push(host); return host as never; });
+    await bridge.connected();
+    expect(bridge.revision).toBe(9);
+    expect(hosts[0]!.seen.map((message) => message.type)).toEqual(['chat-attach']);
+    bridge.close();
+    await until(() => hosts[0]!.seen.at(-1)?.request?.type === 'close');
+  });
 });
