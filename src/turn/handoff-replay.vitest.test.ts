@@ -16,7 +16,7 @@ import type { HarnessSession } from '../session/model.js';
 import { forceStoreSession, unforceStoreSession } from '../session/ephemeral.js';
 import { leaveProvider } from '../session/native-thread.js';
 import { runSessionTurn } from './session-turn.js';
-import { resumePromptForPendingTurn } from '../tui/pickers/resume-in.js';
+import { resumePromptForPendingTurn } from '../session/exhaustion.js';
 import { NATIVE_SESSION_STORES } from '../session/discovery/registry.js';
 import type { NativeSessionStore, NativeThreadWriteContext } from '../session/discovery/stores.js';
 import type { CanonicalRecord } from '../session/canonical.js';

@@ -10,11 +10,12 @@ import type { HarnessSession } from '../../session/model';
 import { readState } from '../../session/state/read';
 import { writeState } from '../../session/state/write';
 import { forceStoreSession, unforceStoreSession } from '../../session/ephemeral';
-import { carryOnAfterExhaustion, type ExhaustionRetryGuard } from './resume-in';
+import { carryOnAfterExhaustion, type ExhaustionRetryGuard } from '../../session/exhaustion';
+import { offerResumeIn } from './resume-in';
 
 const saved = process.env.CLIKCODE_HOME;
 let root: string;
-const noPicker = {} as HarnessPrompter;
+const noPicker = offerResumeIn({} as HarnessPrompter);
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'cc-exhaustion-'));
@@ -84,5 +85,15 @@ describe('running out of usage', () => {
     // The message itself goes back to the composer; the queue stays.
     expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', guard)).toEqual({ stayed: ['fix the parser'] });
     expect((await readState()).sessions.find((item) => item.id === 's1')!.queuedTurns).toHaveLength(4);
+  });
+});
+
+describe('layering', () => {
+  it('the session layer carries a turn on without importing the terminal pickers', async () => {
+    const { readFile } = await import('node:fs/promises');
+    for (const file of ['../../session/exhaustion.ts', '../../session/attach.ts']) {
+      const source = await readFile(new URL(file, import.meta.url), 'utf8');
+      expect(source, file).not.toMatch(/from '\.\.\/tui\/pickers\//);
+    }
   });
 });

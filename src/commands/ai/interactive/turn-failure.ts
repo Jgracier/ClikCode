@@ -10,7 +10,8 @@ import { emitHarnessOutput } from '../../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../../tui/prompter.js';
 import { afterTurnFailure } from '../../../session/attach.js';
 import { signInOutcomeSaid } from '../../account.js';
-import type { ExhaustionRetryGuard } from '../../../tui/pickers/resume-in.js';
+import type { ExhaustionRetryGuard } from '../../../session/exhaustion.js';
+import { offerResumeIn } from '../../../tui/pickers/resume-in.js';
 import { refreshSessionWorker } from '../../../worker/turn-bridge.js';
 
 /** What a failed turn changes about the loop: a notice to show, a message to send next, or the conversation it moved to. */
@@ -41,7 +42,7 @@ export async function turnFailureEffect(
   if (signInOutcomeSaid(error)) return {};
   // The worker put its line in the turn already.
   const said = Boolean((error as { said?: boolean } | undefined)?.said);
-  const next = await afterTurnFailure(terminal, id, error, { ...failed, guard });
+  const next = await afterTurnFailure(terminal && offerResumeIn(terminal), id, error, { ...failed, guard });
   // A stopped turn ends on its own "Stopped" row; nothing more is said.
   if (next.cancelled && terminal) return {};
   if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureText(message) }); return {}; }
