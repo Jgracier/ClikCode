@@ -25,10 +25,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { cancelOrigin, isTranscriptActivity, type CancelOrigin, type WorkerEvent } from './protocol.js';
 import type { HarnessSession } from '../session/model.js';
 import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, recordDecision, type LiveTurnState } from './joined-turn.js';
-import { withSignIn } from '../commands/account.js';
-import { loginNativeHarness } from '../harness/transport/native/login.js';
-import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
-import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { WindowSignIns } from './window-sign-in.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
 import { readState } from '../session/state/read.js';
 import { liveSettingsOf } from '../turn/live-settings.js';
@@ -376,18 +373,15 @@ async function driveWorkerTurn(
         // conversation -- this one again on its return (tracker.signIns).
         // Every one it waits on is given back: the worker ignores one this
         // window was not running.
-        const release = signInClaims(tracker, 'sign-in-release', openSignIns.keys());
-        for (const open of [...openSignIns.values()]) open.withdraw();
-        for (const command of release) client.send(command);
+        for (const command of signInClaims(tracker, 'sign-in-release', signIns.withdrawAll())) client.send(command);
         client.off('event', onEvent);
         client.off('close', onClose);
         fn();
       };
       /** Approvals and questions this window has open, closed by `request-closed`. */
       const openPrompts = new Map<string, AbortController>();
-      /** Sign-ins this window runs for the worker: taken down (not answered)
-       * when the request closes elsewhere or this window leaves the conversation. */
-      const openSignIns = new Map<string, { withdraw: () => void }>();
+      /** Sign-ins this window runs for the worker. */
+      const signIns = new WindowSignIns((response) => client.send(response));
       const onEvent = (event: WorkerEvent): void => {
         if (settled) return;
         switch (event.type) {
@@ -459,39 +453,18 @@ async function driveWorkerTurn(
             }
             openPrompts.get(event.id)?.abort();
             openPrompts.delete(event.id);
-            openSignIns.get(event.id)?.withdraw();
+            signIns.withdraw(event.id);
             return;
           }
           case 'sign-in-pending':
             // This window shows the conversation: it runs the sign-in unless another already does.
             client.send({ type: 'sign-in-claim', id: event.id });
             return;
-          case 'sign-in-request': {
+          case 'sign-in-request':
             // The worker has no terminal; this window does. The vendor's own
             // sign-in runs here, and the worker retries the turn after.
-            const harness = localHarnessForCommand(event.command);
-            const signIn = harness ? { ...harness, loginArgv: event.argv } : undefined;
-            let withdrawn = false;
-            let screen: SignInScreen | undefined;
-            if (openSignIns.has(event.id)) return;
-            openSignIns.set(event.id, { withdraw: () => { withdrawn = true; openSignIns.delete(event.id); screen?.withdraw?.(); } });
-            const shown = {
-              activity: (message: string, key?: string) => rl.activity(message, key),
-              signInScreen: (name: string): SignInScreen => { screen = rl.signInScreen(name); if (withdrawn) screen.withdraw?.(); return screen; },
-            };
-            void (signIn
-              ? withSignIn(shown, event.name, () => loginNativeHarness(signIn, event.environment))
-              : Promise.reject(new Error(`unknown harness ${event.command}`)))
-              .then(() => client.send({ type: 'sign-in-response', id: event.id }),
-                (error: unknown) => {
-                  // Taken down by this window moving on, or answered elsewhere:
-                  // not a refusal -- the worker still waits, and asks again on return.
-                  if (withdrawn) return;
-                  client.send({ type: 'sign-in-response', id: event.id, error: error instanceof Error ? error.message : String(error) });
-                })
-              .finally(() => openSignIns.delete(event.id));
+            signIns.run(event, rl);
             return;
-          }
           case 'restore-draft':
             rl.restoreDraft(event.text);
             return;

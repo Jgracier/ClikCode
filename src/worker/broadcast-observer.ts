@@ -25,7 +25,7 @@ import { MarkSequencer, stepThought, settledThought, upsertMark, type TurnMarkJo
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
-import type { SignInRequest, TurnObserver } from '../turn/observer.js';
+import { SignInEnded, type SignInOutcome, type SignInRequest, type TurnObserver } from '../turn/observer.js';
 import { encodeFrame, isTranscriptActivity, type LiveActivity, type LiveThought, type LiveTurn, type WorkerEvent } from './protocol.js';
 
 /** Characters of the thought a joining window is sent: its newest words. */
@@ -341,7 +341,7 @@ export class BroadcastObserver implements TurnObserver {
     this.pendingQuestions.clear();
     this.awaitingSince.clear();
     if (hadApprovals) this.announceAwaiting();
-    for (const pending of this.pendingSignIns.values()) { pending.unwatch(); pending.reject(new Error('the turn ended')); }
+    for (const pending of this.pendingSignIns.values()) { pending.unwatch(); pending.reject(new SignInEnded('the turn ended', 'cancelled')); }
     this.pendingSignIns.clear();
     this.turnSender = undefined;
     this.userWaitChanged();
@@ -610,14 +610,14 @@ export class BroadcastObserver implements TurnObserver {
    * client attached there is nowhere to run it, so the turn fails with its
    * authentication error and the user signs in on reattaching. */
   signIn(request: SignInRequest, signal?: AbortSignal): Promise<void> {
-    if (this.clients.size === 0) return Promise.reject(new Error(`sign in to ${request.name} needs an open ClikCode window`));
-    if (signal?.aborted) return Promise.reject(new Error('stopped'));
+    if (this.clients.size === 0) return Promise.reject(new SignInEnded(`sign in to ${request.name} needs an open ClikCode window`, 'unavailable'));
+    if (signal?.aborted) return Promise.reject(new SignInEnded('stopped', 'cancelled'));
     const id = randomUUID();
     const event = { type: 'sign-in-request' as const, id, ...request };
     const runner = this.turnSender && this.clients.has(this.turnSender) ? this.turnSender : undefined;
     return new Promise((resolve, reject) => {
       // Stop ends a sign-in the user left waiting.
-      const stop = (): void => this.settleSignIn(id, 'stopped');
+      const stop = (): void => this.settleSignIn(id, new SignInEnded('stopped', 'cancelled'));
       signal?.addEventListener('abort', stop, { once: true });
       this.pendingSignIns.set(id, { resolve, reject, event, runner, unwatch: () => signal?.removeEventListener('abort', stop) });
       this.userWaitChanged();
@@ -646,12 +646,12 @@ export class BroadcastObserver implements TurnObserver {
   /** The window running the sign-in says how it ended. Only that window's
    * word counts: another window, or one that has since released it, is
    * ignored. */
-  answerSignIn(id: string, socket: Socket, error?: string): void {
+  answerSignIn(id: string, socket: Socket, answer: { error?: string; outcome?: SignInOutcome } = {}): void {
     if (this.pendingSignIns.get(id)?.runner !== socket) return;
-    this.settleSignIn(id, error);
+    this.settleSignIn(id, answer.error === undefined ? undefined : new SignInEnded(answer.error, answer.outcome ?? 'failed'));
   }
 
-  private settleSignIn(id: string, error?: string): void {
+  private settleSignIn(id: string, failure?: SignInEnded): void {
     const pending = this.pendingSignIns.get(id);
     if (!pending) return;
     this.pendingSignIns.delete(id);
@@ -659,7 +659,7 @@ export class BroadcastObserver implements TurnObserver {
     this.userWaitChanged();
     // Every other window attached asked the same question: it is over for them too.
     this.broadcast({ type: 'request-closed', id });
-    if (error) pending.reject(new Error(error));
+    if (failure) pending.reject(failure);
     else pending.resolve();
   }
 }

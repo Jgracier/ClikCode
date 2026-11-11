@@ -1,18 +1,11 @@
 /** Signing in to the account a vendor turn runs on. */
 import chalk from 'chalk';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
-import { syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.js';
+import { signInOutcomeSaid, syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.js';
+import { SignInEnded } from './observer.js';
 import { harnessLoginArgvForModel, modelProvider } from '../runtime/lazy-bridge.js';
 import { leavePersistentTransport } from './vendor-process.js';
 import type { VendorTurnContext } from './vendor-turn-context.js';
-
-/** A sign-in that was refused up front because nobody can do it here: a
- * script or pipe answers the worker's sign-in request with "X is not signed
- * in; run ... in a terminal" (worker/scripted-send.ts), and a worker with no
- * window attached says "sign in to X needs an open ClikCode window". */
-function signInNotPossibleHere(error: unknown): boolean {
-  return error instanceof Error && /is not signed in; run |needs an open ClikCode window/.test(error.message);
-}
 
 /** Sign in to the account this turn runs on, once per turn: true when it
  * worked and the account is ready. */
@@ -37,10 +30,10 @@ export async function signInForTurn(ctx: VendorTurnContext, environment: Readonl
     ? prompter.signIn({ command: harness.command, argv: signInArgv, environment, name: signInName }, ctx.signal)
     : withSignIn(prompter, signInName, () => loginNativeHarness(signIn, environment)))
     .then(() => true, (error: unknown) => {
-      // No one to sign in (a script, a worker with no window): nothing was
-      // attempted, so nothing "did not finish". The turn's own error says
-      // the account is not signed in, once.
-      if (signInNotPossibleHere(error)) return false;
+      // Said already where it ran (withSignIn's line, the window's), or
+      // nothing was attempted (a script, a worker with no window): the
+      // turn's own error says the account is not signed in, once.
+      if (error instanceof SignInEnded || signInOutcomeSaid(error)) return false;
       prompter?.activity(chalk.yellow(`sign-in to ${signInName} did not finish: ${error instanceof Error ? error.message : String(error)}`));
       return false;
     });
