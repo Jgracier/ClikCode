@@ -266,13 +266,11 @@ export class McpManager {
   }
 
   /** The server's live client, restarted once if it died since this turn's
-   * listing. */
+   * listing. A server that failed to start is retried only once the failure
+   * backoff has passed: a call to a dead one fails at once rather than each
+   * waiting out the connect timeout again. */
   private async clientFor(state: ServerState): Promise<McpClient> {
-    if (!state.client || state.client.closed) {
-      state.client = undefined;
-      state.failure = undefined;
-      await this.ensureReady(state);
-    }
+    if (!state.client || state.client.closed) await this.ensureReady(state);
     const client = state.client;
     if (!client) throw new Error(`MCP server "${state.spec.name}" is not running: ${state.failure?.message ?? 'it could not be started'}`);
     return client;

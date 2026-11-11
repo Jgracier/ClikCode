@@ -7,7 +7,8 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 if (process.env.FAKE_MCP_PID_FILE) writeFileSync(process.env.FAKE_MCP_PID_FILE, String(process.pid));
-if (process.env.FAKE_MCP_FAIL_START) {
+// FAKE_MCP_FAIL_IF=<file>: fails to start while that file exists -- a server that ran, died, and now will not come back.
+if (process.env.FAKE_MCP_FAIL_START || (process.env.FAKE_MCP_FAIL_IF && existsSync(process.env.FAKE_MCP_FAIL_IF))) {
   process.stderr.write('fatal: could not open the database at /nowhere\n');
   process.exit(2);
 }
