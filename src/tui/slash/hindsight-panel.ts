@@ -5,7 +5,7 @@
 import type { TranscriptMessage } from '../../session/model.js';
 import type { TurnChangeRecord } from '../../session/turn-changes.js';
 import { presentTopics, oneLine, type HindsightMessage, type PresentedTopic } from '../../search/hindsight.js';
-import { ago } from '../../search/format.js';
+import { relativeTime } from '../../harness/protocol/format.js';
 import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 
 /** The transcript as hindsight reads it: each user prompt numbered as
@@ -29,8 +29,8 @@ function promptRange(topic: PresentedTopic): string {
 }
 
 function topicRows(topic: PresentedTopic, now: number): string[] {
-  const at = topic.at ? Date.parse(topic.at) : Number.NaN;
-  const head = [topic.status, ...(Number.isNaN(at) ? [] : [ago(at, now)]), ...(topic.origin ? [topic.origin] : [])].join(' · ');
+  const at = relativeTime(topic.at, now);
+  const head = [topic.status, ...(at ? [at] : []), ...(topic.origin ? [topic.origin] : [])].join(' · ');
   const more = topic.requests.length > 1 ? `  (+${topic.requests.length - 1} more)` : '';
   const files = topic.files.map((file) => `${file.path} +${file.additions} -${file.removals}`);
   if (topic.unnamedEdits) files.push(`${topic.unnamedEdits} unnamed edit${topic.unnamedEdits === 1 ? '' : 's'}`);

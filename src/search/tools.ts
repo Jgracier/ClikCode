@@ -16,9 +16,13 @@ import { activeConversations } from './active.js';
 import { conversationGroups, conversationTitle, findConversation, type ConversationGroup } from './conversations.js';
 import { conversationView, type ConversationView } from './corpus.js';
 import { parseSince, searchConversations, type ConversationHit } from './engine.js';
-import { ago, duration, hitSnippets, mentionCount, parseAnchor, renderFullMessage, renderMessage, runsOn, shortId } from './format.js';
+import { ago, hitSnippets, mentionCount, parseAnchor, renderFullMessage, renderMessage, runsOn, shortId } from './format.js';
+import { formatElapsed } from '../harness/protocol/format.js';
 import { oneLine, presentTopics, rangeLabel, topicsBefore, type HindsightMessage, type PresentedTopic } from './hindsight.js';
 import { maskSecrets } from './secrets.js';
+
+/** How long a turn has run, or `unknown` for a start that does not parse. */
+const workingFor = (ms: number): string => (Number.isFinite(ms) ? formatElapsed(ms) : 'unknown');
 
 export interface ConversationToolContext {
   /** The chat the calling agent is in, when known. */
@@ -223,7 +227,7 @@ const activeTool: ConversationTool = {
     const lines = list.map((item) => {
       const active = `last active ${ago(item.updatedAtMs, now)}`;
       const state = item.state === 'working'
-        ? `working${item.turnStartedAt ? ` for ${duration(now - Date.parse(item.turnStartedAt))}` : ''} · ${active}`
+        ? `working${item.turnStartedAt ? ` for ${workingFor(now - Date.parse(item.turnStartedAt))}` : ''} · ${active}`
         : item.state === 'open' ? `open, idle · ${active}` : active;
       const head = `- ${maskSecrets(item.title)} — id ${shortId(item.conversationId)} · ${runsOn(item)} · ${state}`;
       const parts = [head];

@@ -32,7 +32,7 @@ describe('/changes <path>', () => {
     await appendTurnChanges(stateDirectory(), 'cccccccc-3', { at: '2026-10-10T11:30:00Z', prompt: 'unrelated', changes: [edit('src/a.ts')] });
     const rows = await fileTurnRows({ sessions }, path.join(work, 'src/a.ts'), Date.parse('2026-10-10T12:00:00Z'));
     expect(rows.map((row) => [row.sessionId, row.turnsAgo, row.additions, row.removals])).toEqual([['bbbbbbbb-2', 1, 5, 0], ['aaaaaaaa-1', 2, 2, 1]]);
-    expect(rows[0]).toMatchObject({ label: '60m ago · Search command bbbbbbbb', detail: 'turn 1 · "add search" · +5 -0' });
+    expect(rows[0]).toMatchObject({ label: '1h ago · Search command bbbbbbbb', detail: 'turn 1 · "add search" · +5 -0' });
     const text = fileTurnsText(path.join(work, 'src/a.ts'), rows);
     expect(text.split('\n')[0]).toContain('2 turns edited it, newest first');
     expect(fileTurnsText('/nowhere.ts', [])).toBe('No recorded turn in any conversation edited /nowhere.ts.');

@@ -227,7 +227,9 @@ export async function closeTabsOfOwner(stateDir: string, pid: number, deps: Swee
   return count;
 }
 
-export function formatDuration(ms: number): string {
+/** `40s`, `12m`, `3h`, `2d`: a tab's age, rounded to one unit -- coarser than
+ * harness/protocol/format.ts's formatDuration, which is a call's run time. */
+function roughAge(ms: number): string {
   const minutes = Math.max(0, Math.round(ms / 60_000));
   if (minutes < 1) return `${Math.max(0, Math.round(ms / 1_000))}s`;
   if (minutes < 120) return `${minutes}m`;
@@ -243,7 +245,7 @@ export function describeTabs(views: readonly TabView[], now: number = Date.now()
     const name = view.tab ? `tab "${view.tab}"` : 'default tab';
     const state = view.parked ? ', parked' : view.restoreFor !== undefined && view.ownerPid === 0 ? ', restored, unclaimed' : '';
     const title = view.title ? `"${view.title.replace(/\s+/g, ' ').slice(0, 60)}" ` : '';
-    return `- ${name} · ${view.owner}${state} · open ${formatDuration(now - view.openedAt)}, idle ${formatDuration(now - view.lastUsedAt)} · ${title}${(view.url ?? '').slice(0, 100)}`;
+    return `- ${name} · ${view.owner}${state} · open ${roughAge(now - view.openedAt)}, idle ${roughAge(now - view.lastUsedAt)} · ${title}${(view.url ?? '').slice(0, 100)}`;
   });
-  return `All tabs in the shared browser (${views.length}; tabs idle ${formatDuration(limits.idleMs)} or whose worker ended are closed, at most ${limits.maxTabs} are kept; close any with tab: "<name>"):\n${lines.join('\n')}`;
+  return `All tabs in the shared browser (${views.length}; tabs idle ${roughAge(limits.idleMs)} or whose worker ended are closed, at most ${limits.maxTabs} are kept; close any with tab: "<name>"):\n${lines.join('\n')}`;
 }
