@@ -5,6 +5,7 @@ import { lifecycle } from '../../../runtime/lifecycle-log.js';
 import { markTurn } from '../../../runtime/turn-latency.js';
 import { spawnFailure } from '../../../runtime/machine-folder.js';
 import { killProcessTreePortable, spawnPortable as spawn } from '../spawn.js';
+import { forwardParentSignals } from '../parent-signals.js';
 import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
 import { failureText } from '../../protocol/stderr-line.js';
@@ -254,18 +255,14 @@ export async function captureNativeHarnessTurn(
     // cancelled, never read as a vendor failure for failover to retry.
     const onTerminate = () => { interrupted = true; forward('SIGTERM'); later(2_000, 'SIGKILL'); };
     const onHangup = () => { interrupted = true; forward('SIGHUP'); later(2_000, 'SIGKILL'); };
+    const releaseSignals = forwardParentSignals((signal) => (signal === 'SIGINT' ? onInterrupt : signal === 'SIGTERM' ? onTerminate : onHangup)());
     const cleanup = (): void => {
-      process.off('SIGINT', onInterrupt);
-      process.off('SIGTERM', onTerminate);
-      if (process.platform !== 'win32') process.off('SIGHUP', onHangup);
+      releaseSignals();
       options.signal?.removeEventListener('abort', onAbort);
       for (const timer of stopTimers.splice(0)) clearTimeout(timer);
       if (closeGraceTimer) clearTimeout(closeGraceTimer);
       options.input?.end();
     };
-    process.once('SIGINT', onInterrupt);
-    process.once('SIGTERM', onTerminate);
-    if (process.platform !== 'win32') process.once('SIGHUP', onHangup);
     options.signal?.addEventListener('abort', onAbort, { once: true });
     if (options.signal?.aborted) onAbort();
     const tails = () => ({ stderrTail: stderr.trim().slice(-4000), stdoutTail: stdout.trim().slice(-4000) });

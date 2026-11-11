@@ -1,6 +1,7 @@
 /** Running one vendor command and keeping what it printed. */
 
 import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
+import { forwardParentSignals } from '../parent-signals.js';
 import { NativeHarnessSpec, binaryOnPath } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
 import { failureText } from '../../protocol/stderr-line.js';
@@ -15,20 +16,7 @@ export function run(command: string, args: readonly string[], envOverrides: Read
     // tried here to auto-open a printed URL) made it fail in <1s with a
     // generic "run agy to log in" error instead of ever showing the prompt.
     const child = spawn(command, [...args], { stdio: 'inherit', env: { ...process.env, ...envOverrides } });
-    const forward = (signal: NodeJS.Signals): void => {
-      terminatePortable(child, signal);
-    };
-    const onInterrupt = () => forward('SIGINT');
-    const onTerminate = () => forward('SIGTERM');
-    const onHangup = () => forward('SIGHUP');
-    const cleanup = (): void => {
-      process.off('SIGINT', onInterrupt);
-      process.off('SIGTERM', onTerminate);
-      if (process.platform !== 'win32') process.off('SIGHUP', onHangup);
-    };
-    process.once('SIGINT', onInterrupt);
-    process.once('SIGTERM', onTerminate);
-    if (process.platform !== 'win32') process.once('SIGHUP', onHangup);
+    const cleanup = forwardParentSignals((signal) => terminatePortable(child, signal));
     child.once('error', (error) => {
       cleanup();
       reject(spawnFailure(error, { name: command, binary: command }));
