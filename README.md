@@ -393,7 +393,7 @@ when you would rather type than pick.
 | `clikcode send <prompt> [--chat <id\|name\|last>] [--harness <tool>] [--model <model>] [--permissions <mode>]` | Send one message without opening a session: a new chat, or continue one |
 | `clikcode search <words>` | Find the conversations that mention something, any provider, most mentions first; `--json` gives each hit and its first mention |
 | `clikcode logs [--session <id>] [--role <role>] [--since 10m] [-f]` | What every ClikCode window, worker and editor bridge did, in order; the first place to look when something went wrong |
-| `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
+| `clikcode permissions [ask\|bypass\|auto] [--chat <chat>]` | Approval behavior: the default for new chats, or one chat's with `--chat <chat>` |
 | `clikcode computer on` / `off` / `status` / `inspect` / `login [url] [--new]` / `logins` | Browser and desktop use for ClikCode's agent, and its private sign-in: see `docs/COMPUTER_USE.md` |
 | `clikcode mcp add` / `list` / `remove` / `login` / `logout` | MCP servers for ClikCode's own agent (below) |
 | `clikcode plugin list` / `enable <plugin>` / `disable <plugin>` | Which of Claude Code's plugins ClikCode's own agent uses |

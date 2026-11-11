@@ -15,20 +15,18 @@ import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 import { applyToChat } from './setting-scope.js';
 
-/** Edit the active conversation's approval behavior from the top-level
- * `clikcode permissions` command. The same picker and provider capability
- * checks back the in-chat `/permissions` command, so the two surfaces cannot
- * drift. With no conversation yet, a selection becomes the global default. */
-export async function aiPermissions(mode?: string): Promise<void> {
+/** `clikcode permissions [mode] [--chat <chat>]`: with --chat, that conversation's approval behavior;
+ * without, the global default only -- never whichever chat happened to change last, which may be in
+ * another folder. The same picker and provider capability checks back the in-chat `/permissions`
+ * command, so the two surfaces cannot drift. */
+export async function aiPermissions(mode?: string, options: { chat?: string } = {}): Promise<void> {
   const normalizedMode = mode?.trim().toLowerCase() as AiHarnessPermissionMode | undefined;
   if (normalizedMode && !VALID_PERMISSION_MODES.includes(normalizedMode)) {
     throw new Error('permissions must be ask, bypass, or auto');
   }
-  const indexed = await readState({ transcripts: [] });
-  const latestId = [...indexed.sessions]
-    .sort((left, right) => Number(right.status === 'active') - Number(left.status === 'active') || right.updatedAt.localeCompare(left.updatedAt))[0]?.id;
+  const chatId = options.chat ? await (await import('../../commands/ai/harness.js')).resolveChat(options.chat) : undefined;
   if (normalizedMode) {
-    if (latestId) await aiSessionCommand(latestId, `/permissions ${normalizedMode}`);
+    if (chatId) await aiSessionCommand(chatId, `/permissions ${normalizedMode}`);
     else await aiSettingsSetGlobal('permissions', normalizedMode);
     return;
   }
@@ -36,9 +34,9 @@ export async function aiPermissions(mode?: string): Promise<void> {
   const rl = new TerminalHarnessPrompter();
   TERMINAL.active = rl;
   try {
-    if (latestId) {
-      const state = await readState({ transcripts: [latestId] });
-      const session = state.sessions.find((item) => item.id === latestId)!;
+    if (chatId) {
+      const state = await readState({ transcripts: [chatId] });
+      const session = state.sessions.find((item) => item.id === chatId)!;
       const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
       rl.render?.(session, account);
       await interactivePermissionPicker(rl, session.id);
