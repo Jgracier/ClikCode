@@ -191,7 +191,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     // OpenClaw's sign-ins live in the agent's SQLite auth store.
     // The models.dev catalog a list was read from: a newer copy is a new list.
     ...(harness.modelsDevCatalog ? modelsDevFiles() : []),
-    ...(harness.command === 'aider' ? [openRouterCacheFile()] : []),
+    ...(harness.modelStrategy === 'aider-providers' ? [openRouterCacheFile()] : []),
     // A sign-in changes which models a vendor lists (Pi, Qwen, Cline): its
     // credential files are part of what the list was read from.
     ...(await Promise.all((harness.authFiles ?? []).map((entry) => expandAuthPaths(entry.path.replace(/\/$/, ''), {
@@ -200,7 +200,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
   ];
   const identities = await Promise.all(files.map(fileIdentity));
   // Goose lists the models of the CLIs it drives, so their lists are its too.
-  const driven = harness.command === 'goose'
+  const driven = harness.modelStrategy === 'goose-providers'
     ? await Promise.all([...new Set(Object.values(GOOSE_DRIVEN_HARNESSES))].map(async (command) => {
       const drivenHarness = localHarnessForCommand(command);
       return drivenHarness ? catalogFingerprint(drivenHarness) : '';
@@ -266,7 +266,7 @@ function defaultModelCatalogFallback(
   account?: AiHarnessAccount,
 ): ModelCatalogResult {
   const models = new Set(account?.models ?? []);
-  if (harness.command === 'claude') CLAUDE_FALLBACK_ALIASES.forEach((model) => models.add(model));
+  if (harness.modelStrategy === 'claude-table') CLAUDE_FALLBACK_ALIASES.forEach((model) => models.add(model));
   return { models: [...models] };
 }
 
@@ -399,7 +399,7 @@ async function discoverModelCatalog(
   // empty was offline, not empty: remembered, it stayed empty until Copilot
   // itself was updated. Asked again next time instead (a failed `models`
   // run is the same: no list is not an empty list).
-  if (!result.models.length && (harness.modelsDevCatalog || harness.command === 'aider' || harness.acp || harness.modelDiscoveryArgv)) return result;
+  if (!result.models.length && (harness.modelsDevCatalog || harness.modelStrategy === 'aider-providers' || harness.acp || harness.modelDiscoveryArgv)) return result;
   await rememberCatalog(harness, account, fingerprint, result);
   return result;
 }
