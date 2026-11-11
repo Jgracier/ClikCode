@@ -71,6 +71,25 @@ describe('reading back', () => {
     } finally { rl.close(); }
   });
 
+  // The arrows read back over an approval; the Esc that came back from
+  // reading denied it and stopped the turn.
+  it('Esc read back over an approval returns to the live end and answers nothing; the next Esc denies it', async () => {
+    const { rl } = turnScrolledBack();
+    try {
+      let answer: boolean | 'always' | undefined;
+      void rl.approval('Run make?', 'make clean').then((value) => { answer = value; });
+      vi.advanceTimersByTime(1000);
+      const key = (k: string): void => (rl as unknown as { onWaitingKey(k: string): void }).onWaitingKey(k);
+      key('\u001b');
+      await Promise.resolve();
+      expect(rl.scrolledBack).toBe(false);
+      expect(answer).toBeUndefined();
+      key('\u001b');
+      await Promise.resolve(); await Promise.resolve();
+      expect(answer).toBe(false);
+    } finally { rl.close(); }
+  });
+
   // A phone's swipe is a run of arrows: the ones past the first row put the
   // last message sent into the composer.
   it('a swipe that reaches the first row does not recall the last message into the composer', () => {
