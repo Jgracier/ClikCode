@@ -12,7 +12,8 @@ import { readState } from '../session/state/read';
 import { writeState } from '../session/state/write';
 import { forceStoreSession, unforceStoreSession } from '../session/ephemeral';
 import { RESUME_GRACE_MS, RESUME_MAX_SLEEP_MS, RESUME_RECHECK_MS, resumeStep, resumeWaitLabel, type ResumeAt } from '../turn/usage-exhausted';
-import { carryOnAfterExhaustion, stopWaitingForReset } from '../tui/pickers/resume-in';
+import { carryOnAfterExhaustion, stopWaitingForReset } from '../session/exhaustion';
+import { offerResumeIn } from '../tui/pickers/resume-in';
 import { createResumeWaiter } from './resume-wait';
 
 const T0 = new Date(2026, 9, 4, 15, 0, 0).getTime();
@@ -162,7 +163,7 @@ describe('"Wait for reset" in the Resume-in picker', () => {
       offered = options.map((option) => option.label);
       return options.at(-1)!.value;
     } } as unknown as HarnessPrompter;
-    const next = await carryOnAfterExhaustion(rl, 's1', 'fix the parser', {});
+    const next = await carryOnAfterExhaustion(offerResumeIn(rl), 's1', 'fix the parser', {});
     expect(offered.at(-1)).toMatch(/^Wait for reset \(\d+:\d\d[AP]M/);
     expect('waiting' in next && next.waiting.prompt).toBe('fix the parser');
     expect((await parked())?.prompt).toBe('fix the parser');

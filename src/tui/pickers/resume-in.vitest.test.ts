@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition';
-import { accountHasUsage, resumeInCandidates, resumePromptForPendingTurn, sessionProviderHasUsage } from './resume-in';
+import { resumeInCandidates } from './resume-in';
+import { accountHasUsage, resumePromptForPendingTurn, sessionProviderHasUsage } from '../../session/exhaustion';
 import { leaveProvider } from '../../session/native-thread.js';
 import type { HarnessSession } from '../../session/model.js';
 

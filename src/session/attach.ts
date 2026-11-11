@@ -26,8 +26,7 @@ import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { releaseQueuedTurn } from '../commands/ai/conversations.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { isUsageExhaustedMessage, type ResumeAt } from '../turn/usage-exhausted.js';
-import { carryOnAfterExhaustion, type ExhaustionRetryGuard, type ResumedIn } from '../tui/pickers/resume-in.js';
-import type { HarnessPrompter } from '../harness/prompter.js';
+import { carryOnAfterExhaustion, type ExhaustionRetryGuard, type ResumedIn, type ResumeInOffer } from './exhaustion.js';
 import { deleteConversations } from './state/deletions.js';
 
 /** Reopened, a closed or archived chat is active again. */
@@ -173,12 +172,12 @@ type TurnFailureNext = { cancelled: boolean } & ({ retry: string } | { moved: Re
  *
  * A queued turn that cannot start would stay at the head of the queue and
  * fail identically on every pass, so it is released and its text handed
- * back. Running out of usage is an outcome, not a fault: with a `prompter`
+ * back. Running out of usage is an outcome, not a fault: with a `resumeIn` list
  * to ask, it retries once on this provider if an account came back, and
  * otherwise offers the harnesses that still have some. Carried on, the
  * message is not handed back as well (it would then be sent twice). */
 export async function afterTurnFailure(
-  prompter: HarnessPrompter | undefined, id: string, error: unknown,
+  resumeIn: ResumeInOffer | undefined, id: string, error: unknown,
   turn: { line?: string; sent?: string; queuedTurnId?: string; guard: ExhaustionRetryGuard },
 ): Promise<TurnFailureNext> {
   const cancelled = isTurnCancelled(error);
@@ -186,8 +185,8 @@ export async function afterTurnFailure(
   if (queued) await releaseQueuedTurn(id, turn.queuedTurnId!).catch(quiet('session/attach'));
   const back = queued && turn.line ? [turn.line] : [];
   const message = error instanceof Error ? error.message : String(error);
-  if (cancelled || !prompter || !turn.line || !isUsageExhaustedMessage(message)) return { cancelled, back };
-  const next = await carryOnAfterExhaustion(prompter, id, turn.line, turn.guard, turn.sent ?? turn.line);
+  if (cancelled || !resumeIn || !turn.line || !isUsageExhaustedMessage(message)) return { cancelled, back };
+  const next = await carryOnAfterExhaustion(resumeIn, id, turn.line, turn.guard, turn.sent ?? turn.line);
   if ('stayed' in next) return { cancelled, back: [...back, ...next.stayed.filter((text) => !back.includes(text))] };
   // Parked for the reset: nothing goes back to the composer -- it is sent then.
   if ('waiting' in next) return { cancelled, back: [], waiting: next.waiting };

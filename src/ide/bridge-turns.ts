@@ -18,7 +18,8 @@ import { dispatchLine } from '../tui/slash/dispatch.js';
 import { sessionHarness, slashRouteContextFor } from '../tui/slash/context.js';
 import { commandDuringTurn, slashLineIsCommand } from '../tui/slash/queue.js';
 import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
-import type { ExhaustionRetryGuard } from '../tui/pickers/resume-in.js';
+import type { ExhaustionRetryGuard } from '../session/exhaustion.js';
+import { offerResumeIn } from '../tui/pickers/resume-in.js';
 import { messageOf, TurnFailed, WorkerRetiring } from './bridge-support.js';
 import { createSlashHost } from './bridge-slash-host.js';
 import type { BridgeHost } from './bridge-host.js';
@@ -138,7 +139,7 @@ export class BridgeTurns {
         await this.host.runTurn(this.host.requireSession(), outcome.prompt, { echo: outcome.echo !== false });
       }
     } catch (error) {
-      const next = await afterTurnFailure(this.host.prompter, id, error, {
+      const next = await afterTurnFailure(this.host.prompter && offerResumeIn(this.host.prompter), id, error, {
         line, sent: this.sentPrompt ?? line, guard: this.exhaustionGuard, ...(options.queuedTurnId ? { queuedTurnId: options.queuedTurnId } : {}),
       });
       if ('retry' in next) {

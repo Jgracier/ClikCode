@@ -5,8 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type Conf from 'conf';
 
 const carry = vi.hoisted(() => ({ next: vi.fn() }));
-vi.mock('../tui/pickers/resume-in.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../tui/pickers/resume-in.js')>(),
+vi.mock('../session/exhaustion.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../session/exhaustion.js')>(),
   carryOnAfterExhaustion: carry.next,
 }));
 vi.mock('../commands/ai/conversations.js', async (importOriginal) => ({

@@ -17,7 +17,7 @@ import { TERMINAL } from '../../../tui/active-terminal.js';
 import { claimConversation, leaveConversation } from '../../../session/attach.js';
 import { newConversation } from '../conversations.js';
 import { dispatchLine } from '../../../tui/slash/dispatch.js';
-import { stopWaitingForReset, type ExhaustionRetryGuard } from '../../../tui/pickers/resume-in.js';
+import { stopWaitingForReset, type ExhaustionRetryGuard } from '../../../session/exhaustion.js';
 import { followWorkerTurn, prepareSessionWorker, pushSessionSettings, questionOrWorker, refreshSessionWorker, releaseSessionWorker, workerQueueMark, workerTurn } from '../../../worker/turn-bridge.js';
 import { warmSessionWorker } from '../../../worker/client.js';
 import { shouldWarmVendorChat } from '../../../worker/warm-policy.js';
