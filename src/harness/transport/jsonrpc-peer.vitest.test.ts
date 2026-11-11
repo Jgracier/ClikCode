@@ -317,11 +317,16 @@ describe('JSON-RPC peer', () => {
     expect(added).toHaveLength(1);
     expect(process.listenerCount('SIGINT')).toBe(interruptsBefore + 1);
     // Invoke the handler directly: emitting a real SIGTERM would also reach
-    // the test runner's own listeners.
-    (added[0] as () => void)();
-    expect(child.killed).toEqual(['SIGTERM']);
-    expect(process.listenerCount('SIGTERM')).toBe(before.length);
-    expect(process.listenerCount('SIGINT')).toBe(interruptsBefore);
+    // the test runner's own listeners. With none of its own, ClikCode then
+    // raises the signal again to exit (parent-signals.ts): stubbed here.
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      (added[0] as () => void)();
+      expect(child.killed).toEqual(['SIGTERM']);
+      expect(process.listenerCount('SIGTERM')).toBe(before.length);
+      expect(process.listenerCount('SIGINT')).toBe(interruptsBefore);
+      if (!before.length) expect(kill).toHaveBeenCalledWith(process.pid, 'SIGTERM');
+    } finally { kill.mockRestore(); }
   });
 });
 

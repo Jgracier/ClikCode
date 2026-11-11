@@ -13,6 +13,7 @@
  * BSD script does not flush that file until exit anyway.
  */
 import { killProcessTreePortable, spawnPortable as spawn } from '../../harness/transport/spawn.js';
+import { forwardParentSignals } from '../../harness/transport/parent-signals.js';
 
 /** Single-quote for `sh -c`, the only form util-linux script accepts. */
 export function shellQuote(parts: readonly string[]): string {
@@ -135,13 +136,11 @@ export async function runInPty(input: {
       kill.unref();
     };
     input.signal?.addEventListener('abort', stop, { once: true });
-    process.once('SIGTERM', stop);
-    if (process.platform !== 'win32') process.once('SIGHUP', stop);
+    const releaseSignals = forwardParentSignals(stop, ['SIGTERM', 'SIGHUP']);
     const cleanup = (): void => {
       if (kill) clearTimeout(kill);
       input.signal?.removeEventListener('abort', stop);
-      process.off('SIGTERM', stop);
-      if (process.platform !== 'win32') process.off('SIGHUP', stop);
+      releaseSignals();
     };
     // ENOENT means no script(1) on this machine: not an error, just a
     // platform without the capability, same as Windows.

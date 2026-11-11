@@ -5,6 +5,7 @@
 import { markTurn } from '../../runtime/turn-latency.js';
 import type { ChildProcess } from 'node:child_process';
 import { killProcessTreePortable } from './spawn.js';
+import { forwardParentSignals } from './parent-signals.js';
 import { LineBuffer } from '../protocol/json-lines.js';
 
 type JsonRpcMessage = Record<string, any>;
@@ -451,12 +452,7 @@ export class JsonRpcPeer {
   }
 
   private installSignalForwarding(): void {
-    const signals: NodeJS.Signals[] = process.platform === 'win32' ? ['SIGINT', 'SIGTERM'] : ['SIGINT', 'SIGTERM', 'SIGHUP'];
-    for (const signal of signals) {
-      const forward = (): void => this.kill(signal);
-      process.once(signal, forward);
-      this.signalCleanup.push(() => process.off(signal, forward));
-    }
+    this.signalCleanup.push(forwardParentSignals((signal) => this.kill(signal)));
     // A detached child is outside the terminal's process group, so nothing
     // else reaps it if ClikCode exits while a persistent session is parked.
     const onExit = (): void => this.kill('SIGKILL');
