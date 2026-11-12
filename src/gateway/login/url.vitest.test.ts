@@ -65,6 +65,12 @@ describe('hasLocalDisplay', () => {
     expect(hasLocalDisplay({ DISPLAY: ':0' })).toBe(true);
     expect(hasLocalDisplay({ WAYLAND_DISPLAY: 'wayland-0' })).toBe(true);
   });
+
+  it('treats a ClikDeploy or SSH terminal as remote even when the host exports a display', () => {
+    expect(hasLocalDisplay({ DISPLAY: ':0', CLIKDEPLOY_REMOTE_TERMINAL: '1' })).toBe(false);
+    expect(hasLocalDisplay({ WAYLAND_DISPLAY: 'wayland-0', SSH_TTY: '/dev/pts/2' })).toBe(false);
+    expect(hasLocalDisplay({ DISPLAY: ':0', SSH_CONNECTION: '192.0.2.1 22 192.0.2.2 4455' })).toBe(false);
+  });
 });
 
 describe('shortenLoginUrl', () => {
@@ -93,6 +99,11 @@ describe('loginUrlNotice', () => {
     expect(loginUrlNotice(url, {}).lines).toContain('Consent callback port 49152 · over SSH forward with ssh -L 49152:127.0.0.1:49152 <host>');
     expect(loginCallbackPort('https://provider.example/authorize?redirect_uri=https%3A%2F%2Fexample.com%3A443%2Fcallback')).toBeUndefined();
     expect(loginPortForwardHint(AUTH_URL)).toBeUndefined();
+  });
+  it('shows the automatic callback behavior in a ClikDeploy terminal', () => {
+    const url = `https://provider.example/authorize?redirect_uri=${encodeURIComponent('http://127.0.0.1:1455/auth/callback')}`;
+    expect(loginPortForwardHint(url, { CLIKDEPLOY_REMOTE_TERMINAL: '1' })).toBe('Consent callback port 1455 · tap this link in ClikDeploy to forward automatically');
+    expect(loginUrlNotice(url, { CLIKDEPLOY_REMOTE_TERMINAL: '1' }).lines).toContain('Consent callback port 1455 · tap this link in ClikDeploy to forward automatically');
   });
   it('tells a phone user to paste the code back', () => {
     expect(loginUrlNotice(AUTH_URL, {}).lines.join(' ')).toContain("phone's browser");
