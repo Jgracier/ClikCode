@@ -71,7 +71,10 @@ export async function rememberedVersion(
 ): Promise<MemoizedVersion | undefined> {
   if (!fingerprint) return undefined;
   const entry = (await memo.load()).harnesses[command];
-  return sameFingerprint(entry, fingerprint) ? entry : undefined;
+  // An error is a result of one probe, not a fact about the binary. Older
+  // versions persisted non-zero exits forever, so ignore those entries and
+  // let the next doctor invocation retry the command.
+  return sameFingerprint(entry, fingerprint) && !entry.error ? entry : undefined;
 }
 
 export async function rememberVersion(
@@ -79,7 +82,12 @@ export async function rememberVersion(
   result: { version?: string; error?: string },
 ): Promise<void> {
   const data = await memo.load();
-  data.harnesses[command] = { ...fingerprint, ...(result.version ? { version: result.version } : {}), ...(result.error ? { error: result.error } : {}) };
+  if (result.error) {
+    delete data.harnesses[command];
+    memo.changed();
+    return;
+  }
+  data.harnesses[command] = { ...fingerprint, ...(result.version ? { version: result.version } : {}) };
   memo.changed();
 }
 
