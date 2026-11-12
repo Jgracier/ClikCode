@@ -33,7 +33,7 @@ interface GatewayModel {
    * discount in force, and the price charged. Absent when the account is not
    * charged (unlimited) or the Gateway predates prices. */
   price?: GatewayModelPrice;
-  /** What kind of model the Gateway says it is, from `tags` on its list entry (`uncensored`). Searchable in /model: the tag is in the row. */
+  /** What kind of model the Gateway says it is, from `tags` on its list entry. Searchable in /model: the tag is in the row. */
   tags?: string[];
   /** Which tier the Gateway serves it from right now. Sent to the super admin
    * only: everyone else sees the model alone. */
@@ -149,6 +149,7 @@ export function gatewayModelDetail(model: GatewayModel): string {
   // A phone row has room for little: the tag and the price. What a model can do (images, reasoning,
   // speed) is not what picks it, so it is left off rather than cut off.
   return [
+    model.tags?.includes('abliterated') ? 'abliterated' : '',
     model.tags?.includes('uncensored') ? 'uncensored' : '',
     model.price ? gatewayPriceLabel(model.price, false) : '',
   ].filter(Boolean).join(' · ');
