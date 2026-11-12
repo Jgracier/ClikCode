@@ -97,6 +97,43 @@ export interface GatewayModelList {
   subscriptions?: boolean;
 }
 
+export interface GatewayUncensoredConsent {
+  version: string;
+  terms: string;
+  accepted: boolean;
+  acceptedAt: string | null;
+}
+
+/** Read the current, account-scoped uncensored-model agreement from the Gateway. */
+async function uncensoredConsentRequest(
+  options: { config?: Conf; fetchImpl?: typeof fetch; timeoutMs?: number },
+  version?: string,
+): Promise<GatewayUncensoredConsent> {
+  const { baseUrl, apiKey } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
+  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/uncensored-consent`, {
+    ...(version !== undefined ? { method: 'POST', body: JSON.stringify({ accepted: true, version }) } : {}),
+    headers: {
+      authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT,
+      ...(version !== undefined ? { 'content-type': 'application/json' } : {}),
+    },
+    signal: AbortSignal.timeout(options.timeoutMs ?? MODELS_TIMEOUT_MS),
+  });
+  const body = await response.json().catch(quiet('gateway/uncensored-consent')) as Partial<GatewayUncensoredConsent> & { error?: { message?: string } };
+  if (!response.ok || typeof body.version !== 'string' || typeof body.terms !== 'string' || typeof body.accepted !== 'boolean') {
+    throw new Error(body.error?.message ?? `ClikDeploy Gateway agreement: HTTP ${response.status}`);
+  }
+  return { version: body.version, terms: body.terms, accepted: body.accepted, acceptedAt: typeof body.acceptedAt === 'string' ? body.acceptedAt : null };
+}
+
+export function gatewayUncensoredConsent(options: { config?: Conf; fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<GatewayUncensoredConsent> {
+  return uncensoredConsentRequest(options);
+}
+
+/** Record an explicit acceptance of exactly the agreement version just shown to the user. */
+export function acceptGatewayUncensoredTerms(version: string, options: { config?: Conf; fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<GatewayUncensoredConsent> {
+  return uncensoredConsentRequest(options, version);
+}
+
 /** One row's detail: the model's token price, then what it can do beyond
  * text (images, reasoning) and how fast it answers. Which of the Gateway's
  * providers serves it, and on what terms, is the Gateway's own decision (the
