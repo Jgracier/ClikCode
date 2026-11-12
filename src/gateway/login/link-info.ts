@@ -19,9 +19,12 @@ export function loginCallbackPort(url: string): number | undefined {
   } catch { return undefined; }
 }
 
-export function loginPortForwardHint(url: string): string | undefined {
+export function loginPortForwardHint(url: string, environment: NodeJS.ProcessEnv = process.env): string | undefined {
   const port = loginCallbackPort(url);
-  return port ? `Consent callback port ${port} · over SSH forward with ssh -L ${port}:127.0.0.1:${port} <host>` : undefined;
+  if (!port) return undefined;
+  return environment.CLIKDEPLOY_REMOTE_TERMINAL === '1'
+    ? `Consent callback port ${port} · tap this link in ClikDeploy to forward automatically`
+    : `Consent callback port ${port} · over SSH forward with ssh -L ${port}:127.0.0.1:${port} <host>`;
 }
 
 /** The names a CLI opens a browser through: a sign-in records what they were asked to open, a probe makes them do nothing. */

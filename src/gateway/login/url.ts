@@ -81,7 +81,12 @@ export function completeLoginUrl(value: string): boolean {
 /** Is a browser on THIS machine any use? Over SSH it is not: opening one on
  * the server helps nobody sitting at a phone. */
 export function hasLocalDisplay(environment: NodeJS.ProcessEnv = process.env): boolean {
-  if (process.platform === 'darwin' || process.platform === 'win32') return !environment.SSH_CONNECTION;
+  // SSH and ClikDeploy's remote terminal can inherit the host's X/Wayland
+  // variables. A display on the computer does not mean the person opening
+  // this terminal can reach its browser callback, so prefer the terminal's
+  // actual remote-session signal over DISPLAY.
+  if (environment.CLIKDEPLOY_REMOTE_TERMINAL === '1' || environment.SSH_CONNECTION || environment.SSH_TTY) return false;
+  if (process.platform === 'darwin' || process.platform === 'win32') return true;
   return Boolean(environment.DISPLAY || environment.WAYLAND_DISPLAY);
 }
 
@@ -108,7 +113,7 @@ export function loginUrlNotice(url: string, environment: NodeJS.ProcessEnv = pro
     clipboard: osc52Sequence(url, environment),
     lines: [
       `ClikCode · ${loginLinkLine(url)}`,
-      ...(loginPortForwardHint(url) ? [loginPortForwardHint(url)!] : []),
+      ...(loginPortForwardHint(url, environment) ? [loginPortForwardHint(url, environment)!] : []),
       local
         ? 'A browser should have opened here; paste the link if it did not.'
         : 'Paste it into your phone\'s browser, then come back and paste any code below.',
