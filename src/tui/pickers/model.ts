@@ -6,7 +6,7 @@ import { freePlanModels } from '../../harness/accounts/free-plan.js';
 import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { isGatewayService } from '../../session/route.js';
-import { gatewayMakerName, gatewayModelsByMaker, gatewayModelDetail, gatewayModelLabel, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
+import { acceptGatewayUncensoredTerms, gatewayMakerName, gatewayModelsByMaker, gatewayModelDetail, gatewayModelLabel, gatewayModels, gatewayUncensoredConsent, savedGatewayModels } from '../../gateway/models.js';
 import { gatewayAgents, type GatewayAgent } from '../../gateway/agents.js';
 import { gatewaySubscriptionsOn, setGatewaySubscriptions } from '../../gateway/subscriptions.js';
 import { alwaysStartOwnModels, setAlwaysStartOwnModels } from '../../gateway/own-models.js';
@@ -27,6 +27,7 @@ import { hostedAdapter, hostedList, hostedPlan, hostedSelectionCommand, type Hos
 import { GATEWAY_ID } from '../../session/picker-rows.js';
 import { providerConversationKey } from './engine.js';
 import { selectProviderConversation } from './conversation.js';
+import { emitHarnessOutput } from '../../harness/output.js';
 
 /** One model as every model list shows it. A harness that drives other
  * providers shows `provider/model` (never its own name as the provider:
@@ -303,6 +304,24 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
       currentAgent = selected.id === currentAgent ? undefined : selected.id;
       await selectGatewayAgent(id, currentAgent, agents.find((agent) => agent.id === currentAgent)?.name);
       continue;
+    }
+    const selectedModel = list.models.find((model) => model.id === selected.id);
+    if (selectedModel?.tags?.includes('uncensored')) {
+      try {
+        const consent = await gatewayUncensoredConsent();
+        if (!consent.accepted) {
+          const accepted = await chooseOption(rl, `Uncensored models · agreement ${consent.version}\n\n${consent.terms}\n\nAccepting records this choice for your ClikDeploy account.`, [
+            { label: 'I accept — continue', detail: 'Required before this model can be used', value: true },
+            { label: 'Cancel', value: false },
+          ]);
+          if (accepted !== true) continue;
+          const saved = await acceptGatewayUncensoredTerms(consent.version);
+          if (!saved.accepted) throw new Error('The current agreement was not recorded. Refresh the model list and try again.');
+        }
+      } catch (error) {
+        emitHarnessOutput({ panel: 'error', message: `Uncensored model agreement: ${error instanceof Error ? error.message : String(error)}` });
+        continue;
+      }
     }
     const own = list.models.find((model) => model.id === selected.id)?.own;
     if (own?.state === 'asleep') {

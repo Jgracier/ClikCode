@@ -22,7 +22,7 @@ import { effortChoicesFor } from '../../../harness/accounts/effort-choices.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../../harness/definition.js';
 import { applyClikCodeAgentSessionPolicy, assertRealModel, chooseGatewayModel } from '../../../commands/ai/sessions.js';
 import { releaseHeldLocalModel } from '../../../commands/ai/local-model.js';
-import { gatewayModelDetail, gatewayModelLabel, gatewayModels, isAutomaticModelWord } from '../../../gateway/models.js';
+import { gatewayModelDetail, gatewayModelForWord, gatewayModelLabel, gatewayModels, gatewayUncensoredConsent, isAutomaticModelWord } from '../../../gateway/models.js';
 import { wakeOwnModel } from '../../../gateway/own-models.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../../gateway/options.js';
 import { type HeadlessSlashHandler, saveSettings } from './shared.js';
@@ -166,13 +166,22 @@ export const modelHandlers = {
           selected: session.model ?? 'Automatic',
         });
       }
-      session.model = trusted && !isAutomaticModelWord(value) ? value : await chooseGatewayModel(value);
+      const selectedModel = trusted && !isAutomaticModelWord(value) ? value : await chooseGatewayModel(value);
+      const modelList = await gatewayModels().catch(() => ({ models: [] }));
+      const chosen = selectedModel ? gatewayModelForWord(modelList.models, selectedModel) : undefined;
+      if (chosen?.tags?.includes('uncensored')) {
+        const consent = await gatewayUncensoredConsent().catch(() => null);
+        if (!consent?.accepted) {
+          emitHarnessOutput({ panel: 'error', message: 'This model requires the uncensored-model agreement. Open the /model picker, select the model, and review the agreement before continuing.' });
+          return;
+        }
+      }
+      session.model = selectedModel;
       // The model that answered last was answering the previous choice.
       if (session.reported?.model) delete session.reported.model;
       await saveSettings(state, session);
       // One of the user's own models, asleep: started now, so its GPU is starting while they type rather than
       // from their first message (which waits for it, "Starting model", and goes as soon as it is up).
-      const chosen = (await gatewayModels().catch(() => ({ models: [] }))).models.find((model) => model.id === session.model);
       if (chosen?.own && chosen.own.state !== 'running') {
         const state = await wakeOwnModel(chosen.id).catch(quiet('tui/slash/handlers/model'));
         if (state === 'starting') {

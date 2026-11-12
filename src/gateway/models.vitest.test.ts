@@ -8,7 +8,7 @@ vi.mock('../agent/models/for-session.js', () => ({
   gatewayConnection: () => ({ baseUrl: 'https://clikdeploy.com', apiKey: account.key }),
 }));
 
-const { gatewayModelDetail, gatewayModelForWord, gatewayModels, gatewayPriceLabel, isAutomaticModelWord, resetGatewayModelCache, sameGatewayModel } = await import('./models.js');
+const { acceptGatewayUncensoredTerms, gatewayModelDetail, gatewayModelForWord, gatewayModels, gatewayPriceLabel, gatewayUncensoredConsent, isAutomaticModelWord, resetGatewayModelCache, sameGatewayModel } = await import('./models.js');
 const { chooseGatewayModel } = await import('../commands/ai/sessions.js');
 
 /** What the Gateway sends (GET /v1/models, OpenAI's list)... */
@@ -128,6 +128,17 @@ describe('the Gateway\'s model list', () => {
     expect(gatewayModelDetail(ordinary!)).not.toMatch(/uncensored/);
     // A tag the Gateway sends that is not a string is ignored, not crashed on.
     expect(fromOpenAIModelList([{ id: 'x', tags: [1, null] }]).models[0]).toEqual({ id: 'x' });
+  });
+
+  it('reads and records the exact Gateway agreement version with the configured account key', async () => {
+    const consent = { version: 'v1', terms: 'terms', accepted: false, acceptedAt: null };
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => reply(init?.method === 'POST' ? { ...consent, accepted: true, acceptedAt: '2026-11-12T00:00:00.000Z' } : consent));
+    expect(await gatewayUncensoredConsent({ fetchImpl: fetchImpl as never })).toEqual(consent);
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, 'https://clikdeploy.com/uncensored-consent', expect.objectContaining({ headers: expect.objectContaining({ authorization: 'Bearer cd_live_key' }) }));
+    expect(await acceptGatewayUncensoredTerms('v1', { fetchImpl: fetchImpl as never })).toMatchObject({ accepted: true, version: 'v1' });
+    expect(fetchImpl).toHaveBeenLastCalledWith('https://clikdeploy.com/uncensored-consent', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ accepted: true, version: 'v1' }),
+    }));
   });
 
   it('keeps a private deployment as its own choice, named by the model it serves', async () => {
