@@ -39,7 +39,7 @@ export function continueAnswer(ctx: VendorTurnContext, edit: RetryEdit): void {
  * request carried besides its words (attached files), which the journal
  * does not keep. */
 export async function takeUp(
-  ctx: VendorTurnContext, request: string, options: { interrupted: boolean; withJournal: boolean; requestContext?: string },
+  ctx: VendorTurnContext, request: string, options: { interrupted: boolean; withJournal: boolean; requestContext?: string; reportCarry?: boolean },
 ): Promise<string> {
   const { session, harness, state, checkpoint } = ctx;
   const view = options.withJournal ? session : { ...session, pendingTurn: undefined };
@@ -72,7 +72,7 @@ export async function takeUp(
   });
   // Whatever of the conversation did not arrive whole is said in the chat, not only to the model.
   const carried = carriedLine(record.turns.length, start, harness.displayName, recordPath);
-  if (carried) ctx.prompter?.activity(carried);
+  if (carried && options.reportCarry !== false) ctx.prompter?.activity(carried);
   if (start.kind === 'native') {
     session.nativeSessionId = start.written.nativeId;
     session.nativeThreadAccountId = ctx.account.id;
@@ -90,7 +90,10 @@ export async function takeUp(
  * produced nothing is taken up as the request alone. The answer is cleared,
  * or continued in a new paragraph. Returns what to send. */
 export async function retell(ctx: VendorTurnContext, request: string, edit: RetryEdit, wrote: boolean): Promise<string> {
-  const prompt = await takeUp(ctx, request, { interrupted: wrote, withJournal: wrote, requestContext: ctx.requestContext });
+  // Retries on another account already produce one plain account-switch line.
+  // Repeating a second full "Carried N turns" activity on every failed account
+  // made one switch sequence look like many provider handoffs.
+  const prompt = await takeUp(ctx, request, { interrupted: wrote, withJournal: wrote, requestContext: ctx.requestContext, reportCarry: false });
   continueAnswer(ctx, edit);
   return prompt;
 }

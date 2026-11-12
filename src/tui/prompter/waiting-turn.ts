@@ -441,13 +441,9 @@ export function stopWaiting(this: TerminalHarnessPrompter, refresh = true, why?:
   // the worker's saved copy of the turn does (turn-journal.ts).
   if (turn?.cancelled) this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry));
   if (turn?.cancelled) this.childEntries = stopEntries(this.childEntries, () => true);
-  // A real turn's end -- one that took messages, not a wait on a download
-  // or a shell command -- and not stepping out of it. A stopped turn did
-  // not finish, and whoever stopped it knows. (Its closing line is drawn
-  // from the saved answer: see turnEndLine.)
-  if (turn?.submit && !this.steppedOut && !turn.cancelled) {
-    this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
-  }
+  // Turn completion is shown in the transcript and progress indicator. Only
+  // approvals use a desktop notification; repeated completion alerts were
+  // noisy when following several chats from multiple terminals.
   this.steerable = false;
   this.turn = undefined;
   this.backgroundTerminals = 0;

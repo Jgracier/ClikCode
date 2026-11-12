@@ -114,6 +114,49 @@ function briefTurn(turn: CanonicalTurn): CanonicalTurn {
   return { ...turn, user: `${turn.user}${ran}`, parts: turn.assistant ? [{ type: 'text', text: turn.assistant }] : [], tools: [] };
 }
 
+function clipMiddle(text: string, limit: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (Buffer.byteLength(flat, 'utf8') <= limit) return flat;
+  if (limit < 24) return Buffer.from(flat).subarray(0, Math.max(0, limit)).toString('utf8').replace(/�+$/g, '');
+  const marker = ' … ';
+  const room = Math.max(0, limit - Buffer.byteLength(marker));
+  const head = Buffer.from(flat).subarray(0, Math.ceil(room * 0.65)).toString('utf8').replace(/�+$/g, '');
+  const tail = Buffer.from(flat).subarray(-Math.floor(room * 0.35)).toString('utf8').replace(/^�+/g, '');
+  return `${head}${marker}${tail}`;
+}
+
+/** A compact, attributable account of one old turn. Keeping its request,
+ * outcome and work done means a long handoff loses detail gradually instead
+ * of dropping whole chunks of history before the current request. */
+function compactTurn(turn: CanonicalTurn, maxBytes: number, recordPath?: string): CanonicalTurn {
+  const recordNote = turn.index === 0 && recordPath ? ` Full transcript: ${recordPath}.` : '';
+  const lead = `[ClikCode history, turn ${turn.index + 1}] Request:${recordNote} `;
+  const room = Math.max(0, maxBytes - Buffer.byteLength(lead, 'utf8') - 44);
+  const requestLimit = Math.floor(room * 0.46);
+  const summaryLimit = Math.floor(room * 0.34);
+  const actionsLimit = Math.max(0, room - requestLimit - summaryLimit);
+  const request = clipMiddle(turn.user || '(continued work)', requestLimit);
+  const prose = turn.assistant.replace(/```[\s\S]*?```/g, ' ').replace(/\s+/g, ' ').trim();
+  const sentences = prose.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const outcome = clipMiddle(sentences.length > 1 ? `${sentences[0]} … ${sentences.at(-1)}` : prose, summaryLimit);
+  const actionText = [...new Set([
+    ...turn.tools.map((tool) => `${tool.label}${tool.status === 'failed' ? ' (failed)' : ''}`),
+    ...turn.touchedFiles.map((file) => `changed ${file}`),
+  ])].join('; ');
+  const actions = actionText ? clipMiddle(actionText, actionsLimit) : '';
+  const user = `${lead}${request}${actions ? `\nWork: ${actions}` : ''}`;
+  const assistant = outcome || (turn.interrupted ? '[The turn was interrupted before a response.]' : '');
+  return {
+    ...turn, user, assistant,
+    parts: assistant ? [{ type: 'text', text: assistant }] : [],
+    tools: [], touchedFiles: turn.touchedFiles.slice(0, 8),
+  };
+}
+
+function writtenRecordBytes(turns: readonly CanonicalTurn[]): number {
+  return turns.reduce((sum, turn) => sum + writtenBytes(turn), 0);
+}
+
 /** Share of a fitted thread's budget the outline of left-out requests may take. */
 const OUTLINE_SHARE = 0.1;
 /** What the note's own sentences and the file's path take, apart from the outline. */
@@ -147,6 +190,28 @@ function requestsOutline(turns: readonly CanonicalTurn[], maxBytes: number): str
 export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { recordPath?: string } = {}): { record: CanonicalRecord; omitted: number; summarised: number } {
   const turns = record.turns;
   const brief = turns.map(briefTurn);
+  let totalBytes = writtenRecordBytes(brief);
+  let compacted = 0;
+  const compactedIndices = new Set<number>();
+  // Compact oldest turns first, preserving the most recent full exchanges.
+  // A previous fitter simply omitted these turns; long-running conversations
+  // consequently reached a new provider with only an outline of old requests.
+  if (totalBytes > maxBytes && turns.length > 1) {
+    const perTurn = Math.floor((maxBytes - (options.recordPath ? Buffer.byteLength(options.recordPath, 'utf8') + 48 : 0)) / turns.length);
+    if (perTurn >= 192) {
+      for (let index = 0; index < turns.length - 1 && totalBytes > maxBytes; index += 1) {
+        const compact = compactTurn(turns[index]!, perTurn, options.recordPath);
+        const before = writtenBytes(brief[index]!);
+        const after = writtenBytes(compact);
+        if (after < before) {
+          brief[index] = compact;
+          totalBytes += after - before;
+          compacted += 1;
+          compactedIndices.add(index);
+        }
+      }
+    }
+  }
   /** The newest turns that fit `room`: how many of the oldest are out, and the rest. */
   const select = (room: number): { first: number; kept: CanonicalTurn[] } => {
     let used = 0;
@@ -167,14 +232,16 @@ export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { 
   };
   let { first, kept } = select(maxBytes);
   /** Kept turns that went in as their words and a line of what their calls did. */
-  const summarisedIn = (): number => kept.filter((turn, index) => turn !== turns[first + index] && turns[first + index]!.tools.length > 0).length;
-  if (first === 0 && kept.every((turn, index) => turn === turns[index])) return { record, omitted: 0, summarised: 0 };
-  if (first === 0) return { record: { ...record, turns: kept }, omitted: 0, summarised: summarisedIn() };
+  const summarisedIn = (): number => kept.filter((turn, index) =>
+    !compactedIndices.has(first + index) && turn !== turns[first + index] && turns[first + index]!.tools.length > 0,
+  ).length;
+  if (first === 0 && compacted === 0 && kept.every((turn, index) => turn === turns[index])) return { record, omitted: 0, summarised: 0 };
+  if (first === 0) return { record: { ...record, turns: kept }, omitted: 0, summarised: compacted + summarisedIn() };
   // Something is left out, so the note that says what comes out of the same
   // budget as the turns: fitted again with its room held back, never on top.
   const outlineRoom = Math.floor(maxBytes * OUTLINE_SHARE);
   ({ first, kept } = select(Math.max(0, maxBytes - outlineRoom - NOTE_FIXED_BYTES)));
-  const summarised = summarisedIn();
+  const summarised = compacted + summarisedIn();
   const outline = requestsOutline(turns.slice(0, first), outlineRoom);
   const note = `[ClikCode: the ${first} earlier turn${first === 1 ? ' is' : 's are'} left out to fit this model.${options.recordPath ? ` ${fullRecordNote(options.recordPath)}` : ''}${outline ? `\nWhat was asked in them, oldest first:\n${outline}` : ''}]\n\n`;
   return { record: { ...record, turns: [{ ...kept[0]!, user: `${note}${kept[0]!.user}` }, ...kept.slice(1)] }, omitted: first, summarised };

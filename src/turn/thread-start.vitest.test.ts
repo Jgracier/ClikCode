@@ -141,10 +141,10 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
   });
 
   it('keeps the newest turns that fit, and names the file that holds the rest and what was asked in it', () => {
-    const fitted = fitRecord(long, 5_000, { recordPath: '/state/records/s2.md' });
+    const fitted = fitRecord(long, 3_000, { recordPath: '/state/records/s2.md' });
     expect(fitted.omitted).toBeGreaterThan(0);
     expect(fitted.omitted + fitted.record.turns.length).toBe(20);
-    expect(fitted.record.turns.at(-1)!.user).toBe('request 19');
+    expect(fitted.record.turns.at(-1)!.user).toContain('request 19');
     const note = fitted.record.turns[0]!.user;
     expect(note).toMatch(new RegExp(`^\\[ClikCode: the ${fitted.omitted} earlier turns are left out`));
     expect(note).toContain('/state/records/s2.md');
@@ -194,6 +194,29 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
     expect(start).toMatchObject({ kind: 'native', omitted: 20 - written[0]! });
     expect(written[0]).toBeLessThan(20);
   });
+
+  it('keeps a compact request and outcome for every turn in a long conversation', () => {
+    const many = canonicalRecord({
+      id: 'long-history', route: 'local', accountId: null, provider: 'anthropic', model: 'opus', nativeHarness: 'claude', effort: 'high',
+      createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
+      messages: Array.from({ length: 1_420 }, (_, index) => [
+        { role: 'user' as const, content: `Request ${index + 1}: preserve this decision ${index}.` },
+        { role: 'assistant' as const, content: `Started work on item ${index + 1}. ${'Detailed intermediate context. '.repeat(30)}Completed item ${index + 1} successfully.` },
+      ]).flat(),
+    } as HarnessSession);
+    const fitted = fitRecord(many, 400 * 1024, { recordPath: '/state/records/long-history.md' });
+    const bytes = fitted.record.turns.reduce((sum, turn) => sum
+      + Buffer.byteLength(turn.user, 'utf8') + Buffer.byteLength(JSON.stringify(turn.parts), 'utf8'), 0);
+
+    expect(fitted.omitted).toBe(0);
+    expect(fitted.record.turns).toHaveLength(1_420);
+    expect(fitted.summarised).toBeGreaterThan(1_000);
+    expect(fitted.record.turns[0]!.user).toContain('Request 1: preserve this decision 0.');
+    expect(fitted.record.turns[0]!.assistant).toContain('successfully.');
+    expect(fitted.record.turns[0]!.user).toContain('/state/records/long-history.md');
+    expect(fitted.record.turns.at(-1)!.user).toContain('Request 1420: preserve this decision 1419.');
+    expect(bytes).toBeLessThanOrEqual(400 * 1024);
+  });
 });
 
 describe("a writer's version gate", () => {
@@ -224,7 +247,7 @@ describe('what a person is told was carried', () => {
     expect(fitted.omitted).toBe(0);
     expect(fitted.summarised).toBeGreaterThan(0);
     expect(fitted.summarised).toBeLessThan(20);
-    const tight = fitRecord(heavy, 5_000);
+    const tight = fitRecord(heavy, 100);
     expect(tight.omitted).toBeGreaterThan(0);
     expect(tight.omitted + tight.record.turns.length).toBe(20);
   });

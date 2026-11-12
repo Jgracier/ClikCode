@@ -58,9 +58,9 @@ export function terminalSignals(this: TerminalHarnessPrompter): string {
   return sequence;
 }
 
-/** Something needs the user -- a turn ended, an approval waits -- and the
- * terminal said it lost focus long enough ago: tell them (OSC 9 and a
- * bell). A terminal that never reports focus is never notified. */
+/** An approval needs the user and the terminal has been unfocused long enough:
+ * tell them (OSC 9 and a bell). A terminal that never reports focus is never
+ * notified. */
 export function notifyIfAway(this: TerminalHarnessPrompter, message: string): void {
   if (!output.isTTY || this.suspended || this.closed || !shouldNotify(this.focus, Date.now())) return;
   output.write(notifySequence(message));
