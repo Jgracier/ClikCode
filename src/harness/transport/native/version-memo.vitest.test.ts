@@ -38,6 +38,16 @@ describe('the version memo', () => {
     expect((await rememberedVersion('fake', print))?.version).toBe('1.0.0');
   });
 
+  it('does not keep a failed probe as a permanent fact about an unchanged binary', async () => {
+    const print = await binaryFingerprint(binary);
+    await rememberVersion('fake', print!, { version: '1.0.0' });
+    await rememberVersion('fake', print!, { version: '1.0.0', error: 'version probe exited 1' });
+    expect(await rememberedVersion('fake', print)).toBeUndefined();
+
+    await rememberVersion('fake', print!, { version: '1.0.0' });
+    expect((await rememberedVersion('fake', print))?.version).toBe('1.0.0');
+  });
+
   it('forgets when the binary is replaced, however recently it was learned', async () => {
     // An upgrade is exactly this: same path, new mtime. A TTL would serve the
     // old version for the rest of its window.
