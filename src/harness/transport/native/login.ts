@@ -28,7 +28,7 @@ export function withSignInScreen<T>(screen: SignInScreen, work: () => Promise<T>
 
 /** No screen of ClikCode's: the link printed (copied where no browser is
  * local, opened where one is), questions read from stdin. */
-function plainSignInScreen(name: string): SignInScreen {
+function plainSignInScreen(name: string, environment: NodeJS.ProcessEnv = process.env): SignInScreen {
   let opened = false;
   const controller = new AbortController();
   const line = async (prompt: string): Promise<string> => {
@@ -38,9 +38,10 @@ function plainSignInScreen(name: string): SignInScreen {
   return {
     signal: controller.signal,
     show: (link) => {
-      const local = hasLocalDisplay();
+      const local = hasLocalDisplay(environment);
       if (local && !opened) { opened = true; openLoginUrl(link.url); }
-      process.stdout.write(`${local ? '' : loginUrlNotice(link.url).clipboard}Sign in to ${name}:\n${loginLinkLine(link.url)}\n${loginPortForwardHint(link.url) ? `${loginPortForwardHint(link.url)}\n` : ''}${link.code ? `Code: ${link.code}\n` : ''}`);
+      const hint = loginPortForwardHint(link.url, environment);
+      process.stdout.write(`${local ? '' : loginUrlNotice(link.url, environment).clipboard}Sign in to ${name}:\n${loginLinkLine(link.url)}\n${hint ? `${hint}\n` : ''}${link.code ? `Code: ${link.code}\n` : ''}`);
     },
     ask: (prompt) => line(`${prompt}: `),
     choose: async (title, choices) => {
@@ -67,8 +68,9 @@ export async function loginNativeHarness(spec: NativeHarnessSpec, envOverrides: 
 async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Readonly<Record<string, string>>): Promise<void> {
   await ensureNativeHarness(spec);
   const own = screens.getStore();
-  const screen = own ?? plainSignInScreen(spec.displayName);
-  const local = hasLocalDisplay();
+  const loginEnvironment = { ...process.env, ...envOverrides };
+  const screen = own ?? plainSignInScreen(spec.displayName, loginEnvironment);
+  const local = hasLocalDisplay(loginEnvironment);
   try {
     if (spec.loginKeyCommand) {
       const key = spec.loginKeyRoutes ? await askKey(spec, screen) : '';
