@@ -108,6 +108,14 @@ describe('the Gateway\'s model list', () => {
     expect(gatewayModelDetail(row as never)).toBe('uncensored · $1/$2');
   });
 
+  it('labels free upstream models for super-admin search and exposes abliterated metadata in searchable detail', async () => {
+    const { gatewayModelDetail, gatewayModelLabel, fromOpenAIModelList } = await import('./models.js');
+    const [free] = fromOpenAIModelList([{ id: 'provider/free-model', access: 'free', tags: ['uncensored', 'abliterated'] }]).models;
+    expect(gatewayModelLabel(free!)).toBe('provider/free-model (free)');
+    expect(gatewayModelDetail(free!)).toContain('abliterated');
+    expect(gatewayModelDetail(free!)).toContain('uncensored');
+  });
+
   it('names the tier serving a model beside it, where the Gateway says which (the super admin\'s list)', async () => {
     const { gatewayModelLabel, fromOpenAIModelList } = await import('./models.js');
     expect(gatewayModelLabel({ id: 'claude-opus-5-5', access: 'subscription' })).toBe('claude-opus-5-5 (subscription)');
@@ -128,6 +136,10 @@ describe('the Gateway\'s model list', () => {
     expect(gatewayModelDetail(ordinary!)).not.toMatch(/uncensored/);
     // A tag the Gateway sends that is not a string is ignored, not crashed on.
     expect(fromOpenAIModelList([{ id: 'x', tags: [1, null] }]).models[0]).toEqual({ id: 'x' });
+  });
+
+  it('shows the operator-only abliterated tag in the model row', () => {
+    expect(gatewayModelDetail({ id: 'abliterated-model', tags: ['uncensored', 'abliterated'] } as never)).toBe('abliterated · uncensored');
   });
 
   it('reads and records the exact Gateway agreement version with the configured account key', async () => {
