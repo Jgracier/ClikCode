@@ -21,3 +21,18 @@ it('does not move or rewrite ordinary user files', async () => {
   const file = join(root, 'image.png'); await writeFile(file, 'x');
   expect(await retainUploadedImages(`look ${file}`, 'chat')).toBe(`look ${file}`);
 });
+it('keeps an uploaded file with the conversation under the name it was sent with', async () => {
+  const { retainUpload } = await import('./retained-images.js');
+  const staging = join(root, 'clikcode-upload.ABC'); await mkdir(staging);
+  const source = join(staging, 'report.pdf'); await writeFile(source, 'pdf bytes');
+  const kept = await retainUpload(source, 'report.pdf', 'chat');
+  expect(kept.startsWith(join(root, 'state', 'attachments', 'chat'))).toBe(true);
+  expect(kept.endsWith('/report.pdf')).toBe(true);
+  await rm(staging, { recursive: true, force: true });
+  expect(await readFile(kept, 'utf8')).toBe('pdf bytes');
+  // The same bytes sent again are the same kept file; different bytes under the same name are another.
+  await mkdir(staging); await writeFile(source, 'pdf bytes');
+  expect(await retainUpload(source, 'report.pdf', 'chat')).toBe(kept);
+  await writeFile(source, 'other bytes');
+  expect(await retainUpload(source, 'report.pdf', 'chat')).not.toBe(kept);
+});

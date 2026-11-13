@@ -12,6 +12,7 @@
  * command that moves the conversation (/new, /fork, /resume) switches too.
  */
 import { activityDetails } from './activity-details.js';
+import { IdeUploads, ideUploadLimits } from './upload.js';
 import { stripVTControlCharacters } from 'node:util';
 import { panelParts, renderPanelText } from '../harness/output.js';
 import { lifecycle, setLifecycleSession, quiet } from '../runtime/lifecycle-log.js';
@@ -85,6 +86,7 @@ export class IdeBridge {
   private drainScheduled = false;
   private work: Promise<void> = Promise.resolve();
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+  private readonly uploads = new IdeUploads();
 
   private readonly timers: NodeJS.Timeout[] = [];
   private closed = false;
@@ -154,7 +156,7 @@ export class IdeBridge {
       dispatch: (line, fromQueuedCommand) => bridge.dispatch(line, fromQueuedCommand),
     };
     this.link = new WorkerLink(this.host);
-    this.turns = new BridgeTurns(this.host);
+    this.turns = new BridgeTurns(this.host, this.uploads);
     // A model download is not this chat's wait: it shows on the busy line, and the chat that asked is told how it ended.
     this.stopDownloadFeed = followModelDownloadsInEditor((event) => channel.send(event), {
       sessionId: () => this.sessionId, refresh: () => this.emitSession(),
@@ -194,6 +196,21 @@ export class IdeBridge {
     if (request.type !== 'query') lifecycle('bridge.request', { type: request.type, ...(request.type === 'choose' ? { kind: request.choice.kind } : {}) });
     if (!READ_ONLY_REQUESTS.has(request.type)) this.lastActivityAt = Date.now();
     switch (request.type) {
+      case 'upload-start':
+        this.answerUpload(request.requestId, request.uploadId, async () => {
+          await this.uploads.start(request.uploadId, request.name, request.size);
+          return { maxChunkBytes: ideUploadLimits.maxChunkBytes };
+        });
+        return;
+      case 'upload-chunk':
+        this.answerUpload(request.requestId, request.uploadId, async () => { await this.uploads.append(request.uploadId, request.offset, request.data); return {}; });
+        return;
+      case 'upload-finish':
+        this.answerUpload(request.requestId, request.uploadId, async () => ({ path: await this.uploads.finish(request.uploadId) }));
+        return;
+      case 'upload-abort':
+        this.answerUpload(request.requestId, request.uploadId, async () => { await this.uploads.abort(request.uploadId); return {}; });
+        return;
       case 'activity-details':
         this.track((async () => {
           try {
@@ -252,7 +269,7 @@ export class IdeBridge {
         });
         return;
       case 'send':
-        this.track(this.turns.send(request.text, request.id, request.mode));
+        this.track(this.turns.send(request.text, request.id, request.mode, request.attachments));
         return;
       case 'cancel':
         this.turns.noteCancel();
@@ -373,8 +390,21 @@ export class IdeBridge {
     return this.stopping;
   }
 
+  /** One upload step, answered by `result`. A step that fails ends the upload: its staged bytes are removed. */
+  private answerUpload(requestId: string, uploadId: string, step: () => Promise<Record<string, unknown>>): void {
+    this.track((async () => {
+      try {
+        this.channel.send({ type: 'result', requestId, ok: true, data: await step() });
+      } catch (error) {
+        await this.uploads.abort(uploadId);
+        this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
+      }
+    })(), false);
+  }
+
   private async stop(): Promise<void> {
     this.closed = true;
+    await this.uploads.close();
     this.stopDownloadFeed();
     this.listWatch?.stop();
     this.listWatch = undefined;
