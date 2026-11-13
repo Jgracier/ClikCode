@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { piConfiguredModel, piConnect, piModels, piProviderLabel } from './pi-discovery.js';
-import { gooseConnect, gooseModelsDevModels, gooseProviders, modelsDevProvider } from './goose-discovery.js';
+import { gooseConnect, gooseModelsDevModels, gooseProviders, modelsDevProvider, providerKeyNames } from './goose-discovery.js';
 import { acpSessionModels } from './acp-query.js';
 
 describe('pi discovery', () => {
@@ -22,6 +22,10 @@ describe('pi discovery', () => {
     expect(piConfiguredModel('{"theme":"dark"}', listed)).toBeUndefined();
     expect(piConfiguredModel('not json', listed)).toBeUndefined();
     expect(piConfiguredModel(undefined, listed)).toBeUndefined();
+  });
+
+  it('counts a provider key only when it holds one: an empty variable is no key', () => {
+    expect(providerKeyNames({ ANTHROPIC_API_KEY: '', OPENAI_API_KEY: 'sk-x', OPENROUTER_API_KEY: '  ', HOME: '/h', GROQ_API_KEY: 'g' })).toEqual(['GROQ_API_KEY', 'OPENAI_API_KEY']);
   });
 
   it('finds no models in the signed-out notice, whose doc paths are not models', () => {
