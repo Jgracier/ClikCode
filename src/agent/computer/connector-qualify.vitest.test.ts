@@ -144,6 +144,19 @@ describe('qualify flow', () => {
     expect(pickLinks(page('home', '', { links: [{ href: 'https://a.example/docs', text: 'Documentation' }, { href: 'https://a.example/get-started', text: 'Get started free' }, { href: 'https://a.example/plans', text: 'Pricing' }] }))).toEqual({ signup: 'https://a.example/get-started', pricing: 'https://a.example/plans', docs: 'https://a.example/docs' });
   });
 
+  it('goes to the vendor\'s own site when the recorded sign-up page is really the API reference', () => {
+    // What connector_discover reports when only the reference is known: the file as the sign-up page, a guessed /pricing beside it.
+    const recorded = (url: string, pricing: string) => ({ signup: { url }, evidence: [{ purpose: 'signup page', url }, { purpose: 'pricing link', url: pricing }] });
+    expect(addressesFrom(recorded('https://docs.resemble.ai/openapi.json', 'https://docs.resemble.ai/pricing'))).toEqual({ homepage: 'https://resemble.ai/' });
+    expect(addressesFrom(recorded('https://api-docs.nachonacho.com/swagger.json', 'https://api-docs.nachonacho.com/pricing'))).toEqual({ homepage: 'https://nachonacho.com/' });
+    expect(addressesFrom(recorded('https://developer.remyrewards.co.uk/openapi.json', 'https://developer.remyrewards.co.uk/pricing'))).toEqual({ homepage: 'https://remyrewards.co.uk/' });
+    expect(addressesFrom(recorded('https://docs.moveo.ai/openapi.yaml', 'https://docs.moveo.ai/pricing'))).toEqual({ homepage: 'https://moveo.ai/' });
+    // The reference sits on the vendor's own host: the site root is the home page, and its own /pricing stays.
+    expect(addressesFrom(recorded('https://nexvio.ai/openapi.json', 'https://nexvio.ai/pricing'))).toEqual({ homepage: 'https://nexvio.ai/', pricingUrl: 'https://nexvio.ai/pricing' });
+    // A real sign-up page on a developer host is still visited, with the vendor's site as the home page.
+    expect(addressesFrom({ signup: { url: 'https://developers.acme.com/signup' } })).toEqual({ homepage: 'https://acme.com/', signupUrl: 'https://developers.acme.com/signup' });
+  });
+
   it('reads the pages out of a connector_discover answer', () => {
     expect(addressesFrom({ signup: { url: 'https://a.example/signup' }, evidence: [{ purpose: 'signup page', url: 'https://a.example/' }, { purpose: 'pricing link', url: 'https://a.example/pricing' }] })).toEqual({ homepage: 'https://a.example/', signupUrl: 'https://a.example/signup', pricingUrl: 'https://a.example/pricing' });
   });

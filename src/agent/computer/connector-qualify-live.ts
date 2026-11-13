@@ -7,12 +7,37 @@ const PAGE_BUDGET_MS = 20_000;
 const qualifyTab = (id: string): string => `qualify-${id.replace(/[^a-z0-9-]/g, '-')}`;
 
 /** The addresses in a connector_discover answer. */
+/** A machine-readable reference (an OpenAPI file), not a page a person signs up on. */
+const MACHINE_FILE = /\.(?:json|ya?ml|xml)(?:$|[?#])/i;
+/** A host that serves documentation or the API itself: the sign-up form lives on the vendor's own site. */
+const DOCS_HOST = /^(?:docs?|api|api-?docs|developers?|dev|reference)\./i;
+/** The vendor's own site for an address on its docs or API host: https://docs.acme.com/openapi.json -> https://acme.com/. */
+function vendorSite(url: string): string | undefined {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(DOCS_HOST, '');
+    return host.includes('.') ? `https://${host}/` : undefined;
+  } catch { return undefined; }
+}
+const onDocsHost = (url: string): boolean => { try { return DOCS_HOST.test(new URL(url).hostname); } catch { return false; } };
+
+/**
+ * Where to look for the sign-up form. ClikDeploy often has only the API reference on record and reports it as the sign-up page
+ * (https://docs.acme.com/openapi.json, with a guessed /pricing beside it): rendering that shows no form, and the vendor reads as
+ * "no usable signup form". Such an address is replaced by the vendor's own site, whose links then lead to sign-up and pricing.
+ */
 export function addressesFrom(data: unknown): { homepage?: string; signupUrl?: string; pricingUrl?: string } {
   const d = (data ?? {}) as { signup?: { url?: string }; evidence?: Array<{ purpose?: string; url?: string }> };
   const byPurpose = (p: string): string | undefined => d.evidence?.find(e => e.purpose === p && typeof e.url === 'string')?.url;
-  const homepage = byPurpose('signup page');
-  const signupUrl = d.signup?.url ?? byPurpose('signup link');
-  const pricingUrl = byPurpose('pricing link');
+  const page = (url: string | undefined): string | undefined => (url && !MACHINE_FILE.test(url) ? url : undefined);
+  const recordedHome = byPurpose('signup page');
+  const recordedSignup = d.signup?.url ?? byPurpose('signup link');
+  const reference = [recordedHome, recordedSignup].find(url => url && (MACHINE_FILE.test(url) || onDocsHost(url)));
+  const homepage = reference ? vendorSite(reference) : page(recordedHome);
+  const signupUrl = page(recordedSignup);
+  const recordedPricing = byPurpose('pricing link');
+  // A pricing address beside a reference file was guessed from its host; the vendor's own site links the real one.
+  const pricingUrl = reference && recordedPricing && onDocsHost(recordedPricing) ? undefined : page(recordedPricing);
   return { ...(homepage ? { homepage } : {}), ...(signupUrl ? { signupUrl } : {}), ...(pricingUrl ? { pricingUrl } : {}) };
 }
 

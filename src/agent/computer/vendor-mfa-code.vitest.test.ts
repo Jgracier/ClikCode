@@ -45,6 +45,11 @@ describe('vendorMfaCode', () => {
     expect(res).toEqual({ error: 'no seed stored for aws/root' });
   });
 
+  it('reads the reason out of the CLI error shape (error: { code, message })', async () => {
+    runCli.mockResolvedValue({ code: 1, missing: false, text: JSON.stringify({ status: 'error', command: 'tools run', error: { code: 'NOT_FOUND', message: 'No such account' } }) });
+    expect(await vendorMfaCode('aws/root')).toEqual({ error: 'No such account' });
+  });
+
   it('reports a plain reason when the clikdeploy CLI is not installed', async () => {
     runCli.mockResolvedValue({ code: null, missing: true, text: '' });
     const res = await vendorMfaCode('aws/root');

@@ -60,7 +60,7 @@ const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   // owner's vendor accounts (account, e.g. "aws/root"). ClikDeploy stores it encrypted and hands out
   // only the rolling code (auth_code / admin_vendor_mfa_code), never the seed. The admin's own API key
   // is enough to store it during an account setup.
-  'clikdeploy-vendor-mfa': { about: 'store a vendor authenticator seed in ClikDeploy (account, e.g. "aws/root"; label optional); only the rolling code is ever handed out, never the seed', optionalSlots: ['label'],
+  'clikdeploy-vendor-mfa': { about: 'store a vendor authenticator seed in ClikDeploy (account, e.g. "aws/root"; label optional, no spaces); only the rolling code is ever handed out, never the seed', optionalSlots: ['label'],
     run: ['clikdeploy', 'tools', 'run', 'admin_vendor_mfa_store', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"account":"{{account}}","seed":"{{secret|json}}","label":"{{label}}"') },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
@@ -188,7 +188,9 @@ export async function declaredConnectionValues(integration: string, signal?: Abo
  * The seed never leaves ClikDeploy; this returns only the six-digit code and how long it stays valid.
  * Returns { error } with a plain reason when the code cannot be fetched (CLI missing, no such account, etc.).
  */
-type MfaNode = { status?: string; reason?: string; error?: string; message?: string; data?: MfaNode };
+type MfaNode = { status?: string; reason?: string; error?: string | { code?: string; message?: string }; message?: string; data?: MfaNode };
+/** The CLI reports a refusal as `error: { code, message }`; a route body reports it as `error: "..."`. */
+const mfaReason = (node: MfaNode): string | undefined => node.reason || (typeof node.error === 'string' ? node.error : node.error?.message) || node.message;
 export async function vendorMfaCode(account: string, signal?: AbortSignal): Promise<{ code: string; secondsRemaining: number } | { error: string }> {
   if (!account.trim()) return { error: 'no account given' };
   const shown = await runCli('clikdeploy', ['tools', 'run', 'admin_vendor_mfa_code', '--args-json', JSON.stringify({ account: account.trim() })], { signal, timeoutMs: 30_000, maxChars: 1_000_000 });
@@ -199,7 +201,7 @@ export async function vendorMfaCode(account: string, signal?: AbortSignal): Prom
   const envelope: MfaNode = (parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed);
   const inner = (envelope.data && typeof envelope.data === 'object' ? envelope.data : envelope) as { code?: unknown; secondsRemaining?: unknown };
   if (parsed.status === 'error' || envelope.status === 'error' || typeof inner.code !== 'string') {
-    return { error: envelope.reason || envelope.error || envelope.message || parsed.reason || parsed.error || parsed.message || 'no code was returned (is the account stored, and does this key own it?)' };
+    return { error: mfaReason(envelope) || mfaReason(parsed) || 'no code was returned (is the account stored, and does this key own it?)' };
   }
   return { code: inner.code, secondsRemaining: typeof inner.secondsRemaining === 'number' ? inner.secondsRemaining : 30 };
 }
@@ -281,6 +283,7 @@ export async function destinationProblem(stateDir: string, list: readonly unknow
         continue;
       }
       if (template.optionalSlots?.includes(slot) && (value === undefined || value === '')) continue;
+      if (typeof value === 'string' && value && template.optionalSlots?.includes(slot) && !SAFE_VALUE.test(value)) return `${at}: "${d.to}" takes with.${slot} only as letters, digits, dot, dash, underscore and slash, with no spaces (it is optional: leave it out, or write it like "acme-console").`;
       if (typeof value !== 'string' || !SAFE_VALUE.test(value)) return `${at}: "${d.to}" needs with.${slot} (letters, digits, dot, dash, underscore, slash; not starting with a dash). ${EXAMPLE}`;
     }
   }

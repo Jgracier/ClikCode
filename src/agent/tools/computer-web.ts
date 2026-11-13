@@ -660,7 +660,7 @@ const SHARED_TEXT: Record<ToolKind, Record<string, string>> = {
   },
   account: {
     action: 'What to do. help lists every action with an example.',
-    target: 'capture_secret: the final Create button ([ref=…] or its visible text). oauth_connect: the connector id (slack, github). secrets, accounts: words to filter by (accounts with method: the site\'s address).',
+    target: 'capture_secret: the final Create button ([ref=…] or its visible text). oauth_connect: the connector id (slack, github). auth_code: the field the code goes in. secrets, accounts: words to filter by (accounts with method: the site\'s address).',
     seconds: 'read_email_code, open_email_link: how long to wait for the email to arrive (default 90).',
     steps: 'recipe save: the steps that worked, e.g. [{do:"click", target:"Create key"}]. Never typed values.',
   },
