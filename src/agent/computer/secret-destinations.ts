@@ -30,6 +30,8 @@ type Template = { run: string[]; stdin?: string; about?: string; vaultSlots?: st
   /** `connection`: success is not the command's word for it. After it runs, ClikDeploy is asked whether `integration` now has an active connection. */
   verify?: 'connection' };
 
+/** The destination that hands an authenticator seed to ClikDeploy, which then is its only home. */
+export const VENDOR_MFA_DESTINATION = 'clikdeploy-vendor-mfa';
 /** `{{secret|json}}` is the key as it must sit inside a JSON string. */
 const JSON_ARGS = (fields: string): string => `{${fields}}`;
 

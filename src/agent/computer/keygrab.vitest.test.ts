@@ -32,6 +32,32 @@ function fakeSite(pages: Record<string, Page>, start = 'https://vendor.example/'
   };
   return { port, log, captures, filled, at: () => at };
 }
+describe('an authenticator page', () => {
+  const pages = {
+    'https://vendor.example/': { text: 'Two-factor authentication. Enter the 6-digit code from your authenticator app', controls: ['Verify'], fields: ['Authentication code'], on: { Verify: 'https://vendor.example/keys' } },
+    'https://vendor.example/keys': { text: 'API keys', controls: ['Create API key'], on: { 'Create API key': 'https://vendor.example/keys/made' } },
+    'https://vendor.example/keys/made': { text: 'Your new key', controls: ['Copy'], key: true },
+  };
+  it('is passed with the code from the seed ClikDeploy keeps, typed once', async () => {
+    const site = fakeSite(pages);
+    let asked = 0;
+    const done = await runKeygrab({ ...site.port, authenticatorCode: async () => { asked++; return '123456'; } }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
+    expect(site.filled).toContainEqual(['Authentication code', '123456']);
+    expect(site.log).toContain('click Verify');
+    expect(asked).toBe(1);
+    expect(done).toMatchObject({ ok: true });
+  });
+  it('is still a wall for a person when no seed is kept, or the code was texted', async () => {
+    const none = fakeSite(pages);
+    expect(await runKeygrab({ ...none.port, authenticatorCode: async () => undefined }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined })).toMatchObject({ ok: false, stop: { kind: 'mfa' } });
+    const texted = fakeSite({ 'https://vendor.example/': { text: 'Two-factor authentication. We sent a code to your phone by text message', controls: ['Verify'], fields: ['Code'] } });
+    let asked = 0;
+    await runKeygrab({ ...texted.port, authenticatorCode: async () => { asked++; return '123456'; } }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
+    expect(asked).toBe(0);
+    expect(texted.filled).toEqual([]);
+  });
+});
+
 const run = (site: ReturnType<typeof fakeSite>, over: Partial<Parameters<typeof runKeygrab>[1]> = {}) => runKeygrab(site.port, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined, ...over });
 
 const keysPage: Page = { text: 'API keys\nYou have no API keys yet.', controls: ['Create new secret key', 'Docs'], on: { 'Create new secret key': 'https://vendor.example/keys/new' } };
