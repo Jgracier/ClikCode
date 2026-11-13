@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { piConnect, piModels, piProviderLabel } from './pi-discovery.js';
+import { piConfiguredModel, piConnect, piModels, piProviderLabel } from './pi-discovery.js';
 import { gooseConnect, gooseModelsDevModels, gooseProviders, modelsDevProvider } from './goose-discovery.js';
 import { acpSessionModels } from './acp-query.js';
 
@@ -12,6 +12,16 @@ describe('pi discovery', () => {
       'anthropic  claude-haiku-4-5-20251001   200K     64K      yes       yes   ',
     ].join('\n');
     expect(piModels(listing)).toEqual(['anthropic/claude-fable-5', 'anthropic/claude-haiku-4-5-20251001']);
+  });
+
+  it('starts on the model Pi itself is set to, as provider/id, only while Pi still lists it', () => {
+    const listed = ['openai-codex/gpt-5.3-codex-spark', 'openai-codex/gpt-5.5'];
+    const settings = JSON.stringify({ theme: 'dark', defaultProvider: 'openai-codex', defaultModel: 'gpt-5.5' });
+    expect(piConfiguredModel(settings, listed)).toBe('openai-codex/gpt-5.5');
+    expect(piConfiguredModel(settings, ['openai-codex/gpt-5.3-codex-spark'])).toBeUndefined();
+    expect(piConfiguredModel('{"theme":"dark"}', listed)).toBeUndefined();
+    expect(piConfiguredModel('not json', listed)).toBeUndefined();
+    expect(piConfiguredModel(undefined, listed)).toBeUndefined();
   });
 
   it('finds no models in the signed-out notice, whose doc paths are not models', () => {

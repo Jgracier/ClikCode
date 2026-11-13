@@ -16,7 +16,7 @@ import { discoverOpenClawModels } from './openclaw-discovery.js';
 import { discoverOpencodeConnect, opencodeVerboseModels } from './opencode-discovery.js';
 import { freePlanModels, planIsFree, preferredFreeModel } from './free-plan.js';
 import { copilotAccountModels } from './cli-usage-probes.js';
-import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
+import { discoverPiProviders, piConfiguredModel, piConnect, piModels } from './pi-discovery.js';
 import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
 import { expandAuthPaths } from './auth-files.js';
 import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
@@ -648,11 +648,17 @@ const PRINTED_MODEL_LIST: Readonly<Record<NonNullable<AiLocalHarnessDefinition['
   },
   // Pi prints a provider/model table; the generic reader cannot see a model
   // in it. Its other providers are signed in to inside Pi.
-  'pi-table': async ({ harness, state: d }, printed) => {
-    for (const model of discoveredModelsFrom(printed)) d.models.add(model);
+  'pi-table': async ({ harness, profileRoot, state: d }, printed) => {
+    // Whatever the generic reader made of the table is not a model: it reads
+    // the provider column. Left in the list, "openai-codex" came first and
+    // was the default every Pi turn was started on (`--model openai-codex`:
+    // "Model not found"). Only Pi's own rows are models.
+    for (const misread of discoveredModelsFrom(printed)) d.models.delete(misread);
+    for (const model of [...d.models]) if (model.startsWith('/')) d.models.delete(model);
     const piListed = piModels(printed);
-    for (const model of [...discoveredModelsFrom(printed), ...d.models]) if (model.startsWith('/')) d.models.delete(model);
     piListed.forEach((model) => d.models.add(model));
+    const settings = profileRoot ? await readFile(join(profileRoot, 'settings.json'), 'utf8').catch(() => undefined) : undefined;
+    d.configured ??= piConfiguredModel(settings, piListed);
     d.connect = piConnect(await discoverPiProviders(harness), piListed);
   },
 };
