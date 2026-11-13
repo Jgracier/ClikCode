@@ -79,6 +79,19 @@ function webAddress(value: string | undefined): string {
 const REF = /^(?:f\d+)?e\d+$/;
 const isStandardKey = (key: string): boolean => (PROFILE_KEYS as readonly string[]).includes(key);
 
+/** Whether a value is on the page now, in any frame: in its text, a field, or its markup (a data attribute, a hidden input). */
+export async function pageHolds(page: Page, value: string): Promise<boolean> {
+  for (const frame of page.frames()) {
+    const found = await frame.evaluate((wanted: string) => {
+      const root = (globalThis as unknown as { document: { documentElement: { innerText?: string; outerHTML: string }; querySelectorAll(selector: string): ArrayLike<{ value?: string }> } }).document;
+      if ((root.documentElement.innerText ?? '').includes(wanted) || root.documentElement.outerHTML.includes(wanted)) return true;
+      return Array.from(root.querySelectorAll('input, textarea')).some(field => (field.value ?? '').includes(wanted));
+    }, value).catch(() => false);
+    if (found) return true;
+  }
+  return false;
+}
+
 /** What `target` points at: a [ref=eN] from the last view (any element, named or not, in any frame),
  * or visible text for the controls of a sign-in page, which are listed by name without references. */
 export async function locate(page: Page, target: string | undefined): Promise<Locator> {
@@ -1507,6 +1520,8 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
           if (wanted && placeholder) {
             const value = resolveSecretRef(wanted);
             if (!value) throw new LoginError(`Not saved: ${wanted} is not a placeholder this browser knows (they restart with ClikCode). Observe the page again to get the current ones.`);
+            // Placeholders are numbered across every tab: one from another page would send that site's secret under this one's name.
+            if (!await pageHolds(page, value)) throw new LoginError(`Not saved: ${wanted} stands for a value on another page, not the one open in this tab. Observe this page and use the placeholder it shows.`);
             return { value, from: 'the page value behind the placeholder' };
           }
           if (wanted && (REF.test(wanted) || last)) return undefined; // a control is pressed; a missed label is not guessed at
