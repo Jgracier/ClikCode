@@ -13,6 +13,7 @@ import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { HarnessSession, TranscriptMessage } from './model.js';
 import { isInjectedRequest, requestKey } from './store-evidence.js';
+import { claudeTypedRequest, mayHoldClaudeRequest, type ClaudeThreadEntry } from './discovery/vendors/claude-entry.js';
 import { loadIndex } from './state/index-file.js';
 import { readSessionTranscript, ConversationLogMissingError, replaceTranscriptFromEvidence } from './store/transcripts.js';
 import { sessionLogPath, stateDirectory } from './store/paths.js';
@@ -190,12 +191,9 @@ async function firstRequest(path: string): Promise<string | undefined> {
   } finally { await handle.close(); }
   let found: string | undefined;
   for (const line of head.split('\n')) {
-    if (!line.includes('"type":"user"')) continue;
+    if (!mayHoldClaudeRequest(line)) continue;
     try {
-      const entry = JSON.parse(line) as { type?: string; isSidechain?: boolean; isMeta?: boolean; message?: { content?: unknown } };
-      if (entry.type !== 'user' || entry.isSidechain || entry.isMeta) continue;
-      const content = entry.message?.content;
-      const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map((block) => (block as { type?: string; text?: string })?.type === 'text' ? String((block as { text?: string }).text) : '').join('\n') : '';
+      const text = claudeTypedRequest(JSON.parse(line) as ClaudeThreadEntry)?.text ?? '';
       if (text.trim() && !isInjectedRequest(text)) { found = requestKey(text); break; }
     } catch { /* fail-open-ok: a line cut by the window edge */ }
   }
