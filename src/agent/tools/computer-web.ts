@@ -60,7 +60,7 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'u
 type WebArgs = {
   /** help: an action name, or "guide". */
   topic?: string;
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'cloud' | 'human_check' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'cloud' | 'human_check' | 'auth_code' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; address?: string; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
@@ -408,6 +408,7 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'login': return 'Sign in';
       case 'handoff': return 'Hand off to phone';
       case 'human_check': return 'Press the human check';
+      case 'auth_code': return 'Type authenticator code';
       case 'cloud': return args.clear ? 'Back to the local browser' : 'Move tab to cloud browser';
       case 'capture_secret': return `Capture key${args.secret_name ? ` as ${args.secret_name}` : ''}`;
       case 'close': return 'Close browser';
@@ -516,6 +517,17 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       }
       if (args.action === 'close' && (args.index !== undefined)) { await computerPage(ctx.stateDir, args.tab); return { output: await closeTab(args, { stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}) }) }; }
       if (args.action === 'close') { await closeComputerPage(ctx.stateDir, args.tab); return { output: 'This chat\'s tab is closed.' }; }
+      if (args.action === 'auth_code') {
+        // The six-digit code an authenticator app would show, made from the seed in the vault and typed straight into the page.
+        if (!args.secret?.trim()) throw new Error('auth_code needs secret: the name the authenticator secret key was saved under (capture it with capture_secret when the site shows it).');
+        if (!args.target?.trim()) throw new Error('auth_code needs target: the field the code goes in.');
+        const [{ readNamedSecret }, { nextTotpCode }] = await Promise.all([import('../computer/credential-vault.js'), import('../computer/totp.js')]);
+        const page = await computerPage(ctx.stateDir, args.tab);
+        const field = await locate(page, args.target);
+        const { code, waitedMs } = await nextTotpCode(args.secret.trim(), await readNamedSecret(ctx.stateDir, args.secret.trim()));
+        await field.fill(code, { timeout: 10_000 });
+        return { output: `Typed the current authenticator code into ${args.target}${waitedMs ? ` (waited ${Math.round(waitedMs / 1000)} s for a fresh one)` : ''}. It was not shown to you. A second call gives the next code, for a site that asks for two in a row.` };
+      }
       if (args.action === 'human_check') {
         const checked = await pressHumanCheck(await computerPage(ctx.stateDir, args.tab));
         const inCloud = tabIsInCloud(ctx.stateDir, args.tab);
