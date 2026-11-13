@@ -154,6 +154,8 @@ describe('an ineligible account is named as such, not as a generic failure', () 
   it('still recognizes a separate real quota or auth signal', () => {
     expect(classifyAccountFailure(new Error('usage balance exhausted'), { isResultError: true })).toBe('quota-exhausted');
     expect(classifyAccountFailure(new Error('oauth token has expired'), { isResultError: true })).toBe('authentication-required');
+    // Cline's words for a sign-in it can no longer refresh; read as "other", the account stayed ready.
+    expect(classifyAccountFailure(new Error('Internal error: cline requires re-authentication.'))).toBe('authentication-required');
   });
 
   it('gives every failure kind a reason worth showing', () => {
