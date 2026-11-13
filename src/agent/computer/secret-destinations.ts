@@ -56,6 +56,12 @@ const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   // The vendor gives one key and it is the basic-auth username (BugHerd, HTML/CSS to Image): the password is blank unless one is given.
   'clikdeploy-connection-basic-key': { about: 'connect a key that is the basic-auth USERNAME to a ClikDeploy connector (integration; password optional, blank by default); the result is `connected` or `NOT connected: <reason>`', optionalSlots: ['password'], verify: 'connection',
     run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","username":"{{secret|json}}","password":"{{password}}"') },
+  // The captured value is a TOTP authenticator seed (a base32 key or an otpauth:// URI) for one of the
+  // owner's vendor accounts (account, e.g. "aws/root"). ClikDeploy stores it encrypted and hands out
+  // only the rolling code (auth_code / admin_vendor_mfa_code), never the seed. The admin's own API key
+  // is enough to store it during an account setup.
+  'clikdeploy-vendor-mfa': { about: 'store a vendor authenticator seed in ClikDeploy (account, e.g. "aws/root"; label optional); only the rolling code is ever handed out, never the seed', optionalSlots: ['label'],
+    run: ['clikdeploy', 'tools', 'run', 'admin_vendor_mfa_store', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"account":"{{account}}","seed":"{{secret|json}}","label":"{{label}}"') },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
 
@@ -175,6 +181,27 @@ export async function declaredConnectionValues(integration: string, signal?: Abo
   // ClikDeploy's connect route demands a value only for a variable in the base URL that has no default; any other declared value is optional.
   const template = typeof proxy.base_url === 'string' ? proxy.base_url : '';
   return Object.fromEntries(Object.entries(variables).map(([name, v]) => [name, { ...v, required: !v.optional && v.default === undefined && template.includes(`{${name}}`) }]));
+}
+
+/**
+ * The current rolling authenticator code for a vendor account whose seed is stored in ClikDeploy.
+ * The seed never leaves ClikDeploy; this returns only the six-digit code and how long it stays valid.
+ * Returns { error } with a plain reason when the code cannot be fetched (CLI missing, no such account, etc.).
+ */
+type MfaNode = { status?: string; reason?: string; error?: string; message?: string; data?: MfaNode };
+export async function vendorMfaCode(account: string, signal?: AbortSignal): Promise<{ code: string; secondsRemaining: number } | { error: string }> {
+  if (!account.trim()) return { error: 'no account given' };
+  const shown = await runCli('clikdeploy', ['tools', 'run', 'admin_vendor_mfa_code', '--args-json', JSON.stringify({ account: account.trim() })], { signal, timeoutMs: 30_000, maxChars: 1_000_000 });
+  if (shown.missing) return { error: 'the clikdeploy CLI is not installed on this machine' };
+  const parsed = firstJsonObject<MfaNode>(shown.text);
+  if (!parsed) return { error: 'ClikDeploy returned nothing readable' };
+  // `tools run` wraps the route body once, and the route wraps the code payload in its own `data`: two levels.
+  const envelope: MfaNode = (parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed);
+  const inner = (envelope.data && typeof envelope.data === 'object' ? envelope.data : envelope) as { code?: unknown; secondsRemaining?: unknown };
+  if (parsed.status === 'error' || envelope.status === 'error' || typeof inner.code !== 'string') {
+    return { error: envelope.reason || envelope.error || envelope.message || parsed.reason || parsed.error || parsed.message || 'no code was returned (is the account stored, and does this key own it?)' };
+  }
+  return { code: inner.code, secondsRemaining: typeof inner.secondsRemaining === 'number' ? inner.secondsRemaining : 30 };
 }
 
 /** The connection destinations that fit each auth kind a connector declares. */

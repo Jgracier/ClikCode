@@ -61,7 +61,7 @@ type WebArgs = {
   /** help: an action name, or "guide". */
   topic?: string;
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'cloud' | 'human_check' | 'auth_code' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
-  tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
+  tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; mfa_account?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; address?: string; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
 
@@ -322,7 +322,8 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     login_route: { type: 'string', enum: ['google', 'github', 'email'], description: 'recipe: how the account was signed in (save), or which recipe to get or run.' },
     key_page: { type: 'string', description: 'recipe save: the address of the page where the key is created or shown.' },
     capture_hint: { type: 'string', description: 'recipe save: how the key was captured (which button reveals or copies it). Never the key itself.' },
-    target: { type: 'string', description: 'oauth_connect: the ClikDeploy connector id (slack, github). click, fill, capture_secret: a [ref=…] from the page view (e5, or f1e2 inside a frame), or the visible text of a sign-in page control. forget_login: the site (a host such as wordnik.com, or a URL).' },
+    target: { type: 'string', description: 'oauth_connect: the ClikDeploy connector id (slack, github). click, fill, capture_secret: a [ref=…] from the page view (e5, or f1e2 inside a frame), or the visible text of a sign-in page control. forget_login: the site (a host such as wordnik.com, or a URL). auth_code: the field the code goes in.' },
+    mfa_account: { type: 'string', description: 'auth_code: the vendor account whose authenticator seed is stored in ClikDeploy, e.g. "aws/root". Store the seed first by capturing it with capture_secret to the clikdeploy-vendor-mfa destination; ClikDeploy keeps the seed and hands back only the rolling code.' },
     text: { type: 'string', description: 'fill: the text. Leave it out for what only the user knows (name, address, phone, a password): the user is asked privately, once for all such fields in the call, and you are not shown the answer. wait: the words to wait for.' },
     gone: { type: 'boolean', description: 'wait: wait for the text to disappear instead of appear.' },
     seconds: { type: 'number', description: 'wait: how long to wait at most (default 30, up to 120). read_email_code, open_email_link: how long to wait for the email to arrive when a mailbox is connected (default 90).' },
@@ -518,15 +519,18 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       if (args.action === 'close' && (args.index !== undefined)) { await computerPage(ctx.stateDir, args.tab); return { output: await closeTab(args, { stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}) }) }; }
       if (args.action === 'close') { await closeComputerPage(ctx.stateDir, args.tab); return { output: 'This chat\'s tab is closed.' }; }
       if (args.action === 'auth_code') {
-        // The six-digit code an authenticator app would show, made from the seed in the vault and typed straight into the page.
-        if (!args.secret?.trim()) throw new Error('auth_code needs secret: the name the authenticator secret key was saved under (capture it with capture_secret when the site shows it).');
+        // The six-digit code an authenticator app would show. The seed lives server-side in ClikDeploy
+        // (stored once with capture_secret -> clikdeploy-vendor-mfa); ClikDeploy hands out only the
+        // rolling code, never the seed. The code is typed straight into the field, never shown here.
+        if (!args.mfa_account?.trim()) throw new Error('auth_code needs mfa_account: the vendor account the seed is stored under in ClikDeploy (e.g. "aws/root"). Store it first by capturing the key with capture_secret to the clikdeploy-vendor-mfa destination.');
         if (!args.target?.trim()) throw new Error('auth_code needs target: the field the code goes in.');
-        const [{ readNamedSecret }, { nextTotpCode }] = await Promise.all([import('../computer/credential-vault.js'), import('../computer/totp.js')]);
+        const { vendorMfaCode } = await import('../computer/secret-destinations.js');
         const page = await computerPage(ctx.stateDir, args.tab);
         const field = await locate(page, args.target);
-        const { code, waitedMs } = await nextTotpCode(args.secret.trim(), await readNamedSecret(ctx.stateDir, args.secret.trim()));
-        await field.fill(code, { timeout: 10_000 });
-        return { output: `Typed the current authenticator code into ${args.target}${waitedMs ? ` (waited ${Math.round(waitedMs / 1000)} s for a fresh one)` : ''}. It was not shown to you. A second call gives the next code, for a site that asks for two in a row.` };
+        const res = await vendorMfaCode(args.mfa_account.trim(), ctx.signal);
+        if ('error' in res) throw new Error(`Could not get an authenticator code for "${args.mfa_account.trim()}" from ClikDeploy: ${res.error}`);
+        await field.fill(res.code, { timeout: 10_000 });
+        return { output: `Typed the current authenticator code for ${args.mfa_account.trim()} into ${args.target} (${res.secondsRemaining}s left on it). It was not shown to you, and ClikDeploy keeps the seed, not this machine. Call auth_code again for the next code if the site asks for two in a row.` };
       }
       if (args.action === 'human_check') {
         const checked = await pressHumanCheck(await computerPage(ctx.stateDir, args.tab));

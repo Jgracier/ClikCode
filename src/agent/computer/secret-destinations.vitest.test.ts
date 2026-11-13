@@ -19,7 +19,7 @@ const fake = async (name: string, script: string): Promise<void> => { await writ
 
 it('ships a few destinations as plain data, each naming the slots the agent fills', async () => {
   const all = await loadDestinations(dir);
-  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'clikdeploy-usage-reader', 'clikdeploy-connection', 'clikdeploy-connection-basic', 'clikdeploy-connection-basic-key', 'github-secret']);
+  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'clikdeploy-usage-reader', 'clikdeploy-connection', 'clikdeploy-connection-basic', 'clikdeploy-connection-basic-key', 'clikdeploy-vendor-mfa', 'github-secret']);
   expect(slotsOf(all['clikdeploy-secret']!)).toEqual(['key']);
   expect(slotsOf(all['clikdeploy-compute']!)).toEqual(['provider', 'field']);
   expect(slotsOf(all['clikdeploy-connector']!)).toEqual(['integration', 'client_id']);
