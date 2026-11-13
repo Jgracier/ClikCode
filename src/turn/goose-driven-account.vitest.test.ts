@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { gooseDrivenEnvironment } from './goose-driven-account.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 
-const goose = { modelStrategy: 'goose-providers' } as const;
+const goose = { command: 'goose' } as const;
 const driven = (command: string) => ({
   claude: { provider: 'anthropic', profileEnv: 'CLAUDE_CONFIG_DIR' }, codex: { provider: 'openai', profileEnv: 'CODEX_HOME' },
   cursor: { provider: 'cursor', profileEnv: 'HOME' },
@@ -18,6 +18,7 @@ describe('the account Goose drives another CLI as', () => {
       account('out', 'anthropic', 'CLAUDE_CONFIG_DIR', { status: 'needs_login' }), account('good', 'anthropic', 'CLAUDE_CONFIG_DIR'), account('codex', 'openai', 'CODEX_HOME')];
     expect(gooseDrivenEnvironment(goose, 'claude-code/opus', accounts, driven)).toEqual({ CLAUDE_CONFIG_DIR: '/profiles/good' });
     expect(gooseDrivenEnvironment(goose, 'codex/gpt-6-luna', accounts, driven)).toEqual({ CODEX_HOME: '/profiles/codex' });
+    expect(gooseDrivenEnvironment({ command: 'openclaw' }, 'anthropic/claude-opus-5', accounts, driven)).toEqual({ CLAUDE_CONFIG_DIR: '/profiles/good' });
     // Every signed-in one has run out: still a signed-in one, whose refusal says so.
     expect(gooseDrivenEnvironment(goose, 'claude-code/opus', accounts.slice(0, 3), driven)).toEqual({ CLAUDE_CONFIG_DIR: '/profiles/spent' });
   });
@@ -29,6 +30,6 @@ describe('the account Goose drives another CLI as', () => {
     expect(gooseDrivenEnvironment(goose, 'cursor-agent/gpt-5', accounts, driven)).toEqual({});
     expect(gooseDrivenEnvironment(goose, 'claude-code/opus', [...accounts, account('default', 'anthropic', undefined)], driven)).toEqual({});
     expect(gooseDrivenEnvironment(goose, 'claude-code/opus', [], driven)).toEqual({});
-    expect(gooseDrivenEnvironment({ modelStrategy: 'claude-table' }, 'claude-code/opus', accounts, driven)).toEqual({});
+    expect(gooseDrivenEnvironment({ command: 'claude' }, 'claude-code/opus', accounts, driven)).toEqual({});
   });
 });
