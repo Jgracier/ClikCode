@@ -110,18 +110,39 @@ async function newestClaudeRequest(path: string): Promise<{ text: string; at?: s
   return undefined;
 }
 
-/** A line of a Claude thread that is a request someone typed: a user entry with text, not a tool's result,
- * a sub-agent's, a compaction's or a note the harness wrote. */
+/** The text of a Claude message's content: a string, or its text blocks. */
+function claudeText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((block) => (block && typeof block === 'object' && (block as { type?: string }).type === 'text' ? String((block as { text?: unknown }).text ?? '') : '')).join('\n');
+}
+
+/** A line of a Claude thread that is a request someone typed: not a tool's result, a sub-agent's, a compaction's or a
+ * note the harness wrote. Claude writes a request in one of two shapes, by when it arrived:
+ *  - between turns, a `user` entry;
+ *  - while a turn runs, a `queued_command` attachment (the message was taken into the running turn: no `user` entry
+ *    is ever written for it). Read as "no request", every steered turn left the thread looking shorter than the
+ *    conversation by the messages sent into it, and the next turn threw the thread away and retold everything. */
 function claudeRequestIn(line: string): { text: string; at?: string } | undefined {
-  if (!line.includes('"type":"user"')) return undefined;
-  let entry: { type?: string; isSidechain?: boolean; isMeta?: boolean; isCompactSummary?: boolean; timestamp?: string; message?: { content?: unknown } };
+  const typed = line.includes('"type":"user"');
+  if (!typed && !line.includes('"queued_command"')) return undefined;
+  let entry: {
+    type?: string; isSidechain?: boolean; isMeta?: boolean; isCompactSummary?: boolean; timestamp?: string; message?: { content?: unknown };
+    attachment?: { type?: string; prompt?: unknown; commandMode?: string; timestamp?: string };
+  };
   try { entry = JSON.parse(line); } catch { return undefined; }
-  if (entry.type !== 'user' || entry.isSidechain || entry.isMeta || entry.isCompactSummary) return undefined;
-  const content = entry.message?.content;
-  const text = typeof content === 'string' ? content
-    : Array.isArray(content) ? content.map((block) => (block && typeof block === 'object' && (block as { type?: string }).type === 'text' ? String((block as { text?: unknown }).text ?? '') : '')).join('\n') : '';
+  if (entry.isSidechain) return undefined;
+  let text: string;
+  let at = entry.timestamp;
+  if (entry.type === 'user') {
+    if (entry.isMeta || entry.isCompactSummary) return undefined;
+    text = claudeText(entry.message?.content);
+  } else if (entry.type === 'attachment' && entry.attachment?.type === 'queued_command' && entry.attachment.commandMode === 'prompt') {
+    text = claudeText(entry.attachment.prompt);
+    at = entry.attachment.timestamp ?? at;
+  } else return undefined;
   if (!text.trim() || /^\s*<(command-|local-command|system-reminder)/.test(text)) return undefined;
-  return { text, ...(entry.timestamp ? { at: entry.timestamp } : {}) };
+  return { text, ...(at ? { at } : {}) };
 }
 
 /** Where the thread the conversation is about to resume stands in it: `unknown` for any vendor
