@@ -29,6 +29,19 @@ export function piModels(listing: string): string[] {
   return models;
 }
 
+/** The model Pi itself starts on -- `defaultProvider` and `defaultModel` in
+ * its settings.json -- as the `provider/id` ClikCode passes, when Pi lists
+ * it. Undefined otherwise: a default Pi no longer offers is not a choice. */
+export function piConfiguredModel(settings: string | undefined, listed: readonly string[]): string | undefined {
+  if (!settings) return undefined;
+  try {
+    const parsed = JSON.parse(settings) as { defaultProvider?: unknown; defaultModel?: unknown };
+    if (typeof parsed.defaultProvider !== 'string' || typeof parsed.defaultModel !== 'string') return undefined;
+    const model = `${parsed.defaultProvider}/${parsed.defaultModel}`;
+    return listed.includes(model) ? model : undefined;
+  } catch { return undefined; } // fail-open-ok: unreadable settings mean no configured default, and the first listed model is used
+}
+
 /** The COMMON providers first, as OpenCode's list does. */
 const COMMON = ['anthropic', 'openai-codex', 'openai', 'github-copilot', 'google', 'xai', 'openrouter', 'deepseek', 'mistral', 'groq'];
 
