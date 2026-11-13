@@ -57,6 +57,7 @@ export async function takeUp(
   const recordPath = record.turns.length ? await writeFullRecord(view, stateDirectory()) : undefined;
   const start = await startConversationThread({
     record, request, interrupted: options.interrupted, harness, model: ctx.model,
+    session,
     ...(recordPath ? { recordPath } : {}),
     workspace: session.workspace ?? process.cwd(), environment: turnEnvironment(harness, ctx.account),
     ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}),
