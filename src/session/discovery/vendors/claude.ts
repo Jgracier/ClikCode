@@ -11,6 +11,7 @@ import { type NativeSessionEnvironment, nativeDataRoot } from '../stores.js';
 import { conversationTitle } from '../conversation-title.js';
 import { extractMessageText, leadingText, reconcileNativeTranscript, visibleNativeUserText, type NativeTranscriptMessage } from '../transcript.js';
 import { isClikCodeOpening } from '../../../turn/failover-prompt.js';
+import { claudeTypedRequest } from './claude-entry.js';
 import { DiscoveredNativeSession } from '../discovered-session.js';
 
 /** Claude Code names a project folder by replacing EVERY non-alphanumeric
@@ -153,13 +154,18 @@ function parseClaudeTranscript(raw: string): NativeTranscriptMessage[] {
     if (!line.trim()) continue;
     let record: Record<string, unknown>;
     try { record = JSON.parse(line); } catch { continue; }
-    if (record.type !== 'user' && record.type !== 'assistant') continue;
-    if (record.type === 'user' && (record.origin as { kind?: unknown } | undefined)?.kind === 'task-notification') continue;
-    const message = record.message as { content?: unknown } | undefined;
-    const extracted = extractMessageText(message?.content);
-    const text = record.type === 'user' ? visibleNativeUserText(extracted) : extracted;
+    // What a person typed, by the one rule for it (claude-entry.ts): never a note Claude Code wrote to its own model, and
+    // always a message sent while a turn ran.
+    const typed = claudeTypedRequest(record);
+    if (typed) {
+      const text = visibleNativeUserText(typed.text);
+      if (text) messages.push({ role: 'user', content: text });
+      continue;
+    }
+    if (record.type !== 'assistant' || record.isSidechain) continue;
+    const text = extractMessageText((record.message as { content?: unknown } | undefined)?.content);
     if (!text) continue;
-    messages.push({ role: record.type, content: text });
+    messages.push({ role: 'assistant', content: text });
   }
   return messages;
 }
