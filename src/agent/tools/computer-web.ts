@@ -5,7 +5,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
-import { adoptPage, allTabs, closeComputerPage, computerPage, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
+import { pressHumanCheck } from '../computer/human-check.js';
+import { adoptPage, allTabs, closeComputerPage, computerPage, moveTabToCloud, moveTabToLocal, tabIsInCloud, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
 import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, listTabs, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
 import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
@@ -405,6 +406,8 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'steps': return `${args.steps?.length ?? 0} steps on the page`;
       case 'login': return 'Sign in';
       case 'handoff': return 'Hand off to phone';
+      case 'human_check': return 'Press the human check';
+      case 'cloud': return args.clear ? 'Back to the local browser' : 'Move tab to cloud browser';
       case 'capture_secret': return `Capture key${args.secret_name ? ` as ${args.secret_name}` : ''}`;
       case 'close': return 'Close browser';
       default: return filesEnvLabel(args) ?? `Web ${args.action}`;
@@ -509,6 +512,25 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       }
       if (args.action === 'close' && (args.index !== undefined)) { await computerPage(ctx.stateDir, args.tab); return { output: await closeTab(args, { stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}) }) }; }
       if (args.action === 'close') { await closeComputerPage(ctx.stateDir, args.tab); return { output: 'This chat\'s tab is closed.' }; }
+      if (args.action === 'human_check') {
+        const checked = await pressHumanCheck(await computerPage(ctx.stateDir, args.tab));
+        const inCloud = tabIsInCloud(ctx.stateDir, args.tab);
+        const next = inCloud ? 'Use handoff so the user can finish it.' : 'Try cloud (the managed browser, when the user has it on), then handoff.';
+        return { output: checked.outcome === 'cleared' ? 'The human check accepted the press. Observe the page and carry on.'
+          : checked.outcome === 'puzzle' ? `The check asks for a puzzle, which this browser does not answer. ${next}`
+          : checked.outcome === 'still-there' ? `The box was pressed and did not clear. ${next}`
+          : 'No human-check checkbox is on this page. Observe it: a whole-page check may still be loading, or the block is something else.' };
+      }
+      if (args.action === 'cloud') {
+        if (args.clear === true) {
+          const back = await moveTabToLocal(ctx.stateDir, args.tab);
+          return { output: back.moved ? `This tab is back in the local browser${back.stopped ? ', and the cloud session is stopped' : ''}. Observe it to carry on.` : 'This tab was already in the local browser.' };
+        }
+        const { page: cloudPage, moved } = await moveTabToCloud(ctx.stateDir, args.tab);
+        return { output: moved
+          ? `This tab is now in the managed cloud browser at ${displayUrl(cloudPage.url())}. It is signed out there (local sign-ins are not copied), and the service works on a CAPTCHA by itself: wait a few seconds, then observe. If the page still blocks you, use handoff. When done, close the tab or call cloud with clear: true, which stops the billed session.`
+          : 'This tab is already in the managed cloud browser.' };
+      }
       if (args.action === 'add_login') {
         // One private form: the website, the email, the password. The way in (Google, GitHub or a site's own form) follows from the site.
         if (!ctx.requestPrivateLogin) throw new LoginError('This chat cannot show private login fields.');

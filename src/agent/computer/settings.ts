@@ -49,6 +49,20 @@ export async function setHeadless(stateDir: string, on: boolean): Promise<void> 
   await writeSettings(stateDir, { headless: on });
 }
 
+/** Which browser a tab runs in. `local` (default): ClikCode's own Chrome only. `auto`: local first, and a tab moves to
+ * Browser Use Cloud only when asked to (a page the local browser cannot get past). `browser-use`: every tab in the cloud.
+ * The cloud is a billed remote browser; turning it on never copies local cookies. */
+export type BrowserProvider = 'local' | 'auto' | 'browser-use';
+export async function browserProvider(stateDir: string): Promise<BrowserProvider> {
+  try {
+    const value = (JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { browserProvider?: unknown }).browserProvider;
+    return value === 'browser-use' || value === 'auto' ? value : 'local';
+  } catch { return 'local'; }
+}
+export async function setBrowserProvider(stateDir: string, provider: BrowserProvider): Promise<void> {
+  await updateJsonFile(computerSettingsPath(stateDir), objectOrEmpty, current => ({ ...current, browserProvider: provider }));
+}
+
 export const COMPUTER_OFF = 'Computer use is off. Run `clikcode computer on` to enable it.';
 
 /** Off unless the user turned it on: a private prompt the browser tool would show (a password, a code, an account
