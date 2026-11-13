@@ -19,11 +19,16 @@ import type { TurnUsage } from '../protocol/turn-usage.js';
 /** Lines of Aider's banner and model warning, before the answer starts. */
 const BANNER = [
   /^─+$/, /^\s*$/, /^Aider v\d/, /^(?:Main|Weak|Editor) model:/, /^Git repo:/, /^Repo-map:/, /^infinite output$/,
+  // A model with no weak or editor model beside it is announced as plain
+  // `Model:`; inside a large repository two more lines follow `Git repo:`.
+  /^Model: /, /^Warning: For large repos/, /^See: https:\/\/aider\.chat\//, /^-{12,}$/,
   /^Warning for /, /^Unknown context window/, /^and costs, using/, /^Did you mean one of these/, /^- \S+$/,
   /^You can skip this check/, /^https:\/\/aider\.chat\/docs\//, /^Restored previous conversation history/,
   /^Added .+ to the chat/, /^Use \/help/, /^Cost estimates may be inaccurate/,
   /^Add \.aider\* to \.gitignore/, /^Added \.aider\* to \.gitignore/,
 ];
+const THINKING = /^► \*\*THINKING\*\*$/;
+const ANSWER = /^► \*\*ANSWER\*\*$/;
 const FOOTER = /^Tokens: .+ sent, .+ received/;
 const COST = /Cost: \$([\d.]+) message/;
 
@@ -75,6 +80,13 @@ export function aiderLine(lineText: string, turn: StreamState | undefined): { re
     const cost = /^Cost: /.test(lineText.trim()) ? Number(COST.exec(lineText)?.[1]) : Number.NaN;
     const usage = Number.isFinite(cost) ? state.usage?.amendLatest({ costUsd: cost }) : undefined;
     return usage ? { usage } : {};
+  }
+  // A reasoning model's thoughts, which Aider prints between these two
+  // headings (reasoning_tags.py), are not the answer.
+  if (phase !== 'reply' && THINKING.test(lineText.trim())) { state.textPhase = 'thinking'; return {}; }
+  if (phase === 'thinking') {
+    if (ANSWER.test(lineText.trim())) state.textPhase = 'banner';
+    return {};
   }
   if (phase === 'banner' && BANNER.some((pattern) => pattern.test(lineText.trim()))) return {};
   state.textPhase = 'reply';

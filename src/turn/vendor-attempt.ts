@@ -6,6 +6,8 @@ import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { turnEnvironment } from './turn-environment.js';
+import { gooseDrivenEnvironment } from './goose-driven-account.js';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
 import { runVendorSessionAttempt } from './vendor-session-attempt.js';
 import { signInForTurn } from './vendor-sign-in.js';
@@ -33,7 +35,11 @@ export interface AttemptRecord {
  * servers, skills and hooks are the vendor's: nothing is written into them. */
 async function prepareAttempt(ctx: VendorTurnContext) {
   const { harness, session } = ctx;
-  const environment = turnEnvironment(harness, ctx.account, turnPermissionMode(harness, session.permissionMode));
+  const environment = {
+    ...turnEnvironment(harness, ctx.account, turnPermissionMode(harness, session.permissionMode)),
+    // Goose on another agent's CLI runs it as one of the user's own accounts.
+    ...gooseDrivenEnvironment(harness, ctx.model, ctx.state.accounts, localHarnessForCommand),
+  };
   // A provider with no signed-in account is signed in to when it is used
   // -- here, as its turn starts -- never when it is merely chosen (opening
   // ClikCode picks one without asking anything).

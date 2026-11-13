@@ -30,6 +30,17 @@ describe('aider', () => {
     expect(aiderStdoutReply(warned)).toBe('ok');
   });
 
+  it('keeps a single-model banner, the large-repository notice and a reasoning model’s thoughts out', () => {
+    // Real Aider output for a free OpenRouter model inside a 1,900-file repository.
+    const stdout = ['Model: openrouter/baidu/ernie-5.5-flash-preview:free with whole edit format', 'Git repo: .git with 1,902 files',
+      'Warning: For large repos, consider using --subtree-only and .aiderignore',
+      'See: https://aider.chat/docs/faq.html#can-i-use-aider-in-a-large-mono-repo', 'Repo-map: using 4096 tokens, auto refresh',
+      '--------------', '► **THINKING**', 'The user asks me to reply with exactly "PONG".', '', '------------', '► **ANSWER**', '', 'PONG', '',
+      'Tokens: 2.6k sent, 4 received.'].join('\n');
+    expect(aiderStdoutReply(stdout)).toBe('PONG');
+    expect(aiderStdoutReply(stdout.replace(/-{14}[^]*ANSWER\*\*\n/, ''))).toBe('PONG');
+  });
+
   it('reads the last reply from the chat history file, keeping the model’s own quotes', () => {
     expect(aiderHistoryReply(HISTORY)).toBe('ok');
     const later = `${HISTORY}\n\n#### and now?  \n\nSee below:\n\n> a quoted line from the model\n\nDone.\n\n> Applied edit to x.py  \n> Tokens: 1k sent, 9 received. Cost: $0.001 message, $0.003 session.`;
