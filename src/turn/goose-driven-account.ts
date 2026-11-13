@@ -1,4 +1,4 @@
-/** The sign-in Goose borrows when its model is another agent's CLI.
+/** The sign-in Goose or OpenClaw borrows when its model is another agent's CLI.
  *
  * `claude-code/opus` on Goose is Goose running the `claude` program, signed in
  * however that program finds itself signed in -- which, left alone, is its
@@ -11,6 +11,15 @@ import { GOOSE_DRIVEN_HARNESSES } from '../harness/accounts/goose-discovery.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 
+/** Model provider -> the ClikCode harness whose CLI answers for it. OpenClaw
+ * runs `anthropic/*` through the `claude` program whenever it holds no
+ * Anthropic sign-in of its own (`openclaw models status`: "anthropic via
+ * claude-cli"); when it does hold one, the borrowed profile goes unused. */
+const DRIVEN_BY: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  goose: GOOSE_DRIVEN_HARNESSES,
+  openclaw: { anthropic: 'claude', 'claude-cli': 'claude' },
+};
+
 type DrivenHarness = Pick<AiLocalHarnessDefinition, 'provider' | 'profileEnv'>;
 
 /** The environment that signs the driven CLI in as one of the user's own
@@ -18,11 +27,12 @@ type DrivenHarness = Pick<AiLocalHarnessDefinition, 'provider' | 'profileEnv'>;
  * default profile is itself an account (it is used as it always was), and for
  * a CLI whose profile is the home directory -- that would move Goose's too. */
 export function gooseDrivenEnvironment(
-  harness: Pick<AiLocalHarnessDefinition, 'modelStrategy'>, model: string | null | undefined,
+  harness: Pick<AiLocalHarnessDefinition, 'command'>, model: string | null | undefined,
   accounts: readonly AiHarnessAccount[], drivenHarness: (command: string) => DrivenHarness | undefined,
 ): Record<string, string> {
-  if (harness.modelStrategy !== 'goose-providers' || !model?.includes('/')) return {};
-  const command = GOOSE_DRIVEN_HARNESSES[model.slice(0, model.indexOf('/'))];
+  const drives = DRIVEN_BY[harness.command];
+  if (!drives || !model?.includes('/')) return {};
+  const command = drives[model.slice(0, model.indexOf('/'))];
   const driven = command ? drivenHarness(command) : undefined;
   if (!driven?.profileEnv || driven.profileEnv === 'HOME') return {};
   const signedIn = accounts.filter((account) => account.provider === driven.provider && account.authKind === 'vendor-cli'
