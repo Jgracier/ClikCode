@@ -111,10 +111,11 @@ describe('Cline credits balance', () => {
   // Its :free models still answered on all 12 such accounts: not spent.
   it('a balance at or below zero is out of credits, but the account still runs free models', () => {
     const spent = clineQuotaReading({ data: { userId: 'usr-1', balance: -195907 }, success: true });
-    expect(spent).toEqual({ windows: [{ name: 'credits', usedPct: 100, advisory: true }], label: 'Out of credits · free models only' });
+    // Said as Cline's free plan, so a new chat starts on a free model.
+    expect(spent).toEqual({ windows: [{ name: 'credits', usedPct: 100, advisory: true }], label: 'Out of credits · free models only', plan: { name: 'Free' } });
   });
   it('a positive balance is dollars left, and never spent', () => {
-    expect(clineQuotaReading({ data: { balance: 450000 } })).toEqual({ windows: [], label: '$0.45 credits left' });
+    expect(clineQuotaReading({ data: { balance: 450000 } })).toEqual({ windows: [], label: '$0.45 credits left', plan: { name: 'Credits' } });
     expect(clineQuotaReading({ error: 'x' })).toBeUndefined();
   });
 });

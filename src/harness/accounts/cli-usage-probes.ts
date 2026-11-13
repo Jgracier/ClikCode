@@ -344,8 +344,11 @@ export function clineQuotaReading(result: unknown): UsageReading | undefined {
   const balance = Number(((result as Json | undefined)?.data as Json | undefined)?.balance);
   if (!Number.isFinite(balance)) return undefined;
   const dollars = balance / 1_000_000;
-  if (dollars <= 0) return { windows: [{ name: 'credits', usedPct: 100, advisory: true }], label: 'Out of credits · free models only' };
-  return { windows: [], label: `$${dollars.toFixed(2)} credits left` };
+  // Like Kilo, Cline sells credits and no plan: an account with none is on
+  // its free models, and saying so starts a new chat on one of them instead
+  // of a paid default it refuses ("Insufficient balance").
+  if (dollars <= 0) return { windows: [{ name: 'credits', usedPct: 100, advisory: true }], label: 'Out of credits · free models only', plan: { name: 'Free' } };
+  return { windows: [], label: `$${dollars.toFixed(2)} credits left`, plan: { name: 'Credits' } };
 }
 
 export async function clineUsageReading(environment: Environment): Promise<UsageReading | undefined> {
