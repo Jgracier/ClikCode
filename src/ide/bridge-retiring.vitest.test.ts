@@ -62,7 +62,7 @@ function turnsWith(workers: Array<(link: { turnWaiter: { resolve: () => void; re
   };
   const sent: unknown[] = [];
   const host = { link, channel: { send: (message: unknown) => { sent.push(message); } }, prepareRoute: async () => undefined } as never;
-  return { turns: new BridgeTurns(host), link, sent };
+  return { turns: new BridgeTurns(host, { claim: () => undefined }), link, sent };
 }
 
 describe('sending the prompt again to the replacement', () => {

@@ -48,7 +48,7 @@ function bridgeOf() {
   };
   const link = new WorkerLink(host as never);
   host.link = link;
-  return { turns: new BridgeTurns(host as never), sent };
+  return { turns: new BridgeTurns(host as never, { claim: () => undefined }), sent };
 }
 
 describe('a message sent while its worker leaves', () => {

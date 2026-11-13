@@ -52,6 +52,13 @@ export type IdeUiResult =
   | { text: string };
 
 export type IdeRequest =
+  /** A file from the device the chat is on, sent in order as base64 chunks and
+   * answered each time by `result`. `upload-finish` answers with the staged
+   * `path`: name it in `send.attachments` and that turn takes the file. */
+  | { type: 'upload-start'; requestId: string; uploadId: string; name: string; size: number }
+  | { type: 'upload-chunk'; requestId: string; uploadId: string; offset: number; data: string }
+  | { type: 'upload-finish'; requestId: string; uploadId: string }
+  | { type: 'upload-abort'; requestId: string; uploadId: string }
   | { type: 'activity-details'; requestId: string; ids: string[]; messageIndex?: number; userIndex?: number }
   | { type: 'subagent'; requestId: string; parentId: string; action: 'read' | 'steer'; text?: string; agentId?: string }
   /** Show a conversation: `resume` an id, `continue` the workspace's latest,
@@ -66,6 +73,8 @@ export type IdeRequest =
    * During a turn it steers (or queues); `id` comes back on the worker's
    * `submission` event. */
   | { type: 'send'; text: string; id?: string;
+    /** Paths `upload-finish` answered with. An image is shown to the model; any other file is kept with the conversation and named to the agent. */
+    attachments?: readonly string[];
     /** What a message typed while a turn runs does, as the window that typed it has chosen (`/send`): into the turn, or behind it. Absent: the setting of the machine the chat is on. */
     mode?: 'steer' | 'queue' }
   | { type: 'cancel'; restoreDraft: boolean; trigger?: 'editor-stop' | 'programmatic' }

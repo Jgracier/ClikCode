@@ -1,4 +1,5 @@
-import { retainUploadedImages } from '../session/retained-images.js';
+import { retainUpload, retainUploadedImages } from '../session/retained-images.js';
+import type { IdeUploads } from './upload.js';
 /** Running lines and turns for the open conversation: what is sent at once or
  * queued, the queue's drain, one turn through the worker, and how a failed
  * turn is recovered (another account, another provider, a wait for the reset). */
@@ -6,7 +7,8 @@ import { quiet } from '../runtime/lifecycle-log.js';
 import { holdLocalModelAfterTurn } from '../commands/ai/local-model.js';
 import { queuedNext } from '../session/queue-next.js';
 import { existsSync } from 'node:fs';
-import { expandHomePath } from '../session/attachments.js';
+import { rm } from 'node:fs/promises';
+import { expandHomePath, queueAttachment } from '../session/attachments.js';
 import { afterTurnFailure, prepareTurn } from '../session/attach.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
@@ -44,16 +46,49 @@ export class BridgeTurns {
   /** The window's identity for the send currently entering a new turn. */
   private submissionId?: string;
 
-  constructor(private readonly host: BridgeHost) {}
+  constructor(private readonly host: BridgeHost, private readonly uploads: Pick<IdeUploads, 'claim'>) {}
 
   noteCancel(): void { this.cancelEpoch++; }
 
-  async send(text: string, id?: string, mode?: 'steer' | 'queue'): Promise<void> {
+  /** Takes the files a `send` names from this bridge's uploads into the
+   * conversation. Images are queued for the turn, so the model is shown them;
+   * every other file is kept with the conversation and named in the message,
+   * so the agent can open it with its own tools. Returns the message to send. */
+  private async attach(paths: readonly string[], line: string): Promise<string> {
+    if (paths.length > 10) throw new Error('A message can carry up to 10 attachments.');
+    const staged = paths.map((path) => this.uploads.claim(path));
+    try {
+      if (staged.some((upload) => !upload)) throw new Error('An attachment expired before it was sent. Attach it again.');
+      const sessionId = this.host.requireSession();
+      const state = await readState({ transcripts: [sessionId] });
+      const session = state.sessions.find((item) => item.id === sessionId);
+      if (!session) throw new Error('The ClikCode conversation is no longer available.');
+      const files: string[] = [];
+      for (const upload of staged) {
+        const kept = await retainUpload(upload!.path, upload!.name, sessionId);
+        if (upload!.image) await queueAttachment(session, kept);
+        else files.push(kept);
+      }
+      session.updatedAt = new Date().toISOString();
+      await writeState(state);
+      if (files.length) return [line, ...files.map((file) => `Attached file: ${file}`)].filter(Boolean).join('\n');
+      return line || (staged.length === 1 ? 'Look at the attached image.' : 'Look at the attached images.');
+    } finally {
+      for (const upload of staged) if (upload) await rm(upload.directory, { recursive: true, force: true }).catch(quiet('ide/bridge'));
+    }
+  }
+
+  async send(text: string, id?: string, mode?: 'steer' | 'queue', attachments: readonly string[] = []): Promise<void> {
     let line = text.trim();
     const complete = (): void => { if (id) this.host.channel.send({ type: 'send-complete', id }); };
-    if (!line) { complete(); return; }
+    if (!line && !attachments.length) { complete(); return; }
     try {
-      if (this.host.sessionId) line = await retainUploadedImages(line, this.host.sessionId);
+      if (attachments.length) {
+        line = await this.attach(attachments, line);
+        // A message with files is a turn of its own: steered into a running turn, its text would arrive without them.
+        mode = 'queue';
+      }
+      else if (this.host.sessionId) line = await retainUploadedImages(line, this.host.sessionId);
       if (this.host.link.workerTurnRunning && this.host.link.worker) {
         const sessionId = this.host.link.worker.sessionId;
         const { session } = await this.host.current(sessionId);
