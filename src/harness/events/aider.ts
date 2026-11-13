@@ -27,8 +27,11 @@ const BANNER = [
   /^Added .+ to the chat/, /^Use \/help/, /^Cost estimates may be inaccurate/,
   /^Add \.aider\* to \.gitignore/, /^Added \.aider\* to \.gitignore/,
 ];
-const THINKING = /^► \*\*THINKING\*\*$/;
-const ANSWER = /^► \*\*ANSWER\*\*$/;
+// Two spellings, by model: Aider's own headings, or the tags it wraps a
+// model's reasoning field in (`<thinking-content-<hash>>` ... closing tag).
+const THINKING = /^(?:► \*\*THINKING\*\*|<thinking-content-[0-9a-f]+>)$/;
+const ANSWER = /^(?:► \*\*ANSWER\*\*|<\/thinking-content-[0-9a-f]+>)$/;
+const THINKING_BLOCK = /<thinking-content-([0-9a-f]+)>[^]*?<\/thinking-content-\1>\n?/g;
 const FOOTER = /^Tokens: .+ sent, .+ received/;
 const COST = /Cost: \$([\d.]+) message/;
 
@@ -108,6 +111,7 @@ export function aiderHistoryReply(markdown: string): string | undefined {
     // text does not end that way, and stays.
     .filter((line) => !/^>(?: .*(?: {2}|\.\d+ session\.)|)$/.test(line))
     .join('\n')
+    .replace(THINKING_BLOCK, '')
     .trim();
   return reply || undefined;
 }

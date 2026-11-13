@@ -39,6 +39,10 @@ describe('aider', () => {
       'Tokens: 2.6k sent, 4 received.'].join('\n');
     expect(aiderStdoutReply(stdout)).toBe('PONG');
     expect(aiderStdoutReply(stdout.replace(/-{14}[^]*ANSWER\*\*\n/, ''))).toBe('PONG');
+    // The other spelling of a model's thoughts, in stdout and in the history file.
+    const tagged = ['<thinking-content-7bbeb8e1441453ad>', '', 'Just reply PONG.', '', '</thinking-content-7bbeb8e1441453ad>', '', 'PONG'].join('\n');
+    expect(aiderStdoutReply(`Model: x with whole edit format\n${tagged}\n\nTokens: 2.6k sent, 4 received.`)).toBe('PONG');
+    expect(aiderHistoryReply(`#### Reply with exactly: PONG  \n\n${tagged}\n\n> Tokens: 2.6k sent, 4 received.  `)).toBe('PONG');
   });
 
   it('reads the last reply from the chat history file, keeping the model’s own quotes', () => {
