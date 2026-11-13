@@ -17,7 +17,7 @@ import { discoverOpencodeConnect, opencodeVerboseModels } from './opencode-disco
 import { freePlanModels, planIsFree, preferredFreeModel } from './free-plan.js';
 import { copilotAccountModels } from './cli-usage-probes.js';
 import { discoverPiProviders, piConfiguredModel, piConnect, piModels } from './pi-discovery.js';
-import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
+import { discoverGooseProviders, providerKeyNames, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
 import { expandAuthPaths } from './auth-files.js';
 import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
 import { acpConfigOptionValues, acpDiscoverySession, acpProbeArgv, acpSessionModels, queryAcp } from './acp-query.js';
@@ -220,7 +220,10 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
   // (syncAccountModels), so a fingerprint holding it invalidated its own
   // entry -- the next ask, a moment later, ran the vendor's `models` again.
   // cachedCatalog checks the account's models against the entry instead.
-  return [discoveryContract, ...identities, ...driven].join('|');
+  // Goose's list also depends on which provider keys the process holds: a
+  // list read in a shell that had one must not be served in one that has not.
+  const keys = harness.modelStrategy === 'goose-providers' ? [`keys:${providerKeyNames().join(',')}`] : [];
+  return [discoveryContract, ...identities, ...driven, ...keys].join('|');
 }
 
 function cacheKey(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): string {
@@ -614,6 +617,11 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
   'goose-providers': async ({ harness, account, state: d }) => {
     const providers = await discoverGooseProviders(harness, nativeProfileEnvironment(account?.nativeProfile)).catch(quiet('harness/accounts/model-catalog'));
     if (!providers) return;
+    // Goose answered, so its answer is the list. The models kept on the
+    // account are what an EARLIER answer listed: left in, a provider no
+    // longer configured (a key that shell had, this one has not) kept all its
+    // models, and the first of them stayed Goose's default.
+    d.models.clear();
     const modelsDev = await modelsDevCache();
     const labels = { ...d.labels };
     for (const provider of providers.filter((item) => item.configured)) {

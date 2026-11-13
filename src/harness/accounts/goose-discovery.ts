@@ -74,10 +74,29 @@ export function gooseModelsDevModels(cacheJson: string, providerId: string): str
   }
 }
 
+/** The provider keys this process was started with, by name: Goose counts a
+ * provider as configured from them, so the list it gives depends on them. */
+export function providerKeyNames(environment: Readonly<Record<string, string | undefined>> = process.env): string[] {
+  return Object.keys(environment).filter((name) => /_API_KEY$/.test(name) && environment[name]?.trim()).sort();
+}
+
+/** Goose takes a key variable that is set but EMPTY for a configured provider
+ * (Claude Code starts its shells with `ANTHROPIC_API_KEY=`): every Anthropic
+ * model was then listed, the first of them became Goose's default, and each
+ * turn on it failed as not signed in. An empty variable is no key, so the
+ * question is asked without it -- `-u` cannot be said through an environment
+ * that is merged over this process's, hence the launcher. */
+function withoutEmptyKeys(binary: string, argv: readonly string[]): { binary: string; argv: string[] } {
+  const empty = Object.keys(process.env).filter((name) => /_API_KEY$/.test(name) && !process.env[name]?.trim());
+  if (!empty.length || process.platform === 'win32') return { binary, argv: [...argv] };
+  return { binary: 'env', argv: [...empty.flatMap((name) => ['-u', name]), binary, ...argv] };
+}
+
 export async function discoverGooseProviders(
   harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>,
 ): Promise<GooseProvider[] | undefined> {
-  return queryAcp(harness.binary, harness.acp?.argv ?? ['acp'], environment, async (request) => {
+  const launch = withoutEmptyKeys(harness.binary, harness.acp?.argv ?? ['acp']);
+  return queryAcp(launch.binary, launch.argv, environment, async (request) => {
     const status = await request('_goose/unstable/providers/config/status');
     const setup = await request('_goose/unstable/providers/setup/catalog/list').catch(quiet('harness/accounts/goose-discovery'));
     const catalog = await request('_goose/unstable/providers/catalog/list').catch(quiet('harness/accounts/goose-discovery'));
