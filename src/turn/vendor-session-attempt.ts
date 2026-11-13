@@ -1,4 +1,6 @@
 /** One ACP or app-server attempt, with a CLI fallback where the vendor permits it. */
+import { refreshAcpAgent } from '../harness/transport/native/install.js';
+import { clearNativeHarnessInspectionCache } from '../harness/transport/native/inspect.js';
 import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { LiveSettings } from './live-settings.js';
@@ -144,6 +146,9 @@ export async function runVendorSessionAttempt(input: {
           await checkpoint.persistNow();
         }
         lifecycle('vendor.acp-fallback', { harness: harness.command, reason: unsupported.message.slice(0, 300) });
+        // An agent that refuses a model its own CLI takes is behind that CLI. It is brought up to date beside this turn,
+        // so the turns after it run on the agent again instead of each being refused and sent through the CLI.
+        if (unsupported.acpUnsupportedModel) void refreshAcpAgent(harness).then((fresh) => { if (fresh) clearNativeHarnessInspectionCache(harness.command); });
         prompter?.phase('using structured CLI fallback');
         try { result = await runCli(); }
         catch (cliError) {

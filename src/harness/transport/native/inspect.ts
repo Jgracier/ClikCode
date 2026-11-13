@@ -48,7 +48,7 @@ export async function inspectNativeHarnessForPicker(spec: NativeHarnessSpec): Pr
 }
 
 /** Forget cached availability, e.g. right after installing a harness. */
-function clearNativeHarnessInspectionCache(command?: string): void {
+export function clearNativeHarnessInspectionCache(command?: string): void {
   if (command === undefined) {
     inspectionCache.clear();
     pickerInspectionCache.clear();

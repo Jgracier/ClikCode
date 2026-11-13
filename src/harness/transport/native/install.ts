@@ -27,7 +27,7 @@
  */
 
 import { installerEnv } from '../../../runtime/installer-env.js';
-import { quiet } from '../../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../../runtime/lifecycle-log.js';
 import { constants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -275,6 +275,50 @@ export async function npmPrefixWritable(prefix: string, platform: NodeJS.Platfor
   }
   return true;
 }
+
+/** Agents this process has already brought up to date (or is doing so): one try each. */
+const refreshing = new Map<string, Promise<boolean>>();
+const REFRESH_EVERY_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Bring a harness's ACP agent up to date. A vendor's CLI updates itself; the agent that speaks ACP for it is a separate
+ * npm package, installed once when it was missing and never again. The two drift: the CLI takes a model the agent has
+ * never heard of (Claude Code's `fable` became Fable 5.2 while the installed claude-agent-acp knew only 5.1), and from
+ * then on the agent refused every turn of that conversation and each ran through the one-shot CLI instead.
+ *
+ * Called when the agent refuses a model its CLI takes: that refusal is the evidence it is behind, so nothing is polled.
+ * One try per process, and one per machine every few hours (an agent that is current and still refuses is not asked
+ * again on every turn). Resolves true when the package was installed afresh; a failure is logged and never the turn's.
+ */
+export function refreshAcpAgent(spec: InstallSpec, deps: { install?: (npmPackage: string) => Promise<void>; now?: () => number; directory?: string } = {}): Promise<boolean> {
+  const npmPackage = spec.acp?.npmPackage;
+  if (!npmPackage) return Promise.resolve(false);
+  const running = refreshing.get(spec.command);
+  if (running) return running;
+  const now = deps.now ?? Date.now;
+  const stamp = join(deps.directory ?? join(stateDirectory(), 'tools'), `acp-refresh-${spec.command.replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
+  const work = (async (): Promise<boolean> => {
+    try {
+      const last = JSON.parse(await readFile(stamp, 'utf8')) as { at?: number };
+      if (typeof last.at === 'number' && now() - last.at < REFRESH_EVERY_MS) return false;
+    } catch { /* never refreshed here */ }
+    try {
+      await withInstallLock(`${spec.command}-acp`, () => (deps.install ?? installNpmPackage)(npmPackage));
+      await mkdir(dirname(stamp), { recursive: true });
+      await writeFile(stamp, JSON.stringify({ at: now(), package: npmPackage }));
+      lifecycle('vendor.acp-agent.refreshed', { harness: spec.command, package: npmPackage });
+      return true;
+    } catch (error) {
+      lifecycle('vendor.acp-agent.refresh-failed', { harness: spec.command, package: npmPackage, message: (error instanceof Error ? error.message : String(error)).slice(0, 300) });
+      return false;
+    }
+  })();
+  refreshing.set(spec.command, work);
+  return work;
+}
+
+/** For tests: forget which agents this process refreshed. */
+export function resetAcpRefreshForTests(): void { refreshing.clear(); }
 
 /** An npm failure that means "not allowed to write there", which a private
  * prefix fixes -- as opposed to a bad package or no network, which it does not. */
