@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { grokUsageReading } from './grok-usage.js';
-import { ampUsageProbe, antigravityUsageReading, auggieUsageReading, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
+import { ampUsageProbe, antigravityUsageReading, auggieUsageReading, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageReading, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
 import { PROBE_DEADLINE_MS, probeCommand, queryJsonRpc } from './vendor-probe.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -168,7 +168,7 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageRea
   antigravity: antigravityUsageReading,
   kimi: kimiUsageReading,
   amp: labelOnly(ampUsageProbe),
-  kilo: labelOnly(kiloUsageProbe),
+  kilo: kiloUsageReading,
   cline: clineUsageReading,
   cursor: cursorUsageReading,
   kiro: kiroUsageReading,

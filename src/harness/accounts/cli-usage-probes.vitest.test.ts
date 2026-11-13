@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ampUsageLabel, auggieUsageLabel, clineQuotaReading, commandCodeQuotaReading, devinQuotaReading, hermesQuotaReading, vibeQuotaReading, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint, kiroQuotaReading } from './cli-usage-probes.js';
+import { ampUsageLabel, auggieUsageLabel, clineQuotaReading, commandCodeQuotaReading, devinQuotaReading, hermesQuotaReading, vibeQuotaReading, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kiloProfileReading, kimiQuotaReading, kimiWebEndpoint, kiroQuotaReading } from './cli-usage-probes.js';
 
 const NOW = Date.parse('2026-09-30T04:42:49.300Z');
 
@@ -55,6 +55,10 @@ describe('credit balances', () => {
   it('kilo profile', () => {
     expect(kiloProfileLabel('Name: Someone\nEmail: someone@example.com\nTeam: Personal\nBalance: $0.00\n')).toBe('$0 credits left');
     expect(kiloProfileLabel('Balance: $1,204.50')).toBe('$1204.50 credits left');
+    // No credits is Kilo's free plan: its paid models are refused, its free ones run.
+    expect(kiloProfileReading('Balance: $0.00')?.plan).toEqual({ name: 'Free' });
+    expect(kiloProfileReading('Balance: $12.00')?.plan).toEqual({ name: 'Credits' });
+    expect(kiloProfileReading('not signed in')).toBeUndefined();
   });
 
   it('auggie account status', () => {

@@ -573,6 +573,22 @@ export async function auggieUsageReading(environment: Environment): Promise<Usag
 export const ampUsageProbe = (environment: Environment): Promise<string | undefined> =>
   captureLabel('amp', ['usage'], environment, ampUsageLabel);
 
-export const kiloUsageProbe = (environment: Environment): Promise<string | undefined> =>
-  captureLabel('kilo', ['profile'], environment, kiloProfileLabel);
+/** Kilo sells no plan, only credits: an account with none runs its free
+ * models alone and is refused every other ("Paid Model - Credits Required ...
+ * switch to a free model"), which is what a free plan is everywhere else. Said
+ * as one, a new chat starts on a model the account can run. An account with
+ * credits is named too, so that topping up ends the free start. */
+export function kiloProfileReading(output: string): { windows: []; label: string; plan: { name: string } } | undefined {
+  const label = kiloProfileLabel(output);
+  if (label === undefined) return undefined;
+  return { windows: [], label, plan: { name: label === balanceLabel(0) ? 'Free' : 'Credits' } };
+}
+
+export async function kiloUsageReading(environment: Environment): Promise<UsageReading | undefined> {
+  try {
+    const harness = localHarnessForCommand('kilo');
+    const output = harness ? await probeCommand(harness.binary, ['profile'], environment) : undefined;
+    return output === undefined ? undefined : kiloProfileReading(output);
+  } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
+}
 
