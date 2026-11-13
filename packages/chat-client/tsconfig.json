@@ -1,0 +1,6 @@
+{
+  "//": "Emits the declarations of the chat client (index.ts and every type it reaches) for a client outside this repository. The JavaScript is built by scripts/build-chat-client.mjs.",
+  "extends": "../vscode/tsconfig.json",
+  "compilerOptions": { "noEmit": false, "declaration": true, "emitDeclarationOnly": true, "outDir": "dist/types", "rootDir": "../..", "types": ["node"] },
+  "include": ["index.ts"]
+}
