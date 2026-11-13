@@ -90,6 +90,17 @@ function leftSignIn(startUrl: string, currentUrl: string): boolean {
   return current.protocol === 'https:' && !AUTH_PATH.test(current.pathname);
 }
 
+/** The words of a page whose code was just emailed or texted: an authenticator code is the wrong thing to type there. */
+const SENT_CODE_PAGE = /(?:sent|emailed|texted|e-mailed)[^.\n]{0,60}\bcode\b|code[^.\n]{0,40}(?:sent|emailed|texted) to|check your (?:e-?mail|inbox|phone)|text message|\bsms\b/i;
+/** A code box on a site whose authenticator seed is kept is the authenticator's, unless the page says the code was sent somewhere. */
+export function wantsAuthenticatorCode(pageText: string): boolean {
+  return !SENT_CODE_PAGE.test(pageText);
+}
+async function asksForAuthenticator(page: Page): Promise<boolean> {
+  const text = await page.locator('body').innerText({ timeout: 3_000 }).catch(() => '');
+  return wantsAuthenticatorCode(text.slice(0, 20_000));
+}
+
 export async function loginComputerPage(input: {
   stateDir: string;
   page: Page;
@@ -100,6 +111,8 @@ export async function loginComputerPage(input: {
   newAccount?: boolean;
   /** The emailed one-time code for this site when a mailbox is connected (undefined when none is): asked for with the time the page began asking. */
   mailCode?(since: number): Promise<string | undefined>;
+  /** The current authenticator-app code for this site, when its seed is kept in ClikDeploy (undefined when none is): never asked of anyone. */
+  authenticatorCode?(): Promise<string | undefined>;
 }): Promise<LoginOutcome> {
   const startUrl = input.page.url();
   const origin = checkedOrigin(startUrl);
@@ -121,6 +134,7 @@ export async function loginComputerPage(input: {
   let sentSaved = false;
   const refused = async (): Promise<LoginOutcome> => { if (id) await setLoginRejected(input.stateDir, startUrl, id, true); return 'saved_login_rejected'; };
   let codeAttempts = 0;
+  let usedAuthenticator = false;
   let announcedVerification = false;
   let waited = 0;
 
@@ -191,6 +205,15 @@ export async function loginComputerPage(input: {
     const early = !fields.some(field => field.kind === 'password') && !saved.password && !supplied.password
       && needed.some(field => ['email', 'username', 'accountId'].includes(field.key));
     if (early) needed.push({ index: -1, key: 'password', label: 'Password', kind: 'password', required: true });
+    // A page that asks for the authenticator app's code gets it from the seed kept in ClikDeploy. One try: a second code box
+    // after that is a refusal or another kind of code, and typing more authenticator codes at it would lock the account.
+    if (input.authenticatorCode && !usedAuthenticator && needed.some(candidate => candidate.transient) && await asksForAuthenticator(input.page)) {
+      const code = await input.authenticatorCode();
+      if (code) {
+        usedAuthenticator = true;
+        for (const field of needed.filter(candidate => candidate.transient)) { codes[field.key] = code; needed.splice(needed.indexOf(field), 1); }
+      }
+    }
     // A one-time code that arrives by email is read from the connected mailbox, not asked of anyone.
     if (input.mailCode) {
       for (const field of needed.filter(candidate => candidate.transient)) {
