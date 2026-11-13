@@ -258,7 +258,9 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   } finally {
     if (touched.size) {
       const { accounts } = await readState({ transcripts: [] });
-      for (const path of touched) await purgeAccountProfile({ nativeProfile: { env: '', path } }, accounts);
+      // Housekeeping after the sign-in is decided: a directory that will not
+      // go must not turn a signed-in account into a failed command.
+      for (const path of touched) await purgeAccountProfile({ nativeProfile: { env: '', path } }, accounts).catch(quiet('commands/account'));
     }
   }
 }

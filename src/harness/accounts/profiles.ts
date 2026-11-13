@@ -2,7 +2,7 @@
  * rules for removing one safely. */
 
 import { existsSync } from 'node:fs';
-import { lstat, realpath, rm } from 'node:fs/promises';
+import { chmod, lstat, readdir, realpath, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
@@ -66,6 +66,27 @@ export async function purgeAccountProfile(
   if (remainingAccounts.some((other) => other.nativeProfile?.path && resolve(other.nativeProfile.path) === target)) return undefined;
   const verdict = await resolvePurgeableProfile(profilePath);
   if ('refused' in verdict) return undefined;
-  await rm(verdict.path, { recursive: true, force: true });
+  await removeTree(verdict.path);
   return verdict.path;
+}
+
+/** `rm -rf`, including what a vendor left read-only: Vibe's plugin cache is
+ * directories without the write bit, and a file cannot be unlinked from
+ * one, so a plain recursive remove stopped with EACCES partway through. */
+async function removeTree(path: string): Promise<void> {
+  try {
+    await rm(path, { recursive: true, force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EACCES' && (error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+    await makeWritable(path);
+    await rm(path, { recursive: true, force: true });
+  }
+}
+
+/** Owner write and search on every directory under `path` (never through a symlink). */
+async function makeWritable(path: string): Promise<void> {
+  const info = await lstat(path);
+  if (!info.isDirectory()) return;
+  await chmod(path, info.mode | 0o700);
+  for (const name of await readdir(path)) await makeWritable(join(path, name));
 }
