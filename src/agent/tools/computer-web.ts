@@ -407,6 +407,7 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'login': return 'Sign in';
       case 'handoff': return 'Hand off to phone';
       case 'human_check': return 'Press the human check';
+      case 'auth_code': return 'Type authenticator code';
       case 'cloud': return args.clear ? 'Back to the local browser' : 'Move tab to cloud browser';
       case 'capture_secret': return `Capture key${args.secret_name ? ` as ${args.secret_name}` : ''}`;
       case 'close': return 'Close browser';
@@ -512,6 +513,17 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       }
       if (args.action === 'close' && (args.index !== undefined)) { await computerPage(ctx.stateDir, args.tab); return { output: await closeTab(args, { stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}) }) }; }
       if (args.action === 'close') { await closeComputerPage(ctx.stateDir, args.tab); return { output: 'This chat\'s tab is closed.' }; }
+      if (args.action === 'auth_code') {
+        // The six-digit code an authenticator app would show, made from the seed in the vault and typed straight into the page.
+        if (!args.secret?.trim()) throw new Error('auth_code needs secret: the name the authenticator secret key was saved under (capture it with capture_secret when the site shows it).');
+        if (!args.target?.trim()) throw new Error('auth_code needs target: the field the code goes in.');
+        const [{ readNamedSecret }, { nextTotpCode }] = await Promise.all([import('../computer/credential-vault.js'), import('../computer/totp.js')]);
+        const page = await computerPage(ctx.stateDir, args.tab);
+        const field = await locate(page, args.target);
+        const { code, waitedMs } = await nextTotpCode(args.secret.trim(), await readNamedSecret(ctx.stateDir, args.secret.trim()));
+        await field.fill(code, { timeout: 10_000 });
+        return { output: `Typed the current authenticator code into ${args.target}${waitedMs ? ` (waited ${Math.round(waitedMs / 1000)} s for a fresh one)` : ''}. It was not shown to you. A second call gives the next code, for a site that asks for two in a row.` };
+      }
       if (args.action === 'human_check') {
         const checked = await pressHumanCheck(await computerPage(ctx.stateDir, args.tab));
         const inCloud = tabIsInCloud(ctx.stateDir, args.tab);
