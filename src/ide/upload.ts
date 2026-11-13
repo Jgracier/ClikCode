@@ -1,3 +1,4 @@
+import { quiet } from '../runtime/lifecycle-log.js';
 import { mkdtemp, open, rm, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, extname, join } from 'node:path';
@@ -110,8 +111,8 @@ export class IdeUploads {
     if (!upload) return;
     this.open.delete(id);
     clearTimeout(upload.expires);
-    await upload.handle.close().catch(() => undefined);
-    await rm(upload.directory, { recursive: true, force: true }).catch(() => undefined);
+    await upload.handle.close().catch(quiet('ide/upload'));
+    await rm(upload.directory, { recursive: true, force: true }).catch(quiet('ide/upload'));
   }
 
   async close(): Promise<void> {
@@ -121,7 +122,7 @@ export class IdeUploads {
 
   private async discard(path: string): Promise<void> {
     const staged = this.claim(path);
-    if (staged) await rm(staged.directory, { recursive: true, force: true }).catch(() => undefined);
+    if (staged) await rm(staged.directory, { recursive: true, force: true }).catch(quiet('ide/upload'));
   }
 
   private abandon(drop: () => Promise<void>): NodeJS.Timeout {
