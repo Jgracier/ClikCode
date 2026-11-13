@@ -672,3 +672,64 @@ it('says which wall it read in the reason code: a card or a plan, a work address
   expect(keygrabWall('Please use a work email to sign up.')?.reasonCode).toBe('work-email');
   expect(keygrabWall('Gmail addresses are not allowed.')?.reasonCode).toBe('free-mail');
 });
+
+describe('keygrab and the managed cloud browser', () => {
+  const blocked: Record<string, Page> = { 'https://vendor.example/': { text: 'Checking your browser', captchaFrame: true } };
+  const open: Record<string, Page> = {
+    'https://vendor.example/': { text: 'Dashboard for your account and settings', controls: ['API Keys'], on: { 'API Keys': 'https://vendor.example/keys' } },
+    'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+  };
+
+  it('moves a tab that hit a captcha to the cloud browser once, and carries on when the page opens there', async () => {
+    // The fake reads its pages by reference: swapping the entries is the cloud browser getting past the check.
+    const pages = { ...blocked };
+    const site = fakeSite(pages);
+    let moves = 0;
+    site.port.escalate = async () => { moves++; Object.assign(pages, open); return true; };
+    const done = await run(site);
+    expect(moves).toBe(1);
+    expect(done.ok).toBe(true);
+    expect(site.captures).toEqual([undefined]);
+  });
+
+  it('ends as a captcha for a person when the cloud browser is still blocked, without trying twice', async () => {
+    const site = fakeSite({ 'https://vendor.example/': { text: 'Checking your browser', captchaFrame: true } });
+    let moves = 0;
+    site.port.escalate = async () => { moves++; return true; };
+    const done = await run(site);
+    expect(moves).toBe(1);
+    expect(done).toMatchObject({ ok: false, stop: { kind: 'captcha' } });
+  });
+
+  it('stops at once when the cloud browser is off', async () => {
+    const site = fakeSite({ 'https://vendor.example/': { text: 'Checking your browser', captchaFrame: true } });
+    site.port.escalate = async () => false;
+    expect(await run(site)).toMatchObject({ ok: false, stop: { kind: 'captcha' } });
+  });
+});
+
+describe('keygrab and a checkbox-style human check', () => {
+  const open: Record<string, Page> = {
+    'https://vendor.example/': { text: 'Dashboard for your account and settings', controls: ['API Keys'], on: { 'API Keys': 'https://vendor.example/keys' } },
+    'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+  };
+
+  it('presses the box once and carries on when it clears, without going to the cloud', async () => {
+    const pages: Record<string, Page> = { 'https://vendor.example/': { text: 'Verify to continue to your account', captchaFrame: true } };
+    const site = fakeSite(pages);
+    let presses = 0, moves = 0;
+    site.port.humanCheck = async () => { presses++; Object.assign(pages, open); return 'cleared'; };
+    site.port.escalate = async () => { moves++; return true; };
+    expect((await run(site)).ok).toBe(true);
+    expect([presses, moves]).toEqual([1, 0]);
+  });
+
+  it('never presses twice on one page: a puzzle goes to the cloud browser, then to a person', async () => {
+    const site = fakeSite({ 'https://vendor.example/': { text: 'Verify to continue to your account', captchaFrame: true } });
+    let presses = 0, moves = 0;
+    site.port.humanCheck = async () => { presses++; return 'puzzle'; };
+    site.port.escalate = async () => { moves++; return true; };
+    expect(await run(site)).toMatchObject({ ok: false, stop: { kind: 'captcha' } });
+    expect([presses, moves]).toEqual([1, 1]);
+  });
+});

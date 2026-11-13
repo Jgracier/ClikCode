@@ -30,6 +30,33 @@ Nothing here asks you anything of its own: in Auto mode these tools just run, an
 agent stops only for what it cannot do itself (a sign-in you must type, a choice
 between accounts, a payment, a CAPTCHA).
 
+### Human checks, and the optional managed browser
+
+ClikCode's browser is your own Chrome on your own connection, so most "are you human"
+checks never appear. When one does, three things happen in order:
+
+1. **One press.** A checkbox-style check ("I'm not a robot", "Verify you are human") gets
+   the single press any visitor makes (`browser_use` action `human_check`; the connector
+   runner does it by itself). ClikCode never answers an image, audio or text puzzle.
+2. **The managed browser, if you turned it on.** `clikcode computer browser-use auto`
+   keeps the local browser for everything and lets a tab move to Browser Use Cloud only
+   when a page blocks it (`browser_use` action `cloud`; the connector runner does it once
+   per vendor). That service works on the challenge by itself. `on` runs every tab there;
+   `off` (the default) is local only and stops the cloud session.
+3. **You.** `handoff` gives you a live view of the same tab on your phone.
+
+Save the key first as the secret `browser-use/api-key`. A cloud session costs
+$0.02/hour, billed by the minute, and ClikCode stops it when its last tab closes, when the
+worker or command ends, or after 10 idle minutes (`CLIKCODE_CLOUD_BROWSER_IDLE_MINUTES`);
+the service ends it itself after an hour. `clikcode computer browser-use` shows whether one
+is running, and `view` prints its live-control link in your own terminal only.
+
+A cloud tab is a different browser: the service receives the page, cookies made there and
+anything typed into it. ClikCode never copies your local cookies or profile to it, so a
+moved tab starts signed out, and pages on this computer or its private network are never
+moved. Its key and connection address stay in local files and are not shown to the agent.
+Its captcha handling is a service, not a guarantee.
+
 ## How the agent works a page
 
 `open` and `observe` return the page; each element carries a `[ref=e12]` (`f1e2` inside a

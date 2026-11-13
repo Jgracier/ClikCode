@@ -46,6 +46,8 @@ function collectView(readControls: () => PageControl[]): PageView {
     if (/recaptcha\/api2\/bframe|hcaptcha\.com\/captcha|challenges\.cloudflare\.com|turnstile|funcaptcha|arkoselabs/i.test(src) && box.width >= 280 && box.height >= 70) captchaFrame = true;
     else if (/recaptcha\/api2\/anchor/i.test(src) && box.width >= 280 && box.height >= 70) captchaFrame = true;
   }
+  // A check that already holds its answer (ticked, accepted) is no longer in the way.
+  if (captchaFrame && Array.from(doc.querySelectorAll('#g-recaptcha-response, [name="g-recaptcha-response"], [name="cf-turnstile-response"], [name="h-captcha-response"]') as unknown as ArrayLike<{ value?: string }>).some(field => (field.value ?? '').length > 20)) captchaFrame = false;
   // innerText stops at a shadow root: add the text of each one.
   let text = doc.body?.innerText ?? '';
   for (const host of Array.from(doc.querySelectorAll('*')).slice(0, 4000) as unknown as Array<{ shadowRoot?: { children: ArrayLike<{ tagName: string; innerText?: string }> } | null }>) {
@@ -140,6 +142,8 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
         return { html: /html/i.test(type), status: res.status, url: res.url || url };
       } catch { return undefined; }
     },
+    humanCheck: async () => (await (await import('./human-check.js')).pressHumanCheck(await page())).outcome,
+    escalate: async () => { const moved = await run({ action: 'cloud' }); return !moved.isError && /now in the managed cloud browser/.test(moved.output); },
     screenshot: async () => {
       try { const p = await page(); if (p.isClosed()) return undefined; const path = join(await shots(), `${options.id}.png`); await p.screenshot({ path, timeout: 10_000 }); return path; } catch { return undefined; }
     },

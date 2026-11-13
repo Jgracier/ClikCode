@@ -15,6 +15,8 @@ import { watchDialogs } from './page-dialogs.js';
 import { watchConsole } from './console-log.js';
 import { allTabs, closeTabsByLabel, closeTabsOfOwner, readTabRecords, sweepTabs, writeTabRecord, type TabRecord } from './tab-registry.js';
 import { sleep } from '../../runtime/sleep.js';
+import { browserProvider } from './settings.js';
+import { browserUseConnection, stopBrowserUse } from './browser-use-cloud.js';
 
 type Connected = { browser: Browser; context: BrowserContext };
 const running = sharedState('browser-running', () => new Map<string, Promise<Connected>>());
@@ -172,20 +174,30 @@ async function startHost(stateDir: string): Promise<Connected> {
   throw new Error('ClikCode Chrome could not start.');
 }
 
-async function browserFor(stateDir: string, start: boolean): Promise<Connected> {
-  let opening = running.get(stateDir);
+/** The managed cloud browser is a second, separate browser: its own connection, its own tabs, never the local profile. */
+const cloudRunKey = (stateDir: string): string => `${stateDir}\u0000\u0000cloud`;
+
+async function browserFor(stateDir: string, start: boolean, cloud = false): Promise<Connected> {
+  const runKey = cloud ? cloudRunKey(stateDir) : stateDir;
+  let opening = running.get(runKey);
   if (!opening) {
     opening = (async () => {
+      if (cloud) {
+        const remote = await browserUseConnection(stateDir, start);
+        if (remote) return remote;
+        throw new Error('The managed cloud browser is closed. Open a URL with browser_use first.');
+      }
       const current = await connect(stateDir);
       if (current) return current;
       if (!start) throw new Error('ClikCode browser is closed. Open a URL with browser_use first.');
       return startHost(stateDir);
     })();
-    running.set(stateDir, opening);
+    running.set(runKey, opening);
     void opening.then(({ browser }) => {
-      browser.on('disconnected', () => { if (running.get(stateDir) === opening) running.delete(stateDir); });
+      browser.on('disconnected', () => { if (running.get(runKey) === opening) running.delete(runKey); });
+      if (cloud) watchCloudIdle(stateDir);
     }).catch(quiet('agent/computer/browser'));
-    opening.catch(() => { if (running.get(stateDir) === opening) running.delete(stateDir); });
+    opening.catch(() => { if (running.get(runKey) === opening) running.delete(runKey); });
   }
   return opening;
 }
@@ -196,6 +208,136 @@ async function browserFor(stateDir: string, start: boolean): Promise<Connected> 
  * own `tab`: calls with different names never share, read or navigate each other's page. */
 const owned = sharedState('browser-owned', () => new Map<string, Page[]>());
 const ownerKey = (stateDir: string, tab?: string): string => (tab ? `${stateDir}\u0000${tab}` : stateDir);
+
+// ── which of this process's tabs live in the managed cloud browser ──
+
+/** Tabs moved to the cloud in `auto` mode (with `browser-use` selected every tab is there). */
+const cloudOwners = sharedState('browser-cloud-owners', () => new Set<string>());
+const cloudPages = sharedState('browser-cloud-pages', () => new WeakSet<Page>());
+const cloudUsedAt = sharedState('browser-cloud-used', () => new Map<string, number>());
+const cloudTimers = sharedState('browser-cloud-timers', () => new Map<string, ReturnType<typeof setInterval>>());
+
+/** How long the cloud browser may sit unused before its billed session is stopped. */
+export function cloudIdleMs(env: NodeJS.ProcessEnv = process.env): number {
+  const minutes = Number(env.CLIKCODE_CLOUD_BROWSER_IDLE_MINUTES);
+  return (Number.isFinite(minutes) && minutes >= 1 ? Math.min(minutes, 55) : 10) * 60_000;
+}
+
+async function onCloud(stateDir: string, tab?: string): Promise<boolean> {
+  const provider = await browserProvider(stateDir);
+  return provider === 'browser-use' || (provider === 'auto' && cloudOwners.has(ownerKey(stateDir, tab)));
+}
+
+/** True when this chat's tab is in the managed cloud browser. */
+export function tabIsInCloud(stateDir: string, tab?: string): boolean {
+  const page = mine(stateDir, tab);
+  return Boolean(page && cloudPages.has(page));
+}
+
+/** A page of the cloud browser that holds something: a fresh session's blank tab does not count. */
+const inUse = (page: Page): boolean => !page.isClosed() && !/^(?:about:blank|chrome:\/\/newtab\/?|chrome:\/\/new-tab-page\/?)?$/.test(page.url());
+
+/** Stop the billed session once no tab in it is in use (this process's or another worker's). Returns true when it stopped. */
+async function settleCloud(stateDir: string, force = false): Promise<boolean> {
+  const runKey = cloudRunKey(stateDir);
+  const opening = running.get(runKey);
+  const connected = await opening?.catch(quiet('agent/computer/browser'));
+  if (connected && !force && connected.context.pages().some(inUse)) return false;
+  if (!connected && !force) return false;
+  running.delete(runKey);
+  const timer = cloudTimers.get(stateDir);
+  if (timer) { clearInterval(timer); cloudTimers.delete(stateDir); }
+  cloudUsedAt.delete(stateDir);
+  await connected?.browser.close().catch(quiet('agent/computer/browser'));
+  await stopBrowserUse(stateDir);
+  return true;
+}
+
+/** The session is billed by the minute: close this process's cloud tabs and stop it once nothing has used it for a while. */
+function watchCloudIdle(stateDir: string): void {
+  cloudUsedAt.set(stateDir, Date.now());
+  if (cloudTimers.has(stateDir)) return;
+  const timer = setInterval(() => {
+    if (Date.now() - (cloudUsedAt.get(stateDir) ?? 0) < cloudIdleMs()) return;
+    void closeCloudTabs(stateDir).then(() => settleCloud(stateDir)).catch(quiet('agent/computer/browser'));
+  }, 30_000);
+  timer.unref();
+  cloudTimers.set(stateDir, timer);
+}
+
+/** Close every cloud tab this process holds; their chats go back to the local browser. */
+async function closeCloudTabs(stateDir: string): Promise<void> {
+  const all = owned as Map<string, Page[]>;
+  for (const key of [...all.keys()]) {
+    if (key !== stateDir && !key.startsWith(`${stateDir}\u0000`)) continue;
+    const pages = all.get(key) ?? [];
+    const cloud = pages.filter(page => cloudPages.has(page));
+    if (!cloud.length) continue;
+    all.set(key, pages.filter(page => !cloudPages.has(page)));
+    cloudOwners.delete(key);
+    for (const page of cloud) await page.close().catch(quiet('agent/computer/browser'));
+  }
+}
+
+/** An address only this computer or its private network can reach: never sent to a remote browser. */
+export function privateAddress(address: string): boolean {
+  let host: string;
+  try { host = new URL(address).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch { return true; }
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.ts.net') || !host.includes('.') && !host.includes(':')) return true;
+  if (/^(?:127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(host) || /^172\.(?:1[6-9]|2\d|3[01])\./.test(host) || /^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)) return true;
+  return host === '::1' || /^f[cd][0-9a-f]{2}:/.test(host) || /^fe80:/.test(host);
+}
+
+/** Move this chat's tab to the managed cloud browser at the same address (a page the local browser cannot get past).
+ * Local cookies and sign-ins are not copied. The local tab is closed only once the cloud one is open. */
+export async function moveTabToCloud(stateDir: string, tab?: string): Promise<{ page: Page; moved: boolean }> {
+  const provider = await browserProvider(stateDir);
+  if (provider === 'local') throw new Error('The managed cloud browser is off. The user turns it on with `clikcode computer browser-use auto` (local first, cloud when asked) after saving its key as the secret `browser-use/api-key`.');
+  const key = ownerKey(stateDir, tab);
+  const current = mine(stateDir, tab);
+  if (current && cloudPages.has(current)) return { page: current, moved: false };
+  const address = current && /^https?:/i.test(current.url()) ? current.url() : undefined;
+  if (address && privateAddress(address)) throw new Error('This page is on this computer or its private network, which a cloud browser cannot reach. It stays in the local browser.');
+  const { context } = await browserFor(stateDir, true, true);
+  // Always a page of its own: a blank page in the session may be another chat's tab that has not navigated yet.
+  const page = await context.newPage();
+  cloudPages.add(page);
+  const local = owned.get(key) ?? [];
+  owned.set(key, []);
+  cloudOwners.add(key);
+  adoptPage(stateDir, page, tab);
+  for (const old of local) await old.close().catch(quiet('agent/computer/browser'));
+  if (address) await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(quiet('agent/computer/browser'));
+  lifecycle('browser.cloud.tab', { moved: 'to-cloud' });
+  return { page, moved: true };
+}
+
+/** Bring this chat's tab back to the local browser at the same address, and stop the cloud session if nothing else uses it. */
+export async function moveTabToLocal(stateDir: string, tab?: string): Promise<{ page: Page | undefined; moved: boolean; stopped: boolean }> {
+  if (await browserProvider(stateDir) === 'browser-use') throw new Error('Browser Use Cloud is selected for every tab. The user switches back with `clikcode computer browser-use off` or `auto`.');
+  const key = ownerKey(stateDir, tab);
+  const pages = owned.get(key) ?? [];
+  const cloud = pages.filter(page => cloudPages.has(page));
+  if (!cloudOwners.has(key) && !cloud.length) return { page: mine(stateDir, tab), moved: false, stopped: false };
+  const front = mine(stateDir, tab);
+  const address = front && /^https?:/i.test(front.url()) ? front.url() : undefined;
+  owned.set(key, pages.filter(page => !cloudPages.has(page)));
+  chosen.delete(key);
+  cloudOwners.delete(key);
+  for (const page of cloud) await page.close().catch(quiet('agent/computer/browser'));
+  const stopped = await settleCloud(stateDir).catch(() => false);
+  const page = await openComputerPage(stateDir, tab);
+  if (address) await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(quiet('agent/computer/browser'));
+  lifecycle('browser.cloud.tab', { moved: 'to-local', stopped });
+  return { page, moved: true, stopped };
+}
+
+/** Stop the cloud session now, whatever is open in it (the user turned the cloud browser off). */
+export async function stopCloudBrowser(stateDir: string): Promise<void> {
+  await closeCloudTabs(stateDir);
+  cloudOwners.clear();
+  await settleCloud(stateDir, true);
+}
 
 /** The tab a chat chose with `switch`, until a new popup is followed or it closes. */
 const chosen = sharedState('browser-chosen', () => new Map<string, Page>());
@@ -214,13 +356,16 @@ function mine(stateDir: string, tab?: string): Page | undefined {
 
 /** Make `page` this chat's tab (a popup the chat's own page opened). */
 export function adoptPage(stateDir: string, page: Page, tab?: string): void {
+  // A popup opened by a cloud tab lives in the cloud browser too.
+  if (!cloudPages.has(page) && (owned.get(ownerKey(stateDir, tab)) ?? []).some(other => cloudPages.has(other) && other.context() === page.context())) cloudPages.add(page);
   watchDownloads(page, stateDir);
   watchDialogs(page);
   const key = ownerKey(stateDir, tab);
   owned.set(key, [...(owned.get(key) ?? []).filter(old => old !== page), page]);
   chosen.delete(key);
   watchConsole(page);
-  holdTab(stateDir, page, tab);
+  // The tab registry lists the local Chrome's tabs; a cloud tab is tracked by its session instead.
+  if (cloudPages.has(page)) cloudUsedAt.set(stateDir, Date.now()); else holdTab(stateDir, page, tab);
 }
 
 // ── who holds each tab: written down so any chat can list it and the sweep can close what no one holds (tab-registry.ts) ──
@@ -267,6 +412,7 @@ function holdTab(stateDir: string, page: Page, tab?: string): void {
 
 /** This chat used `page` just now. Also closes tabs no one holds, at most once a minute. */
 function touchTab(stateDir: string, page: Page): void {
+  if (cloudPages.has(page)) { cloudUsedAt.set(stateDir, Date.now()); return; }
   const entry = held.get(page);
   if (entry) { entry.lastUsedAt = Date.now(); void flushHeld(stateDir, page, entry, false).catch(quiet('agent/computer/browser')); }
   const now = Date.now();
@@ -308,12 +454,15 @@ export async function closeOwnedPage(stateDir: string, page: Page, tab?: string)
   if (!(owned.get(key) ?? []).includes(page)) throw new Error('That tab is not one of this chat\'s open tabs.');
   owned.set(key, (owned.get(key) ?? []).filter(old => old !== page));
   await page.close().catch(quiet('agent/computer/browser'));
+  if (cloudPages.has(page)) await settleCloud(stateDir).catch(quiet('agent/computer/browser'));
 }
 
 /** A second tab for this chat (a page to keep while another is read); it becomes the one in front. */
 export async function openNewComputerPage(stateDir: string, tab?: string): Promise<Page> {
-  const { context } = await browserFor(stateDir, true);
+  const cloud = await onCloud(stateDir, tab);
+  const { context } = await browserFor(stateDir, true, cloud);
   const page = await context.newPage();
+  if (cloud) cloudPages.add(page);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);
   return page;
@@ -337,18 +486,21 @@ export async function recoverComputerPage(stateDir: string, page: Page, tab?: st
 
 /** This chat's tab, opened in the shared Chrome the first time it is needed. */
 export async function openComputerPage(stateDir: string, tab?: string): Promise<Page> {
-  const { context } = await browserFor(stateDir, true);
-  const existing = mine(stateDir, tab) ?? await claimRestored(stateDir, context, tab);
+  const cloud = await onCloud(stateDir, tab);
+  const { context } = await browserFor(stateDir, true, cloud);
+  const existing = mine(stateDir, tab) ?? (cloud ? undefined : await claimRestored(stateDir, context, tab));
   if (existing) { touchTab(stateDir, existing); return existing; }
   const page = await context.newPage();
+  if (cloud) cloudPages.add(page);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);
   return page;
 }
 
 export async function computerPage(stateDir: string, tab?: string): Promise<Page> {
-  const { context } = await browserFor(stateDir, false);
-  const page = mine(stateDir, tab) ?? await claimRestored(stateDir, context, tab);
+  const cloud = await onCloud(stateDir, tab);
+  const { context } = await browserFor(stateDir, false, cloud);
+  const page = mine(stateDir, tab) ?? (cloud ? undefined : await claimRestored(stateDir, context, tab));
   if (page) touchTab(stateDir, page);
   if (!page) throw new Error('This chat has no open tab. Open a URL with browser_use first.');
   return page;
@@ -356,7 +508,7 @@ export async function computerPage(stateDir: string, tab?: string): Promise<Page
 
 /** For a command run outside any chat (`clikcode computer inspect`): the tab in front. */
 export async function frontComputerPage(stateDir: string): Promise<Page> {
-  const { context } = await browserFor(stateDir, false);
+  const { context } = await browserFor(stateDir, false, await browserProvider(stateDir) === 'browser-use');
   const open = context.pages().filter(page => !page.isClosed());
   for (const page of open.reverse()) {
     try { if (await page.evaluate(() => (globalThis as unknown as { document: { visibilityState: string } }).document.visibilityState === 'visible')) return page; }
@@ -382,7 +534,7 @@ export async function computerBrowserPids(stateDir: string): Promise<number[] | 
 
 /** Every tab in the shared Chrome, whichever chat holds it (for the rule that keeps a sign-in out of view). */
 export async function allComputerPages(stateDir: string): Promise<Page[]> {
-  const { context } = await browserFor(stateDir, false);
+  const { context } = await browserFor(stateDir, false, await browserProvider(stateDir) === 'browser-use');
   return context.pages().filter(page => !page.isClosed());
 }
 
@@ -394,6 +546,9 @@ export async function closeComputerPage(stateDir: string, tab?: string): Promise
   owned.delete(key);
   chosen.delete(key);
   for (const page of pages) await page.close().catch(quiet('agent/computer/browser'));
+  // A closed cloud tab hands its chat back to the local browser, and the billed session stops with its last tab.
+  cloudOwners.delete(key);
+  if (pages.some(page => cloudPages.has(page))) await settleCloud(stateDir).catch(quiet('agent/computer/browser'));
   if (tab) await closeTabsByLabel(stateDir, tab).catch(quiet('agent/computer/browser'));
 }
 
@@ -406,7 +561,9 @@ export async function closeAllOwnedPages(stateDir: string): Promise<void> {
     all.delete(key);
     chosen.delete(key);
     for (const page of pages) await page.close().catch(quiet('agent/computer/browser'));
+    cloudOwners.delete(key);
   }
+  await settleCloud(stateDir).catch(quiet('agent/computer/browser'));
   await closeTabsOfOwner(stateDir, process.pid).catch(quiet('agent/computer/browser'));
 }
 
@@ -426,7 +583,7 @@ export async function parkComputerPage(stateDir: string, tab: string, marker: st
 
 /** The parked tab with this marker, found among the shared Chrome's tabs and made this process's `tab`; undefined when Chrome or the tab is gone. */
 export async function reattachParkedPage(stateDir: string, tab: string, marker: string): Promise<Page | undefined> {
-  const { context } = await browserFor(stateDir, false).catch(() => ({ context: undefined }));
+  const { context } = await browserFor(stateDir, false, await browserProvider(stateDir) === 'browser-use').catch(() => ({ context: undefined }));
   if (!context) return undefined;
   for (const page of context.pages()) {
     if (page.isClosed()) continue;
@@ -445,6 +602,12 @@ export async function closeParkedPage(stateDir: string, marker: string): Promise
 
 /** Lets go of this process's connection to the shared Chrome (a command line that is finished with the browser can then exit); the browser keeps running. */
 export async function releaseComputerBrowser(stateDir: string): Promise<void> {
+  // A finished command must not leave a billed session behind: its cloud tabs close, and the session stops with its last tab.
+  await closeCloudTabs(stateDir);
+  await settleCloud(stateDir).catch(quiet('agent/computer/browser'));
+  const cloud = running.get(cloudRunKey(stateDir));
+  running.delete(cloudRunKey(stateDir));
+  await (await cloud?.catch(quiet('agent/computer/browser')))?.browser.close().catch(quiet('agent/computer/browser'));
   owned.delete(stateDir);
   const opening = running.get(stateDir);
   running.delete(stateDir);
@@ -452,6 +615,8 @@ export async function releaseComputerBrowser(stateDir: string): Promise<void> {
 }
 
 export async function closeComputerBrowser(stateDir: string): Promise<void> {
+  // A stop that fails keeps its record on disk, so `clikcode computer browser-use` still shows the session and `off` retries it.
+  await stopCloudBrowser(stateDir).catch(quiet('agent/computer/browser'));
   owned.delete(stateDir);
   const opening = running.get(stateDir);
   running.delete(stateDir);
@@ -469,7 +634,7 @@ export async function closeComputerBrowser(stateDir: string): Promise<void> {
 
 /** A tab for one check, not owned by any chat: the caller closes it. Starts the shared Chrome when it is not running. */
 export async function throwawayComputerPage(stateDir: string): Promise<Page> {
-  const { context } = await browserFor(stateDir, true);
+  const { context } = await browserFor(stateDir, true, await browserProvider(stateDir) === 'browser-use');
   return context.newPage();
 }
 

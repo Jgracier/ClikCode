@@ -1,9 +1,9 @@
 import { quiet } from '../runtime/lifecycle-log.js';
-import { computerEnabled, generatedPasswordsAllowed, setComputerEnabled, setGeneratedPasswords } from '../agent/computer/settings.js';
+import { browserProvider, computerEnabled, generatedPasswordsAllowed, setBrowserProvider, setComputerEnabled, setGeneratedPasswords } from '../agent/computer/settings.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
-import { closeComputerBrowser, closeComputerPage, frontComputerPage, releaseComputerBrowser } from '../agent/computer/browser.js';
+import { closeComputerBrowser, closeComputerPage, frontComputerPage, releaseComputerBrowser, stopCloudBrowser } from '../agent/computer/browser.js';
 import { loginFields, loginFieldSummary, pageControls } from '../agent/computer/login-fields.js';
 import { lockCredentialVault } from '../agent/computer/credential-vault.js';
 import { randomUUID } from 'node:crypto';
@@ -47,13 +47,48 @@ export async function computerUnattended(setting: string | undefined): Promise<v
 export async function computerHeadless(setting: string | undefined): Promise<void> {
   const { headlessSetting, setHeadless } = await import('../agent/computer/settings.js');
   const dir = stateDirectory();
-  if (setting === 'on' || setting === 'off') { await setHeadless(dir, setting === 'on'); await closeComputerBrowser(dir); }
+  if (setting === 'on' || setting === 'off') {
+    await setHeadless(dir, setting === 'on');
+    if (await browserProvider(dir) !== 'browser-use') await closeComputerBrowser(dir);
+  }
   else if (setting) throw new Error('Say on or off: clikcode computer headless on');
   const on = await headlessSetting(dir);
   if (isJsonDefaultMode()) return emitResult({ computer: { headless: on } });
   process.stdout.write(on
     ? 'Headless is on: ClikCode\'s browser runs with no window. Turn off with `clikcode computer headless off`.\n'
     : 'Headless is off: ClikCode\'s browser opens a window (Linux with no display, or CLIKCODE_BROWSER_HEADLESS=1, still runs without one). Turn on with `clikcode computer headless on`.\n');
+}
+
+/** Browser Use Cloud is opt-in. `auto` keeps the local browser first and lets a tab move to the cloud when a page blocks it;
+ * `on` runs every tab there; `off` stops the billed session and returns to local only. */
+export async function computerBrowserUse(setting: string | undefined): Promise<void> {
+  const dir = stateDirectory();
+  const cloud = await import('../agent/computer/browser-use-cloud.js');
+  if (setting === 'view') {
+    if (process.env.CLIKCODE_WORKER_PID || !process.stdin.isTTY) throw new Error('The Browser Use live-control link is available only from your interactive terminal.');
+    const url = await cloud.browserUseLiveUrl(dir);
+    if (isJsonDefaultMode()) return emitResult({ computer: { browser: { liveUrl: url } } });
+    process.stdout.write(`Open this live browser link on your computer or phone to handle the page, then return to the chat:\n${url}\n`);
+    return;
+  }
+  if (setting && !['on', 'auto', 'off'].includes(setting)) throw new Error('Use `clikcode computer browser-use auto|on|off|view`.');
+  const current = await browserProvider(dir);
+  const wanted = setting === 'on' ? 'browser-use' : setting === 'auto' ? 'auto' : setting === 'off' ? 'local' : current;
+  if (wanted !== current) {
+    if (wanted !== 'local' && !(await cloud.browserUseStatus(dir)).configured) throw new Error('Save your Browser Use API key in ClikCode Secrets as `browser-use/api-key` first (`clikcode computer store browser-use/api-key`). The browser tool never receives the key in chat.');
+    // Leaving the cloud stops its billed session; a stop that fails leaves the setting as it was, so it can be retried.
+    if (wanted === 'local') await stopCloudBrowser(dir);
+    else await releaseComputerBrowser(dir);
+    await setBrowserProvider(dir, wanted);
+  }
+  const provider = await browserProvider(dir);
+  const status = await cloud.browserUseStatus(dir);
+  if (isJsonDefaultMode()) return emitResult({ computer: { browser: { provider, ...status } } });
+  const session = status.active ? ' A cloud session is running now.' : '';
+  const terms = 'Pages and anything typed into a cloud tab are handled by Browser Use Cloud; local Chrome cookies are never copied. A session costs $0.02/hour (one minute minimum) and stops by itself when its last tab closes or after 10 idle minutes.';
+  process.stdout.write(provider === 'browser-use' ? `Browser Use Cloud runs every tab.${session} ${terms} Stop with \`clikcode computer browser-use off\`.\n`
+    : provider === 'auto' ? `Local browser first; a tab moves to Browser Use Cloud only when the agent asks for it on a page the local browser cannot get past.${session} ${terms}\n`
+    : `The local ClikCode browser is used for everything (default). Browser Use Cloud is ${status.configured ? 'configured' : 'not configured'}; turn it on with \`clikcode computer browser-use auto\`.\n`);
 }
 
 export async function computerSetEnabled(enabled: boolean): Promise<void> {

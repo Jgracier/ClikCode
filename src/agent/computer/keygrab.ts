@@ -36,6 +36,10 @@ export interface KeygrabPort {
   probe?(url: string): Promise<{ html: boolean; status: number; url: string } | undefined>;
   /** Presses a key on the page (Escape closes a menu, Enter submits a search). */
   press?(key: string): Promise<string | undefined>;
+  /** Presses a checkbox-style human check ("I'm not a robot") once, as a visitor would. Never answers a puzzle. */
+  humanCheck?(): Promise<'cleared' | 'puzzle' | 'still-there' | 'none'>;
+  /** Moves this tab to the managed cloud browser at the same address, when the user turned that on. False when it is off, already there, or failed. */
+  escalate?(): Promise<boolean>;
   screenshot(): Promise<string | undefined>;
   profileEmail(): Promise<string | undefined>;
 }
@@ -215,11 +219,34 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     const wall = keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields });
     if (wall) throw await wallStop(view, wall);
   };
+  const captchaOn = (view: KeyView): boolean => keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields })?.kind === 'captcha';
+  let escalated = false;
+  const pressedAt = new Set<string>();
+  /** A captcha in the way, in order: the one press a visitor makes on a checkbox-style check (once per page); then, once per run,
+   * the tab moves to the managed cloud browser if the user turned it on, whose service works on the challenge by itself. The
+   * runner never answers a puzzle: a page still blocked after that ends as a human step. */
+  const pastCaptcha = async (view: KeyView): Promise<KeyView> => {
+    if (!captchaOn(view)) return view;
+    let v = view;
+    const here = pathOf(v.url) || v.url;
+    if (port.humanCheck && !pressedAt.has(here) && pressedAt.size < 3) {
+      pressedAt.add(here);
+      const pressed = await act('press the human-check box once', () => port.humanCheck!());
+      say(`human check: ${pressed}`);
+      if (pressed === 'cleared') { await sleep(800); v = await dismissBanner(await port.look()); if (!captchaOn(v)) return v; }
+    }
+    if (escalated || !port.escalate) return v;
+    escalated = true;
+    if (!await act('move the tab to the managed cloud browser (a captcha)', () => port.escalate!())) return v;
+    for (let wait = 0; wait < 10; wait++) { await sleep(2_500); v = await port.look(); if (!captchaOn(v) && (v.controls.length || v.text.trim().length >= 40)) break; }
+    return dismissBanner(v);
+  };
   const look = async (): Promise<KeyView> => {
     let v = await port.look();
     // A page still loading shows nothing yet: give it a few seconds before judging it.
     for (let wait = 0; wait < 6 && ((!v.controls.length && v.text.trim().length < 40) || bareShell(v) || (/\b(?:loading|just a minute|please wait)\b/i.test(v.text) && v.text.length < 400 && v.controls.length < 6)); wait++) { await sleep(1_500); v = await port.look(); }
     v = await dismissBanner(v);
+    v = await pastCaptcha(v);
     await guard(v);
     const here = pathOf(v.url);
     if (here && !visited.includes(here) && visited.length < 60) visited.push(here);
