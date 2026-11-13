@@ -301,7 +301,7 @@ export function refreshAcpAgent(spec: InstallSpec, deps: { install?: (npmPackage
     try {
       const last = JSON.parse(await readFile(stamp, 'utf8')) as { at?: number };
       if (typeof last.at === 'number' && now() - last.at < REFRESH_EVERY_MS) return false;
-    } catch { /* never refreshed here */ }
+    } catch { /* fail-open-ok: no stamp means it was never refreshed on this machine, which is the answer. */ }
     try {
       await withInstallLock(`${spec.command}-acp`, () => (deps.install ?? installNpmPackage)(npmPackage));
       await mkdir(dirname(stamp), { recursive: true });
