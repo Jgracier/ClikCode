@@ -49,3 +49,17 @@ it('lists the buttons and links by name so the agent can press one or ask which,
   expect(summary).not.toContain('justin@example.com');
   expect(loginFieldSummary('https://example.com', [])).not.toContain('Buttons and links');
 });
+
+it('takes an unlabelled box named in one word (oneTimeCode, authCode, otp_code) for a code box, and not a postcode', async () => {
+  const fieldsOf = async (names: string[]) => {
+    const nodes = names.map(name => ({ type: 'text', name, id: name, autocomplete: '', required: true, placeholder: '', labels: [], value: '', getAttribute: () => null }));
+    const page = { locator: () => ({ evaluateAll: async (callback: (inputs: unknown[]) => unknown) => callback(nodes) }) } as unknown as Page;
+    return (await loginFields(page)).map(({ key, transient }) => [key, transient === true]);
+  };
+  expect(await fieldsOf(['oneTimeCode'])).toEqual([['code', true]]);
+  expect(await fieldsOf(['authCode'])).toEqual([['code', true]]);
+  expect(await fieldsOf(['otp_code'])).toEqual([['code', true]]);
+  expect(await fieldsOf(['mfaCode'])).toEqual([['code', true]]);
+  expect((await fieldsOf(['postcode']))[0]![1]).toBe(false);
+  expect((await fieldsOf(['barcode']))[0]![1]).toBe(false);
+});
