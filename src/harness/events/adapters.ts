@@ -46,7 +46,7 @@ export interface StreamState {
   atParagraph?: boolean;
   /** A plain-text harness with a banner before its answer (Aider): where in
    * the output this turn is. */
-  textPhase?: 'banner' | 'reply' | 'done';
+  textPhase?: 'banner' | 'thinking' | 'reply' | 'done';
   /** Per-message usage, summed into the turn's. */
   readonly usage: StreamUsageTally;
   /** Claude-shaped content blocks in flight, created on first use. */
