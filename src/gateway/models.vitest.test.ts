@@ -123,6 +123,15 @@ describe('the Gateway\'s model list', () => {
     expect(fromOpenAIModelList([{ id: 'x', access: 'somewhere' }]).models[0]).toEqual({ id: 'x' });
   });
 
+  it('reads the agreement from the Gateway base, and says so when the Gateway answers with an error page', async () => {
+    const { gatewayUncensoredConsent } = await import('./models.js');
+    const ok = vi.fn(async () => new Response(JSON.stringify({ version: 'v1', terms: 't', accepted: true, acceptedAt: null }), { status: 200 }));
+    expect(await gatewayUncensoredConsent({ fetchImpl: ok as never })).toEqual({ version: 'v1', terms: 't', accepted: true, acceptedAt: null });
+    expect(String((ok.mock.calls[0] as unknown as [string])[0])).toMatch(/\/v1\/uncensored-consent$/);
+    const page = (async () => new Response('<!DOCTYPE html><html></html>', { status: 404 })) as never;
+    await expect(gatewayUncensoredConsent({ fetchImpl: page })).rejects.toThrow('did not return the agreement (HTTP 404)');
+  });
+
   it('carries the Gateway\'s uncensored tag into the row, so /model search for "uncensored" finds the model', async () => {
     const { fromOpenAIModelList } = await import('./models.js');
     const list = fromOpenAIModelList([
@@ -146,9 +155,9 @@ describe('the Gateway\'s model list', () => {
     const consent = { version: 'v1', terms: 'terms', accepted: false, acceptedAt: null };
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => reply(init?.method === 'POST' ? { ...consent, accepted: true, acceptedAt: '2026-11-12T00:00:00.000Z' } : consent));
     expect(await gatewayUncensoredConsent({ fetchImpl: fetchImpl as never })).toEqual(consent);
-    expect(fetchImpl).toHaveBeenNthCalledWith(1, 'https://clikdeploy.com/uncensored-consent', expect.objectContaining({ headers: expect.objectContaining({ authorization: 'Bearer cd_live_key' }) }));
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, 'https://clikdeploy.com/v1/uncensored-consent', expect.objectContaining({ headers: expect.objectContaining({ authorization: 'Bearer cd_live_key' }) }));
     expect(await acceptGatewayUncensoredTerms('v1', { fetchImpl: fetchImpl as never })).toMatchObject({ accepted: true, version: 'v1' });
-    expect(fetchImpl).toHaveBeenLastCalledWith('https://clikdeploy.com/uncensored-consent', expect.objectContaining({
+    expect(fetchImpl).toHaveBeenLastCalledWith('https://clikdeploy.com/v1/uncensored-consent', expect.objectContaining({
       method: 'POST', body: JSON.stringify({ accepted: true, version: 'v1' }),
     }));
   });
