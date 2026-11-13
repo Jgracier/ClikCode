@@ -44,6 +44,24 @@ describe('vendor account email', () => {
       rmSync(profile, { recursive: true, force: true });
     }
   });
+  it('takes a signed-out account named by the same email as the one re-authenticating, never as a second one', async () => {
+    const empty = mkdtempSync(join(tmpdir(), 'clikcode-signed-out-'));
+    try {
+      const harness = { command: 'grok', provider: 'xai', displayName: 'Grok Build' } as AiLocalHarnessDefinition;
+      const accounts = [
+        // Signed out: its own profile holds no identity to read.
+        { id: 'signed-out', provider: 'xai', label: 'Grok@example.com', authKind: 'vendor-cli', nativeProfile: { env: 'HOME', path: empty } },
+        { id: 'shared', provider: 'xai', label: 'shared@example.com', authKind: 'vendor-cli' },
+        { id: 'named', provider: 'xai', label: 'Work laptop', authKind: 'vendor-cli', nativeProfile: { env: 'HOME', path: empty } },
+      ] as never;
+      expect((await matchingVendorAccount(accounts, harness, 'grok@example.com'))?.id).toBe('signed-out');
+      expect((await matchingVendorAccount(accounts, harness, 'shared@example.com'))?.id).toBe('shared');
+      // A name that is not this identity proves nothing either way.
+      expect(await matchingVendorAccount(accounts, harness, 'someone@example.com')).toBeUndefined();
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
   it('reads file-backed identities from each provider\'s actual profile root', async () => {
     const profile = mkdtempSync(join(tmpdir(), 'clikcode-identities-'));
     try {

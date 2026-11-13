@@ -29,7 +29,7 @@ import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, matchingVendorAccount, nameAccount } from '../harness/accounts/labels.js';
 import { keyVariables, readProfileKey } from '../harness/accounts/profile-key.js';
 import { profileEnvironment, purgeAccountProfile, resolvePurgeableProfile } from '../harness/accounts/profiles.js';
-import { authEvidencePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
+import { adoptAuthFiles, authEvidencePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
 import { vendorCredentialCapture } from '../harness/accounts/vendor-identity.js';
 import { apiKeyAccountEmail } from '../harness/accounts/api-key-identity.js';
 import { profileExtraEnvironment } from '../harness/transport/profile-environment.js';
@@ -170,6 +170,29 @@ export async function aiDoctor(): Promise<void> {
   emitResult({ adapterVersion: harnessAdapterVersion(), harnesses, localModelCatalog: { diagnostics: (await import('../local-models/catalog-source.js')).catalogDiagnostics() } });
 }
 
+/** A sign-in turned out to be `existing`'s own: put its credential where
+ * that account runs. An account with vendor chats keeps its profile (they
+ * live there) and is given the credential; any other moves to the profile
+ * the sign-in was made in. Before this, an account with chats kept its
+ * signed-out profile, was marked ready anyway, and the fresh credential was
+ * deleted with the profile it was made in -- so it needed a login again at
+ * its next check. Returns the profile the account left, when it left one. */
+async function settleReauthenticatedProfile(
+  harness: AiLocalHarnessDefinition, existing: AiHarnessAccount, fresh: AiHarnessAccount['nativeProfile'], state: HarnessState,
+): Promise<string | undefined> {
+  if (!fresh || existing.nativeProfile?.path === fresh.path) return undefined;
+  const keepsChats = existing.nativeProfile && state.sessions.some((session) => session.accountId === existing.id && session.nativeSessionId);
+  if (keepsChats && await adoptAuthFiles(harness,
+    { root: fresh.path, environment: profileEnvironment(harness, { nativeProfile: fresh }) },
+    { root: existing.nativeProfile!.path, environment: profileEnvironment(harness, existing) })) return undefined;
+  // No chats to keep, or a vendor whose credential ClikCode cannot carry: a
+  // working account in the new profile. One with chats keeps the old
+  // directory on disk, unreferenced, rather than losing them.
+  const left = keepsChats ? undefined : existing.nativeProfile?.path;
+  existing.nativeProfile = fresh;
+  return left;
+}
+
 /**
  * After ANY successful native-CLI login -- not just the explicit "add
  * another account" flow -- checks whether the account's real identity, as
@@ -207,11 +230,10 @@ export async function syncAccountIdentityAfterLogin(
   }
   const existingMatch = await matchingVendorAccount(state.accounts, harness, derived, account.id);
   if (existingMatch) {
-    const existingHasNativeSessions = state.sessions.some((session) => session.accountId === existingMatch.id && session.nativeSessionId);
     existingMatch.label = nameAccount(state.accounts.filter((item) => item.id !== account.id), harness, derived, existingMatch.id);
     existingMatch.status = 'ready';
     existingMatch.signedInAt = account.signedInAt;
-    if (account.nativeProfile && !existingHasNativeSessions) existingMatch.nativeProfile = account.nativeProfile;
+    await settleReauthenticatedProfile(harness, existingMatch, account.nativeProfile, state);
     state.accounts = state.accounts.filter((item) => item.id !== account.id);
     for (const session of state.sessions) if (session.accountId === account.id) session.accountId = existingMatch.id;
     for (const invocation of state.invocations) if (invocation.accountId === account.id) invocation.accountId = existingMatch.id;
@@ -327,13 +349,12 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
   if (derived) {
     const existingMatch = keyed ? undefined : await matchingVendorAccount(state.accounts, harness, derived);
     if (existingMatch) {
-      const existingHasNativeSessions = state.sessions.some((session) => session.accountId === existingMatch.id && session.nativeSessionId);
       existingMatch.label = nameAccount(state.accounts, harness, derived, existingMatch.id);
       existingMatch.status = 'ready';
-      if (nativeProfile && !existingHasNativeSessions) {
-        if (existingMatch.nativeProfile?.path) touched.add(existingMatch.nativeProfile.path);
-        existingMatch.nativeProfile = nativeProfile;
-      }
+      existingMatch.signedInAt = new Date().toISOString();
+      delete existingMatch.neverSignedIn;
+      const left = await settleReauthenticatedProfile(harness, existingMatch, nativeProfile, state);
+      if (left) touched.add(left);
       existingMatch.verification = undefined;
       await writeState(state);
       emitHarnessOutput({ status: 'connected', harness: harness.command, account: existingMatch.label, credentialBoundary: 'local-only' });

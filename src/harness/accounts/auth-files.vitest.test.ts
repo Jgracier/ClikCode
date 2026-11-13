@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { authEvidencePresent, authFilesStamp, expandAuthPath, prepareAuthFilesForLogin, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files.js';
+import { adoptAuthFiles, authEvidencePresent, authFilesStamp, expandAuthPath, prepareAuthFilesForLogin, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 
@@ -14,6 +14,52 @@ describe('vendor credential files', () => {
   let root: string;
   beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'auth-files-')); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+  it('carries a fresh sign-in into the account\'s own profile, credential only', async () => {
+    const fresh = join(root, 'fresh');
+    const kept = join(root, 'kept');
+    const at = (profile: string) => ({ root: profile, environment: { HOME: profile, X_HOME: profile } });
+    const x = harness({ authFiles: [
+      { path: '${X_HOME}/auth.json' },
+      { path: '${X_HOME}/.env', contains: 'X_API_KEY', removeLine: true },
+      { path: '~/.x/credentials.json', jsonFields: ['oauth.accessToken'] },
+      { path: '~/.x/tokens/' },
+    ] });
+    await mkdir(join(fresh, '.x', 'tokens'), { recursive: true });
+    await mkdir(join(kept, '.x'), { recursive: true });
+    await writeFile(join(fresh, 'auth.json'), 'new-token');
+    await writeFile(join(fresh, '.env'), 'X_API_KEY=new\n');
+    await writeFile(join(fresh, '.x', 'credentials.json'), JSON.stringify({ oauth: { accessToken: 'new' }, fresh: true }));
+    await writeFile(join(fresh, '.x', 'tokens', 'a'), 'new');
+    // The account's own profile: an old credential beside things that are not one.
+    await writeFile(join(kept, 'auth.json'), 'expired');
+    await writeFile(join(kept, '.env'), 'EDITOR=vim\nX_API_KEY=old\n');
+    await writeFile(join(kept, '.x', 'credentials.json'), JSON.stringify({ oauth: { accessToken: 'old' }, mcpOAuth: { server: 'kept' } }));
+    await writeFile(join(kept, 'history.jsonl'), 'chats');
+
+    expect(await adoptAuthFiles(x, at(fresh), at(kept), {})).toBe(true);
+    expect(await readFile(join(kept, 'auth.json'), 'utf8')).toBe('new-token');
+    expect(await readFile(join(kept, '.env'), 'utf8')).toBe('EDITOR=vim\nX_API_KEY=new\n');
+    expect(JSON.parse(await readFile(join(kept, '.x', 'credentials.json'), 'utf8'))).toEqual({ oauth: { accessToken: 'new' }, mcpOAuth: { server: 'kept' } });
+    expect(await readFile(join(kept, '.x', 'tokens', 'a'), 'utf8')).toBe('new');
+    expect(await readFile(join(kept, 'history.jsonl'), 'utf8')).toBe('chats');
+  });
+
+  it('carries nothing, and says so, when the sign-in left no credential or left it outside its profile', async () => {
+    const fresh = join(root, 'fresh');
+    const kept = join(root, 'kept');
+    const elsewhere = join(root, 'elsewhere');
+    await mkdir(fresh, { recursive: true });
+    await mkdir(kept, { recursive: true });
+    await mkdir(elsewhere, { recursive: true });
+    await writeFile(join(kept, 'auth.json'), 'expired');
+    await writeFile(join(elsewhere, 'auth.json'), 'not-this-profile');
+    const x = harness({ authFiles: [{ path: '${X_HOME}/auth.json' }] });
+    expect(await adoptAuthFiles(x, { root: fresh, environment: { X_HOME: fresh } }, { root: kept, environment: { X_HOME: kept } }, {})).toBe(false);
+    expect(await adoptAuthFiles(x, { root: fresh, environment: { X_HOME: elsewhere } }, { root: kept, environment: { X_HOME: kept } }, {})).toBe(false);
+    expect(await adoptAuthFiles(harness({}), { root: fresh, environment: {} }, { root: kept, environment: {} }, {})).toBe(false);
+    expect(await readFile(join(kept, 'auth.json'), 'utf8')).toBe('expired');
+  });
 
   it('requires complete, parseable Antigravity credentials before reporting signed in', async () => {
     const agy = AI_LOCAL_HARNESSES.find((entry) => entry.command === 'antigravity')!;
