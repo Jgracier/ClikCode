@@ -489,3 +489,11 @@ it('keeps a damaged destinations file aside instead of overwriting every saved d
   expect(await readFile(join(dir, 'computer', kept[0]!), 'utf8')).toContain('my-vault');
   expect(Object.keys(JSON.parse(await readFile(join(dir, 'computer', 'destinations.json'), 'utf8')) as object)).toEqual(['other']);
 });
+
+it('says an optional value is malformed instead of claiming it is needed', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dest-'));
+  const problem = await destinationProblem(dir, [{ to: 'clikdeploy-vendor-mfa', with: { account: 'acme/console', label: 'Acme console (me@example.com)' } }]);
+  expect(problem).toContain('takes with.label only as');
+  expect(problem).not.toContain('needs with.label');
+  expect(await destinationProblem(dir, [{ to: 'clikdeploy-vendor-mfa', with: { account: 'acme/console' } }])).toBeUndefined();
+});
