@@ -696,6 +696,11 @@ describe('harness modes read from the installed vendors (2026-10-10)', () => {
     const auggie = localHarnessForCommand('auggie')!;
     expect(nativeHarnessTurnArgv(auggie, { prompt: 'hi', model: 'haiku4.5', effort: 'medium' })).not.toContain('--reasoning-effort');
     expect(nativeHarnessTurnArgv(auggie, { prompt: 'hi', model: 'sonnet4.6', effort: 'medium' })).toContain('--reasoning-effort');
+    // Copilot refuses to open a session at all: "Reasoning effort is not
+    // supported when using the "auto" model" -- the only model some plans list.
+    const copilot = localHarnessForCommand('copilot')!;
+    expect(JSON.stringify(harnessAcpLaunch(copilot, { model: 'auto', effort: 'high' }))).not.toContain('--effort');
+    expect(JSON.stringify(harnessAcpLaunch(copilot, { model: 'gpt-5.4', effort: 'high' }))).toContain('--effort');
   });
 });
 
