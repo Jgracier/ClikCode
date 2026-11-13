@@ -60,7 +60,8 @@ export async function loginFields(page: Page): Promise<LoginField[]> {
     if (/new-password/.test(field.autocomplete)) return [];
     const password = field.type === 'password' || /current-password|password/.test(hint);
     const code = !password && (/one-time-code/.test(field.autocomplete)
-      || /one.time|\botp\b|\btotp\b|verification|security code|passcode|authenticator|\b2fa\b|\bmfa\b|\bcode\b/.test(hint));
+      // A field named in one word (oneTimeCode, authCode, mfaCode, otp_code) is a code box as much as one labelled "Code".
+      || /one.?time|\botp\b|\btotp\b|verification|security code|passcode|authenticator|\b2fa\b|\bmfa\b|\bcode\b|(?:auth|login|signin|verify|mfa|otp|totp|security|access|sms|email|factor)[ _-]?code\b/.test(hint));
     const key = code ? 'code' : password ? 'password'
       : /account[ -]?id|account[ -]?alias/.test(hint) ? 'accountId'
       : field.type === 'email' || /\bemail\b/.test(field.autocomplete) ? 'email'
