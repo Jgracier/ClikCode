@@ -1527,6 +1527,8 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
  */
 async function handoffAction(args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
   const handoffKey = args.tab ? `${ctx.stateDir}#${args.tab}` : ctx.stateDir;
+  const viaDesk = await deskHandoff(args, ctx, handoffKey);
+  if (viaDesk) return viaDesk;
   let running = handoffs.get(handoffKey);
   if (args.clear === true) {
     if (!running) return { output: 'No handoff is open on this tab.' };
@@ -1554,6 +1556,43 @@ async function handoffAction(args: WebArgs, ctx: ToolContext): Promise<ToolRunRe
   const outcome = await Promise.race([running.done, new Promise<'waiting'>(resolve => setTimeout(() => resolve('waiting'), 90_000))]);
   if (outcome === 'waiting') return { output: `The user has not finished yet. The link is still ${running.url ?? '(opening)'}; show it to them again. Call handoff again to keep waiting, or handoff with clear: true to take the tab back.` };
   return outcome.ok ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: outcome.message, isError: true };
+}
+
+/** The item each chat tab has on the handoff desk, so a repeat call waits on the same one. */
+const deskWaits = sharedState('desk-handoffs', () => new Map<string, string>());
+
+/** The handoff through the desk the browser host serves: an address that outlives this process, valid until the user taps Done.
+ * Undefined when the desk is not there (an older host still running, no tailnet, a cloud tab): the caller falls back to a link of its own. */
+async function deskHandoff(args: WebArgs, ctx: ToolContext, handoffKey: string): Promise<ToolRunResult | undefined> {
+  const store = await import('../computer/handoff-desk-store.js');
+  const info = await store.readDeskInfo(ctx.stateDir);
+  if (!info) return undefined;
+  const known = deskWaits.get(handoffKey);
+  if (args.clear === true) {
+    if (!known) return undefined;
+    deskWaits.delete(handoffKey);
+    await store.removeDeskItem(ctx.stateDir, known);
+    return { output: 'The handoff is closed; the tab is yours again.' };
+  }
+  let item = known ? await store.readDeskItem(ctx.stateDir, known) : undefined;
+  if (!item) {
+    const { putTabOnDesk } = await import('../computer/browser.js');
+    await computerPage(ctx.stateDir, args.tab);
+    const label = (typeof args.label === 'string' && args.label.trim()) || (typeof args.text === 'string' && args.text.trim()) || '';
+    const put = await putTabOnDesk(ctx.stateDir, args.tab, { label: label || 'Browser step', kind: 'other' });
+    if (!put) return undefined;
+    deskWaits.set(handoffKey, put.item.id);
+    return { output: `Phone link over Tailscale (a live view of this tab for the phone, which must be on the same tailnet): ${put.address}\nIt stays valid until the user taps Done, reloads included, and the tab is kept open for them for up to twelve hours even if this chat ends. Everything waiting on them is listed at ${store.deskAddress(info)} (one address that never changes). Tell the user to open the link, finish the browser step with their own keyboard, and tap Done. Then call handoff again to wait until they are done. Other browser calls still work meanwhile; do not act on the page the user is working on.` };
+  }
+  const id = item.id;
+  for (let waited = 0; item?.status === 'waiting' && waited < 90_000; waited += 1_000) {
+    await sleep(1_000);
+    item = await store.readDeskItem(ctx.stateDir, id);
+  }
+  if (item?.status === 'waiting') return { output: `The user has not finished yet. The link is still ${store.deskItemAddress(info, id)}; show it to them again. Call handoff again to keep waiting, or handoff with clear: true to take the tab back.` };
+  deskWaits.delete(handoffKey);
+  await store.removeDeskItem(ctx.stateDir, id);
+  return item?.status === 'done' ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: 'The handoff ended without the user finishing (it waited too long, or the tab was closed). Observe the page, and hand off again if it is still needed.', isError: true };
 }
 
 /** A native dialog or separate popup window is outside the page, so a click

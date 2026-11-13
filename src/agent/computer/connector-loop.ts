@@ -65,6 +65,7 @@ export class Cooldown {
   constructor(private readonly defaultMs: number, private readonly now: () => number) {}
   mark(id: string, ms = this.defaultMs): void { this.until.set(id, this.now() + ms); }
   active(id: string): boolean { const u = this.until.get(id); if (u === undefined) return false; if (u <= this.now()) { this.until.delete(id); return false; } return true; }
+  clear(id: string): void { this.until.delete(id); }
   ids(): string[] { return [...this.until.keys()].filter(id => this.active(id)); }
   snapshot(): Record<string, string> { return Object.fromEntries(this.ids().map(id => [id, new Date(this.until.get(id)!).toISOString()])); }
   restore(saved: Record<string, string> | undefined): void { for (const [id, iso] of Object.entries(saved ?? {})) { const t = Date.parse(iso); if (Number.isFinite(t) && t > this.now()) this.until.set(id, t); } }
@@ -109,6 +110,8 @@ export interface LoopPorts {
   closeTab(id: string): Promise<void>;
   log(line: string): void;
   saveState(state: LoopState): Promise<void>;
+  /** Vendors whose human step the user just finished (on the handoff desk): they are due again now, whatever their cooldown. */
+  finishedByUser?(): Promise<string[]>;
   loadCooldown?(): Promise<Record<string, string> | undefined>;
   now(): number;
   sleep(ms: number): Promise<void>;
@@ -223,6 +226,10 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
           waitMs = Math.min(pause, limits.tickMs);
         } else {
           stalls = 0; pausedUntil = undefined;
+          for (const id of await ports.finishedByUser?.().catch(() => [] as string[]) ?? []) {
+            cooldown.clear(id);
+            ports.log(`${new Date(t).toISOString()} id=${id} the user finished its browser step: due again now`);
+          }
           const slots = limits.parallel - active.size;
           if (slots > 0) {
             const exclude = new Set([...cooldown.ids(), ...active.keys()]);

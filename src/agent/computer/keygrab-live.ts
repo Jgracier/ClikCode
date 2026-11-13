@@ -167,6 +167,19 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
   let parked = false;
   try {
     const marker = park.markerFor(id);
+    // The user finished this vendor's check on the handoff desk: carry on in that same tab, from where the last run stopped.
+    if (!budget.resume) {
+      const desk = await import('./handoff-desk-store.js');
+      const finished = (await desk.listDeskItems(options.stateDir)).filter(item => item.resume === id && item.status !== 'waiting');
+      if (finished.some(item => item.status === 'done')) {
+        const record = await park.loadParked(options.stateDir, id);
+        if (record && await browser.reattachParkedPage(options.stateDir, TAB, marker)) {
+          if (record.journal) recorder.importJournal(journalKey, record.journal);
+          budget = { ...budget, resume: record };
+        }
+      }
+      for (const item of finished) await desk.removeDeskItem(options.stateDir, item.id);
+    }
     const port = await liveKeygrabPort({ ...options, id });
     const done = await runKeygrab(port, {
       id, url, maxMs: budget.maxMs, ...(budget.maxSteps ? { maxSteps: budget.maxSteps } : {}), ...(budget.alternates?.length ? { alternates: budget.alternates } : {}),
@@ -186,6 +199,9 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
       trail: [...(budget.resume?.trail ?? []), ...(stop.trail ?? [])].slice(-40), controls: stop.controls, visited: stop.visited ?? [], menus: stop.menus ?? [], ...((stop.signedIn || budget.resume?.signedIn) ? { signedIn: true } : {}), why: stop.message.slice(0, 300),
       ...(recorder.exportJournal(journalKey) ? { journal: recorder.exportJournal(journalKey)! } : {}),
     };
+    // What a person can do in the page goes on the handoff desk, so the tab is one tap away and carries on by itself once they are done.
+    const deskKind = stop.kind === 'captcha' ? 'captcha' as const : stop.kind === 'mfa' ? 'code' as const : stop.kind === 'password' ? 'sign-in' as const : undefined;
+    if (deskKind) await browser.putTabOnDesk(options.stateDir, TAB, { label: id, kind: deskKind, note: stop.message, resume: id }).catch(quiet('agent/computer/keygrab-live'));
     parked = await browser.parkComputerPage(options.stateDir, TAB, marker);
     if (parked) {
       await park.saveParked(options.stateDir, record);

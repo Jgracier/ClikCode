@@ -55,6 +55,13 @@ export async function recordBackoff(stateDir: string, id: string, now = new Date
   await fs.writeFile(backoffFile(stateDir), `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
   return until;
 }
+/** The user got the vendor past its check themselves: nothing to wait out. */
+export async function clearBackoff(stateDir: string, id: string): Promise<void> {
+  const all = await readBackoff(stateDir);
+  if (!(id in all)) return;
+  delete all[id];
+  await fs.writeFile(backoffFile(stateDir), `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+}
 /** When the vendor may be tried again, or undefined when no back-off is running. */
 export async function backoffUntil(stateDir: string, id: string, now = new Date()): Promise<Date | undefined> {
   const value = (await readBackoff(stateDir))[id];

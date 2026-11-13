@@ -103,6 +103,18 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       await atomicWriteFile(loopStatePath(), `${JSON.stringify(state, null, 1)}\n`, { durable: false });
     },
     async loadCooldown() { return (await readLoopState())?.cooldown; },
+    async finishedByUser() {
+      const [desk, park] = await Promise.all([import('./handoff-desk-store.js'), import('./keygrab-park.js')]);
+      const ids: string[] = [];
+      for (const item of await desk.takeFinishedResumes(stateDir)) {
+        const id = item.resume!;
+        await park.clearBackoff(stateDir, id).catch(quiet('agent/computer/connector-loop-live'));
+        // The platform holds the vendor on its attention list until told the step was done; then its own check puts it back in the queue.
+        await client.tool('connector_attention_resolve', { id, note: `the user finished the ${item.kind} step in the browser`, confirm: true }).catch(quiet('agent/computer/connector-loop-live'));
+        ids.push(id);
+      }
+      return ids;
+    },
   };
 }
 

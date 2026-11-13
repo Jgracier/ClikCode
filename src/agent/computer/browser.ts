@@ -17,6 +17,7 @@ import { allTabs, closeTabsByLabel, closeTabsOfOwner, readTabRecords, sweepTabs,
 import { sleep } from '../../runtime/sleep.js';
 import { browserProvider } from './settings.js';
 import { browserUseConnection, stopBrowserUse } from './browser-use-cloud.js';
+import { addDeskItem, deskHeldTargets, deskItemAddress, readDeskInfo, type DeskItem, type DeskKind } from './handoff-desk-store.js';
 
 type Connected = { browser: Browser; context: BrowserContext };
 const running = sharedState('browser-running', () => new Map<string, Promise<Connected>>());
@@ -379,7 +380,7 @@ const lastSweep = sharedState('browser-last-sweep', () => new Map<string, number
 const ownerLabel = (): string => `worker ${process.pid}${process.env.CLIKCODE_SESSION_ID ? ` (session ${process.env.CLIKCODE_SESSION_ID.slice(0, 8)})` : ''}`;
 
 /** The browser's own id for a page, or undefined when it cannot say. */
-function targetIdOf(page: Page): Promise<string | undefined> {
+export function targetIdOf(page: Page): Promise<string | undefined> {
   return (async () => {
     const session = await page.context().newCDPSession(page);
     try { return ((await session.send('Target.getTargetInfo')) as { targetInfo: { targetId: string } }).targetInfo.targetId; }
@@ -538,6 +539,32 @@ export async function allComputerPages(stateDir: string): Promise<Page[]> {
   return context.pages().filter(page => !page.isClosed());
 }
 
+/** The pages the handoff desk is not holding for the user. A held tab is let go of (no longer this chat's) but stays open. */
+async function notDeskHeld(stateDir: string, pages: readonly Page[]): Promise<Page[]> {
+  const heldIds = await deskHeldTargets(stateDir).catch(() => new Set<string>());
+  if (!heldIds.size) return [...pages];
+  const free: Page[] = [];
+  for (const page of pages) {
+    if (page.isClosed()) continue;
+    const id = await targetIdOf(page).catch(() => undefined);
+    if (!id || !heldIds.has(id)) free.push(page);
+  }
+  return free;
+}
+
+/** Put this chat's tab on the handoff desk: it stays open, whoever ends, until the user taps Done there (or twelve hours pass).
+ * Returns the item and its address, or undefined when the desk is not being served (no browser host of this build, no tailnet)
+ * or the tab is in the cloud browser. */
+export async function putTabOnDesk(stateDir: string, tab: string | undefined, input: { label: string; kind?: DeskKind; note?: string; resume?: string }): Promise<{ item: DeskItem; address: string } | undefined> {
+  const info = await readDeskInfo(stateDir);
+  const page = mine(stateDir, tab);
+  if (!info || !page || page.isClosed() || cloudPages.has(page)) return undefined;
+  const targetId = await targetIdOf(page).catch(() => undefined);
+  if (!targetId) return undefined;
+  const item = await addDeskItem(stateDir, { targetId, url: page.url(), ...input });
+  return { item, address: deskItemAddress(info, item.id) };
+}
+
 /** Close this chat's tab only: the Chrome and every other chat's tab stay as they are. A named tab is closed whoever
  * holds it (another worker's, one left by a worker that ended): the name is how an agent says which. */
 export async function closeComputerPage(stateDir: string, tab?: string): Promise<void> {
@@ -545,7 +572,7 @@ export async function closeComputerPage(stateDir: string, tab?: string): Promise
   const pages = owned.get(key) ?? [];
   owned.delete(key);
   chosen.delete(key);
-  for (const page of pages) await page.close().catch(quiet('agent/computer/browser'));
+  for (const page of await notDeskHeld(stateDir, pages)) await page.close().catch(quiet('agent/computer/browser'));
   // A closed cloud tab hands its chat back to the local browser, and the billed session stops with its last tab.
   cloudOwners.delete(key);
   if (pages.some(page => cloudPages.has(page))) await settleCloud(stateDir).catch(quiet('agent/computer/browser'));
@@ -560,7 +587,7 @@ export async function closeAllOwnedPages(stateDir: string): Promise<void> {
     const pages = all.get(key) ?? [];
     all.delete(key);
     chosen.delete(key);
-    for (const page of pages) await page.close().catch(quiet('agent/computer/browser'));
+    for (const page of await notDeskHeld(stateDir, pages)) await page.close().catch(quiet('agent/computer/browser'));
     cloudOwners.delete(key);
   }
   await settleCloud(stateDir).catch(quiet('agent/computer/browser'));
