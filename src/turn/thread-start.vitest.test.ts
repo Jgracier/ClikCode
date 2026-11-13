@@ -5,7 +5,7 @@ import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { NativeThreadWriteContext, NativeThreadWriter } from '../session/discovery/stores.js';
-import { carriedLine, fitRecord, nativeThreadBudget, startConversationThread, type ThreadStartInput } from './thread-start.js';
+import { carriedLine, fitRecord, nativeThreadBudget, rememberStatelessRoute, startConversationThread, type ThreadStartInput } from './thread-start.js';
 import { failoverPromptRequest } from './failover-prompt.js';
 
 const harness = { command: 'fake', provider: 'fake', displayName: 'Fake' } as AiLocalHarnessDefinition;
@@ -107,6 +107,27 @@ describe('startConversationThread', () => {
     const start = await startConversationThread(input({ writer, harness: claw, model: 'claude-cli/claude-opus-4-7' }));
     expect(start.kind).toBe('transfer');
     expect(seen).toEqual([]);
+  });
+
+  it('carries the conversation once a turn has shown the route keeps no history, whatever the model is called', async () => {
+    // OpenClaw's own default: `anthropic/...`, answered through the claude program.
+    const claw = {
+      command: 'openclaw', provider: 'openclaw', displayName: 'OpenClaw', modelProviderSeparator: '/',
+      turn: { output: 'json', statelessRoute: { path: ['meta'], values: ['claude-cli'] } },
+    } as unknown as AiLocalHarnessDefinition;
+    const model = 'anthropic/claude-opus-5';
+    const first = fakeWriter();
+    expect((await startConversationThread(input({ writer: first.writer, harness: claw, model }))).kind).toBe('native');
+    const session: { statelessRoutes?: string[] } = {};
+    rememberStatelessRoute(session, claw, model);
+    rememberStatelessRoute(session, claw, model);
+    expect(session.statelessRoutes).toEqual(['openclaw:anthropic/claude-opus-5']);
+    const { writer, seen } = fakeWriter();
+    const start = await startConversationThread(input({ writer, harness: claw, model, session }));
+    expect(start.kind).toBe('transfer');
+    expect(seen).toEqual([]);
+    // Another model of the same chat is not assumed to share the route.
+    expect((await startConversationThread(input({ writer: fakeWriter().writer, harness: claw, model: 'openai/gpt-6', session }))).kind).toBe('native');
   });
 
   it('writes nothing for a conversation with no turns', async () => {

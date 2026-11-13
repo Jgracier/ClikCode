@@ -3,7 +3,7 @@
 import { diagnostic } from '../runtime/lifecycle-log.js';
 import { harnessReplyError } from '../runtime/lazy-bridge.js';
 import { adoptListedNativeId } from '../session/discovery/cli-listing.js';
-import { keepsNoHistory } from './thread-start.js';
+import { keepsNoHistory, rememberStatelessRoute } from './thread-start.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import { emitHarnessOutput } from '../harness/output.js';
@@ -51,7 +51,8 @@ export async function settleAttempt(ctx: VendorTurnContext, observer: VendorObse
   // A route that keeps no history: forget the session, so the next turn
   // opens a fresh one and carries ClikCode's own transcript (the fresh-
   // thread replay above) instead of resuming into an empty memory.
-  const statelessProvider = session.nativeTransport !== 'acp' && keepsNoHistory(harness, ctx.model);
+  if (!result.isError && result.nativeSessionStateless) rememberStatelessRoute(session, harness, ctx.model);
+  const statelessProvider = session.nativeTransport !== 'acp' && keepsNoHistory(harness, ctx.model, session);
   if (!result.isError && (result.nativeSessionStateless || statelessProvider)) forgetNativeThread(session);
   // A non-zero exit code alone is not treated as failure here: by this
   // point nativeTurnResult has already thrown if it found neither assistant

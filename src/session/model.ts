@@ -172,6 +172,12 @@ export interface HarnessSession {
    * and the vendor process has not yet confirmed it exists. While set, a retry
    * re-creates with the same id instead of resuming a session that never was. */
   nativeSessionPreallocated?: true;
+  /** `harness:model` pairs whose turn here came back through a route that
+   * keeps no history (OpenClaw answering `anthropic/*` through the `claude`
+   * program). The model's name does not say so -- only the result does -- so
+   * it is remembered: the next turn carries the conversation itself instead
+   * of resuming a thread the provider never saw. */
+  statelessRoutes?: string[];
   /** The account whose profile holds `nativeSessionId`'s files. A vendor
    * reads a thread only from the profile it was written in, so this -- not
    * `accountId`, which the user changes at any moment, from any process --

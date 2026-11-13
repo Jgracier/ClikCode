@@ -29,14 +29,32 @@ import { BYTES_PER_TOKEN, transferBudget, transferPrompt } from './transfer.js';
  * turns (catalog `turn.statelessProviders`: Goose's `claude-code`). Its
  * thread is forgotten after every turn, and no thread is written for it:
  * only the transfer reaches the model. */
-export function keepsNoHistory(harness: AiLocalHarnessDefinition, model: string | null): boolean {
+export function keepsNoHistory(
+  harness: AiLocalHarnessDefinition, model: string | null, session?: { statelessRoutes?: readonly string[] },
+): boolean {
   if (harness.turn?.stateless) return true;
+  // What an earlier turn of this chat found out (see rememberStatelessRoute).
+  if (session?.statelessRoutes?.includes(statelessRouteKey(harness, model))) return true;
   if (!model) return false;
   // Both catalog declarations name providers that forget the thread: Goose's
   // `statelessProviders`, OpenClaw's `statelessRoute.values` (the route its
   // result reports, which is also the provider prefix of the model).
   const stateless = [...(harness.turn?.statelessProviders ?? []), ...(harness.turn?.statelessRoute?.values ?? [])];
   return stateless.length > 0 && stateless.includes(modelProvider(harness, model) ?? '');
+}
+
+const statelessRouteKey = (harness: Pick<AiLocalHarnessDefinition, 'command'>, model: string | null): string => `${harness.command}:${model ?? ''}`;
+
+/** A turn's result said its route keeps no history (catalog
+ * `turn.statelessRoute`). OpenClaw answers `anthropic/claude-opus-5` through
+ * the `claude` program, and nothing in that name says so: the second turn of
+ * such a chat resumed a thread the provider had never seen and answered "this
+ * session has no prior messages". */
+export function rememberStatelessRoute(
+  session: { statelessRoutes?: string[] }, harness: Pick<AiLocalHarnessDefinition, 'command'>, model: string | null,
+): void {
+  const key = statelessRouteKey(harness, model);
+  if (!session.statelessRoutes?.includes(key)) session.statelessRoutes = [...session.statelessRoutes ?? [], key];
 }
 
 type ThreadStart =
@@ -62,6 +80,8 @@ export interface ThreadStartInput {
   /** Bytes a prompt may take when it travels in argv; absent when the turn's
    * transport passes it another way (stdin, ACP, app-server). */
   argvLimit?: number;
+  /** The chat, for what its earlier turns learnt about this model's route. */
+  session?: { statelessRoutes?: readonly string[] };
   /** The writer for this harness, if any (registry: nativeSessionStore). */
   writer?: NativeThreadWriter;
   /** Where the whole conversation is saved as a file (session/full-record.ts):
@@ -250,7 +270,7 @@ export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { 
 async function written(input: ThreadStartInput): Promise<{ written: NativeThreadWritten; omitted: number; summarised: number } | undefined> {
   const writer = input.writer;
   if (!writer || !input.record.turns.length) return undefined;
-  if (keepsNoHistory(input.harness, input.model)) {
+  if (keepsNoHistory(input.harness, input.model, input.session)) {
     input.onFallback?.(`${input.model} keeps no history: a written ${input.harness.command} thread would not reach it`);
     return undefined;
   }
