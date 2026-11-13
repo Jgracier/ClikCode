@@ -76,14 +76,14 @@ afterEach(async () => {
   mfa = false;
 });
 
-async function signIn(answers: Record<string, string>, options: { newAccount?: boolean; start?: string } = {}): Promise<{ outcome: string; asked: string[][]; options: (readonly string[] | undefined)[]; at: string; page: Page }> {
+async function signIn(answers: Record<string, string>, options: { newAccount?: boolean; start?: string; authenticatorCode?: () => Promise<string | undefined> } = {}): Promise<{ outcome: string; asked: string[][]; options: (readonly string[] | undefined)[]; at: string; page: Page }> {
   const context = await browser!.newContext({ ignoreHTTPSErrors: true });
   const tab = await context.newPage();
   await tab.goto(`${base}${options.start ?? '/signin/identifier'}`);
   const asked: string[][] = [];
   const offered: (readonly string[] | undefined)[] = [];
   const outcome = await loginComputerPage({
-    stateDir, page: tab, newAccount: options.newAccount,
+    stateDir, page: tab, newAccount: options.newAccount, ...(options.authenticatorCode ? { authenticatorCode: options.authenticatorCode } : {}),
     ask: async (_site: string, fields: readonly LoginField[]) => {
       asked.push(fields.map(field => field.key));
       offered.push(fields[0]!.options);
@@ -108,6 +108,22 @@ it.skipIf(!enabled)('signs in with email, password and a one-time code, saving t
   const again = await signIn({ code: '123456' });
   expect(again).toMatchObject({ outcome: 'signed_in', asked: [['code']], at: '/home' });
   expect(received).toEqual(['/signin/identifier=one@example.com', '/signin/pwd=correct-one', '/signin/challenge/totp=123456']);
+}, 60_000);
+
+it.skipIf(!enabled)('types the authenticator code from the kept seed instead of asking anyone, and tries it once', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-real-'));
+  mfa = true;
+  let fetched = 0;
+  const result = await signIn({ username: 'one@example.com', password: 'correct-one' }, { authenticatorCode: async () => { fetched++; return '123456'; } });
+  expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username', 'password']], at: '/home' });
+  expect(received.at(-1)).toBe('/signin/challenge/totp=123456');
+  expect(fetched).toBe(1);
+
+  // A code the site refuses is not followed by more authenticator codes: the next box is asked of the person.
+  received = [];
+  const refused = await signIn({ code: '123456' }, { authenticatorCode: async () => '000000' });
+  expect(refused.asked).toEqual([['code']]);
+  expect(received.filter(entry => entry.startsWith('/signin/challenge/totp='))).toEqual(['/signin/challenge/totp=000000', '/signin/challenge/totp=123456']);
 }, 60_000);
 
 it.skipIf(!enabled)('does not save a login the site rejected', async () => {

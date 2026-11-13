@@ -1467,6 +1467,13 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
     case 'login': {
       const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
         mailCode: since => codeFromMailbox(ctx.stateDir, page.url(), since, ctx.signal),
+        authenticatorCode: async () => {
+          const { vendorMfaAccounts, vendorMfaAccountFor, vendorMfaCode } = await import('../computer/secret-destinations.js');
+          const account = vendorMfaAccountFor(page.url(), await vendorMfaAccounts(ctx.signal));
+          if (!account) return undefined;
+          const code = await vendorMfaCode(account, ctx.signal);
+          return 'error' in code ? undefined : code.code;
+        },
         ask: async (site, fields, signal) => {
           // The profile's email and password secret answer a sign-in with no saved login; anything else is asked.
           const fromProfile = await profileLoginAnswers(ctx.stateDir, fields, args.label);

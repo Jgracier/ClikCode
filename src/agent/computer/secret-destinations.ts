@@ -206,6 +206,27 @@ export async function vendorMfaCode(account: string, signal?: AbortSignal): Prom
   return { code: inner.code, secondsRemaining: typeof inner.secondsRemaining === 'number' ? inner.secondsRemaining : 30 };
 }
 
+/** The account keys of the authenticator seeds ClikDeploy holds for this owner (no seeds, no codes). Empty when it cannot be asked. */
+export async function vendorMfaAccounts(signal?: AbortSignal): Promise<string[]> {
+  const shown = await runCli('clikdeploy', ['tools', 'run', 'admin_vendor_mfa_list'], { signal, timeoutMs: 30_000, maxChars: 1_000_000 });
+  if (shown.missing) return [];
+  const parsed = firstJsonObject<{ status?: string; data?: { data?: { accounts?: Array<{ account?: unknown }> } } }>(shown.text);
+  if (!parsed || parsed.status === 'error') return [];
+  return (parsed.data?.data?.accounts ?? []).map(row => row.account).filter((account): account is string => typeof account === 'string');
+}
+
+/**
+ * The stored authenticator account that belongs to a site: the one whose first part ("bamboohr" of "bamboohr/developer-portal")
+ * is a label of the site's host (developers.bamboohr.com). Undefined when none or several match: guessing between two accounts
+ * would type a wrong code, and a site locks an account after a few of those.
+ */
+export function vendorMfaAccountFor(siteUrl: string, accounts: readonly string[]): string | undefined {
+  let labels: string[];
+  try { labels = new URL(siteUrl).hostname.toLowerCase().split('.'); } catch { return undefined; }
+  const matches = accounts.filter(account => { const vendor = account.split('/')[0]!.toLowerCase(); return vendor.length >= 3 && labels.includes(vendor); });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 /** The connection destinations that fit each auth kind a connector declares. */
 const ACCEPTS: Record<string, string[]> = { 'api-key': ['clikdeploy-connection'], basic: ['clikdeploy-connection-basic', 'clikdeploy-connection-basic-key'], custom: [], 'aws-sigv4': ['clikdeploy-connection'], oauth: ['clikdeploy-connection'] };
 
