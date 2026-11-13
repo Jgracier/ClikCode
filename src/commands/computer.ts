@@ -59,6 +59,23 @@ export async function computerHeadless(setting: string | undefined): Promise<voi
     : 'Headless is off: ClikCode\'s browser opens a window (Linux with no display, or CLIKCODE_BROWSER_HEADLESS=1, still runs without one). Turn on with `clikcode computer headless on`.\n');
 }
 
+/** `clikcode computer desk`: the one address for everything in the browser that waits on the user, and what is waiting there now. */
+export async function computerDesk(): Promise<void> {
+  const dir = stateDirectory();
+  const desk = await import('../agent/computer/handoff-desk-store.js');
+  const info = await desk.readDeskInfo(dir);
+  const waiting = (await desk.listDeskItems(dir)).filter(item => item.status === 'waiting');
+  if (isJsonDefaultMode()) return emitResult({ computer: { desk: { serving: Boolean(info), ...(info ? { address: desk.deskAddress(info) } : {}), waiting: waiting.map(item => ({ id: item.id, label: item.label, kind: item.kind, ...(item.host ? { host: item.host } : {}), minutes: Math.round((Date.now() - item.createdAt) / 60_000) })) } } });
+  if (!info) {
+    process.stdout.write('The handoff desk is not being served. It starts with ClikCode\'s browser, on a computer that is on a Tailscale network: use the browser once (any browser_use call), then run this again.\n');
+    return;
+  }
+  process.stdout.write(`Handoff desk (open on a phone or computer on your Tailscale network; the address does not change): ${desk.deskAddress(info)}\n`);
+  if (!waiting.length) { process.stdout.write('Nothing is waiting on you.\n'); return; }
+  process.stdout.write(`${waiting.length} waiting:\n`);
+  for (const item of waiting) process.stdout.write(`  ${item.label} [${item.kind}]${item.host ? ` at ${item.host}` : ''}, ${Math.round((Date.now() - item.createdAt) / 60_000)} min: ${desk.deskItemAddress(info, item.id)}\n`);
+}
+
 /** Browser Use Cloud is opt-in. `auto` keeps the local browser first and lets a tab move to the cloud when a page blocks it;
  * `on` runs every tab there; `off` stops the billed session and returns to local only. */
 export async function computerBrowserUse(setting: string | undefined): Promise<void> {

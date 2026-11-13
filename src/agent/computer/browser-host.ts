@@ -6,6 +6,8 @@ import { leaveDialogsToWorkers } from './page-dialogs.js';
 import { hostStatusFile, launchComputerBrowser, shouldRunHeadless, writeHostStatus } from './browser-launch.js';
 import { headlessSetting } from './settings.js';
 import { restoreTabs, startBrowserJanitor, takeRecycle } from './browser-janitor.js';
+import { startHandoffDesk } from './handoff-desk.js';
+import { tailnetAddress } from './tailnet-handoff.js';
 
 export function computerProfile(stateDir: string): string { return path.join(stateDir, 'computer', 'chrome'); }
 export function computerHostFile(stateDir: string): string { return path.join(stateDir, 'computer', 'host.json'); }
@@ -54,10 +56,14 @@ export async function runComputerHost(stateDir: string): Promise<void> {
       },
     }).catch(quiet('agent/computer/browser-host'));
     const stopJanitor = startBrowserJanitor({ stateDir, hostPid: process.pid, recycle: async () => { stop(); } });
+    // The handoff desk lives here because this process outlives every worker: one address for what waits on the user.
+    const tailnet = tailnetAddress();
+    const desk = tailnet ? await startHandoffDesk({ stateDir, host: tailnet, context }).catch(quiet('agent/computer/browser-host')) : undefined;
     process.once('SIGTERM', stop);
     process.once('SIGINT', stop);
     await new Promise<void>(resolve => (context as unknown as { once(event: 'close', callback: () => void): void }).once('close', resolve));
     stopJanitor();
+    await desk?.stop().catch(quiet('agent/computer/browser-host'));
     process.off('SIGTERM', stop);
     process.off('SIGINT', stop);
   } finally {

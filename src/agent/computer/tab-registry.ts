@@ -14,6 +14,7 @@ import path from 'node:path';
 import { lifecycle, quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { pidIsAlive } from '../../session/store/locks.js';
 import { atomicWriteFile } from '../../session/store/files.js';
+import { deskHeldTargets } from './handoff-desk-store.js';
 
 export interface TabRecord {
   /** The browser's own id for the page (CDP target id). */
@@ -84,15 +85,19 @@ interface Closure { id: string; reason: CloseReason }
  * `records` should already include a stand-in record for each page Chrome has that no worker recorded. */
 export function planTabClosures(input: {
   records: readonly TabRecord[]; liveIds: ReadonlySet<string>; now: number; limits: TabLimits; alive: (pid: number) => boolean;
+  /** Tabs the handoff desk holds for the user: never closed here, whatever their owner or age. */
+  deskHeld?: ReadonlySet<string>;
 }): { close: Closure[]; forget: string[] } {
   const { records, liveIds, now, limits, alive } = input;
+  const deskHeld = input.deskHeld ?? new Set<string>();
   const forget = records.filter(record => !liveIds.has(record.id)).map(record => record.id);
   const live = records.filter(record => liveIds.has(record.id));
   const close: Closure[] = [];
   const kept: TabRecord[] = [];
   for (const record of live) {
     const idle = now - record.lastUsedAt;
-    if (record.parked) {
+    if (deskHeld.has(record.id)) kept.push(record);
+    else if (record.parked) {
       if (idle >= PARKED_MS) close.push({ id: record.id, reason: 'idle' }); else kept.push(record);
     } else if (record.ownerPid > 0 && !alive(record.ownerPid)) close.push({ id: record.id, reason: 'owner ended' });
     else if (idle >= limits.idleMs) close.push({ id: record.id, reason: 'idle' });
@@ -102,7 +107,7 @@ export function planTabClosures(input: {
   let excess = kept.length - limits.maxTabs;
   for (const record of [...kept].sort((a, b) => a.lastUsedAt - b.lastUsedAt)) {
     if (excess <= 0) break;
-    if (record.parked || now - record.lastUsedAt < ACTIVE_MS) continue;
+    if (record.parked || deskHeld.has(record.id) || now - record.lastUsedAt < ACTIVE_MS) continue;
     close.push({ id: record.id, reason: 'over the tab cap' });
     excess--;
   }
@@ -191,7 +196,8 @@ export async function sweepTabs(stateDir: string, deps: SweepDeps = {}): Promise
   if (!views) return [];
   const live = new Set(views.map(view => view.id));
   const records = await readTabRecords(stateDir);
-  const plan = planTabClosures({ records: views, liveIds: live, now, limits: deps.limits ?? tabLimits(), alive: deps.alive ?? pidIsAlive });
+  const deskHeld = await deskHeldTargets(stateDir, now).catch(() => new Set<string>());
+  const plan = planTabClosures({ records: views, liveIds: live, now, limits: deps.limits ?? tabLimits(), alive: deps.alive ?? pidIsAlive, deskHeld });
   for (const id of records.map(record => record.id)) if (!live.has(id)) await removeTabRecord(stateDir, id);
   for (const id of firstSeen.keys()) if (!live.has(id)) firstSeen.delete(id);
   // Chrome quits with its last window: leave the most recently used page.
@@ -212,7 +218,8 @@ export async function sweepTabs(stateDir: string, deps: SweepDeps = {}): Promise
 export async function closeTabsByLabel(stateDir: string, label: string, deps: SweepDeps = {}): Promise<TabView[]> {
   const views = (await allTabs(stateDir, deps.list ? { list: deps.list } : {})) ?? [];
   const closed: TabView[] = [];
-  for (const view of views.filter(item => item.tab === label)) if (await closeTabLogged(stateDir, view, 'asked to close', deps)) closed.push(view);
+  const deskHeld = await deskHeldTargets(stateDir).catch(() => new Set<string>());
+  for (const view of views.filter(item => item.tab === label && !deskHeld.has(item.id))) if (await closeTabLogged(stateDir, view, 'asked to close', deps)) closed.push(view);
   return closed;
 }
 
@@ -220,7 +227,8 @@ export async function closeTabsByLabel(stateDir: string, label: string, deps: Sw
 export async function closeTabsOfOwner(stateDir: string, pid: number, deps: SweepDeps = {}): Promise<number> {
   const views = (await allTabs(stateDir, deps.list ? { list: deps.list } : {})) ?? [];
   let count = 0;
-  for (const view of views.filter(item => item.ownerPid === pid && !item.parked)) if (await closeTabLogged(stateDir, view, 'owner ended', deps)) count++;
+  const deskHeld = await deskHeldTargets(stateDir).catch(() => new Set<string>());
+  for (const view of views.filter(item => item.ownerPid === pid && !item.parked && !deskHeld.has(item.id))) if (await closeTabLogged(stateDir, view, 'owner ended', deps)) count++;
   return count;
 }
 
