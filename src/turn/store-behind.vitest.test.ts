@@ -50,7 +50,7 @@ describe('where a vendor thread stands in the conversation', () => {
 });
 
 describe('a Claude thread resumed for a conversation', () => {
-  async function thread(requests: Array<{ text: string; at: string }>): Promise<{ root: string; session: HarnessSession; account: AiHarnessAccount }> {
+  async function thread(requests: Array<{ text: string; at: string }>, midTurn: Array<{ text: string; at: string }> = []): Promise<{ root: string; session: HarnessSession; account: AiHarnessAccount }> {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-coverage-'));
     const workspace = '/tmp/clikcode-coverage-workspace';
     const profile = join(root, 'profile');
@@ -64,6 +64,14 @@ describe('a Claude thread resumed for a conversation', () => {
       // The tool traffic at the end of a turn is not a request.
       lines.push(JSON.stringify({ type: 'user', uuid: `t${index}`, parentUuid: `a${index}`, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: 'out' }] } }));
       parent = `t${index}`;
+    });
+    // Messages sent while the last turn ran, exactly as Claude Code writes them: queued, taken into the turn, never a `user` entry.
+    midTurn.forEach((request, index) => {
+      lines.push(JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: request.at, sessionId: 'thread', content: request.text }));
+      lines.push(JSON.stringify({ type: 'attachment', uuid: `q${index}`, parentUuid: parent, isSidechain: false, timestamp: request.at, attachment: { type: 'queued_command', prompt: request.text, commandMode: 'prompt', timestamp: request.at, hostsOwnTurn: true } }));
+      lines.push(JSON.stringify({ type: 'queue-operation', operation: 'remove', timestamp: request.at, sessionId: 'thread', content: request.text, reason: 'absorbed_mid_turn' }));
+      lines.push(JSON.stringify({ type: 'assistant', uuid: `qa${index}`, parentUuid: `q${index}`, message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }));
+      parent = `qa${index}`;
     });
     await writeFile(join(project, 'thread.jsonl'), lines.join('\n'));
     const account = { id: 'a', provider: 'anthropic', authKind: 'vendor-cli', credentialRef: 'native:a', nativeProfile: { env: 'CLAUDE_CONFIG_DIR', path: profile } } as AiHarnessAccount;
@@ -81,6 +89,17 @@ describe('a Claude thread resumed for a conversation', () => {
     const { root, session, account } = await thread([{ text: asked(20), at: '2026-10-09T00:00:00.000Z' }, { text: 'and then we shipped the new billing flow to production', at: '2026-10-12T18:29:00.000Z' }]);
     try {
       expect(await nativeThreadCoverage(session, localHarnessForCommand('claude')!, account)).toMatchObject({ kind: 'ahead' });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('messages sent into a running turn are the thread\'s requests too: a steered turn leaves it current, not behind', async () => {
+    // The conversation's last two user messages were typed while turn 18 ran. Claude took them into that turn.
+    const { root, session, account } = await thread(
+      [{ text: asked(17), at: '2026-10-09T00:00:00.000Z' }, { text: asked(18), at: '2026-10-09T01:00:00.000Z' }],
+      [{ text: asked(19), at: '2026-10-09T01:01:00.000Z' }, { text: asked(20), at: '2026-10-09T01:02:00.000Z' }],
+    );
+    try {
+      expect(await nativeThreadCoverage(session, localHarnessForCommand('claude')!, account)).toEqual({ kind: 'current' });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
