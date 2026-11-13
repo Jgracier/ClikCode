@@ -110,7 +110,7 @@ async function uncensoredConsentRequest(
   version?: string,
 ): Promise<GatewayUncensoredConsent> {
   const { baseUrl, apiKey } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
-  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/uncensored-consent`, {
+  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/v1/uncensored-consent`, {
     ...(version !== undefined ? { method: 'POST', body: JSON.stringify({ accepted: true, version }) } : {}),
     headers: {
       authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT,
@@ -118,9 +118,10 @@ async function uncensoredConsentRequest(
     },
     signal: AbortSignal.timeout(options.timeoutMs ?? MODELS_TIMEOUT_MS),
   });
-  const body = await response.json().catch(quiet('gateway/uncensored-consent')) as Partial<GatewayUncensoredConsent> & { error?: { message?: string } };
+  // A Gateway that answers with something other than JSON (an error page) has no body to read.
+  const body = (await response.json().catch(quiet('gateway/uncensored-consent')) ?? {}) as Partial<GatewayUncensoredConsent> & { error?: { message?: string } };
   if (!response.ok || typeof body.version !== 'string' || typeof body.terms !== 'string' || typeof body.accepted !== 'boolean') {
-    throw new Error(body.error?.message ?? `ClikDeploy Gateway agreement: HTTP ${response.status}`);
+    throw new Error(body.error?.message ?? `the ClikDeploy Gateway did not return the agreement (HTTP ${response.status})`);
   }
   return { version: body.version, terms: body.terms, accepted: body.accepted, acceptedAt: typeof body.acceptedAt === 'string' ? body.acceptedAt : null };
 }
