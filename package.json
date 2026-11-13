@@ -16,6 +16,7 @@
     "build": "node scripts/build.mjs",
     "install-local": "node scripts/install-local.mjs",
     "build:analyze": "node scripts/build.mjs --analyze",
+    "build:chat-client": "node scripts/build-chat-client.mjs",
     "type-check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser-tests.json && pnpm --filter @clikcode/router type-check",
     "test": "vitest run",
     "test:router": "pnpm --filter @clikcode/router test",
