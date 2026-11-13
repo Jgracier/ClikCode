@@ -6,9 +6,10 @@
  * (`authFiles`) and which environment variables sign it in by themselves
  * (`authEnv`); this reads those, so ClikCode knows before a turn fails. */
 
-import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
+import { dirname, join, relative, resolve } from 'node:path';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 
@@ -142,6 +143,62 @@ export async function authFilePresent(
   const environment = { ...processEnvironment, ...profileEnvironment };
   for (const entry of harness.authFiles ?? []) if (await present(entry, environment)) return true;
   return false;
+}
+
+/** A profile of one harness: its directory and the environment the vendor
+ * runs under there. */
+export interface AuthProfile { root: string; environment: Readonly<Record<string, string>> }
+
+/** Carry a sign-in from one profile of a harness into another, credential
+ * only. A re-authentication runs in a fresh profile (who signed in is not
+ * known until it has), but the account it turns out to be may keep its own
+ * profile, where its vendor chats live: the credential goes to the account,
+ * not the account to the credential.
+ *
+ * Each catalog `authFiles` entry is carried the way it is declared: a
+ * `removeLine` file gives up only its credential lines, a `jsonFields` file
+ * only the top-level keys holding them (Claude keeps MCP servers' OAuth
+ * beside its own), anything else whole. Returns whether a credential was
+ * carried; false leaves the target exactly as it was. */
+export async function adoptAuthFiles(
+  harness: Pick<AiLocalHarnessDefinition, 'authFiles'>, from: AuthProfile, to: AuthProfile,
+  processEnvironment: Environment = process.env,
+): Promise<boolean> {
+  const environment = { ...processEnvironment, ...from.environment };
+  const fromRoot = resolve(from.root);
+  let carried = false;
+  for (const entry of harness.authFiles ?? []) {
+    for (const source of await expandAuthPaths(entry.path, environment)) {
+      if (!await presentAt(source, entry)) continue;
+      const inside = relative(fromRoot, resolve(source));
+      // Outside the profile (a variable the profile does not set): there is
+      // no matching place in the other one.
+      if (!inside || inside.startsWith('..')) continue;
+      const target = join(resolve(to.root), inside);
+      await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+      if (source.endsWith('/')) {
+        await cp(source, target, { recursive: true, force: true });
+      } else if (entry.removeLine && entry.contains !== undefined) {
+        const holds = (line: string): boolean => line.includes(entry.contains!);
+        const kept = (await readFile(target, 'utf8').catch(() => '')).split('\n').filter((line) => line && !holds(line));
+        const fresh = (await readFile(source, 'utf8')).split('\n').filter(holds);
+        await writeFile(target, `${[...kept, ...fresh].join('\n')}\n`, { mode: 0o600 });
+      } else if (entry.jsonFields) {
+        const fresh = JSON.parse(await readFile(source, 'utf8')) as Record<string, unknown>;
+        let merged: Record<string, unknown> = {};
+        try {
+          const existing: unknown = JSON.parse(await readFile(target, 'utf8'));
+          if (existing && typeof existing === 'object' && !Array.isArray(existing)) merged = existing as Record<string, unknown>;
+        } catch { /* fail-open-ok: no readable file there is the signed-out case this repairs */ }
+        for (const key of new Set(entry.jsonFields.map((field) => field.split('.')[0]!))) merged[key] = fresh[key];
+        await writeFile(target, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
+      } else {
+        await copyFile(source, target);
+      }
+      carried = true;
+    }
+  }
+  return carried;
 }
 
 /** Whether ClikCode can tell this vendor's sign-in state without asking it. */

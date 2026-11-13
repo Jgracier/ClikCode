@@ -36,6 +36,13 @@ export async function matchingVendorAccount(
     // The credential's current identity, not its label, proves equality.
     const actual = await deriveAccountLabel(harness, account.nativeProfile?.path);
     if (actual?.toLowerCase() === wanted) return account;
+    // A record that reveals no identity of its own -- signed out, its token
+    // expired, or still on the shared default profile -- cannot contradict
+    // its name. Named by this exact identity, it IS this account, and the
+    // sign-in is its re-authentication. Requiring proof from a profile that
+    // holds none made every re-authentication a new "email (2)". (Labels are
+    // unique within a provider, so at most one record can match this way.)
+    if (!actual && account.label.toLowerCase() === wanted) return account;
   }
   return undefined;
 }

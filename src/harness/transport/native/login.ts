@@ -31,10 +31,25 @@ export function withSignInScreen<T>(screen: SignInScreen, work: () => Promise<T>
 function plainSignInScreen(name: string, environment: NodeJS.ProcessEnv = process.env): SignInScreen {
   let opened = false;
   const controller = new AbortController();
-  const line = async (prompt: string): Promise<string> => {
+  // One question holds stdin at a time: a new one withdraws the one before
+  // (answered '' -- its asker has moved on), and so does the end of the
+  // sign-in. The key field offered beside a vendor's own sign-in is asked
+  // and never answered when the vendor finishes by itself; left open, it
+  // kept stdin -- and so `clikcode accounts login` -- alive for good after
+  // the account was signed in.
+  let withdraw: (() => void) | undefined;
+  const line = (prompt: string): Promise<string> => new Promise((resolve) => {
+    withdraw?.();
     const reader = createInterface({ input: process.stdin, output: process.stdout });
-    try { return await reader.question(prompt); } finally { reader.close(); }
-  };
+    const settle = (text: string): void => {
+      if (withdraw === cancel) withdraw = undefined;
+      reader.close();
+      resolve(text);
+    };
+    const cancel = (): void => settle('');
+    withdraw = cancel;
+    reader.question(prompt).then(settle, cancel);
+  });
   return {
     signal: controller.signal,
     show: (link) => {
@@ -49,7 +64,7 @@ function plainSignInScreen(name: string, environment: NodeJS.ProcessEnv = proces
       const picked = Number.parseInt(await line('Number: '), 10);
       return picked >= 1 && picked <= choices.length ? picked - 1 : undefined;
     },
-    stop: () => undefined,
+    stop: () => { withdraw?.(); process.stdin.pause(); },
   };
 }
 
