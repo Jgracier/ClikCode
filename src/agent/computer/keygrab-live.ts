@@ -118,6 +118,13 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
     press: async key => failed(await run({ action: 'press', key })),
     fill: async (name, text) => failed(await run({ action: 'fill', target: name, ...(text !== undefined ? { text } : {}) })),
     login: async () => { const r = await run({ action: 'login' }); return { ok: !r.isError, message: clean(r.output.split('\n')[0] ?? '') }; },
+    authenticatorCode: async () => {
+      const { vendorMfaAccounts, vendorMfaAccountFor, vendorMfaCode } = await import('./secret-destinations.js');
+      const account = vendorMfaAccountFor((await page()).url(), await vendorMfaAccounts());
+      if (!account) return undefined;
+      const code = await vendorMfaCode(account);
+      return 'error' in code ? undefined : code.code;
+    },
     emailCode: async () => {
       for (const subject of ['verification', 'code', 'confirm']) {
         const r = await run({ action: 'read_email_code', subject, seconds: 45 });

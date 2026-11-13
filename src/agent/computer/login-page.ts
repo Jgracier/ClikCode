@@ -97,8 +97,10 @@ export function wantsAuthenticatorCode(pageText: string): boolean {
   return !SENT_CODE_PAGE.test(pageText);
 }
 async function asksForAuthenticator(page: Page): Promise<boolean> {
-  const text = await page.locator('body').innerText({ timeout: 3_000 }).catch(() => '');
-  return wantsAuthenticatorCode(text.slice(0, 20_000));
+  // A page whose words cannot be read is not assumed to want the authenticator: the person is asked, as before.
+  let text: string;
+  try { text = await page.locator('body').innerText({ timeout: 3_000 }); } catch { return false; }
+  return !!text.trim() && wantsAuthenticatorCode(text.slice(0, 20_000));
 }
 
 export async function loginComputerPage(input: {

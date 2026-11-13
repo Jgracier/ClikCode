@@ -26,6 +26,7 @@ import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.j
 import { LoginError } from '../computer/login-error.js';
 import { type LoginField } from '../computer/login-fields.js';
 import { isSecretRef, registerSecret, resolveSecretRef, scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
+import { hideRecoveryCodes, otpauthIn, QR_TARGET, recoveryCodesIn, RECOVERY_TARGET } from '../computer/recovery-codes.js';
 import { profileLoginAnswers } from '../computer/profile-login.js';
 import { classifyPasswordPage, readPasswordPageContext } from '../computer/password-page.js';
 import { Parked, park } from '../computer/parking.js';
@@ -48,7 +49,8 @@ import { connectEmail } from '../computer/email-consent.js';
 import { beginJournal, noteStep, recordVerified } from '../computer/recipe-recorder.js';
 import { chooseValue, labelledCandidates } from '../computer/read-value.js';
 import { whyBlank } from '../computer/why-blank.js';
-import { saveNamedSecret } from '../computer/credential-vault.js';
+import { deleteNamedSecret, saveNamedSecret } from '../computer/credential-vault.js';
+import { VENDOR_MFA_DESTINATION } from '../computer/secret-destinations.js';
 import { lintRecipe } from '../computer/recipe-tools.js';
 import { oauthConnect } from '../computer/oauth-consent.js';
 import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.js';
@@ -281,7 +283,11 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
   if (document) return { output: document };
   const raw = scrubSecrets(await maskSensitive(page, await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never) as string));
   // A key the page is showing is not for the model to read: capture_secret takes it.
-  const { text: shown, hidden } = hideKeyLikeText(raw.replace(/^(\s*- \/url: )(\S{160})\S+$/gm, '$1$2…'));
+  const keys = hideKeyLikeText(raw.replace(/^(\s*- \/url: )(\S{160})\S+$/gm, '$1$2…'));
+  // Backup codes each sign in to the account: they are kept from the model like a key is.
+  const codes = hideRecoveryCodes(keys.text);
+  const shown = codes.hidden ? `${codes.text}\n\n[${codes.hidden} backup codes hidden. Save them all without reading them: capture_secret with target "backup codes".]` : codes.text;
+  const hidden = keys.hidden;
   if (find?.trim()) {
     const found = findInSnapshot(shown, find.trim());
     return { output: `Page: ${displayUrl(page.url())}\n\n${found ? `Lines mentioning "${find.trim()}" (with the elements around them):\n${found.slice(0, 12_000)}` : `Nothing on the page mentions "${find.trim()}". Try observe with full: true.`}` };
@@ -673,7 +679,7 @@ const SHARED_TEXT: Record<ToolKind, Record<string, string>> = {
   },
   account: {
     action: 'What to do. help lists every action with an example.',
-    target: 'capture_secret: the final Create button ([ref=…] or its visible text). oauth_connect: the connector id (slack, github). auth_code: the field the code goes in. secrets, accounts: words to filter by (accounts with method: the site\'s address).',
+    target: 'capture_secret: the final Create button ([ref=…] or its visible text). Or "backup codes" / "qr code" (two-factor set-up). oauth_connect: the connector id (slack, github). auth_code: the field the code goes in. secrets, accounts: words to filter by (accounts with method: the site\'s address).',
     seconds: 'read_email_code, open_email_link: how long to wait for the email to arrive (default 90).',
     steps: 'recipe save: the steps that worked, e.g. [{do:"click", target:"Create key"}]. Never typed values.',
   },
@@ -826,6 +832,8 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
       const extras = clickExtras(step);
       const coordinates = !step.target?.trim() && step.x !== undefined;
       const target = coordinates ? undefined : await locate(page, step.target);
+      // A greyed-out button takes the fallback click without doing anything, and "Clicked" would be a lie.
+      if (target && await target.isDisabled({ timeout: 1_500 }).catch(() => false)) throw new Error(`${step.target} is disabled: the page will not take the click yet. Look for a field it still needs (one marked invalid or required), fill it, and try again.`);
       const { dialogs } = await withDialogs(page, step.accept_dialog === true, () => extras || coordinates || (target && step.x !== undefined) ? clickWith(page, target, step) : clickOrHint(target!, step.at));
       const how = extras ? ` (${[extras.modifiers.join('+'), extras.clickCount === 2 ? 'double' : extras.clickCount === 3 ? 'triple' : '', extras.button !== 'left' ? extras.button : ''].filter(Boolean).join(' ')})` : '';
       return `Clicked ${coordinates ? `at ${step.x},${step.y}` : step.target}${how}.${dialogNote(dialogs, step.accept_dialog === true)}`;
@@ -1424,7 +1432,19 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
         const anchors = mail.anchors?.length ? mail.anchors : mail.links.map(href => ({ href, text: '' }));
         const pick = pickLink(anchors, args.link);
         if (!pick) throw new Error(`The email has no ${args.link ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${anchors.slice(0, 6).map(link => link.text.trim() || displayUrl(link.href)).join(', ') || 'none'}.`);
-        await page.goto(pick.chosen.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        // A tracking link hops through redirects, and a hop can drop the first request (net::ERR_NETWORK_CHANGED, ERR_ABORTED) while
+        // the page still arrives. The email is already used up, so the outcome is read from where the tab ended, not from that error;
+        // and the link itself (a one-time sign-in) is never put in the message.
+        const before = page.url();
+        const failed = await page.goto(pick.chosen.href, { waitUntil: 'domcontentloaded', timeout: 30_000 }).then(() => undefined, (error: unknown) => String(error instanceof Error ? error.message : error).split('\n')[0]!);
+        if (failed) {
+          await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(quiet('agent/tools/computer-web'));
+          const moved = page.url() !== before && !page.url().startsWith('chrome-error:') && page.url() !== 'about:blank';
+          if (!moved) {
+            const again = await page.goto(pick.chosen.href, { waitUntil: 'domcontentloaded', timeout: 30_000 }).then(() => undefined, () => 'failed');
+            if (again) throw new Error(`The link from the email in ${mail.mailbox} did not open (${failed.replace(/https?:\/\/\S+/g, 'the link').slice(0, 120)}). The email was used; ask the site to send it again.`);
+          }
+        }
         await settle(page);
         return withMailbox(await observeComputerPage(page, ctx.acceptsImages === true), chosenNote(pick, `Opened the link from the email in ${mail.mailbox}.`));
       }
@@ -1508,7 +1528,9 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       const plan = normalizeSendTo(args.send_to);
       const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan, (id) => declaredConnectionValues(id, ctx.signal), (id) => declaredAuthKind(id, ctx.signal)) : undefined;
       if (planProblem) throw new Error(`${planProblem} Nothing was clicked.`);
-      const placeholder = !!args.target && isSecretRef(args.target);
+      const codeSet = !!args.target && RECOVERY_TARGET.test(args.target.trim());
+      const qrKey = !!args.target && QR_TARGET.test(args.target.trim());
+      const placeholder = !!args.target && (isSecretRef(args.target) || codeSet || qrKey);
       const triggerLabel = args.target && !placeholder ? (await controlName(page, args.target)) ?? (REF.test(args.target.trim()) ? undefined : args.target.trim()) : undefined;
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       // The clipboard is one thing and a Copy button only works in the focused tab: captures take turns, each in front.
@@ -1517,6 +1539,17 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
         ...(plan?.length ? { sendTo: plan } : {}),
         readKnown: async (last) => {
           const wanted = args.target?.trim();
+          if (codeSet) {
+            const found = recoveryCodesIn(await page.locator('body').innerText({ timeout: 5_000 }).catch(() => ''));
+            if (!found.length) throw new LoginError('Not saved: this page shows no backup codes.');
+            return { value: found.join('\n'), from: `the ${found.length} backup codes the page shows` };
+          }
+          if (qrKey) {
+            let link: string | undefined;
+            for (const frame of page.frames()) { link = otpauthIn(await frame.content().catch(() => '')); if (link) break; }
+            if (!link) throw new LoginError('Not saved: the QR code on this page is a picture only, with no setup link in the page behind it. Press the page\'s "enter the key manually" or "can\'t scan?" control so the key is shown as text, then capture its placeholder.');
+            return { value: link, from: 'the setup link behind the QR code' };
+          }
           if (wanted && placeholder) {
             const value = resolveSecretRef(wanted);
             if (!value) throw new LoginError(`Not saved: ${wanted} is not a placeholder this browser knows (they restart with ClikCode). Observe the page again to get the current ones.`);
@@ -1542,6 +1575,11 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
         const saved = await recordVerified(ctx.stateDir, key, { kind: 'capture', url: page.url(), hint: `${triggerLabel ? `Click "${triggerLabel}" to make the key show, then capture_secret. ` : ''}Verified: ${check.verdict === 'works' ? 'the key works' : 'a key was found and stored'}.` }).catch(quiet('agent/tools/computer-web'));
         if (saved) recipeLint = lintRecipe(saved).map(finding => finding.message);
       }
+      // An authenticator seed has one home. Once ClikDeploy holds it, the copy this computer kept for the hand-over is removed,
+      // so a stolen laptop vault cannot make the account's codes.
+      const seedOnly = !!plan?.length && plan.every(destination => destination.to === VENDOR_MFA_DESTINATION);
+      const handedOver = seedOnly && !refused && sent.length > 0 && sent.every(delivery => delivery.ok)
+        && await deleteNamedSecret(ctx.stateDir, alreadySavedAs ?? name).catch(() => false);
       const lines = [
         alreadySavedAs ? `ALREADY SAVED as "${alreadySavedAs}" (${length} characters, ${shape}, taken from ${via}): the same value is in ClikCode Secrets Manager, so it was not saved again and carries on to send_to. Use the name "${alreadySavedAs}" for secret: references.`
           : `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${shape}, taken from ${via}). You were not shown the key; if that does not match what you expected (an id where a secret should be), delete it and capture again.`,
@@ -1549,6 +1587,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
           : check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
         ...(recipeLint.length ? [`Recipe saved (tidied; the recorded steps are kept in the .bak file). Still to fix: ${recipeLint.join('; ')}.`] : []),
         ...sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`),
+        ...(handedOver ? ['ClikDeploy now keeps this setup key; the copy in ClikCode Secrets Manager was removed. Use auth_code with the same account for its codes.'] : []),
         ...(refused ? [] : sent.some(delivery => !delivery.ok) ? ['The key is still saved. Fix the cause, then send it again with send_secret.'] : sent.length ? [] : ['Nothing was sent anywhere: use send_to to send it on, or send_secret later.']),
       ];
       return { output: lines.join('\n'), ...(sent.some(delivery => !delivery.ok) ? { isError: true } : {}) };

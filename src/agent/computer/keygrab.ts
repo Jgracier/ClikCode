@@ -28,6 +28,8 @@ export interface KeygrabPort {
   login(): Promise<{ ok: boolean; message: string }>;
   /** The code in the newest verification email, when a mailbox is connected. */
   emailCode(): Promise<string | undefined>;
+  /** The current authenticator-app code for the open site, when its seed is kept in ClikDeploy (undefined when none is). */
+  authenticatorCode?(): Promise<string | undefined>;
   /** Opens the link in the newest verification email in this tab. */
   emailLink(): Promise<boolean>;
   /** Captures the key unseen and sends it to ClikDeploy. `target` is a control that reveals it; none: the page already shows it. */
@@ -74,6 +76,8 @@ const SUBMIT = /^(sign ?up|create( account)?|register|continue|next|get started|
 const TERMS_NOTICE = /by (?:proceeding|continuing|clicking|signing up|registering)[^.\n]{0,60}\b(?:agree|accept)|\b(?:agree|accept)[^.\n]{0,40}(?:terms|privacy)/i;
 const COMPLETE_SIGNUP = /^(?:complete (?:your )?(?:registration|sign ?up|account(?: setup)?|setup|profile)|finish(?: sign ?up| setup| registration)?|accept(?: and continue)?|agree(?: and continue)?|i agree|create (?:my )?account|continue)$/i;
 const NAME_FIELD = /name|label|description|title/i;
+/** The page says its code was emailed or texted: an authenticator code is the wrong thing to type there. */
+const SENT_CODE = /(?:sent|emailed|texted)[^.\n]{0,60}\bcode\b|code[^.\n]{0,40}(?:sent|emailed|texted) to|check your (?:e-?mail|inbox|phone)|text message|\bsms\b/i;
 const CODE_PAGE = /(?:enter|type|paste)[^.\n]{0,40}\bcode\b|verification code|check your (?:e-?mail|inbox)|we(?:'ve| have) sent[^.\n]{0,40}(?:e-?mail|code)/i;
 const RETIRED = /[^.\n]{0,60}\b(?:was|has been|is being|were) (?:retired|discontinued|shut down|sunset|deprecated)\b[^.\n]{0,60}/i;
 const NOT_FOUND = /\b404\b|page (?:not found|does(?:n't| not) exist)|not found|no such page|couldn'?t find|can'?t find|\boops\b|doesn'?t exist|does not exist/i;
@@ -215,8 +219,23 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     }
     return v;
   };
+  let authenticatorTried = false;
+  /** An authenticator page is not a wall when ClikDeploy keeps the site's seed: type its code once and carry on. */
+  const pastAuthenticator = async (view: KeyView): Promise<boolean> => {
+    if (authenticatorTried || !port.authenticatorCode || !view.fields.length || SENT_CODE.test(view.text)) return false;
+    authenticatorTried = true;
+    const code = await act('read the authenticator code', () => port.authenticatorCode!());
+    if (!code) return false;
+    const field = view.fields.find(f => /code|otp|token|2fa|mfa/i.test(f)) ?? view.fields[0]!;
+    await act('type the authenticator code', () => port.fill(field, code));
+    const go = [...view.controls].reverse().find(c => pressable(c) && /^(verify|confirm|continue|submit|next|log ?in|sign ?in)\b/i.test(c.name));
+    if (go) await click(go.name);
+    await sleep(800);
+    return true;
+  };
   const guard = async (view: KeyView): Promise<void> => {
     const wall = keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields });
+    if (wall?.kind === 'mfa' && await pastAuthenticator(view)) return;
     if (wall) throw await wallStop(view, wall);
   };
   const captchaOn = (view: KeyView): boolean => keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields })?.kind === 'captcha';

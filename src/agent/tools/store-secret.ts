@@ -3,8 +3,8 @@
  * destination failed, or to another place later. The worker reads the value and
  * runs the command, so the value is in nothing the model writes or reads. */
 import { defineTool } from '../tool-contract.js';
-import { readNamedSecret } from '../computer/credential-vault.js';
-import { declaredAuthKind, declaredConnectionValues, destinationProblem, normalizeSendTo, sendToDestinations, type Destination } from '../computer/secret-destinations.js';
+import { deleteNamedSecret, readNamedSecret } from '../computer/credential-vault.js';
+import { declaredAuthKind, declaredConnectionValues, destinationProblem, normalizeSendTo, sendToDestinations, VENDOR_MFA_DESTINATION, type Destination } from '../computer/secret-destinations.js';
 import { registerSecret, scrubSecrets } from '../computer/secret-scrubber.js';
 
 type Args = { secret: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; connectionValues?: Record<string, string> | string; send_to?: Destination[] | Destination | string };
@@ -37,7 +37,11 @@ export const storeSecretTool = defineTool<Args>({
       const value = await readNamedSecret(ctx.stateDir, args.secret);
       registerSecret(value);
       const sent = await sendToDestinations(ctx.stateDir, plan, value, ctx.signal);
-      const output = sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`).join('\n');
+      // An authenticator seed has one home: once ClikDeploy holds it, the copy kept here for the hand-over is removed.
+      const handedOver = plan.every(destination => destination.to === VENDOR_MFA_DESTINATION) && sent.length > 0 && sent.every(delivery => delivery.ok)
+        && await deleteNamedSecret(ctx.stateDir, args.secret).catch(() => false);
+      const output = [...sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`),
+        ...(handedOver ? ['ClikDeploy now keeps this setup key; the copy in ClikCode Secrets Manager was removed.'] : [])].join('\n');
       return { output: scrubSecrets(output), ...(sent.every(delivery => delivery.ok) ? {} : { isError: true }) };
     } catch (error) { return { output: scrubSecrets(error instanceof Error ? error.message : String(error)), isError: true }; }
   },
