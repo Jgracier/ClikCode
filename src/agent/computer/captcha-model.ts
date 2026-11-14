@@ -116,6 +116,66 @@ export async function askTileMatch(question: TileQuestion, options: { signal?: A
   return yes * 2 > votes.length;
 }
 
+/** Models that point well at a spot in a picture (measured 2026-11-14 on live hCaptcha click puzzles: these agreed
+ * on the right spot where others missed). The first the account lists is asked. */
+export const POINT_MODELS = ['gemini-3-flash', 'qwen3-vl-235b-a22b', 'gemini-2.5-pro'];
+let cachedPointModel: { id?: string; at: number } | undefined;
+
+/** Where to click on a free-form challenge picture ("click the icon that is different", "find all foods eaten hot"):
+ * every spot as fractions of the picture's width and height. An empty list means the model saw nothing to click.
+ * `undefined` is no usable answer. Never throws. */
+export async function askClickPoints(image: ImageInput, instruction: string, options: { signal?: AbortSignal; modelClientOf?: ModelClientOf; now?: () => number } = {}): Promise<Array<{ x: number; y: number }> | undefined> {
+  const now = options.now ?? Date.now;
+  let client: ModelClient;
+  try {
+    if (options.modelClientOf) client = await options.modelClientOf();
+    else {
+      if (!cachedPointModel || now() - cachedPointModel.at > VISION_TTL_MS) {
+        const { gatewayModels } = await import('../../gateway/models.js');
+        const vision = (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id);
+        const id = POINT_MODELS.find(name => vision.includes(name)) ?? vision[0];
+        cachedPointModel = { ...(id ? { id } : {}), at: now() };
+      }
+      if (!cachedPointModel.id) return undefined;
+      client = await gatewayModelClientOnce(cachedPointModel.id);
+    }
+  } catch (error) {
+    quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+  const text = `This is a picture of a visual puzzle. The instruction is: "${instruction}". Where should one click to answer it? `
+    + 'If it asks for several things, give a point for each one. Give each point as fractions of the picture\'s width and height. '
+    + 'Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}.';
+  try {
+    const result = await client.step({
+      system: 'You locate answers to visual puzzles and reply with JSON only.',
+      items: [{ type: 'text', role: 'user', text, images: [image] }],
+      tools: [], toolChoice: 'none', maxOutputTokens: 800,
+      ...(options.signal ? { signal: options.signal } : {}),
+      onTextDelta: () => undefined,
+    });
+    return parsePoints(result.text);
+  } catch (error) {
+    quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+}
+
+/** The points in a model's answer: {"points": [...]} or a single {"x","y"}; values outside 0..1 are dropped. */
+export function parsePoints(text: string): Array<{ x: number; y: number }> | undefined {
+  const inRange = (p: { x?: unknown; y?: unknown }): p is { x: number; y: number } => typeof p.x === 'number' && typeof p.y === 'number' && p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
+  const list = /\{\s*"points"\s*:\s*\[[\s\S]*?\]\s*\}/.exec(text);
+  try {
+    if (list) {
+      const points = (JSON.parse(list[0]) as { points?: unknown }).points;
+      if (Array.isArray(points)) return (points as Array<{ x?: unknown; y?: unknown }>).filter(inRange).map(p => ({ x: p.x as number, y: p.y as number }));
+    }
+    const one = /\{[^{}]*"x"[^{}]*\}/.exec(text);
+    if (one) { const p = JSON.parse(one[0]) as { x?: unknown; y?: unknown }; return inRange(p) ? [{ x: p.x as number, y: p.y as number }] : []; }
+  } catch { return undefined; }
+  return undefined;
+}
+
 /** One ask: the puzzle picture plus the strict prompt, answered as JSON. Never throws. */
 export async function askCaptchaModel(image: ImageInput, options: { signal?: AbortSignal; modelClientOf?: ModelClientOf; now?: () => number } = {}): Promise<CaptchaAsk> {
   const now = options.now ?? Date.now;
