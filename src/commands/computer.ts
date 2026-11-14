@@ -47,8 +47,17 @@ export async function computerUnattended(setting: string | undefined): Promise<v
  * account's own Gateway vision model, playing its answer back at a visitor's pace. */
 export async function computerCaptcha(setting: string | undefined): Promise<void> {
   const dir = stateDirectory();
+  if (setting === 'stats') {
+    const { captchaTally } = await import('../agent/computer/captcha-log.js');
+    const tally = await captchaTally(dir);
+    if (isJsonDefaultMode()) return emitResult({ computer: { captchaTally: tally } });
+    if (!tally.length) { process.stdout.write('No human checks have been met in the last 30 days.\n'); return; }
+    process.stdout.write('Human checks met in the last 30 days (family: cleared of runs, average seconds):\n');
+    for (const row of tally) process.stdout.write(`  ${row.family}: ${row.cleared} of ${row.runs}, ${Math.round(row.seconds / row.runs)}s\n`);
+    return;
+  }
   if (setting === 'on' || setting === 'off') await setCaptchaSolving(dir, setting === 'on');
-  else if (setting) throw new Error('Say on or off: clikcode computer captcha on');
+  else if (setting) throw new Error('Say on, off or stats: clikcode computer captcha on');
   const on = await captchaSolvingAllowed(dir);
   if (isJsonDefaultMode()) return emitResult({ computer: { captchaSolving: on } });
   process.stdout.write(on
