@@ -205,3 +205,28 @@ describe('answering only on a shared whole answer, without waiting for the slowe
     expect(await untilAgreed([Promise.resolve(1), Promise.reject(new Error('down'))], () => false)).toEqual([1, undefined]);
   });
 });
+
+describe('what a vote costs and who sided with the answer', () => {
+  const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);
+
+  it('counts each ask and marks the voters that gave the answer that was used', async () => {
+    const { askPick, newMeter } = await import('./captcha-model.js');
+    const meter = newMeter();
+    expect(await askPick([image, image, image], 'Pick the cat', { meter, modelClientsOf: async () => [fake('{"pick": 2}'), fake('{"pick": 2}'), fake('{"pick": 3}')] })).toBe(2);
+    expect(meter.asks).toBe(3);
+    expect(meter.votes.map(vote => vote.withWinner)).toEqual([]);
+    // Fake voters have no names, so nothing is scored; the question itself is kept with what each said.
+    expect(meter.samples).toHaveLength(1);
+    expect(meter.samples[0]).toMatchObject({ roster: 'order', answers: { 'voter-1': '{"pick": 2}', 'voter-3': '{"pick": 3}' } });
+  });
+
+  it('runs the subscription voter headless, with no tools but reading the pictures and no session kept', async () => {
+    const { subscriptionArgs } = await import('./captcha-subscription.js');
+    const claude = subscriptionArgs('claude', 'Q', ['/t/picture-1.png'], '/t', '/t/mcp.json', '/t/final.txt');
+    expect(claude).toEqual(expect.arrayContaining(['-p', 'Q', '--strict-mcp-config', '--no-session-persistence', '--permission-mode', 'dontAsk']));
+    expect(claude[claude.indexOf('--tools') + 1]).toBe('Read');
+    const codex = subscriptionArgs('codex', 'Q', ['/t/picture-1.png'], '/t', '/t/mcp.json', '/t/final.txt');
+    expect(codex).toEqual(expect.arrayContaining(['exec', '--ephemeral', '--ignore-user-config', '-i', '/t/picture-1.png', '-o', '/t/final.txt']));
+    expect(codex.at(-1)).toBe('Q');
+  });
+});

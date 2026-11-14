@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { captchaTally, familyOf, recordCaptcha, shouldHoldOff, stepOf, weakKinds } from './captcha-log.js';
+import { captchaCost, captchaTally, familyOf, heldOffHosts, recordCaptcha, recordVotes, saveSamples, shouldHoldOff, stepOf, voterOrder, weakKinds } from './captcha-log.js';
 
 describe('the captcha log', () => {
   it('counts runs and clears per family over the window, most runs first', async () => {
@@ -54,5 +54,33 @@ describe('the captcha log', () => {
     await run(['drag the segments', 'click the odd one'], 'still-there');
     await run(['click the odd one'], 'cleared');
     expect([...await weakKinds(dir, now)]).toEqual(['drag the segments']);
+  });
+
+  it('adds up what the runs asked of the models, and how much of it went to the subscription', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
+    const now = Date.parse('2026-11-14T12:00:00Z');
+    const run = (models: Record<string, number>) => recordCaptcha(dir, { at: new Date(now - 60_000).toISOString(), host: 'a.example', family: 'hcaptcha', outcome: 'cleared', seconds: 30, steps: ['click'], asks: Object.values(models).reduce((a, b) => a + b, 0), models });
+    await run({ 'gpt-4.1-mini': 16, 'claude-sonnet-5-5': 17 }); await run({ 'claude-sonnet-5-5': 2, 'subscription-claude': 1 });
+    expect(await captchaCost(dir, 30, now)).toEqual({ asks: 36, subscription: 1, models: [{ model: 'claude-sonnet-5-5', asks: 19 }, { model: 'gpt-4.1-mini', asks: 16 }, { model: 'subscription-claude', asks: 1 }] });
+    expect(await heldOffHosts(dir, now)).toEqual([]);
+  });
+
+  it('orders the voters of a kind of question by how often they sided with an accepted answer, once measured enough', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
+    const votes = (model: string, right: number, wrong: number) => [...Array.from({ length: right }, () => ({ roster: 'tile', model, withWinner: true })), ...Array.from({ length: wrong }, () => ({ roster: 'tile', model, withWinner: false }))];
+    await recordVotes(dir, [...votes('fast', 12, 8), ...votes('careful', 19, 1), ...votes('new', 3, 0)]);
+    // "new" has too few answers to be placed; the roster's own order still decides where it goes.
+    expect(await voterOrder(dir)).toEqual({ tile: ['careful', 'fast'] });
+    await recordVotes(dir, votes('new', 17, 0));
+    expect((await voterOrder(dir)).tile).toEqual(['new', 'careful', 'fast']);
+  });
+
+  it('keeps the hard questions of a run with their pictures and outcome, newest 300', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
+    await saveSamples(dir, 'cleared', 'hcaptcha', [{ roster: 'click', text: 'Click the odd one', images: [{ mimeType: 'image/png', data: Buffer.from('png').toString('base64') }], answers: { 'claude-sonnet-5-5': '{"points":[]}' } }], new Date('2026-11-14T12:00:00Z'));
+    const root = path.join(dir, 'computer', 'captcha-samples');
+    const [one] = await fs.readdir(root);
+    expect((await fs.readFile(path.join(root, one!, 'picture-1.png'))).toString()).toBe('png');
+    expect(JSON.parse(await fs.readFile(path.join(root, one!, 'question.json'), 'utf8'))).toMatchObject({ outcome: 'cleared', family: 'hcaptcha', roster: 'click', pictures: ['picture-1.png'] });
   });
 });

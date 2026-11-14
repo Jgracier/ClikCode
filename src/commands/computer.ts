@@ -48,12 +48,16 @@ export async function computerUnattended(setting: string | undefined): Promise<v
 export async function computerCaptcha(setting: string | undefined): Promise<void> {
   const dir = stateDirectory();
   if (setting === 'stats') {
-    const { captchaTally } = await import('../agent/computer/captcha-log.js');
-    const tally = await captchaTally(dir);
-    if (isJsonDefaultMode()) return emitResult({ computer: { captchaTally: tally } });
+    const { captchaTally, captchaCost, heldOffHosts, weakKinds, voterScores } = await import('../agent/computer/captcha-log.js');
+    const [tally, cost, heldOff, skipped, voters] = await Promise.all([captchaTally(dir), captchaCost(dir), heldOffHosts(dir), weakKinds(dir).then(kinds => [...kinds].sort()), voterScores(dir)]);
+    if (isJsonDefaultMode()) return emitResult({ computer: { captchaTally: tally, captchaCost: cost, heldOff, skippedKinds: skipped, voters } });
     if (!tally.length) { process.stdout.write('No human checks have been met in the last 30 days.\n'); return; }
     process.stdout.write('Human checks met in the last 30 days (family: cleared of runs, average seconds):\n');
     for (const row of tally) process.stdout.write(`  ${row.family}: ${row.cleared} of ${row.runs}, ${Math.round(row.seconds / row.runs)}s\n`);
+    if (cost.asks) process.stdout.write(`Model asks: ${cost.asks} (${cost.subscription} on your own subscription, the rest on Gateway credit). Most asked: ${cost.models.slice(0, 5).map(row => `${row.model} ${row.asks}`).join(', ')}.\n`);
+    if (voters.length) { process.stdout.write('Voters, by how often they sided with an accepted answer:\n'); for (const row of voters) process.stdout.write(`  ${row.roster}: ${row.model} ${Math.round(100 * row.right / row.asked)}% of ${row.asked}\n`); }
+    if (heldOff.length) process.stdout.write(`Left alone for now (three refusals in a row): ${heldOff.join(', ')}.\n`);
+    if (skipped.length) process.stdout.write(`hCaptcha kinds skipped because they never cleared: ${skipped.join('; ')}.\n`);
     return;
   }
   if (setting === 'on' || setting === 'off') await setCaptchaSolving(dir, setting === 'on');
@@ -61,7 +65,7 @@ export async function computerCaptcha(setting: string | undefined): Promise<void
   const on = await captchaSolvingAllowed(dir);
   if (isJsonDefaultMode()) return emitResult({ computer: { captchaSolving: on } });
   process.stdout.write(on
-    ? 'Captcha solving is on (the default): when a human check asks a puzzle, a picture of it goes to your own Gateway vision model and the answer is clicked like a visitor would -- no external solving service, nothing leaves this machine but the puzzle. Turn off with `clikcode computer captcha off`.\n'    : 'Captcha solving is off: a check that wants more than one press is left for you. Turn on with `clikcode computer captcha on`.\n');
+    ? 'Captcha solving is on (the default): when a human check asks a puzzle, pictures of it go to your own Gateway models (and, for the hard ones, your signed-in Claude or Codex subscription) and the answer is played like a visitor would -- no external solving service, nothing leaves this machine but the puzzle. Turn off with `clikcode computer captcha off`.\n'    : 'Captcha solving is off: a check that wants more than one press is left for you. Turn on with `clikcode computer captcha on`.\n');
 }
 
 /** `clikcode computer headless on|off`: run ClikCode's browser with no window. A Linux computer with no display does this by itself. */

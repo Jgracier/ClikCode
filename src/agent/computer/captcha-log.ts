@@ -17,6 +17,10 @@ export interface CaptchaRecord {
   steps: string[];
   /** hCaptcha only: the kinds of challenge answered (the instruction with its particulars removed). */
   kinds?: string[];
+  /** What the run cost: how many model asks it made, and how many went to each model (a `subscription-` name is
+   * the user's own Claude or Codex plan, the rest are Gateway credit). */
+  asks?: number;
+  models?: Record<string, number>;
 }
 
 export function captchaLogPath(stateDir: string): string { return path.join(stateDir, 'computer', 'captcha-log.jsonl'); }
@@ -60,6 +64,85 @@ export async function shouldHoldOff(stateDir: string, host: string, now = Date.n
   if (!host) return false;
   const recent = (await recordsSince(stateDir, now - 30 * 60_000)).filter(record => record.host === host && record.outcome !== 'none');
   return recent.length >= 3 && recent.slice(-3).every(record => record.outcome === 'still-there');
+}
+
+/** Sites being left alone right now (three refusals in a row in the last half hour). */
+export async function heldOffHosts(stateDir: string, now = Date.now()): Promise<string[]> {
+  const hosts = new Set((await recordsSince(stateDir, now - 30 * 60_000)).map(record => record.host).filter(Boolean));
+  const held: string[] = [];
+  for (const host of hosts) if (await shouldHoldOff(stateDir, host, now)) held.push(host);
+  return held.sort();
+}
+
+/** Asks made over the last `days`, by model, most first. */
+export async function captchaCost(stateDir: string, days = 30, now = Date.now()): Promise<{ asks: number; subscription: number; models: Array<{ model: string; asks: number }> }> {
+  const models = new Map<string, number>();
+  for (const record of await recordsSince(stateDir, now - days * 86_400_000)) for (const [model, asks] of Object.entries(record.models ?? {})) models.set(model, (models.get(model) ?? 0) + asks);
+  const rows = [...models].map(([model, asks]) => ({ model, asks })).sort((a, b) => b.asks - a.asks);
+  return { asks: rows.reduce((total, row) => total + row.asks, 0), subscription: rows.filter(row => row.model.startsWith('subscription-')).reduce((total, row) => total + row.asks, 0), models: rows };
+}
+
+// ── which voters to trust, measured ─────────────────────────────────────────────────────────────────────────
+
+type VoterScores = Record<string, Record<string, { asked: number; right: number }>>;
+const votersFile = (stateDir: string): string => path.join(stateDir, 'computer', 'captcha-voters.json');
+async function readScores(stateDir: string): Promise<VoterScores> {
+  try { return JSON.parse(await fs.readFile(votersFile(stateDir), 'utf8')) as VoterScores; } catch { return {}; }
+}
+
+/** After a run the site accepted: each voter's answers are counted, and those that sided with the answer given
+ * are counted as right. A refused run teaches nothing certain (which of its answers was wrong is not known), so
+ * only accepted runs are counted. */
+export async function recordVotes(stateDir: string, votes: ReadonlyArray<{ roster: string; model: string; withWinner: boolean }>): Promise<void> {
+  if (!votes.length) return;
+  try {
+    const scores = await readScores(stateDir);
+    for (const vote of votes) {
+      const row = ((scores[vote.roster] ??= {})[vote.model] ??= { asked: 0, right: 0 });
+      row.asked++; if (vote.withWinner) row.right++;
+    }
+    await fs.mkdir(path.dirname(votersFile(stateDir)), { recursive: true, mode: 0o700 });
+    await fs.writeFile(votersFile(stateDir), `${JSON.stringify(scores, null, 2)}\n`, { mode: 0o600 });
+  } catch { /* a score that cannot be written never fails a sign-up */ }
+}
+
+/** Per kind of question, the models measured on at least 20 answers, best first. The solver asks them in this
+ * order ahead of its built-in roster order. */
+export async function voterOrder(stateDir: string, least = 20): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {};
+  for (const [roster, models] of Object.entries(await readScores(stateDir))) {
+    const ranked = Object.entries(models).filter(([model, row]) => row.asked >= least && !model.startsWith('subscription-')).sort((a, b) => b[1].right / b[1].asked - a[1].right / a[1].asked).map(([model]) => model);
+    if (ranked.length) out[roster] = ranked;
+  }
+  return out;
+}
+
+/** The measured share of right answers per voter, for the stats command. */
+export async function voterScores(stateDir: string): Promise<Array<{ roster: string; model: string; asked: number; right: number }>> {
+  return Object.entries(await readScores(stateDir)).flatMap(([roster, models]) => Object.entries(models).map(([model, row]) => ({ roster, model, ...row }))).sort((a, b) => a.roster.localeCompare(b.roster) || b.right / b.asked - a.right / a.asked);
+}
+
+// ── the stored answer set ───────────────────────────────────────────────────────────────────────────────────
+
+const SAMPLES_KEPT = 300;
+/** Keeps the hard questions of a run -- the pictures, what was asked, what each voter said, and whether the site
+ * took the answer -- so a change to a prompt or a roster can be checked against real challenges instead of spent
+ * on live ones. Only challenge pictures are kept, never a page; the newest 300 questions stay. */
+export async function saveSamples(stateDir: string, outcome: string, family: string, samples: ReadonlyArray<{ roster: string; text: string; images: ReadonlyArray<{ mimeType: string; data: string }>; answers: Record<string, string> }>, now = new Date()): Promise<void> {
+  if (!samples.length) return;
+  try {
+    const root = path.join(stateDir, 'computer', 'captcha-samples');
+    const stamp = now.toISOString().replace(/[:.]/g, '-');
+    for (const [index, sample] of samples.entries()) {
+      const dir = path.join(root, `${stamp}-${index + 1}`);
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      const pictures: string[] = [];
+      for (const [n, image] of sample.images.entries()) { const name = `picture-${n + 1}.${/png/.test(image.mimeType) ? 'png' : 'jpg'}`; await fs.writeFile(path.join(dir, name), Buffer.from(image.data, 'base64'), { mode: 0o600 }); pictures.push(name); }
+      await fs.writeFile(path.join(dir, 'question.json'), `${JSON.stringify({ at: now.toISOString(), family, outcome, roster: sample.roster, text: sample.text, pictures, answers: sample.answers }, null, 2)}\n`, { mode: 0o600 });
+    }
+    const all = (await fs.readdir(root)).sort();
+    for (const old of all.slice(0, Math.max(0, all.length - SAMPLES_KEPT))) await fs.rm(path.join(root, old), { recursive: true, force: true });
+  } catch { /* the answer set never fails a sign-up */ }
 }
 
 export interface CaptchaTally { family: string; runs: number; cleared: number; seconds: number }
