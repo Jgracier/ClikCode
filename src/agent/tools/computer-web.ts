@@ -561,7 +561,8 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
           // the account's own Gateway vision model and its answer is played back at a visitor's pace -- built-in
           // captcha solving, no external service.
           const solved = await solveHumanCheck(page, { ...(ctx.signal ? { signal: ctx.signal } : {}) });
-          return { output: solved.outcome === 'cleared' ? 'The puzzle was solved: the challenge accepted the answer. Observe the page and carry on.'
+          return { output: solved.outcome === 'cleared' && solved.widget === 'text' ? 'The characters in the captcha picture were read and typed into its field. Send the form; if the site says the code was wrong, run human_check again on the new picture.'
+            : solved.outcome === 'cleared' ? 'The puzzle was solved: the challenge accepted the answer. Observe the page and carry on.'
             : solved.outcome === 'none' ? 'No puzzle is showing to answer. Observe the page: the block may be something else.'
             : `The puzzle could not be solved (${solved.widget ?? 'unknown widget'}). ${next}` };
         }

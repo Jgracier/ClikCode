@@ -9,7 +9,7 @@
 import type { Frame, Page } from 'playwright-core';
 import { sleep as realSleep } from '../../runtime/sleep.js';
 
-export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha';
+export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider';
 export interface HumanCheckResult {
   /** cleared: the check accepted the press. puzzle: it asked for more than a press. still-there: pressed, nothing changed. none: no checkbox on the page. */
   outcome: 'cleared' | 'puzzle' | 'still-there' | 'none';
@@ -33,7 +33,8 @@ async function boxOf(frame: Frame): Promise<Box | undefined> {
 async function findCheckbox(page: Page): Promise<{ widget: HumanCheckWidget; box: Box } | undefined> {
   for (const frame of page.frames()) {
     const kind = CHECKBOX.find(([, pattern]) => pattern.test(frame.url()));
-    if (!kind) continue;
+    // Invisible reCAPTCHA shows only its "protected by" badge, which is checkbox-sized but has nothing to press.
+    if (!kind || /[?&]size=invisible/.test(frame.url())) continue;
     const box = await boxOf(frame);
     if (box && box.width >= 100 && box.height >= 40 && box.height <= 150 && box.y >= 0) return { widget: kind[0], box };
   }
@@ -55,8 +56,10 @@ async function puzzleShown(page: Page): Promise<boolean> {
 /** The page holds an accepted answer (the hidden field each widget fills in once it is satisfied). */
 export async function humanCheckAnswered(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const doc = (globalThis as unknown as { document: { querySelectorAll(selector: string): ArrayLike<{ value?: string }> } }).document;
-    return Array.from(doc.querySelectorAll('#g-recaptcha-response, [name="g-recaptcha-response"], [name="cf-turnstile-response"], [name="h-captcha-response"]')).some(field => (field.value ?? '').length > 20);
+    const doc = (globalThis as unknown as { document: { querySelectorAll(selector: string): ArrayLike<{ value?: string; getBoundingClientRect?(): { width: number } }> } }).document;
+    if (Array.from(doc.querySelectorAll('#g-recaptcha-response, [name="g-recaptcha-response"], [name="cf-turnstile-response"], [name="h-captcha-response"], [name="lot_number"], [name="geetest_validate"]')).some(field => (field.value ?? '').length > 8)) return true;
+    // GeeTest shows its success state on its own button instead of filling a field the page can see at once.
+    return Array.from(doc.querySelectorAll('[class*="geetest_lock_success"], [class*="geetest_success_radar"], [class*="geetest_btn_click"][class*="geetest_success"]')).some(el => (el.getBoundingClientRect?.().width ?? 0) > 0);
   }).catch(() => false);
 }
 
@@ -129,7 +132,11 @@ export interface SolveDeps {
   /** The whole-grid vision ask, used only when the challenge's layout cannot be read; defaults to the Gateway model. */
   ask?: (image: { mimeType: string; data: string }) => Promise<{ ok: true; answer: CaptchaAskAnswer } | { ok: false; error: string }>;
   /** The where-to-click ask for free-form challenges; defaults to the Gateway model (captcha-model.ts askClickPoints). */
-  askPoints?: (image: { mimeType: string; data: string }, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>;
+  askPoints?: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>;
+  /** Reads a "type what you see" captcha picture; defaults to the Gateway model (captcha-model.ts askCaptchaText). */
+  askText?: (image: { mimeType: string; data: string }) => Promise<string | undefined>;
+  /** Where to drag on a drag puzzle; defaults to the Gateway model (captcha-model.ts askDrag). */
+  askDrag?: (image: { mimeType: string; data: string }, instruction: string) => Promise<import('./captcha-model.js').DragAnswer | undefined>;
   /** The one-square ask; defaults to the Gateway model (captcha-model.ts askTileMatch). */
   askTile?: (question: import('./captcha-model.js').TileQuestion) => Promise<boolean | undefined>;
   /** Source of randomness for the human-like pacing; tests inject a fixed one. */
@@ -231,6 +238,162 @@ async function fitPuzzle(page: Page, box: Box): Promise<boolean> {
   } catch { return false; }
 }
 
+/** A drag like a hand makes it: press on the piece, set off slowly, speed up, overshoot a little, settle back,
+ * pause, let go. The path wobbles vertically and is never the same twice. */
+async function visitorDrag(mouse: Page['mouse'], from: { x: number; y: number }, to: { x: number; y: number }, random: () => number, sleep: (ms: number) => Promise<void>): Promise<void> {
+  await mouse.move(from.x - 20 - random() * 30, from.y + (random() - 0.5) * 20);
+  await mouse.move(from.x, from.y, { steps: 5 + Math.floor(random() * 4) });
+  await sleep(120 + random() * 200);
+  await mouse.down();
+  await sleep(90 + random() * 150);
+  const overshoot = 3 + random() * 6, dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
+  const steps = 18 + Math.floor(random() * 10);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps, ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    const reach = ease * (1 + overshoot / len);
+    await mouse.move(from.x + dx * reach, from.y + dy * reach + Math.sin(t * Math.PI) * (random() - 0.5) * 6);
+    await sleep(8 + random() * 22);
+  }
+  await mouse.move(to.x + (random() - 0.5) * 2, to.y + (random() - 0.5) * 2, { steps: 4 });
+  await sleep(150 + random() * 250);
+  await mouse.up();
+}
+
+/** A slider check drawn in the page itself (GeeTest, Alibaba's "slide to verify", similar): a handle on a track,
+ * usually under a picture with a gap. The model says where the handle is and where the piece fits; the handle is
+ * dragged that far along its track. A plain "slide to the end" track is dragged to its end. */
+async function solveSlider(page: Page, askDrag: (image: { mimeType: string; data: string }, instruction: string) => Promise<import('./captcha-model.js').DragAnswer | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void, pressedTrigger = false, askPoints?: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>): Promise<boolean> {
+  const found = await page.evaluate(`(() => {
+    const seen = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 8 && r.height > 8 && s.visibility !== 'hidden' && s.display !== 'none' && r.bottom > 0 && r.top < innerHeight; };
+    const handle = Array.from(document.querySelectorAll('.geetest_btn, .geetest_slider_button, .geetest_slider_button_new, .btn_slide, .nc_iconfont.btn_slide, [class*="slider"][class*="btn"], [class*="slider"][class*="handle"], [class*="slide"][class*="button"], [class*="captcha"][class*="slider"] [role="slider"]')).find(seen);
+    if (!handle) return null;
+    const box = handle.closest('.geetest_box, .geetest_panel_box, .geetest_widget, .geetest_holder, .nc-container, [class*="captcha"], [class*="verify"]') || handle.parentElement;
+    const track = handle.parentElement;
+    const r = el => { const b = el.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; };
+    box.setAttribute('data-clikcode-slider', '1');
+    const text = (box.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160);
+    const picture = !!box.querySelector('canvas, img, [class*="bg"]');
+    return { handle: r(handle), track: r(track), box: r(box), text, picture };
+  })()`).catch(() => null) as { handle: Box; track: Box; box: Box; text: string; picture: boolean } | null;
+  if (!found) {
+    // A slider check often starts as a button ("Click to verify"); press it once and look again.
+    const trigger = await page.evaluate(`(() => {
+      const el = Array.from(document.querySelectorAll('[class*="geetest_btn_click"], .geetest_radar_tip, .geetest_radar_btn, .nc_iconfont.btn_slide')).find(e => { const r = e.getBoundingClientRect(); return r.width > 8 && r.height > 8 && r.bottom > 0 && r.top < innerHeight; });
+      if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height };
+    })()`).catch(() => null) as Box | null;
+    if (!trigger || pressedTrigger) return askPoints ? solveInPageBox(page, askPoints, random, sleep, trace) : false;
+    trace?.('slider check: pressing its button');
+    await visitorClick(page.mouse, toTarget(trigger), random, sleep);
+    await sleep(3_000);
+    return solveSlider(page, askDrag, random, sleep, trace, true, askPoints);
+  }
+  const start = { x: found.handle.x + found.handle.width / 2, y: found.handle.y + found.handle.height / 2 };
+  let distance = found.track.x + found.track.width - found.handle.width / 2 - start.x;
+  if (found.picture) {
+    let shot: Buffer;
+    try { shot = await page.locator('[data-clikcode-slider="1"]').first().screenshot({ type: 'jpeg', quality: 88, timeout: 8_000 }); } catch { return false; }
+    const answer = await askDrag({ mimeType: 'image/jpeg', data: shot.toString('base64') }, found.text || 'Drag the slider so the piece fits into its gap');
+    if (!answer) return false;
+    distance = (answer.to.x - answer.from.x) * found.box.width;
+  }
+  if (!(distance > 4)) return false;
+  trace?.(`slider ("${found.text}"): dragging ${Math.round(distance)}px`);
+  await visitorDrag(page.mouse, start, { x: start.x + distance, y: start.y }, random, sleep);
+  return true;
+}
+
+/** GeeTest's "select N images with <example>": a 3x3 drawing and a small example picture. The example is taken at
+ * its full size, each square is cut out and compared with it by the voting models, and the N best are clicked. */
+async function solveGeetestMatch(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
+  const info = await page.evaluate(`(() => {
+    const ex = document.querySelector('[class*="geetest_ques_tips"] img');
+    const grid = Array.from(document.querySelectorAll('[class*="geetest_svg_item"], [class*="geetest_subitem"]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 150 && r.height > 150; });
+    const tips = document.querySelector('[class*="geetest_text_tips"]');
+    if (!ex || !grid) return null;
+    const r = grid.getBoundingClientRect();
+    return { src: ex.src, grid: { x: r.x, y: r.y, width: r.width, height: r.height }, text: tips ? tips.textContent.trim() : '' };
+  })()`).catch(() => null) as { src: string; grid: Box; text: string } | null;
+  if (!info) return false;
+  let example: Buffer | undefined;
+  try {
+    if (info.src.startsWith('data:')) example = Buffer.from(info.src.slice(info.src.indexOf(',') + 1), 'base64');
+    else { const res = await page.request.get(info.src, { timeout: 10_000 }); if (res.ok()) example = await res.body(); }
+  } catch { example = undefined; }
+  if (!example) return false;
+  const mime = /\.png(?:$|\?)/i.test(info.src) || example[0] === 0x89 ? 'image/png' : 'image/jpeg';
+  const want = Math.max(1, Number(/select\s+(\d+)/i.exec(info.text)?.[1] ?? 1));
+  const { askSameAsExample } = await import('./captcha-model.js');
+  const w = info.grid.width / 3, h = info.grid.height / 3;
+  const cells = Array.from({ length: 9 }, (_, i) => ({ x: info.grid.x + (i % 3) * w, y: info.grid.y + Math.floor(i / 3) * h, width: w, height: h }));
+  const shots = await Promise.all(cells.map(cell => page.screenshot({ type: 'png', clip: { x: cell.x + 3, y: cell.y + 3, width: cell.width - 6, height: cell.height - 6 }, timeout: 8_000 }).catch(() => undefined)));
+  const scores = await Promise.all(shots.map(shot => shot ? askSameAsExample({ mimeType: mime, data: example!.toString('base64') }, { mimeType: 'image/png', data: shot.toString('base64') }) : Promise.resolve(undefined)));
+  const ranked = scores.map((score, index) => ({ index, score: score ?? 0 })).filter(c => c.score > 0).sort((a, b) => b.score - a.score).slice(0, want);
+  if (!ranked.length) { trace?.(`GeeTest match ("${info.text}"): nothing matched the example`); return false; }
+  trace?.(`GeeTest match ("${info.text}"): clicking ${ranked.map(c => `${c.index}(${c.score.toFixed(2)})`).join(' ')}`);
+  for (const { index } of ranked) await visitorClick(page.mouse, toTarget(cells[index]!), random, sleep);
+  return true;
+}
+
+/** A challenge drawn in the page itself with no slider (GeeTest's "select the image that matches", icon order,
+ * nine-square): a picture of the challenge box goes to the voting models, the spots they agree on are clicked,
+ * then the box's own confirm button if it has one. */
+async function solveInPageBox(page: Page, askPoints: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
+  const box = await page.evaluate(`(() => {
+    const el = Array.from(document.querySelectorAll('[class*="geetest_box"], [class*="geetest_panel_box"]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 200 && r.height > 200 && r.bottom > 0 && r.top < innerHeight && getComputedStyle(e).visibility !== 'hidden'; });
+    if (!el) return null;
+    el.setAttribute('data-clikcode-box', '1');
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height, text: (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160) };
+  })()`).catch(() => null) as (Box & { text: string }) | null;
+  if (!box) return false;
+  if (await solveGeetestMatch(page, random, sleep, trace)) return true;
+  let shot: Buffer;
+  try { shot = await page.locator('[data-clikcode-box="1"]').first().screenshot({ type: 'jpeg', quality: 88, timeout: 8_000 }); } catch { return false; }
+  const instruction = `${box.text}. A small picture in the top corner, if any, is the example to match.`;
+  const points = await askPoints([{ mimeType: 'image/jpeg', data: shot.toString('base64') }], instruction);
+  if (!points?.length) { trace?.(`in-page check ("${box.text}"): no agreed spot`); return false; }
+  trace?.(`in-page check ("${box.text}"): clicking ${points.map(p => `(${p.x.toFixed(2)},${p.y.toFixed(2)})`).join(' ')}`);
+  for (const p of points.slice(0, 9)) {
+    const x = box.x + p.x * box.width, y = box.y + p.y * box.height;
+    await visitorClick(page.mouse, { x: x - 4, x2: x + 4, y: y - 4, y2: y + 4 }, random, sleep);
+  }
+  const submit = await page.evaluate(`(() => { const b = Array.from(document.querySelectorAll('[data-clikcode-box="1"] [class*="geetest_submit"], [data-clikcode-box="1"] [class*="geetest_commit"]')).find(e => e.getBoundingClientRect().width > 0); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
+  if (submit) await visitorClick(page.mouse, toTarget(submit), random, sleep);
+  return true;
+}
+
+/** A classic "type the characters you see" captcha: a small picture beside a field asking for its code. The picture
+ * is read by the vision model and typed in at a visitor's pace. Says whether it typed anything; whether the site
+ * accepts it shows when the form is sent. */
+async function solveTextCaptcha(page: Page, askText: (image: { mimeType: string; data: string }) => Promise<string | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
+  const marked = await page.evaluate(`(() => {
+    const seen = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 4 && r.height > 4 && s.visibility !== 'hidden' && s.display !== 'none' && el.type !== 'hidden'; };
+    const asks = /captcha|security ?code|verification ?code|verify ?code|characters|code (shown|above|below|in the image)|text (shown|in the image)|type the (code|text|characters)|enter the (code|text|characters)|antispam|human/i;
+    const labelOf = input => { const l = input.id && document.querySelector('label[for="' + CSS.escape(input.id) + '"]'); return [input.name, input.id, input.placeholder, input.getAttribute('aria-label'), l ? l.textContent : '', input.closest('label') ? input.closest('label').textContent : ''].join(' '); };
+    const input = Array.from(document.querySelectorAll('input:not([type]), input[type=text], input[type=tel], input[type=number]')).find(i => seen(i) && asks.test(labelOf(i)) && !/recaptcha|hcaptcha|turnstile|email|phone|name|company/i.test((i.name || '') + ' ' + (i.id || '')));
+    if (!input) return false;
+    const near = input.getBoundingClientRect();
+    const pics = Array.from(document.querySelectorAll('img, canvas')).filter(p => { if (!seen(p)) return false; const r = p.getBoundingClientRect(); return r.width >= 50 && r.width <= 450 && r.height >= 18 && r.height <= 180; });
+    const score = p => { const r = p.getBoundingClientRect(); const named = /captcha|securimage|code|verif|kaptcha/i.test([p.src, p.alt, p.id, p.className].join(' ')) ? 0 : 400; return named + Math.hypot(r.x + r.width / 2 - (near.x + near.width / 2), r.y + r.height / 2 - (near.y + near.height / 2)); };
+    const pic = pics.sort((a, b) => score(a) - score(b))[0];
+    if (!pic || score(pic) > 600) return false;
+    input.setAttribute('data-clikcode-captcha-field', '1');
+    pic.setAttribute('data-clikcode-captcha-picture', '1');
+    return true;
+  })()`).catch(() => false);
+  if (!marked) return false;
+  let shot: Buffer;
+  try { shot = await page.locator('[data-clikcode-captcha-picture="1"]').first().screenshot({ type: 'png', timeout: 8_000 }); } catch { return false; }
+  const text = await askText({ mimeType: 'image/png', data: shot.toString('base64') });
+  if (!text) { trace?.('text captcha: the picture could not be read'); return false; }
+  trace?.(`text captcha: typing ${text.length} characters`);
+  const field = page.locator('[data-clikcode-captcha-field="1"]').first();
+  await field.click({ timeout: 5_000 }).catch(() => undefined);
+  await field.fill('').catch(() => undefined);
+  for (const char of text) { await page.keyboard.type(char); await sleep(60 + random() * 140); }
+  return true;
+}
+
 /** Answer a shown puzzle the way a person does. The challenge's own layout is read from the page (instruction,
  * target, every square's position, the Verify button), each square is asked about on its own -- far more reliable
  * than asking for a list of indices over the whole grid -- and the matches are clicked at a visitor's pace. A
@@ -244,12 +407,15 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   const signal = deps.signal ? { signal: deps.signal } : {};
   const ask = deps.ask ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaModel(image, signal)));
   const askTile = deps.askTile ?? ((question) => import('./captcha-model.js').then(m => m.askTileMatch(question, signal)));
-  const askPoints = deps.askPoints ?? ((image, instruction) => import('./captcha-model.js').then(m => m.askClickPoints(image, instruction, signal)));
+  const askText = deps.askText ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaText(image, signal)));
+  const askDrag = deps.askDrag ?? ((image, instruction) => import('./captcha-model.js').then(m => m.askDrag(image, instruction, signal)));
+  const askPoints = deps.askPoints ?? ((images, instruction) => import('./captcha-model.js').then(m => m.askClickPoints(images, instruction, signal)));
   const budgetMs = deps.waitMs ?? 180_000;
   const began = Date.now();
   let firstWidget: HumanCheckWidget | undefined;
   let repressed = 0;
   let refreshed = 0;
+  let inPageTries = 0, textTried = false;
   while (Date.now() - began < budgetMs) {
     if (deps.signal?.aborted) break;
     const found = await findPuzzle(page);
@@ -263,7 +429,19 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
         await sleep(1_500);
         continue;
       }
-      return { outcome: (await humanCheckAnswered(page)) ? 'cleared' : 'none', ...(firstWidget ? { widget: firstWidget } : {}) };
+      if (await humanCheckAnswered(page)) return { outcome: 'cleared', ...(firstWidget ? { widget: firstWidget } : {}) };
+      // No widget challenge: the page may carry its own check -- a slider to drag, or a picture of characters to type.
+      if (!firstWidget && inPageTries < 4) {
+        inPageTries++;
+        const slid = await solveSlider(page, askDrag, random, sleep, deps.trace, false, askPoints);
+        if (slid) { await sleep(2_000); continue; }
+      }
+      if (!firstWidget && !textTried) {
+        textTried = true;
+        const typed = await solveTextCaptcha(page, askText, random, sleep, deps.trace);
+        if (typed) return { outcome: 'cleared', widget: 'text' };
+      }
+      return { outcome: 'none', ...(firstWidget ? { widget: firstWidget } : {}) };
     }
     firstWidget ??= found.widget;
     if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
@@ -299,8 +477,26 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
       // clicks where the answer is, so the model is asked where; a drag puzzle (or one it cannot place) is swapped
       // for another challenge, up to five times, before this check is left to a person.
       const instruction = String(await found.frame.evaluate(`((document.querySelector('.prompt-text') || {}).innerText || '').replace(/\\s+/g, ' ').trim()`).catch(() => ''));
-      const points = instruction && !/\bdrag\b/i.test(instruction) ? await askPoints(grid, instruction) : undefined;
-      if (points?.length) {
+      const drag = instruction && /\b(?:drag|slide|move)\b/i.test(instruction) ? await askDrag(grid, instruction) : undefined;
+      let points: Array<{ x: number; y: number }> | undefined;
+      if (instruction && !drag && !/\b(?:drag|slide)\b/i.test(instruction)) {
+        // A puzzle about motion is answered from a few frames, half a second apart, not one still.
+        const frames = [grid];
+        if (/\b(?:mov(?:e|es|ing)|visit(?:ed|s)?|path|went|travel(?:s|led)?|jump(?:s|ed)?)\b/i.test(instruction)) {
+          for (let i = 0; i < 4; i++) {
+            await sleep(500);
+            try { frames.push({ mimeType: 'image/jpeg', data: (await (await found.frame.frameElement()).screenshot({ type: 'jpeg', quality: 80, timeout: 8_000 }) as Buffer).toString('base64') }); } catch { break; }
+          }
+        }
+        points = await askPoints(frames, instruction);
+      }
+      if (drag) {
+        deps.trace?.(`"${instruction}": dragging (${drag.from.x.toFixed(2)},${drag.from.y.toFixed(2)}) to (${drag.to.x.toFixed(2)},${drag.to.y.toFixed(2)})`);
+        const at = (p: { x: number; y: number }) => ({ x: found.box.x + p.x * found.box.width, y: found.box.y + p.y * found.box.height });
+        await visitorDrag(page.mouse, at(drag.from), at(drag.to), random, sleep);
+        const submit = await found.frame.evaluate(`(() => { const b = document.querySelector('.button-submit'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
+        confirm = submit ? toTarget({ ...submit, x: submit.x + found.box.x, y: submit.y + found.box.y }) : { x: found.box.x + found.box.width * 0.8, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 20 };
+      } else if (points?.length) {
         deps.trace?.(`"${instruction}": clicking ${points.map(p => `(${p.x.toFixed(2)},${p.y.toFixed(2)})`).join(' ')}`);
         for (const p of points.slice(0, 9)) {
           const x = found.box.x + p.x * found.box.width, y = found.box.y + p.y * found.box.height;

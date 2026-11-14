@@ -119,3 +119,30 @@ describe('where to click on a free-form challenge', () => {
     expect(parsePoints('I cannot tell.')).toBeUndefined();
   });
 });
+
+describe('voting on spots, reading text, reading a drag', () => {
+  it('keeps only spots two or more voters agree on, averaged', async () => {
+    const { agreedPoints } = await import('./captcha-model.js');
+    const agreed = agreedPoints([[{ x: 0.5, y: 0.34 }, { x: 0.28, y: 0.72 }], [{ x: 0.52, y: 0.36 }, { x: 0.9, y: 0.1 }], [{ x: 0.29, y: 0.71 }]]);
+    expect(agreed).toHaveLength(2);
+    expect(agreed[0]!.x).toBeCloseTo(0.51); expect(agreed[1]!.y).toBeCloseTo(0.715);
+    // One voter alone, however sure, is not enough.
+    expect(agreedPoints([[{ x: 0.5, y: 0.5 }], undefined, []])).toEqual([]);
+  });
+
+  it('reads the typed text, without spaces, and refuses an implausibly long one', async () => {
+    const { parseCaptchaText, askCaptchaText } = await import('./captcha-model.js');
+    expect(parseCaptchaText('```json\n{"text": "Xk d7DE"}\n```')).toBe('Xkd7DE');
+    expect(parseCaptchaText('{"text": "this is far too long to be a code"}')).toBeUndefined();
+    const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);
+    // The reading most voters agree on wins; a tie goes to the first voter.
+    expect(await askCaptchaText({ mimeType: 'image/png', data: 'eA==' }, { modelClientsOf: async () => [fake('{"text":"XKd1DE"}'), fake('{"text":"XKd7DE"}'), fake('{"text":"XKd7DE"}')] })).toBe('XKd7DE');
+    expect(await askCaptchaText({ mimeType: 'image/png', data: 'eA==' }, { modelClientsOf: async () => [fake('{"text":"ab12"}'), fake('{"text":"ab1z"}')] })).toBe('ab12');
+  });
+
+  it('reads a drag answer and refuses points outside the picture', async () => {
+    const { parseDrag } = await import('./captcha-model.js');
+    expect(parseDrag('{"from": {"x": 0.1, "y": 0.8}, "to": {"x": 0.62, "y": 0.8}}')).toEqual({ from: { x: 0.1, y: 0.8 }, to: { x: 0.62, y: 0.8 } });
+    expect(parseDrag('{"from": {"x": 0.1, "y": 0.8}, "to": {"x": 1.4, "y": 0.8}}')).toBeUndefined();
+  });
+});
