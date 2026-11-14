@@ -73,7 +73,9 @@ export function qualifyPorts(stateDir: string, client: DeployClient, options: { 
         await page.waitForLoadState('networkidle', { timeout: Math.min(6_000, budgetMs) }).catch(quiet('agent/computer/connector-qualify-live'));
         await page.waitForTimeout(800).catch(quiet('agent/computer/connector-qualify-live'));
         const read = await page.evaluate(READ_PAGE) as Pick<RenderedPage, 'text' | 'hasForm' | 'hasEmailField' | 'captchaWidget' | 'links'>;
-        return { role, url: page.url() || url, ...(status !== undefined ? { status } : {}), ...read };
+        // The widget markup is one sign; the solver's own detector adds the checks a page draws itself (GeeTest, a hold button, a code picture).
+        const check = read.captchaWidget ? undefined : await (await import('./human-check.js')).detectHumanCheck(page).catch(() => undefined);
+        return { role, url: page.url() || url, ...(status !== undefined ? { status } : {}), ...read, captchaWidget: read.captchaWidget || !!check };
       })();
       const late = new Promise<RenderedPage>(resolve => { timer = setTimeout(() => resolve(dead(`page budget of ${Math.round(budgetMs / 1000)}s used`)), budgetMs + 4_000); });
       const dump = async (page: RenderedPage): Promise<RenderedPage> => {

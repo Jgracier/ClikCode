@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
-import { pressHumanCheck, solveHumanCheck } from '../computer/human-check.js';
+import { passHumanCheck } from '../computer/human-check.js';
 import { adoptPage, allTabs, closeComputerPage, computerPage, moveTabToCloud, moveTabToLocal, tabIsInCloud, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
 import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, listTabs, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
 import { COMPUTER_OFF, captchaSolvingAllowed, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
@@ -553,25 +553,18 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       }
       if (args.action === 'human_check') {
         const page = await computerPage(ctx.stateDir, args.tab);
-        const checked = await pressHumanCheck(page);
-        if (checked.outcome === 'cleared') { const { recordCaptcha } = await import('../computer/captcha-log.js'); let host = ''; try { host = new URL(page.url()).host; } catch { host = ''; } void recordCaptcha(ctx.stateDir, { at: new Date().toISOString(), host, family: checked.widget ?? 'unknown', outcome: 'cleared', seconds: 0, steps: ['press'] }); }
+        // One press, then (when solving is on) the answer itself, in this signed-in tab: pictures of the challenge go
+        // to the account's own Gateway models and their answer is played back at a visitor's pace -- built-in captcha
+        // solving, no external service. A tab in the managed cloud browser is only pressed.
         const inCloud = tabIsInCloud(ctx.stateDir, args.tab);
-        const next = inCloud ? 'Use handoff so the user can finish it.' : 'Try cloud (the managed browser, when the user has it on), then handoff.';
-        if (checked.outcome !== 'cleared' && !inCloud && await captchaSolvingAllowed(ctx.stateDir)) {
-          // The check wants more than a press: solve it here, in this signed-in tab. A picture of the puzzle goes to
-          // the account's own Gateway vision model and its answer is played back at a visitor's pace -- built-in
-          // captcha solving, no external service.
-          const { recordCaptcha } = await import('../computer/captcha-log.js');
-          const solved = await solveHumanCheck(page, { ...(ctx.signal ? { signal: ctx.signal } : {}), record: entry => { void recordCaptcha(ctx.stateDir, entry); } });
-          return { output: solved.outcome === 'cleared' && solved.widget === 'text' ? 'The characters in the captcha picture were read and typed into its field. Send the form; if the site says the code was wrong, run human_check again on the new picture.'
-            : solved.outcome === 'cleared' ? 'The puzzle was solved: the challenge accepted the answer. Observe the page and carry on.'
-            : solved.outcome === 'none' ? 'No puzzle is showing to answer. Observe the page: the block may be something else.'
-            : `The puzzle could not be solved (${solved.widget ?? 'unknown widget'}). ${next}` };
-        }
-        return { output: checked.outcome === 'cleared' ? 'The human check accepted the press. Observe the page and carry on.'
-          : checked.outcome === 'puzzle' ? `The check asks for a puzzle, which this browser does not answer. ${next}`
-          : checked.outcome === 'still-there' ? `The box was pressed and did not clear. ${next}`
-          : 'No human-check checkbox is on this page. Observe it: a whole-page check may still be loading, or the block is something else.' };
+        const solve = !inCloud && await captchaSolvingAllowed(ctx.stateDir);
+        const checked = await passHumanCheck(page, { stateDir: ctx.stateDir, solve, ...(ctx.signal ? { signal: ctx.signal } : {}) });
+        const next = 'Use handoff so the user can finish it.';
+        return { output: checked.outcome === 'cleared' && checked.widget === 'text' ? 'The characters in the captcha picture were read and typed into its field. Send the form; if the site says the code was wrong, run human_check again on the new picture.'
+          : checked.outcome === 'cleared' ? 'The human check was passed. Observe the page and carry on.'
+          : checked.outcome === 'puzzle' ? `The check asks for a puzzle, and captcha solving is ${inCloud ? 'not run in the managed cloud browser' : 'turned off (clikcode computer captcha on)'}. ${next}`
+          : checked.outcome === 'still-there' ? `The check was tried and did not clear (${checked.widget ?? 'unknown kind'}). ${next}`
+          : 'No human check is on this page. Observe it: a whole-page check may still be loading, or the block is something else.' };
       }
       if (args.action === 'cloud') {
         if (args.clear === true) {

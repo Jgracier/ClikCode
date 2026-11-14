@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { captchaTally, familyOf, recordCaptcha, stepOf } from './captcha-log.js';
+import { captchaTally, familyOf, recordCaptcha, shouldHoldOff, stepOf, weakKinds } from './captcha-log.js';
 
 describe('the captcha log', () => {
   it('counts runs and clears per family over the window, most runs first', async () => {
@@ -27,5 +27,32 @@ describe('the captcha log', () => {
     expect(familyOf('recaptcha', ['pictures'])).toBe('recaptcha');
     expect(familyOf(undefined, ['board'])).toBe('geetest');
     expect(familyOf(undefined, [])).toBe('unknown');
+  });
+
+  it('leaves a site alone for half an hour after it refused three answers in a row', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
+    const now = Date.parse('2026-11-14T12:00:00Z');
+    const run = (host: string, outcome: string, minutesAgo: number) => recordCaptcha(dir, { at: new Date(now - minutesAgo * 60_000).toISOString(), host, family: 'hcaptcha', outcome, seconds: 40, steps: ['click'] });
+    await run('a.example', 'still-there', 20); await run('a.example', 'still-there', 10);
+    expect(await shouldHoldOff(dir, 'a.example', now)).toBe(false);
+    await run('a.example', 'still-there', 5);
+    expect(await shouldHoldOff(dir, 'a.example', now)).toBe(true);
+    // Another site is not affected, a clear ends the streak, and the hold lapses by itself.
+    expect(await shouldHoldOff(dir, 'b.example', now)).toBe(false);
+    expect(await shouldHoldOff(dir, 'a.example', now + 31 * 60_000)).toBe(false);
+    await run('a.example', 'cleared', 1);
+    expect(await shouldHoldOff(dir, 'a.example', now)).toBe(false);
+  });
+
+  it('names the challenge kinds that never clear, once they have been met three times', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
+    const now = Date.parse('2026-11-14T12:00:00Z');
+    const run = (kinds: string[], outcome: string) => recordCaptcha(dir, { at: new Date(now - 3_600_000).toISOString(), host: 'a.example', family: 'hcaptcha', outcome, seconds: 40, steps: ['click'], kinds });
+    await run(['drag the segments', 'click the odd one'], 'still-there');
+    await run(['drag the segments'], 'still-there');
+    expect([...await weakKinds(dir, now)]).toEqual([]);
+    await run(['drag the segments', 'click the odd one'], 'still-there');
+    await run(['click the odd one'], 'cleared');
+    expect([...await weakKinds(dir, now)]).toEqual(['drag the segments']);
   });
 });

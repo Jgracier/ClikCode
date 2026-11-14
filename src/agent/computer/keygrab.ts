@@ -39,13 +39,10 @@ export interface KeygrabPort {
   probe?(url: string): Promise<{ html: boolean; status: number; url: string } | undefined>;
   /** Presses a key on the page (Escape closes a menu, Enter submits a search). */
   press?(key: string): Promise<string | undefined>;
-  /** Presses a checkbox-style human check ("I'm not a robot") once, as a visitor would. */
+  /** Gets past a human check as a visitor would: the one press on an "I'm not a robot" box, then (when captcha
+   * solving is on) the answer to the puzzle, slider, hold button or code picture, worked out by the account's own
+   * models and played at a visitor's pace in this tab. */
   humanCheck?(): Promise<'cleared' | 'puzzle' | 'still-there' | 'none'>;
-  /** Solves the puzzle behind the check, when solving is on: a picture of the challenge goes to the account's own
-   * vision model and its answer is clicked at a visitor's pace. False when it is off, unavailable, or failed. */
-  solveCaptcha?(): Promise<boolean>;
-  /** Moves this tab to the managed cloud browser at the same address, when the user turned that on. False when it is off, already there, or failed. */
-  escalate?(): Promise<boolean>;
   screenshot(): Promise<string | undefined>;
   profileEmail(): Promise<string | undefined>;
 }
@@ -243,37 +240,25 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     if (wall) throw await wallStop(view, wall);
   };
   const captchaOn = (view: KeyView): boolean => keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields })?.kind === 'captcha';
-  let escalated = false;
-  const pressedAt = new Set<string>();
-  let solved = false;
-  /** A captcha in the way, in order: the one press a visitor makes on a checkbox-style check (once per page); then,
-   * once per run, the puzzle itself is solved -- a picture of the challenge goes to the account's own vision model
-   * and its answer is clicked at a visitor's pace, so the tab keeps its cookies and sign-in; then, once per run,
-   * the tab moves to the managed cloud browser if the user turned it on, whose service works on the challenge
-   * by itself. A page still blocked after all that ends as a human step. */
+  const checkedAt = new Map<string, number>();
+  let checks = 0;
+  /** A captcha in the way is answered in this tab, which keeps its cookies and sign-in: up to twice per page (a
+   * site that says "wrong code" shows a new one) and six times per run (one on the sign-up form, another after it
+   * is sent, another at sign-in). A page still blocked after that ends as a human step. */
   const pastCaptcha = async (view: KeyView): Promise<KeyView> => {
-    if (!captchaOn(view)) return view;
     let v = view;
-    const here = pathOf(v.url) || v.url;
-    if (port.humanCheck && !pressedAt.has(here) && pressedAt.size < 3) {
-      pressedAt.add(here);
-      const pressed = await act('press the human-check box once', () => port.humanCheck!());
-      say(`human check: ${pressed}`);
-      if (pressed === 'cleared') { await sleep(800); v = await dismissBanner(await port.look()); if (!captchaOn(v)) return v; }
+    while (captchaOn(v) && port.humanCheck) {
+      const here = pathOf(v.url) || v.url;
+      const tries = checkedAt.get(here) ?? 0;
+      if (tries >= 2 || checks >= 6) break;
+      checkedAt.set(here, tries + 1); checks++;
+      const outcome = await act('get past the human check', () => port.humanCheck!());
+      say(`human check: ${outcome}`);
+      if (outcome !== 'cleared') break;
+      await sleep(800);
+      v = await dismissBanner(await port.look());
     }
-    if (!solved && port.solveCaptcha) {
-      solved = true;
-      if (await act('solve the captcha puzzle (the vision model answers it)', () => port.solveCaptcha!())) {
-        await sleep(800);
-        v = await dismissBanner(await port.look());
-        if (!captchaOn(v)) return v;
-      }
-    }
-    if (escalated || !port.escalate) return v;
-    escalated = true;
-    if (!await act('move the tab to the managed cloud browser (a captcha)', () => port.escalate!())) return v;
-    for (let wait = 0; wait < 10; wait++) { await sleep(2_500); v = await port.look(); if (!captchaOn(v) && (v.controls.length || v.text.trim().length >= 40)) break; }
-    return dismissBanner(v);
+    return v;
   };
   const look = async (): Promise<KeyView> => {
     let v = await port.look();

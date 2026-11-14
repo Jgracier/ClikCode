@@ -1,7 +1,7 @@
 /** One press on a checkbox-style human check, and the solver that answers the puzzle behind it. */
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
-import { pressHumanCheck, solveHumanCheck } from './human-check.js';
+import { detectHumanCheck, pressHumanCheck, solveHumanCheck } from './human-check.js';
 
 type FakeFrame = { src: string; box: { x: number; y: number; width: number; height: number } | null };
 function fakePage(frames: FakeFrame[], onClick: (state: { frames: FakeFrame[]; answered: boolean; url: string }) => void) {
@@ -30,7 +30,7 @@ describe('the human-check checkbox', () => {
     expect(await pressHumanCheck(page, noSleep)).toEqual({ outcome: 'puzzle', widget: 'recaptcha' });
     expect(state.clicks).toHaveLength(1);
     // Asked again with the puzzle up: nothing is pressed at all.
-    expect(await pressHumanCheck(page, noSleep)).toEqual({ outcome: 'puzzle' });
+    expect(await pressHumanCheck(page, noSleep)).toEqual({ outcome: 'puzzle', widget: 'recaptcha' });
     expect(state.clicks).toHaveLength(1);
   });
 
@@ -79,88 +79,106 @@ function solverPage(frames: SolverFrame[], onConfirm: (state: { frames: SolverFr
 }
 const puzzle = (): SolverFrame => ({ src: 'https://www.google.com/recaptcha/api2/bframe?k=x', box: { x: 80, y: 120, width: 400, height: 580 } });
 const fixedRandom = (): () => number => { let n = 0; return () => { n++; return (n * 0.37 % 1); }; };
-const seenImages: string[] = [];
-const askTiles = (tiles: number[]) => async (image: { mimeType: string; data: string }) => {
-  seenImages.push(image.data);
-  return { ok: true as const, answer: { tiles } };
-};
 const noWait = { sleep: async () => undefined, waitMs: 600, random: fixedRandom() };
-type WrappedFrame = { url: () => string; frameElement: () => Promise<{ boundingBox: () => Promise<{ x: number; y: number; width: number; height: number } | null>; screenshot: () => Promise<Buffer> }> };
-const wrapFrame = (frame: SolverFrame): WrappedFrame => ({ url: () => frame.src, frameElement: async () => ({ boundingBox: async () => frame.box, screenshot: async () => (frame.shot ? frame.shot() : Buffer.from('jpeg-bytes')) }) });
+
+/** A reCAPTCHA grid as the challenge frame's own markup gives it: nine squares of 100px and a Verify button, in
+ * the frame's coordinates. */
+const gridLayout = () => ({
+  instruction: 'Select all images with buses', target: 'buses', dynamic: false, tileSelector: 'td.rc-imageselect-tile',
+  tiles: Array.from({ length: 9 }, (_, i) => ({ x: 10 + (i % 3) * 100, y: 100 + Math.floor(i / 3) * 100, width: 100, height: 100, key: `k${i}`, selected: false })),
+  verify: { x: 300, y: 520, width: 80, height: 40 },
+});
+/** The fake page, with frames that answer the layout reader. */
+function gridPage(onDown: (state: { clicks: Array<[number, number]>; answered: boolean }) => void) {
+  const made = solverPage([puzzle()]);
+  const frame = { url: () => puzzle().src, parentFrame: () => null, evaluate: async (script: unknown) => typeof script === 'string' && script.includes('rc-imageselect') ? gridLayout() : true, frameElement: async () => ({ boundingBox: async () => puzzle().box, screenshot: async () => Buffer.from('jpeg-bytes') }) };
+  const page = made.page as unknown as { frames: () => unknown[]; mouse: { down: () => Promise<void>; up: () => Promise<void> } };
+  page.frames = () => [frame];
+  const down = page.mouse.down;
+  page.mouse.down = async () => { await down(); onDown(made.state); };
+  page.mouse.up = async () => { made.state.downs--; };
+  return made;
+}
 
 describe('the puzzle solver', () => {
-  it('shows the challenge to the vision model and clicks its tiles inside the frame, then clears when the page accepts', async () => {
-    const { page, state } = solverPage([puzzle()], s => { if (state.clicks.length >= 3) s.answered = true; });
-    expect(await solveHumanCheck(page, { ...noWait, ask: askTiles([0, 4]), waitMs: 600 })).toEqual({ outcome: 'cleared', widget: 'recaptcha' });
-    // The picture the model saw was the challenge frame's own screenshot.
-    expect(seenImages.at(-1)).toBe(Buffer.from('jpeg-bytes').toString('base64'));
-    // Two tiles plus the confirm were pressed (down/up pairs), each inside the challenge frame's bounds.
-    const inFrame = state.clicks.filter(([x, y]) => x >= 80 && x <= 480 && y >= 120 && y <= 700);
-    expect(inFrame.length).toBe(3);
-    // Tile 0 landed in the top-left third, tile 4 in the middle.
-    const [t0] = inFrame;
-    expect(t0![0]).toBeLessThan(80 + 400 / 3 + 1);
-    expect(t0![1]).toBeLessThan(120 + 580 / 3 + 1);
-    const t1 = inFrame[1]!;
-    expect(t1![0]).toBeGreaterThan(80 + 400 / 3 - 1);
-    expect(t1![1]).toBeGreaterThan(120 + 580 / 3 - 1);
+  it('asks about each square on its own, clicks the ones that match where the challenge says they are, then Verify', async () => {
+    const { page, state } = gridPage(s => { if (s.clicks.length >= 3) s.answered = true; });
+    let asked = 0;
+    const tile = async (question: { target: string; size: number }) => { expect(question).toMatchObject({ target: 'buses', size: 3 }); const index = asked++; return index === 0 || index === 4; };
+    expect(await solveHumanCheck(page, { ...noWait, asks: { tile } })).toEqual({ outcome: 'cleared', widget: 'recaptcha' });
+    expect(asked).toBe(9);
+    const inside = (click: [number, number], box: { x: number; y: number; width: number; height: number }) => click[0] >= 80 + box.x && click[0] <= 80 + box.x + box.width && click[1] >= 120 + box.y && click[1] <= 120 + box.y + box.height;
+    const layout = gridLayout();
+    expect(state.clicks).toHaveLength(3);
+    expect(inside(state.clicks[0]!, layout.tiles[0]!)).toBe(true);
+    expect(inside(state.clicks[1]!, layout.tiles[4]!)).toBe(true);
+    expect(inside(state.clicks[2]!, layout.verify)).toBe(true);
   });
 
-  it('paces like a person: the cursor approaches each tile through several moves, never teleporting', async () => {
-    const { page } = solverPage([puzzle()], () => undefined);
-    await solveHumanCheck(page, { ...noWait, ask: askTiles([8]), waitMs: 0 });
-    // Every click is preceded by at least three approach moves (visitorClick's wander).
-    expect(true).toBe(true); // pacing asserted below via move counts
+  it('answers the next grid when the widget asks again', async () => {
+    // The first Verify does not clear the check; the second round's does.
+    const { page, state } = gridPage(s => { if (s.clicks.length >= 4) s.answered = true; });
+    let asked = 0;
+    expect(await solveHumanCheck(page, { ...noWait, waitMs: 60_000, asks: { tile: async () => asked++ % 9 === 0 } })).toEqual({ outcome: 'cleared', widget: 'recaptcha' });
+    expect(asked).toBe(18);
+    expect(state.clicks).toHaveLength(4);
   });
 
-  it('retries once on a fresh grid after a wrong first round, and stops there', async () => {
-    // Grid A shows; its confirm does not clear the check but swaps in a fresh grid B (a new frame object);
-    // round two answers on grid B and the page accepts. Frame wrappers are kept stable per fake frame,
-    // like Playwright where one Frame object stands for one frame across calls.
-    const gridA = puzzle();
-    const gridB = { ...puzzle(), shot: () => Buffer.from('grid-b') };
-    const state = { frames: [gridA], answered: false, url: 'https://vendor.example/signup', clicks: [] as Array<[number, number]>, moves: [] as Array<[number, number]>, downs: 0 };
-    const wrapped = new Map<SolverFrame, ReturnType<typeof wrapFrame>>();
-    const page = {
-      url: () => state.url,
-      frames: () => state.frames.map(frame => { if (!wrapped.has(frame)) wrapped.set(frame, wrapFrame(frame)); return wrapped.get(frame)!; }),
-      evaluate: async () => state.answered,
-      mouse: {
-        move: async (x: number, y: number) => { state.moves.push([x, y]); },
-        click: async (x: number, y: number) => { state.moves.push([x, y]); state.clicks.push([x, y]); },
-        down: async () => { state.downs++; const last = state.moves.at(-1) ?? [0, 0]; state.clicks.push([last[0], last[1]]); if (state.clicks.length >= 2 && state.frames[0] === gridA) state.frames = [gridB]; else if (state.clicks.length >= 4) state.answered = true; },
-        up: async () => { --state.downs; },
-      },
-    } as unknown as Page;
+  it('shows a challenge it has no reader for to the voters and clicks where they agree', async () => {
+    const { page, state } = solverPage([puzzle()], s => { s.answered = true; });
     const seen: string[] = [];
-    expect(await solveHumanCheck(page, { ...noWait, waitMs: 600, ask: async image => { seen.push(image.data); return { ok: true as const, answer: { tiles: [4] } }; } })).toEqual({ outcome: 'cleared', widget: 'recaptcha' });
-    // Two rounds means two pictures were shown to the model, the second one the fresh grid's.
-    expect(seen).toHaveLength(2);
-    expect(seen[1]).toBe(Buffer.from('grid-b').toString('base64'));
+    const points = async (images: Array<{ data: string }>) => { seen.push(images[0]!.data); return [{ x: 0.5, y: 0.5 }]; };
+    expect(await solveHumanCheck(page, { ...noWait, asks: { points } })).toEqual({ outcome: 'cleared', widget: 'recaptcha' });
+    // The picture the voters saw was the challenge frame's own screenshot; the click landed at its centre.
+    expect(seen[0]).toBe(Buffer.from('jpeg-bytes').toString('base64'));
+    expect(Math.abs(state.clicks[0]![0] - 280)).toBeLessThan(5);
+    expect(Math.abs(state.clicks[0]![1] - 410)).toBeLessThan(5);
   });
 
-  it('keeps retrying when the model cannot read the challenge or picks nothing, until the budget ends', async () => {
-    // The budget ends the retry loop; the widget stays put in this fake, so each run ends as still-there.
-    const unreadable = { ...noWait, waitMs: 600, ask: async () => ({ ok: true as const, answer: { unreadable: true as const } }) };
-    expect(await solveHumanCheck(solverPage([puzzle()]).page, unreadable)).toEqual({ outcome: 'still-there', widget: 'recaptcha' });
-    const empty = { ...noWait, waitMs: 600, ask: askTiles([]) };
-    expect(await solveHumanCheck(solverPage([puzzle()]).page, empty)).toEqual({ outcome: 'still-there', widget: 'recaptcha' });
-    const failed = { ...noWait, waitMs: 600, ask: async () => ({ ok: false as const, error: 'gateway-off' }) };
-    expect(await solveHumanCheck(solverPage([puzzle()]).page, failed)).toEqual({ outcome: 'still-there', widget: 'recaptcha' });
+  it('gives up on a challenge nobody can read after three looks, without clicking anything', async () => {
+    const { page, state } = solverPage([puzzle()]);
+    let looks = 0;
+    expect(await solveHumanCheck(page, { ...noWait, waitMs: 60_000, asks: { points: async () => { looks++; return undefined; } } })).toEqual({ outcome: 'still-there', widget: 'recaptcha' });
+    expect(looks).toBe(3);
+    expect(state.clicks).toEqual([]);
   });
 
-  it('says none when there is no puzzle to answer and the page holds no accepted answer', async () => {
-    expect(await solveHumanCheck(solverPage([]).page, { ...noWait, ask: askTiles([0]) })).toEqual({ outcome: 'none' });
+  it('says none when there is nothing to answer and the page holds no accepted answer', async () => {
+    expect(await solveHumanCheck(solverPage([]).page, noWait)).toEqual({ outcome: 'none' });
   });
 
   it('never sends the same mouse trail twice: two solves differ in their move paths', async () => {
     const trails: number[][] = [];
     for (let run = 0; run < 2; run++) {
-      const { page, state } = solverPage([puzzle()], () => undefined);
-      await solveHumanCheck(page, { ...noWait, random: Math.random, ask: askTiles([0]), waitMs: 600 });
+      const { page, state } = solverPage([puzzle()], s => { s.answered = true; });
+      await solveHumanCheck(page, { ...noWait, random: Math.random, asks: { points: async () => [{ x: 0.3, y: 0.3 }] } });
+      // The cursor wanders to the spot through several moves instead of teleporting onto it.
+      expect(state.moves.length).toBeGreaterThanOrEqual(3);
       trails.push(state.moves.map(([x, y]) => Math.round(x * 10 + y)));
     }
     expect(trails[0]).not.toEqual(trails[1]);
+  });
+});
+
+describe('what is in the way', () => {
+  const pageWith = (frames: FakeFrame[], drawn: string | null, answered = false) => ({
+    url: () => 'https://vendor.example/signup',
+    frames: () => frames.map(frame => ({ url: () => frame.src, parentFrame: () => null, frameElement: async () => ({ boundingBox: async () => frame.box }) })),
+    evaluate: async (script: unknown) => typeof script === 'string' ? drawn : answered,
+  }) as unknown as Page;
+
+  it('names a box to press, a puzzle that is up, and a check the page draws itself', async () => {
+    expect(await detectHumanCheck(pageWith([anchor(), hiddenPuzzle()], null))).toEqual({ widget: 'recaptcha', stage: 'checkbox' });
+    expect(await detectHumanCheck(pageWith([anchor(), puzzle()], null))).toEqual({ widget: 'recaptcha', stage: 'puzzle' });
+    expect(await detectHumanCheck(pageWith([{ src: 'https://newassets.hcaptcha.com/captcha/v1/x/static/hcaptcha.html#frame=challenge', box: puzzle().box }], null))).toEqual({ widget: 'hcaptcha', stage: 'puzzle' });
+    expect(await detectHumanCheck(pageWith([], 'geetest'))).toEqual({ widget: 'geetest', stage: 'page' });
+    expect(await detectHumanCheck(pageWith([], 'hold'))).toEqual({ widget: 'hold', stage: 'page' });
+  });
+
+  it('sees nothing on a plain page, behind an invisible badge, or once the check holds its answer', async () => {
+    expect(await detectHumanCheck(pageWith([], null))).toBeUndefined();
+    expect(await detectHumanCheck(pageWith([{ src: 'https://www.google.com/recaptcha/api2/anchor?k=x&size=invisible', box: { x: 900, y: 600, width: 256, height: 60 } }], null))).toBeUndefined();
+    expect(await detectHumanCheck(pageWith([anchor()], null, true))).toBeUndefined();
   });
 });
 
@@ -168,7 +186,7 @@ describe('GeeTest board games, worked out by rule', () => {
   const board = (rows: string[]) => rows.flatMap((line, row) => [...line].map((ch, column) => ({ row, column, kind: ch === '.' ? null : ch })));
 
   it('finds the piece and the empty cell that line up five', async () => {
-    const { lineUpMove } = await import('./human-check.js');
+    const { lineUpMove } = await import('./human-check-geetest.js');
     // Column 4 holds four whites with a hole in row 2; the stray white at row 3 column 2 fills it.
     const move = lineUpMove(board(['...w.', '....y', '.w.w.', '...w.', '...w.']));
     expect(move && [move.from.row, move.from.column, move.to.row, move.to.column]).toEqual([2, 1, 1, 3]);
@@ -176,10 +194,18 @@ describe('GeeTest board games, worked out by rule', () => {
   });
 
   it('finds the two neighbours to swap for three in a row', async () => {
-    const { swapMove } = await import('./human-check.js');
+    const { swapMove } = await import('./human-check-geetest.js');
     const move = swapMove(board(['aba', 'cbd', 'bac']));
     // Swapping row 3's first two gives column 2 three b's.
     expect(move && [move.from.row, move.from.column, move.to.row, move.to.column]).toEqual([2, 0, 2, 1]);
     expect(swapMove(board(['abc', 'def', 'ghi']))).toBeUndefined();
+  });
+});
+
+describe('hCaptcha challenge kinds', () => {
+  it('drops the particulars so two challenges of one kind are counted together', async () => {
+    const { promptKind } = await import('./human-check-hcaptcha.js');
+    expect(promptKind('Drag the 3 segments to complete the line!')).toBe(promptKind('Drag the 2 segments to complete the line'));
+    expect(promptKind('Please click on the object that is different from the others in the picture')).toBe('please click on the object that');
   });
 });
