@@ -53,6 +53,15 @@ async function signedOutAccount(options: { chats: boolean }): Promise<string> {
 }
 
 describe('account sign-in profiles', () => {
+  it('adds no account, and leaves no profile, when the vendor\'s login ended without writing a credential', async () => {
+    // Junie, stopped by a question nobody answered, exits 0 having written nothing.
+    vendor.signIn = async () => undefined;
+    const { aiAccountLogin } = await import('./account.js');
+    await expect(aiAccountLogin('codex')).rejects.toThrow('ended without signing in');
+    expect((await readState()).accounts.filter((account) => account.provider === 'openai')).toEqual([]);
+    expect(await readdir(join(root, 'profiles', 'codex')).catch(() => [])).toEqual([]);
+  });
+
   it('removes the profile a failed sign-in created', async () => {
     const { aiAccountLogin } = await import('./account.js');
     await expect(aiAccountLogin('codex')).rejects.toThrow('sign-in cancelled');

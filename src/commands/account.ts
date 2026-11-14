@@ -29,7 +29,7 @@ import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, matchingVendorAccount, nameAccount } from '../harness/accounts/labels.js';
 import { keyVariables, readProfileKey } from '../harness/accounts/profile-key.js';
 import { profileEnvironment, purgeAccountProfile, resolvePurgeableProfile } from '../harness/accounts/profiles.js';
-import { adoptAuthFiles, authEvidencePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
+import { adoptAuthFiles, authEvidencePresent, authFilePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
 import { vendorCredentialCapture } from '../harness/accounts/vendor-identity.js';
 import { apiKeyAccountEmail } from '../harness/accounts/api-key-identity.js';
 import { profileExtraEnvironment } from '../harness/transport/profile-environment.js';
@@ -340,6 +340,14 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
   await loginNativeHarness(harness, profileEnvironment(harness, { nativeProfile }));
   if (captureCredential && profilePath && !await captureCredential(profilePath)) {
     throw new Error(`${harness.displayName} login completed, but ClikCode could not save its API key into this account’s isolated profile. The account was not added.`);
+  }
+  // A vendor that keeps its sign-in in a file, and left none (and no key was
+  // pasted instead): its login ended without signing in. Junie, stopped by a
+  // question nobody answered, simply exited -- and each try was added as a
+  // ready "Junie CLI", "Junie CLI 2", ... that could run nothing.
+  if (profilePath && harness.authFiles?.length && !captureCredential && !Object.keys(readProfileKey(profilePath)).length
+    && !await authFilePresent(harness, profileEnvironment(harness, { nativeProfile }))) {
+    throw new Error(`${harness.displayName}'s sign-in ended without signing in, so no account was added. Run it again and finish the sign-in.`);
   }
   // The vendor's identity decides the account even when the caller supplied
   // a label. Skipping this for explicit labels created duplicate sign-ins of
