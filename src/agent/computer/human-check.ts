@@ -36,7 +36,24 @@ async function findCheckbox(page: Page): Promise<{ widget: HumanCheckWidget; box
     // Invisible reCAPTCHA shows only its "protected by" badge, which is checkbox-sized but has nothing to press.
     if (!kind || /[?&]size=invisible/.test(frame.url())) continue;
     const box = await boxOf(frame);
-    if (box && box.width >= 100 && box.height >= 40 && box.height <= 150 && box.y >= 0) return { widget: kind[0], box };
+    if (!box || box.width < 100 || box.height < 40 || box.height > 150 || box.y < 0) continue;
+    // Only a box a visitor can see and reach counts: not one inside a closed form, under a banner, or below the fold.
+    const reachable = await frame.frameElement().then(el => el.evaluate((node: unknown) => {
+      const g = globalThis as unknown as { innerHeight: number; innerWidth: number; document: { elementFromPoint(x: number, y: number): unknown } };
+      const el = node as { getBoundingClientRect(): { left: number; top: number; width: number; height: number }; contains(other: unknown): boolean; scrollIntoView(options: unknown): void };
+      const r = el.getBoundingClientRect();
+      const x = r.left + Math.min(30, r.width / 2), y = r.top + r.height / 2;
+      if (y > g.innerHeight || x > g.innerWidth) { el.scrollIntoView({ block: 'center' }); return 'scrolled'; }
+      const hit = g.document.elementFromPoint(x, y);
+      if (hit === node || el.contains(hit)) return 'yes';
+      // A widget inside a shadow root (Turnstile) is reported as its host element.
+      let root = (node as { getRootNode(): { host?: { contains(other: unknown): boolean; getRootNode(): unknown } } }).getRootNode();
+      while (root.host) { if (root.host === hit || root.host.contains(hit)) return 'yes'; root = root.host.getRootNode() as typeof root; }
+      return 'no';
+    })).catch(() => 'yes');
+    if (reachable === 'no') continue;
+    if (reachable === 'scrolled') { const moved = await boxOf(frame); if (moved) return { widget: kind[0], box: moved }; }
+    return { widget: kind[0], box };
   }
   return undefined;
 }
