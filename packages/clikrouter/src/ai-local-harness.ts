@@ -1168,7 +1168,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // auto-approves by definition ("no UI output, auto-approve actions"), so an
   // `ask` mode on this path would be a promise the CLI cannot keep. The ACP
   // path above is the one that can actually prompt.
-  { command: 'openhands', quotaProbe: { none: '`openhands --help` has no usage command; cloud billing is on the web only' }, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'openhands', displayName: 'OpenHands CLI', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'] }, experimental: true, localAuth: ['api-key', 'vendor-cli'], binary: 'openhands', installer: HARNESS_INSTALLERS.openhands, authFiles: [{ path: '${OPENHANDS_PERSISTENCE_DIR:-~/.openhands}/cloud/api_key.txt' }, { path: '${OPENHANDS_PERSISTENCE_DIR:-~/.openhands}/agent_settings.json', contains: 'api_key' }], authEnv: ['LLM_API_KEY'], loginArgv: ['login'], logoutArgv: ['logout'], permissionModes: ['bypass', 'auto'], permissionArgv: { bypass: { argv: ['--always-approve'] }, auto: { argv: ['--llm-approve'] } }, turn: { startArgv: ['--headless', '--json'], promptArgvPrefix: ['-t'], output: 'json-lines', responseFields: ['text', 'content', 'response', 'result'] }, session: { resumeIdPrefix: ['--resume'] } },
+  { command: 'openhands', quotaProbe: { none: '`openhands --help` has no usage command; cloud billing is on the web only' }, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'openhands', displayName: 'OpenHands CLI', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'] }, experimental: true, localAuth: ['api-key', 'vendor-cli'], binary: 'openhands', installer: HARNESS_INSTALLERS.openhands, authFiles: [{ path: '${OPENHANDS_PERSISTENCE_DIR:-~/.openhands}/cloud/api_key.txt' }, { path: '${OPENHANDS_PERSISTENCE_DIR:-~/.openhands}/agent_settings.json', contains: 'api_key', required: true }], authEnv: ['LLM_API_KEY'], loginArgv: ['login'], logoutArgv: ['logout'], permissionModes: ['bypass', 'auto'], permissionArgv: { bypass: { argv: ['--always-approve'] }, auto: { argv: ['--llm-approve'] } }, turn: { startArgv: ['--headless', '--json'], promptArgvPrefix: ['-t'], output: 'json-lines', responseFields: ['text', 'content', 'response', 'result'] }, session: { resumeIdPrefix: ['--resume'] } },
   // Continue CLI: `cn -p` is the documented headless mode and prints the final
   // answer as text. No ACP mode is declared because none is documented.
   // Flags read from `cn --help` on a real install: -p/--print for headless,
@@ -1883,7 +1883,13 @@ export interface AiHarnessAuthFile {
   removeLine?: boolean;
   /** A JSON credential must parse and contain these nonempty string paths. */
   jsonFields?: readonly string[];
+  /** The vendor cannot run without this one, whatever else is there: the
+   * account is signed in only once it exists, and a sign-in is not over until
+   * it is written (OpenHands writes its cloud key first and its agent
+   * settings a moment later; ended at the key, it never had settings). */
+  required?: true;
 }
+
 
 /** A reply that is a failed call. `pattern` is matched against the whole
  * trimmed reply; the status is the first capture group, else `status`. */
