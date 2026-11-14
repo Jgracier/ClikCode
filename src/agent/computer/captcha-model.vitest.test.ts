@@ -109,3 +109,13 @@ describe('one outlined square at a time', () => {
     expect(tileQuestionText({ ...question, size: 3 })).toMatch(/Each square is a separate photo/);
   });
 });
+
+describe('where to click on a free-form challenge', () => {
+  it('reads a list of points or a single point, fenced or not, and drops ones outside the picture', async () => {
+    const { parsePoints } = await import('./captcha-model.js');
+    expect(parsePoints('```json\n{"points": [{"x": 0.2, "y": 0.4}, {"x": 1.4, "y": 0.1}]}\n```')).toEqual([{ x: 0.2, y: 0.4 }]);
+    expect(parsePoints('The odd one is the star. {"x": 0.53, "y": 0.4}')).toEqual([{ x: 0.53, y: 0.4 }]);
+    expect(parsePoints('{"points": []}')).toEqual([]);
+    expect(parsePoints('I cannot tell.')).toBeUndefined();
+  });
+});

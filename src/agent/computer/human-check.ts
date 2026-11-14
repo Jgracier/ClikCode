@@ -40,12 +40,14 @@ async function findCheckbox(page: Page): Promise<{ widget: HumanCheckWidget; box
   return undefined;
 }
 
-/** A challenge that wants an answer is on screen (a hidden one sits far off the page). */
+/** A challenge frame that is shown. A hidden one is parked thousands of pixels off the page; a shown one can still
+ * hang partly above a small window (hCaptcha centres its challenge on the checkbox), so any real overlap counts. */
+const shownPuzzleBox = (box: Box | undefined): box is Box => !!box && box.width >= 250 && box.height >= 200 && box.y > -1500 && box.x > -1500 && box.y + box.height > 60 && box.x + box.width > 60;
+
+/** A challenge that wants an answer is on screen. */
 async function puzzleShown(page: Page): Promise<boolean> {
   for (const frame of page.frames()) {
-    if (!PUZZLE.test(frame.url())) continue;
-    const box = await boxOf(frame);
-    if (box && box.width >= 250 && box.height >= 250 && box.y > -50 && box.x > -50) return true;
+    if (PUZZLE.test(frame.url()) && shownPuzzleBox(await boxOf(frame))) return true;
   }
   return false;
 }
@@ -86,7 +88,7 @@ async function findPuzzle(page: Page): Promise<{ widget: HumanCheckWidget; frame
   for (const frame of page.frames()) {
     if (!PUZZLE.test(frame.url())) continue;
     const box = await boxOf(frame);
-    if (box && box.width >= 250 && box.height >= 200 && box.y > -50 && box.x > -50) return { widget: CHECKBOX.find(([, pattern]) => pattern.test(frame.url()))?.[0] ?? 'recaptcha', frame, box };
+    if (shownPuzzleBox(box)) return { widget: /hcaptcha/i.test(frame.url()) ? 'hcaptcha' : 'recaptcha', frame, box };
   }
   return undefined;
 }
@@ -126,6 +128,8 @@ export interface SolveDeps {
   sleep?: (ms: number) => Promise<void>;
   /** The whole-grid vision ask, used only when the challenge's layout cannot be read; defaults to the Gateway model. */
   ask?: (image: { mimeType: string; data: string }) => Promise<{ ok: true; answer: CaptchaAskAnswer } | { ok: false; error: string }>;
+  /** The where-to-click ask for free-form challenges; defaults to the Gateway model (captcha-model.ts askClickPoints). */
+  askPoints?: (image: { mimeType: string; data: string }, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>;
   /** The one-square ask; defaults to the Gateway model (captcha-model.ts askTileMatch). */
   askTile?: (question: import('./captcha-model.js').TileQuestion) => Promise<boolean | undefined>;
   /** Source of randomness for the human-like pacing; tests inject a fixed one. */
@@ -214,6 +218,19 @@ async function matchingTiles(frame: Frame, layout: PuzzleLayout, indices: number
   return answers.filter(index => index >= 0);
 }
 
+/** Make room for a challenge that hangs off a small window: the tab's viewport grows to hold the whole frame (only
+ * this tab, and only when needed). Says whether it changed anything, so the caller re-reads the moved frame. */
+async function fitPuzzle(page: Page, box: Box): Promise<boolean> {
+  try {
+    const [width, height] = await page.evaluate('[innerWidth, innerHeight]') as [number, number];
+    if (box.y >= 0 && box.x >= 0 && box.y + box.height <= height && box.x + box.width <= width) return false;
+    const want = { width: Math.max(width, Math.ceil(box.width + 80)), height: Math.max(height, Math.ceil(box.height + 120)) };
+    if (want.width === width && want.height === height) return false;
+    await page.setViewportSize(want);
+    return true;
+  } catch { return false; }
+}
+
 /** Answer a shown puzzle the way a person does. The challenge's own layout is read from the page (instruction,
  * target, every square's position, the Verify button), each square is asked about on its own -- far more reliable
  * than asking for a list of indices over the whole grid -- and the matches are clicked at a visitor's pace. A
@@ -227,10 +244,12 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   const signal = deps.signal ? { signal: deps.signal } : {};
   const ask = deps.ask ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaModel(image, signal)));
   const askTile = deps.askTile ?? ((question) => import('./captcha-model.js').then(m => m.askTileMatch(question, signal)));
+  const askPoints = deps.askPoints ?? ((image, instruction) => import('./captcha-model.js').then(m => m.askClickPoints(image, instruction, signal)));
   const budgetMs = deps.waitMs ?? 180_000;
   const began = Date.now();
   let firstWidget: HumanCheckWidget | undefined;
   let repressed = 0;
+  let refreshed = 0;
   while (Date.now() - began < budgetMs) {
     if (deps.signal?.aborted) break;
     const found = await findPuzzle(page);
@@ -248,6 +267,8 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
     }
     firstWidget ??= found.widget;
     if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
+    // Every square must be on screen to be clicked: a challenge taller than a small window is given room first.
+    if (await fitPuzzle(page, found.box)) { await sleep(800); continue; }
     let bytes: Buffer;
     try { bytes = await (await found.frame.frameElement()).screenshot({ type: 'jpeg', quality: 85, timeout: 10_000 }) as Buffer; }
     catch { return { outcome: 'still-there', widget: firstWidget }; }
@@ -273,6 +294,30 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
       }
       const verify = (await readLayout(found.frame, found.box))?.verify ?? layout.verify;
       confirm = verify ? toTarget(verify) : { x: found.box.x + found.box.width * 0.7, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 15 };
+    } else if (found.widget === 'hcaptcha') {
+      // hCaptcha draws most challenges on a canvas: a grid of pictures, or one picture to click a spot on. A visitor
+      // clicks where the answer is, so the model is asked where; a drag puzzle (or one it cannot place) is swapped
+      // for another challenge, up to five times, before this check is left to a person.
+      const instruction = String(await found.frame.evaluate(`((document.querySelector('.prompt-text') || {}).innerText || '').replace(/\\s+/g, ' ').trim()`).catch(() => ''));
+      const points = instruction && !/\bdrag\b/i.test(instruction) ? await askPoints(grid, instruction) : undefined;
+      if (points?.length) {
+        deps.trace?.(`"${instruction}": clicking ${points.map(p => `(${p.x.toFixed(2)},${p.y.toFixed(2)})`).join(' ')}`);
+        for (const p of points.slice(0, 9)) {
+          const x = found.box.x + p.x * found.box.width, y = found.box.y + p.y * found.box.height;
+          await visitorClick(page.mouse, { x: x - 4, x2: x + 4, y: y - 4, y2: y + 4 }, random, sleep);
+        }
+        const submit = await found.frame.evaluate(`(() => { const b = document.querySelector('.button-submit'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
+        confirm = submit ? toTarget({ ...submit, x: submit.x + found.box.x, y: submit.y + found.box.y }) : { x: found.box.x + found.box.width * 0.8, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 20 };
+      } else {
+        if (refreshed >= 5) return { outcome: 'still-there', widget: firstWidget };
+        refreshed++;
+        deps.trace?.(`"${instruction}": no spot to click, asking for another challenge`);
+        const refresh = await found.frame.evaluate(`(() => { const b = document.querySelector('.refresh.button, .refresh'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
+        if (!refresh) return { outcome: 'still-there', widget: firstWidget };
+        await visitorClick(page.mouse, toTarget({ ...refresh, x: refresh.x + found.box.x, y: refresh.y + found.box.y }), random, sleep);
+        await sleep(2_500);
+        continue;
+      }
     } else {
       const reply = await ask(grid);
       // An unreadable or empty answer is not a refusal: reCAPTCHA deliberately blurs and noises its grids.
