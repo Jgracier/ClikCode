@@ -189,7 +189,9 @@ export function startWaiting(
   const submittedPrompt = this.submittedPrompt;
   // The same turn, drawn early: it carries on, its clock with it. (The draft is the composer's, and simply stays.)
   const early = this.turn?.early ? { ...this.turn } : undefined;
+  this.keepVoiceReply = Boolean(early);
   this.stopWaiting(false);
+  this.keepVoiceReply = false;
   this.submittedPrompt = submittedPrompt;
   // A summary its turn never got to write (it ended with no answer) is
   // not this turn's.
@@ -203,6 +205,8 @@ export function startWaiting(
   // A new turn is the reader rejoining the conversation.
   this.alternateScrollback = 0;
   if (!rejoined) this.liveResponse = '';
+  // A new answer for the phone to read aloud (not a turn carrying on, nor one followed again: what it said was said).
+  if (!early && !rejoined) this.voiceReply.start();
   // The last turn's plan, finished or left unfinished, is not this one's.
   if (!rejoined) { this.planEntries = []; this.planStart = undefined; }
   // A running turn always renders as stable messages, its submitted user
@@ -420,6 +424,7 @@ export function onWaitingEnded(this: TerminalHarnessPrompter, ended: () => void)
 export function stopWaiting(this: TerminalHarnessPrompter, refresh = true, why?: string): void {
   const turn = this.turn;
   if (turn) lifecycle('window.turn.end', { cancelled: turn.cancelled, ...(why ? { why } : {}) });
+  if (turn && !this.keepVoiceReply) this.voiceReply.end(Boolean(turn.cancelled));
   if (turn?.cancelled && turn.submit && !this.steppedOut) this.markTurnStopped();
   if (turn) {
     if (turn.timer) clearTimeout(turn.timer);

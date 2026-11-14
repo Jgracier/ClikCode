@@ -12,6 +12,7 @@ import { historyDump, installTerminalRestoreSignals, parseReexecHandover, REEXEC
 import type { FocusState } from './terminal-signals.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript } from '../turn/transcript.js';
+import { VoiceReply } from './voice-reply.js';
 import type { HarnessPrompter, JournalState, PickerOption, PickerSettings } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, commonPrefixLength, rebaseActivityOffsets } from './render/activity-log.js';
@@ -129,6 +130,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * frame is built (render/row-tags.ts). */
   readonly lineTags = new Map<number, string>();
   liveResponse = '';
+  /** The answer as words for ClikDeploy's phone, which can read it aloud (voice-reply.ts). */
+  readonly voiceReply = new VoiceReply();
+  /** Set while a turn that carries on is started again (drawn early): the phone is not told it ended. */
+  keepVoiceReply = false;
   /** The running turn can take a message into itself (the worker says so): Enter again on a waiting one can put it in. */
   steerable = false;
   responsePaintTimer?: NodeJS.Timeout;
@@ -567,6 +572,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       this.liveResponse = text;
     } else this.liveResponse += text;
+    if (this.turn) this.voiceReply.answer(this.liveResponse);
     this.schedulePaint();
   }
 
