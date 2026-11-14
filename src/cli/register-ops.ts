@@ -17,6 +17,8 @@ export function registerOperatorCommands(program: Command, computer: Command): v
     .option('--published', 'With --ids: connect only. Send each id straight to the consent driver, even when it is already published to users and developers (onboarding refuses those)')
     .option('--dry-run', 'Show the plan per vendor and change nothing')
     .option('--max-calls <n>', 'With --loop: most ClikDeploy calls per vendor (default 60)')
+    .option('--agent-minutes <n>', 'With --loop: minutes one agent hand-off may take, on top of --max-minutes (default 20)')
+    .option('--agent-calls <n>', 'With --loop: tool calls one agent hand-off may make (default 120)')
     .option('--max-hours <n>', 'With --loop: stop starting vendors after this many hours (default 8, at most 168)')
     .option('--cooldown-hours <n>', 'With --loop: hours before the same vendor is tried again (default 6; a wall holds 24)')
     .action(async (flags: import('../commands/connectors.js').ConnectorsRunFlags & import('../commands/connectors.js').ConnectorsLoopFlags & { loop?: boolean }) => {
