@@ -46,7 +46,9 @@ export const READ_PAGE = `(() => {
   const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
   const inputs = Array.from(document.querySelectorAll('input')).filter(i => !['hidden', 'submit', 'button', 'checkbox', 'radio', 'search'].includes(i.type) && visible(i));
   const hasEmailField = inputs.some(i => i.type === 'email' || /e-?mail/i.test([i.name, i.placeholder, i.id, i.getAttribute('aria-label') || '', i.autocomplete].join(' ')));
-  const hasForm = inputs.some(i => ['email', 'password', 'tel'].includes(i.type) || /e-?mail|phone/i.test(i.name + ' ' + i.placeholder));
+  const hasForm = inputs.some(i => ['email', 'password', 'tel'].includes(i.type) || /e-?mail|phone/i.test(i.name + ' ' + i.placeholder))
+    // A "Continue with Google / GitHub" page is a sign-up screen too: its form is the provider's own, behind one press.
+    || Array.from(document.querySelectorAll('button, a')).some(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && /continue with|sign ?up with|log ?in with/i.test(el.textContent || ''); });
   const captchaWidget = Array.from(document.querySelectorAll('.h-captcha, .cf-turnstile, .g-recaptcha, iframe[src*="hcaptcha"], iframe[src*="turnstile"], iframe[src*="recaptcha/api2/anchor"], iframe[src*="recaptcha/enterprise/anchor"]'))
     .some(el => { if (el.closest('.grecaptcha-badge') || el.getAttribute('data-size') === 'invisible') return false; const r = el.getBoundingClientRect(); return visible(el) && r.width >= 150 && r.height >= 50; });
   const links = Array.from(document.querySelectorAll('a[href]')).slice(0, 400).map(a => ({ href: a.href, text: (a.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 60) })).filter(l => l.text);
