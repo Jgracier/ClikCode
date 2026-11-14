@@ -32,7 +32,7 @@ import type { DraftWithPastes } from './render/held-pastes.js';
 import { reducedMotion } from './capabilities.js';
 import { KEEP_STDIN_FLOWING, onTerminalFocus } from './input-decoder.js';
 import { sessionModesOn, setTerminalRawMode, type Redraw } from './modes.js';
-import { onCoveredTopChange, probeTerminal } from './probe.js';
+import { asksCoveredTop, coveredTopKnown, onCoveredTopChange, probeTerminal } from './probe.js';
 import { PlanEntry } from './render/plan-block.js';
 import { type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { takeHistoryDump } from './prompter/history-dump.js';
@@ -388,6 +388,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (!inlineHistoryMode()) historyDump.source = () => this.takeHistoryDump();
       // Asked, not believed; never waited for (see probe.ts for the fallback when nothing answers).
       void probeTerminal();
+      // ClikDeploy's phone covers rows at the top; drawn before it has said how many, the first frame was drawn again a moment later.
+      // It answers within a frame or two: the first paint waits for that (never more than a quarter second).
+      if (asksCoveredTop() && !this.paintsHeld) {
+        this.holdPaints();
+        void coveredTopKnown().then(() => this.releasePaints());
+      }
       // The terminal covers a different number of rows at the top than it did: the view is drawn for that.
       onCoveredTopChange(() => { if (!this.closed && !this.suspended) this.redrawScreen(); });
     }
