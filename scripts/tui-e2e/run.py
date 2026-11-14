@@ -2661,6 +2661,25 @@ SCENARIOS = {
         'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-SLOW go'), ('wait_for', 'word3', 20), ('type', 'steer-now please'), ('wait_for', 'Steer received, adjusting.', 30), ('settle', 2)],
         'watch': [], 'final_contains': ['steer-now please', 'Steer received, adjusting.'], 'never': ['Error:'],
     },
+    # ClikDeploy's phone terminal (CLIKDEPLOY_CLIENT=mobile) is given each answer as words (OSC 7702) for its voice to read aloud; a
+    # stopped turn says so, and no other terminal is ever written them.
+    'voice-reply-words-for-the-phone': {
+        'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'timing', 'env': {'CLIKDEPLOY_CLIENT': 'mobile'},
+        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-5XX go'), ('wait_for', 'Starting the work now.', 40), ('settle', 2)],
+        'watch': [], 'final_contains': ['Starting the work now.'], 'never': ['Error:'],
+        'voice_reply': {'ends': 'e', 'says': 'Starting the work now.'},
+    },
+    'voice-reply-stopped-turn': {
+        'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'timing', 'env': {'CLIKDEPLOY_CLIENT': 'mobile'},
+        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-SLOW go'), ('wait_for', 'word3', 20), ('keys', '\x1b'), ('settle', 3)],
+        'watch': [], 'final_contains': ['Stopped'], 'never': ['word49'],
+        'voice_reply': {'ends': 'x', 'says': 'word3', 'never_says': 'word49'},
+    },
+    'voice-reply-only-for-the-phone': {
+        'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'timing',
+        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-5XX go'), ('wait_for', 'Starting the work now.', 40), ('settle', 2)],
+        'watch': [], 'final_contains': ['Starting the work now.'], 'raw_never': ['\x1b]7702'],
+    },
     'gateway-credit-on-composer': {
         'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'static screen',
         'steps': [('keys', '\r'), ('settle', 4)],
@@ -3822,6 +3841,26 @@ def run(name, spec, entry, keep):
         if sequence.encode() in bytes(raw): problems.append(f'written, and never should be: {sequence!r}')
     if spec.get('no_clear_after_type') and typed_raw_at is not None and b'\x1b[2J' in raw[typed_raw_at:]:
         problems.append('screen cleared after the turn started')
+    if 'voice_reply' in spec:
+        # The answer as words for ClikDeploy's phone (OSC 7702, src/tui/voice-reply.ts): begun, its text, ended or stopped.
+        import base64, re as regex
+        events = []
+        for body in regex.findall(rb'\x1b\]7702;([^\x1b\x07]*)(?:\x1b\\|\x07)', bytes(raw)):
+            body = body.decode('ascii', 'replace')
+            if body.startswith('d;'):
+                text = base64.b64decode(body[2:]).decode('utf-8', 'replace')
+                if events and events[-1][0] == 'd': events[-1] = ('d', events[-1][1] + text)
+                else: events.append(('d', text))
+            else: events.append((body, ''))
+        want = spec['voice_reply']
+        kinds = [kind for kind, _ in events]
+        said = ''.join(text for _, text in events)
+        if not kinds: problems.append('no answer was written as words (no OSC 7702 in the output)')
+        else:
+            if kinds[0] != 's': problems.append(f'the words did not begin with a start: {kinds}')
+            if kinds[-1] != want['ends']: problems.append(f'the words ended with {kinds[-1]!r}, expected {want["ends"]!r}: {kinds}')
+            if want.get('says') and want['says'] not in said: problems.append(f'the words were {said!r}, expected them to say {want["says"]!r}')
+            if want.get('never_says') and want['never_says'] in said: problems.append(f'the words said {want["never_says"]!r} after the stop')
     if 'clipboard' in spec:
         import base64, re as regex
         copies = [base64.b64decode(m).decode('utf-8', 'replace') for m in regex.findall(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)\x07', bytes(raw))]
