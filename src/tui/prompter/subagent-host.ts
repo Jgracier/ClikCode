@@ -3,6 +3,7 @@
  * above is untouched), left with Left / Esc / Ctrl+C. The main turn runs on
  * underneath; none of these keys reaches it. State, keys and rows are
  * tui/subagent-view.ts; this file only connects them to the prompter. */
+import { uncoveredRows } from '../probe.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { stdout as output } from 'node:process';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
@@ -134,7 +135,7 @@ export function paintSubView(this: TerminalHarnessPrompter): void {
   const { vendor } = harnessOf(this);
   view.state = { ...view.state, frame: this.reducedMotion ? 0 : this.waitingFrame };
   const width = Math.max(12, output.columns || 100);
-  const height = Math.max(4, this.viewportRows());
+  const height = Math.max(4, uncoveredRows(this.viewportRows()));
   const mainStatus = `main: running ${formatElapsed(turnElapsedMs(turn.clock, Date.now()))}`;
   const lines = subAgentViewLines(view.state, { vendor, mainStatus, rows: view.rows, ...((view.readError ?? view.notice) ? { notice: view.readError ?? view.notice } : {}), width: width - 1, height });
   const shown = lines.slice(-height);

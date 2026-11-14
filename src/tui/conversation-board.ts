@@ -20,6 +20,7 @@
  * The decisions are `boardKey`, a pure function, so they are tested without a
  * terminal; `runConversationBoard` only wires it to one. */
 
+import { uncoveredRows } from './probe.js';
 import { stdout as output } from 'node:process';
 import type { PickerOption } from '../harness/prompter.js';
 import { takeTerminalKeys } from './input-decoder.js';
@@ -317,7 +318,9 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       // whatever height the screen is when it is painted.
       // A titled machine list has one extra overlay row. Reserve its space
       // so the title does not disappear above the top of the screen.
-      const capacity = (): number => boardCapacity(output.rows ?? 24, level === 'machines');
+      // The chat history starts below what the terminal covers at the top (a phone's status bar and tabs): it is a list to read
+      // from its first row, not a conversation that runs under them.
+      const capacity = (): number => boardCapacity(uncoveredRows(output.rows ?? 24), level === 'machines');
       // Nothing to list yet: said, rather than a bare hint line.
       const empty = !showing.length && !boardShowsCommands(state) && !state.finding;
       host.paint(level === 'machines' ? '' : state.draft, empty ? [{ label: level === 'machines' ? 'No machines yet' : 'No conversations yet', value: '' }] : showing.map((row) => ({

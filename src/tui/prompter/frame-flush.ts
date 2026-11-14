@@ -198,9 +198,11 @@ export function flushAlternateFrame(
     const limit = Math.max(1, (output.columns || 100) - 1);
     const footerStart = rows.length - chrome;
     const at = footerStart - overlay.length;
+    // Never onto the rows the terminal covers at the top: a list is read from its first row, and those rows are the conversation's alone.
+    const top = coveredTop(height);
     for (const [offset, row] of overlay.entries()) {
       const index = at + offset;
-      if (index >= 0 && index < footerStart) rows[index] = safeRow(row, limit);
+      if (index >= top && index < footerStart) rows[index] = safeRow(row, limit);
     }
   }
   // Only what changed. A keystroke changes the composer's row and nothing
