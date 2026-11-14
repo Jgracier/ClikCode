@@ -7,7 +7,7 @@ import type { HarnessSession } from '../../session/model.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { sessionNativeCommands } from '../../turn/vendor-process.js';
 import { knownVendorCommands } from '../../turn/vendor-commands.js';
-import { declaredHarnessCommands } from '../../harness/declared-commands.js';
+import { declaredHarnessCommands, runnableHarnessCommands } from '../../harness/declared-commands.js';
 import type { HarnessAvailableCommand } from '../../harness/events/turn-observer.js';
 import { allLocalHarnesses, harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { compareProviders } from '../../session/options.js';
@@ -45,11 +45,10 @@ const CUSTOM_COMMAND_ROOTS: { home?: string; clikcodeDirs?: readonly string[] } 
  * turns and keeps it, vendor-commands.ts), else what ClikCode knows it runs
  * (declared-commands.ts) for a harness that lists none itself. */
 function harnessCommandsFor(session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): readonly HarnessAvailableCommand[] {
-  const heard = sessionNativeCommands(session.id);
-  if (heard.length) return heard;
   const command = harness?.command ?? session.nativeHarness;
-  const known = knownVendorCommands(command);
-  return known.length ? known : declaredHarnessCommands(command);
+  const heard = sessionNativeCommands(session.id);
+  const known = heard.length ? heard : knownVendorCommands(command);
+  return known.length ? runnableHarnessCommands(command, known) : declaredHarnessCommands(command);
 }
 
 export function slashExtrasFor(session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): SlashExtras {

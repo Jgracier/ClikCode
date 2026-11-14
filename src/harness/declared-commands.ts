@@ -50,6 +50,19 @@ const DECLARED: Readonly<Record<string, readonly HarnessAvailableCommand[]>> = {
   ],
 };
 
+/** Commands a harness lists but does not run when ClikCode sends them: its
+ * model answers the text instead (checked 2026-11-14). Left out of the menu,
+ * so choosing one never spends a model turn on a command that did nothing. */
+const LISTED_NOT_RUN: Readonly<Record<string, readonly string[]>> = {
+  hermes: ['usage'],
+  goose: ['prompts'],
+};
+
+export function runnableHarnessCommands(command: string | undefined, listed: readonly HarnessAvailableCommand[]): readonly HarnessAvailableCommand[] {
+  const skip = command ? LISTED_NOT_RUN[command] : undefined;
+  return skip?.length ? listed.filter((item) => !skip.includes(item.name.replace(/^\//, '').toLowerCase())) : listed;
+}
+
 export function declaredHarnessCommands(command: string | undefined): readonly HarnessAvailableCommand[] {
   return command ? DECLARED[command] ?? [] : [];
 }

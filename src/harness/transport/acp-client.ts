@@ -1147,7 +1147,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     live.cancelled = false;
     // Tool-only turns are real work with nothing to say. Only a turn that
     // produced neither prose nor activity is a failure.
-    if (!text && !turn.sawActivity) throw new Error(`${input.command} ACP returned no assistant text`);
+    if (!text && !turn.sawActivity) {
+      // One of the agent's own commands, which it ran and answered on its own
+      // screen only (Grok's /context draws a panel in its terminal): the turn
+      // ended normally, there is just nothing to show here.
+      const command = /^\/[\w:.-]+/.exec(input.prompt.trim())?.[0];
+      if (command && completed.stopReason === 'end_turn') {
+        return { text: `${input.displayName ?? input.command} ran ${command} and showed nothing back here.`, nativeSessionId: turn.sessionId! };
+      }
+      throw new Error(`${input.command} ACP returned no assistant text`);
+    }
     return { text, nativeSessionId: turn.sessionId! };
   }
 
