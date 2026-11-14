@@ -89,3 +89,23 @@ describe('askCaptchaModel', () => {
     expect(await askCaptchaModel(image, { modelClientOf: broken })).toEqual({ ok: false, error: 'unreachable' });
   });
 });
+
+describe('one outlined square at a time', () => {
+  const fake = (text: string | Error): ModelClient => ({ step: async () => { if (text instanceof Error) throw text; return { text } as never; } } as unknown as ModelClient);
+  const question = { image: { mimeType: 'image/jpeg', data: 'eA==' }, instruction: 'Select all squares with buses', target: 'buses', size: 4 };
+
+  it('lets the majority of the models that answered decide, and calls a tie or silence no', async () => {
+    const { askTileMatch } = await import('./captcha-model.js');
+    expect(await askTileMatch(question, { modelClientsOf: async () => [fake('Yes.'), fake('yes'), fake('No')] })).toBe(true);
+    expect(await askTileMatch(question, { modelClientsOf: async () => [fake('No'), fake('Yes'), fake('no.')] })).toBe(false);
+    // One model failed: the two that answered decide, and a 1-1 split is no.
+    expect(await askTileMatch(question, { modelClientsOf: async () => [fake('Yes'), fake(new Error('down')), fake('No')] })).toBe(false);
+    expect(await askTileMatch(question, { modelClientsOf: async () => [fake(new Error('down')), fake('maybe')] })).toBeUndefined();
+  });
+
+  it('asks about the outlined square and says how a split photo counts', async () => {
+    const { tileQuestionText } = await import('./captcha-model.js');
+    expect(tileQuestionText(question)).toMatch(/red-outlined square contain any part of buses\? The squares together form one photo/);
+    expect(tileQuestionText({ ...question, size: 3 })).toMatch(/Each square is a separate photo/);
+  });
+});
