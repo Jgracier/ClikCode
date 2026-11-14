@@ -277,6 +277,76 @@ export async function askOrderedPoints(image: ImageInput, options: { signal?: Ab
   return clients.length === 1 ? answers[0] : agreedInOrder(answers);
 }
 
+/** One piece to drag: its number, where to grab it and where to drop it (fractions of the picture). */
+export type NumberedDrag = { n: number; from: { x: number; y: number }; to: { x: number; y: number } };
+
+export function parseDrags(text: string): NumberedDrag[] | undefined {
+  const found = /\{\s*"drags"\s*:\s*\[[\s\S]*\]\s*\}/.exec(text);
+  if (!found) return undefined;
+  try {
+    const drags = (JSON.parse(found[0]) as { drags?: unknown }).drags;
+    if (!Array.isArray(drags)) return undefined;
+    const ok = (p: unknown): p is { x: number; y: number } => !!p && typeof (p as { x?: unknown }).x === 'number' && typeof (p as { y?: unknown }).y === 'number' && (p as { x: number }).x >= 0 && (p as { x: number }).x <= 1 && (p as { y: number }).y >= 0 && (p as { y: number }).y <= 1;
+    return (drags as Array<{ n?: unknown; from?: unknown; to?: unknown }>).filter(d => typeof d.n === 'number' && ok(d.from) && ok(d.to))
+      .map(d => ({ n: d.n as number, from: { x: (d.from as { x: number }).x, y: (d.from as { y: number }).y }, to: { x: (d.to as { x: number }).x, y: (d.to as { y: number }).y } }));
+  } catch { return undefined; }
+}
+
+/** The drags at least two voters agree on, piece by piece (same number, grab and drop points within `radius`),
+ * averaged, in number order. */
+export function agreedDrags(answers: Array<NumberedDrag[] | undefined>, radius = 0.09): NumberedDrag[] {
+  const numbers = [...new Set(answers.flatMap(a => (a ?? []).map(d => d.n)))].sort((a, b) => a - b);
+  const out: NumberedDrag[] = [];
+  for (const n of numbers) {
+    const given = answers.map(a => a?.find(d => d.n === n)).filter((d): d is NumberedDrag => !!d);
+    const anchor = given.find(d => given.filter(e => Math.hypot(e.to.x - d.to.x, e.to.y - d.to.y) <= radius && Math.hypot(e.from.x - d.from.x, e.from.y - d.from.y) <= radius).length >= 2);
+    if (!anchor) continue;
+    const near = given.filter(e => Math.hypot(e.to.x - anchor.to.x, e.to.y - anchor.to.y) <= radius && Math.hypot(e.from.x - anchor.from.x, e.from.y - anchor.from.y) <= radius);
+    const mean = (pick: (d: NumberedDrag) => number) => near.reduce((t, d) => t + pick(d), 0) / near.length;
+    out.push({ n, from: { x: mean(d => d.from.x), y: mean(d => d.from.y) }, to: { x: mean(d => d.to.x), y: mean(d => d.to.y) } });
+  }
+  return out;
+}
+
+/** Every piece to drag on a "drag the segments to complete the line" puzzle, voted by the ordering models.
+ * An empty list means no agreement. `modelClientsOf` is the test seam. Never throws. */
+export async function askDrags(image: ImageInput, instruction: string, options: { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; now?: () => number } = {}): Promise<NumberedDrag[] | undefined> {
+  const now = options.now ?? Date.now;
+  let clients: ModelClient[];
+  try {
+    if (options.modelClientsOf) clients = await options.modelClientsOf();
+    else {
+      if (!cachedOrderModels || now() - cachedOrderModels.at > VISION_TTL_MS) {
+        const { gatewayModels } = await import('../../gateway/models.js');
+        const vision = (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id);
+        const ids = ORDER_VOTERS.filter(name => vision.includes(name));
+        cachedOrderModels = { ids: ids.length ? ids : vision.slice(0, 1), at: now() };
+      }
+      clients = await Promise.all(cachedOrderModels.ids.map(id => gatewayModelClientOnce(id)));
+    }
+  } catch (error) {
+    quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+  const text = `This is a drag puzzle: "${instruction}". Numbered pieces form one continuous line (or complete picture) when placed in number order. The pieces labelled "Move" are out of place; the others are already placed. `
+    + 'For each movable piece, give where to grab it (the centre of its numbered circle, or of the piece) and where that point should end up so the piece fits between its neighbours. Fractions of the whole image. '
+    + 'Answer with JSON only: {"drags": [{"n": 2, "from": {"x": 0.0, "y": 0.0}, "to": {"x": 0.0, "y": 0.0}}]}.';
+  const answers = await Promise.all(clients.map(async client => {
+    try {
+      const result = await client.step({
+        system: 'You solve drag puzzles and reply with JSON only.',
+        items: [{ type: 'text', role: 'user', text, images: [image] }],
+        tools: [], toolChoice: 'none', maxOutputTokens: 1500,
+        ...(options.signal ? { signal: options.signal } : {}),
+        onTextDelta: () => undefined,
+      });
+      return parseDrags(result.text);
+    } catch { return undefined; }
+  }));
+  if (answers.every(a => a === undefined)) return undefined;
+  return clients.length === 1 ? (answers[0] ?? []) : agreedDrags(answers);
+}
+
 /** The client for the pointing model, cached like the list: the model that answers "where" and "what does it say". */
 async function pointClient(now: () => number, modelClientOf?: ModelClientOf): Promise<ModelClient | undefined> {
   if (modelClientOf) return modelClientOf();

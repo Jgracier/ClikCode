@@ -172,3 +172,17 @@ describe('ordered spots', () => {
     expect(agreedInOrder([a, undefined])).toBeUndefined();
   });
 });
+
+describe('several pieces to drag', () => {
+  it('keeps the pieces two voters agree on, by number, and reads fenced JSON', async () => {
+    const { agreedDrags, parseDrags } = await import('./captcha-model.js');
+    const a = parseDrags('```json\n{"drags":[{"n":2,"from":{"x":0.87,"y":0.37},"to":{"x":0.52,"y":0.56}},{"n":5,"from":{"x":0.86,"y":0.52},"to":{"x":0.32,"y":0.6}}]}\n```')!;
+    const b = parseDrags('{"drags":[{"n":5,"from":{"x":0.86,"y":0.52},"to":{"x":0.31,"y":0.59}},{"n":2,"from":{"x":0.87,"y":0.37},"to":{"x":0.53,"y":0.56}}]}')!;
+    const stray = parseDrags('{"drags":[{"n":2,"from":{"x":0.91,"y":0.28},"to":{"x":0.64,"y":0.45}}]}')!;
+    const agreed = agreedDrags([a, stray, b]);
+    expect(agreed.map(d => d.n)).toEqual([2, 5]);
+    expect(agreed[0]!.to.x).toBeCloseTo(0.525);
+    expect(agreedDrags([a, stray])).toEqual([{ n: 5, from: a[1]!.from, to: a[1]!.to }].slice(0, 0));
+    expect(parseDrags('{"drags":[{"n":1,"from":{"x":2,"y":0},"to":{"x":0,"y":0}}]}')).toEqual([]);
+  });
+});
