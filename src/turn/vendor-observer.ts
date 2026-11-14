@@ -15,6 +15,7 @@ import { createToolLog } from './tool-log.js';
 import { unfinishedUsageRecorder } from './turn-steps.js';
 import { turnSink } from './turn-output.js';
 import { nativeAvailableCommands } from './vendor-process.js';
+import { rememberVendorCommands } from './vendor-commands.js';
 import type { VendorTurnContext } from './vendor-turn-context.js';
 
 export type VendorTransport = ReturnType<typeof sessionTurnTransport>;
@@ -123,7 +124,11 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     // Only where the screen can ask: a missing member is how a transport
     // learns to cancel the question with a notice instead of hanging on it.
     ...(prompter?.askQuestions ? { onQuestion: (request, signal) => prompter.askQuestions!(request, signal) } : {}),
-    onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
+    onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => {
+      nativeAvailableCommands.set(session.id, commands);
+      // For the windows: this runs in the session worker (vendor-commands.ts).
+      void rememberVendorCommands(harness.command, commands);
+    },
   } satisfies HarnessTurnObserver;
   return {
     sharedObserver, onActivity, onSessionId, keepTransport, recordUnfinishedAttempt, pendingWork,

@@ -6,6 +6,7 @@ import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { sessionNativeCommands } from '../../turn/vendor-process.js';
+import { knownVendorCommands } from '../../turn/vendor-commands.js';
 import { allLocalHarnesses, harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { compareProviders } from '../../session/options.js';
 import { type SlashExtras, type SlashRouteContext } from './registry.js';
@@ -41,7 +42,9 @@ export function slashExtrasFor(session: HarnessSession, harness: AiLocalHarnessD
   const managers = harness ? localHarnessCapabilityManifest(harness).managers ?? {} : {};
   return {
     managers: Object.entries(managers).map(([name, manager]) => ({ name, label: manager?.label ?? name })),
-    native: isClikCodeAgent(session) ? [] : sessionNativeCommands(session.id),
+    // This chat's own list where this process heard it, else what the harness
+    // last said it has (written by the session worker, which runs the turns).
+    native: isClikCodeAgent(session) ? [] : sessionNativeCommands(session.id).length ? sessionNativeCommands(session.id) : knownVendorCommands(harness?.command ?? session.nativeHarness),
     custom: customCommandsFor(session, harness),
     harnesses: allLocalHarnesses().filter((item) => harnessCanRunTurns(item))
       .map((item, index) => ({ item, index })).sort((a, b) => compareProviders({ harness: a.item }, { harness: b.item }) || a.index - b.index)

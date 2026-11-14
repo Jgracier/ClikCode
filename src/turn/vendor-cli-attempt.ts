@@ -22,7 +22,7 @@ import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { captureNativeHarnessTurn, createTurnInput, createTurnRelease } from '../harness/transport/native/turn.js';
 import { nativeMcpConfig } from '../harness/transport/native/mcp-config.js';
 import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
-import { createPiRpcTurn, piRpcPrompt, piRpcSteer } from '../harness/transport/native/pi-rpc.js';
+import { createPiRpcTurn, PI_RPC_GET_COMMANDS, piRpcCommands, piRpcPrompt, piRpcSteer } from '../harness/transport/native/pi-rpc.js';
 import { ampUserMessage, createAmpStreamTurn } from '../harness/transport/native/amp-stream.js';
 import { settleHeldVendor } from './turn-steps.js';
 import { holdVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
@@ -189,7 +189,7 @@ export async function runVendorCliAttempt(input: {
     });
   }
   const stdinText = turn.promptInput !== 'stdin' ? undefined
-    : piRpc ? await piRpcPrompt(turnText, images) : ampStream ? ampUserMessage(turnText) : heldInput ? streamJsonUserMessage(turnText) : turnText;
+    : piRpc ? `${PI_RPC_GET_COMMANDS}${await piRpcPrompt(turnText, images)}` : ampStream ? ampUserMessage(turnText) : heldInput ? streamJsonUserMessage(turnText) : turnText;
   // The global MCP servers, for a harness that takes them per run (Amp's --mcp-config).
   const mcp = await nativeMcpConfig(harness);
   argv.unshift(...mcp.argv);
@@ -204,6 +204,9 @@ export async function runVendorCliAttempt(input: {
       // Parsed here, once: every reader below takes this record.
       const record = parseJsonRecord(lineText);
       if (piTurn && record) piTurn.note(record);
+      // The answer to the get_commands sent with the prompt.
+      const piCommands = piRpc && record ? piRpcCommands(record) : undefined;
+      if (piCommands) sharedObserver.onAvailableCommands?.(piCommands);
       if (ampTurn && record) ampTurn.note(record);
       if (held) {
         held.line(lineText, record);

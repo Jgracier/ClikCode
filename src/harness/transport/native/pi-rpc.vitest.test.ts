@@ -52,3 +52,15 @@ describe('pi --mode rpc turn', () => {
     expect(sent).toMatchObject({ type: 'prompt', message: 'look', images: [{ type: 'image', mimeType: 'image/png', data: Buffer.from('png').toString('base64') }] });
   });
 });
+
+describe('the commands pi says it has', () => {
+  it('reads its get_commands answer, and nothing else', async () => {
+    const { piRpcCommands, PI_RPC_GET_COMMANDS } = await import('./pi-rpc.js');
+    expect(JSON.parse(PI_RPC_GET_COMMANDS)).toEqual({ id: 'clikcode-commands', type: 'get_commands' });
+    expect(piRpcCommands({ type: 'response', command: 'get_commands', success: true, data: { commands: [
+      { name: 'fix-tests', description: 'Fix the failing tests', source: 'prompt' }, { name: 'skill:pdf', source: 'skill' }, { nope: 1 },
+    ] } })).toEqual([{ name: 'fix-tests', description: 'Fix the failing tests' }, { name: 'skill:pdf' }]);
+    expect(piRpcCommands({ type: 'response', command: 'steer', success: true })).toBeUndefined();
+    expect(piRpcCommands({ type: 'agent_end' })).toBeUndefined();
+  });
+});
