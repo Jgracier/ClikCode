@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SLASH_COMMANDS, SLASH_HANDLER_KEYS, SLASH_PALETTE_PINNED, parseSlashInput, resolveSlashCommand, routeSlashInput, slashControls,
-  slashHelpText, slashPalette, suggestSlashCommand, unknownSlashMessage,
-} from './registry.js';
+  slashHelpText, slashPalette, suggestSlashCommand, unknownSlashMessage, harnessCommandGroup } from './registry.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 
@@ -171,14 +170,18 @@ describe('slash registry', () => {
     for (const value of pinned) expect(palette.filter((row) => row.value === value)).toHaveLength(1);
   });
 
-  it('keeps the vendor harness out of the palette and in /help', () => {
-    const palette = slashPalette(session(), harness(), VENDOR_EXTRAS).map((row) => row.value);
-    // A manager surface or an advertised command would otherwise render as if
-    // ClikCode owned it.
-    for (const vendor of ['/mcp', '/rewind']) expect(palette).not.toContain(vendor);
-    expect(palette).toContain('/ship');
+  it('lists the harness\'s own commands in the palette, in a section under its name after ClikCode\'s', () => {
+    // In a chat on a harness, its commands are there -- in their own section,
+    // so none reads as ClikCode's.
+    const palette = slashPalette(session(), harness(), VENDOR_EXTRAS);
+    const group = harnessCommandGroup(harness());
+    for (const vendor of ['/mcp', '/rewind']) expect(palette.find((row) => row.value === vendor)?.group).toBe(group);
+    expect(palette.find((row) => row.value === '/ship')?.group).toBe('Custom');
+    const groups = [...new Set(palette.map((row) => row.group))];
+    expect(groups.indexOf(group)).toBe(groups.indexOf('Custom') + 1);
     const help = slashHelpText(session(), harness(), VENDOR_EXTRAS);
     for (const vendor of ['/mcp', '/rewind']) expect(help).toContain(vendor);
+    expect(help).toContain(group);
     expect(help).toContain('/<harness>');
   });
 
@@ -314,5 +317,16 @@ describe('commands ClikCode used to emulate on a vendor', () => {
     const rows = slashPalette(session(), harness(), { native: [{ name: 'compress' }] });
     expect(rows.find((row) => row.value === '/compact')?.detail).not.toMatch(/^unavailable/);
     expect(slashPalette(session(), harness()).find((row) => row.value === '/compact')?.detail).toMatch(/^unavailable/);
+  });
+});
+
+describe('a harness\'s own commands of a ClikCode name', () => {
+  it('runs /review and /init on a harness that says it has them, and refuses them where it has neither', async () => {
+    const { resolveSlashCommand } = await import('./registry.js');
+    const review = resolveSlashCommand('review')!;
+    const grok = { command: 'grok', displayName: 'Grok Build' } as never;
+    expect(review.availability(undefined, grok, '', ['review', 'compact']).available).toBe(true);
+    expect(review.availability(undefined, grok, '', ['/review']).available).toBe(true);
+    expect(review.availability(undefined, grok, '', []).available).toBe(false);
   });
 });

@@ -7,6 +7,8 @@ import type { HarnessSession } from '../../session/model.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { sessionNativeCommands } from '../../turn/vendor-process.js';
 import { knownVendorCommands } from '../../turn/vendor-commands.js';
+import { declaredHarnessCommands } from '../../harness/declared-commands.js';
+import type { HarnessAvailableCommand } from '../../harness/events/turn-observer.js';
 import { allLocalHarnesses, harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { compareProviders } from '../../session/options.js';
 import { type SlashExtras, type SlashRouteContext } from './registry.js';
@@ -38,13 +40,25 @@ export function customCommandsFor(session: HarnessSession, harness: AiLocalHarne
 /** Test seam: redirect `~` and ClikCode's own command directories. */
 const CUSTOM_COMMAND_ROOTS: { home?: string; clikcodeDirs?: readonly string[] } = {};
 
+/** The commands of the harness a chat is on: what it said this session in
+ * this process, else what it last said anywhere (the session worker runs the
+ * turns and keeps it, vendor-commands.ts), else what ClikCode knows it runs
+ * (declared-commands.ts) for a harness that lists none itself. */
+function harnessCommandsFor(session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): readonly HarnessAvailableCommand[] {
+  const heard = sessionNativeCommands(session.id);
+  if (heard.length) return heard;
+  const command = harness?.command ?? session.nativeHarness;
+  const known = knownVendorCommands(command);
+  return known.length ? known : declaredHarnessCommands(command);
+}
+
 export function slashExtrasFor(session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): SlashExtras {
   const managers = harness ? localHarnessCapabilityManifest(harness).managers ?? {} : {};
   return {
     managers: Object.entries(managers).map(([name, manager]) => ({ name, label: manager?.label ?? name })),
     // This chat's own list where this process heard it, else what the harness
     // last said it has (written by the session worker, which runs the turns).
-    native: isClikCodeAgent(session) ? [] : sessionNativeCommands(session.id).length ? sessionNativeCommands(session.id) : knownVendorCommands(harness?.command ?? session.nativeHarness),
+    native: isClikCodeAgent(session) ? [] : harnessCommandsFor(session, harness),
     custom: customCommandsFor(session, harness),
     harnesses: allLocalHarnesses().filter((item) => harnessCanRunTurns(item))
       .map((item, index) => ({ item, index })).sort((a, b) => compareProviders({ harness: a.item }, { harness: b.item }) || a.index - b.index)

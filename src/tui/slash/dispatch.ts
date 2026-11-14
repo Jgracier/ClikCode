@@ -220,7 +220,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
   // harness without a model selector says so instead of offering a list.
   // /compact: an agent that announced its own compaction command compacts, whatever its catalog says (compactConversation sends it).
   const availability: SlashAvailability = route.entry.handlerKey === 'compact' && canCompact(id, session) ? { available: true }
-    : route.entry.availability(session, harness, route.args);
+    : route.entry.availability(session, harness, route.args, slashRouteContextFor(session, harness).nativeCommands);
   // The one refusal worth turning into a question: the command needs a
   // provider and none is chosen. The command is queued on the chat the
   // picker produced (choosing a provider can branch it) rather than run on

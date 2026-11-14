@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aiderHistoryReply, aiderLine, aiderStdoutReply } from './aider.js';
+import { aiderHistoryCommandOutput, aiderHistoryReply, aiderLine, aiderStdoutReply } from './aider.js';
 import { createStreamState } from './adapters.js';
 
 // Real Aider 0.86.2 output for `--message "Reply with only the word ok"`.
@@ -50,5 +50,16 @@ describe('aider', () => {
     const later = `${HISTORY}\n\n#### and now?  \n\nSee below:\n\n> a quoted line from the model\n\nDone.\n\n> Applied edit to x.py  \n> Tokens: 1k sent, 9 received. Cost: $0.001 message, $0.003 session.`;
     expect(aiderHistoryReply(later)).toBe('See below:\n\n> a quoted line from the model\n\nDone.');
     expect(aiderHistoryReply('# aider chat started')).toBeUndefined();
+  });
+
+  it('answers a command with what it printed, as Aider records it', () => {
+    // Real Aider 0.86.2 history for `--message /tokens`.
+    const history = ['#### /ls  ', '> No files in chat, git repo, or read-only list.  ', '', '# aider chat started at 2026-11-14 08:33:29', '',
+      '> Restored previous conversation history.  ', '', '#### /tokens  ',
+      '> Approximate context window usage for openrouter/x, in tokens:  ', '> $ 0.0000      472 tokens total  ', '> 1,024,000 tokens max context window size  '].join('\n');
+    expect(aiderHistoryReply(history)).toBeUndefined();
+    expect(aiderHistoryCommandOutput(history)).toBe('Approximate context window usage for openrouter/x, in tokens:\n$ 0.0000      472 tokens total\n1,024,000 tokens max context window size');
+    expect(aiderHistoryCommandOutput(HISTORY)).toBeUndefined();
+    expect(aiderHistoryCommandOutput('#### /test true  \n')).toBe('/test finished with no output.');
   });
 });

@@ -124,6 +124,27 @@ export function aiderStdoutReply(stdout: string): string | undefined {
   return text || undefined;
 }
 
+/** What an Aider command printed (`/tokens`, `/ls`, `/diff`, `/run ...`):
+ * the lines Aider quotes under the last `#### /command` heading, when no
+ * model answered it. Read as a failure before, though it is the command's
+ * whole answer. Undefined when the last request was not a command or printed
+ * nothing. */
+export function aiderHistoryCommandOutput(markdown: string): string | undefined {
+  const lines = markdown.split(/\r?\n/);
+  let start = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index]!.startsWith('#### ')) { start = index; break; }
+  }
+  if (start < 0 || !lines[start]!.slice(5).trimStart().startsWith('/')) return undefined;
+  const printed = lines.slice(start + 1)
+    .filter((line) => line.startsWith('>'))
+    .map((line) => line.replace(/^> ?/, '').replace(/ {2}$/, ''))
+    .filter((line) => !/^Tokens: .+ sent, .+ received/.test(line));
+  const text = printed.join('\n').trim();
+  // A command that printed nothing finished all the same (`/test true`).
+  return text || `${lines[start]!.slice(5).trim().split(/\s/)[0]} finished with no output.`;
+}
+
 /** Why the last turn in an Aider chat history file has no reply: the notice
  * Aider quoted under its heading (`> litellm.NotFoundError: …`), preferring
  * the one that names an error. Undefined when there is nothing quoted. */

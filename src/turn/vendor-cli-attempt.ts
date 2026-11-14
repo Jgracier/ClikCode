@@ -15,7 +15,7 @@ import { nativeTurnResult } from '../harness/protocol/turn-result.js';
 import { parseJsonRecord } from '../harness/protocol/json-lines.js';
 import { ProcessCost } from '../harness/protocol/running-cost.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
-import { aiderHistoryNotice, aiderHistoryReply, aiderStdoutReply } from '../harness/events/aider.js';
+import { aiderHistoryCommandOutput, aiderHistoryNotice, aiderHistoryReply, aiderStdoutReply } from '../harness/events/aider.js';
 import { createStreamState } from '../harness/events/adapters.js';
 import { reportStructuredLine } from '../harness/events/structured.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
@@ -296,7 +296,8 @@ export async function runVendorCliAttempt(input: {
   // answer would.
   if (harness.parser === 'aider') {
     const history = session.nativeSessionId ? await readFile(session.nativeSessionId, 'utf8').catch(() => '') : '';
-    const reply = history ? aiderHistoryReply(history) : aiderStdoutReply(turnOutput.stdout);
+    // A command (`/tokens`, `/run ...`) answers with what it printed, not a model reply.
+    const reply = history ? aiderHistoryReply(history) ?? aiderHistoryCommandOutput(history) : aiderStdoutReply(turnOutput.stdout);
     if (!reply) {
       const notice = history ? aiderHistoryNotice(history) : undefined;
       throw Object.assign(new Error(`${harness.displayName}: ${notice ?? 'returned no reply'}`), {
@@ -305,6 +306,13 @@ export async function runVendorCliAttempt(input: {
       });
     }
     cliResult = { ...cliResult, text: reply };
+    // What streamed live is Aider's stdout, read line by line: a question it
+    // answered itself ("Add file to the chat?") or a model's thinking can reach
+    // it. The file's answer is the clean one, so it is what the chat keeps.
+    if (history && reply !== (session.pendingTurn?.response ?? '').trim()) {
+      checkpoint.response(reply, 'replace');
+      prompter?.response(reply, 'replace');
+    }
   }
   if (!cliResult.isError) confirmNativeSession();
   if (!sawLineUsage && cliResult.usage) sharedObserver.onUsage?.(turnCost(cliResult.usage));
