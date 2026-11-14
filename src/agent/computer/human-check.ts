@@ -92,12 +92,17 @@ async function findPuzzle(page: Page): Promise<{ widget: HumanCheckWidget; frame
 }
 
 /** Where each tile of an N-tile grid sits inside the challenge frame: the grid fills the frame minus its edges,
- * so a tile's centre is found without knowing the site's exact markup. */
+ * so a tile's centre is found without knowing the site's exact markup. The grid does not fill the whole frame:
+ * a reCAPTCHA challenge spends about 90px on its instruction header and about 60px on its button footer, so the
+ * tile area is the frame minus those bands. */
+const GRID_HEADER = 90, GRID_FOOTER = 60;
 function tileCentres(box: Box, columns: number, rows: number): Array<{ x: number; x2: number; y: number; y2: number }> {
   const out: Array<{ x: number; x2: number; y: number; y2: number }> = [];
-  const w = box.width / columns, h = box.height / rows;
+  const top = box.y + Math.min(GRID_HEADER, box.height * 0.2);
+  const gridHeight = Math.max(box.height - GRID_HEADER - GRID_FOOTER, box.height * 0.5);
+  const w = box.width / columns, h = gridHeight / rows;
   for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
-    out.push({ x: box.x + column * w, x2: box.x + (column + 1) * w, y: box.y + row * h, y2: box.y + (row + 1) * h });
+    out.push({ x: box.x + column * w, x2: box.x + (column + 1) * w, y: top + row * h, y2: top + (row + 1) * h });
   }
   return out;
 }
@@ -131,26 +136,45 @@ export interface SolveDeps {
 export type CaptchaAskAnswer = { tiles: number[] } | { unreadable: true };
 
 /** Answer a shown puzzle: screenshot the challenge, ask the vision model which tiles match, click them like a
- * visitor would, then confirm. Up to two rounds (a wrong first round refreshes the grid). Resolves `cleared` when
- * the page holds an accepted answer, else `still-there`. Never throws: an unsolvable puzzle is a result, not a failure. */
+ * visitor would, then confirm. reCAPTCHA often asks several grids in one challenge ("select all buses" then more
+ * buses), so rounds continue while the widget keeps asking; each round re-reads the grid, so a mid-challenge
+ * instruction change is followed too. Resolves `cleared` when the page holds an accepted answer, else `still-there`
+ * when the budget runs out. Never throws: an unsolvable puzzle is a result, not a failure. */
 export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise<HumanCheckResult> {
   const sleep = deps.sleep ?? realSleep;
   const random = deps.random ?? Math.random;
   const ask = deps.ask ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaModel(image, { ...(deps.signal ? { signal: deps.signal } : {}) })));
-  let round = 0;
-  while (round < 2) {
-    round++;
+  const budgetMs = deps.waitMs ?? 120_000;
+  const began = Date.now();
+  let firstWidget: HumanCheckWidget | undefined;
+  let repressed = 0;
+  while (Date.now() - began < budgetMs) {
     const found = await findPuzzle(page);
-    if (!found) return (await humanCheckAnswered(page)) ? { outcome: 'cleared' } : { outcome: 'none' };
-    if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: found.widget };
+    if (!found) {
+      // The challenge may have expired ("Verification challenge expired"): the checkbox is back and a visitor
+      // presses it again. Up to three presses; the answer field says whether any of them was accepted.
+      if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
+      if (await findCheckbox(page) && repressed < 3) {
+        repressed++;
+        await pressHumanCheck(page, { waitMs: 8_000 });
+        await sleep(1_500);
+        continue;
+      }
+      return { outcome: (await humanCheckAnswered(page)) ? 'cleared' : 'none', ...(firstWidget ? { widget: firstWidget } : {}) };
+    }
+    firstWidget ??= found.widget;
+    if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
     let bytes: Buffer;
     try { bytes = await (await found.frame.frameElement()).screenshot({ timeout: 10_000 }) as Buffer; }
-    catch { return { outcome: 'still-there', widget: found.widget }; }
+    catch { return { outcome: 'still-there', widget: firstWidget }; }
     const reply = await ask({ mimeType: 'image/jpeg', data: bytes.toString('base64') });
-    if (!reply.ok) return { outcome: 'still-there', widget: found.widget };
-    if ('unreadable' in reply.answer) return { outcome: 'still-there', widget: found.widget };
+    // An unreadable or empty answer is not a refusal: reCAPTCHA deliberately blurs and noises its grids.
+    // Wait out the widget's own refresh and try the next round with a fresh screenshot.
+    if (!reply.ok || 'unreadable' in reply.answer || !reply.answer.tiles.length) {
+      await sleep(3_000);
+      continue;
+    }
     const tiles: number[] = reply.answer.tiles;
-    if (!tiles.length) return { outcome: 'still-there', widget: found.widget };
     // reCAPTCHA and hCaptcha grids are square (3x3 or 4x4); the count tells us which.
     const side = tiles.length <= 9 ? 3 : 4;
     const centres = tileCentres(found.box, side, side);
@@ -162,17 +186,16 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
     // Confirm inside the same frame, wherever the widget put its Verify/Next button.
     const confirm = { x: found.box.x + found.box.width * 0.5, x2: found.box.x + found.box.width, y: found.box.y + found.box.height * 0.85, y2: found.box.y + found.box.height };
     await visitorClick(page.mouse, confirm, random, sleep);
-    for (let waited = 0; waited < (deps.waitMs ?? 15_000); waited += 600) {
+    for (let waited = 0; waited < 20_000; waited += 600) {
       await sleep(600);
-      if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: found.widget };
+      if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
       const again = await findPuzzle(page);
       // No puzzle left and the page moved on: solved.
-      if (!again && !await findCheckbox(page)) return { outcome: 'cleared', widget: found.widget };
-      // A fresh grid appeared: the first round was wrong, and there is one more try in the budget.
-      if (again && again.frame !== found.frame) break;
-      // The same challenge is still up after its answer was played: it refused this round. One more, then give up.
-      if (again && waited + 600 >= (deps.waitMs ?? 15_000)) return { outcome: 'still-there', widget: found.widget };
+      if (!again && !await findCheckbox(page)) return { outcome: 'cleared', widget: firstWidget };
+      // The widget asked again (a fresh grid, or the same one with more to pick): loop for another round
+      // while the budget lasts. A short pause first: the widget is mid-refresh.
+      if (again) { await sleep(1_500); break; }
     }
   }
-  return (await humanCheckAnswered(page)) ? { outcome: 'cleared' } : { outcome: 'still-there' };
+  return (await humanCheckAnswered(page)) ? { outcome: 'cleared' } : { outcome: 'still-there', ...(firstWidget ? { widget: firstWidget } : {}) };
 }

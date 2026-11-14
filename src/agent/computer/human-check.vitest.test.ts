@@ -139,12 +139,13 @@ describe('the puzzle solver', () => {
     expect(seen[1]).toBe(Buffer.from('grid-b').toString('base64'));
   });
 
-  it('reports still-there when the model cannot read the challenge or picks nothing', async () => {
-    const unreadable = { ...noWait, ask: async () => ({ ok: true as const, answer: { unreadable: true as const } }) };
+  it('keeps retrying when the model cannot read the challenge or picks nothing, until the budget ends', async () => {
+    // The budget ends the retry loop; the widget stays put in this fake, so each run ends as still-there.
+    const unreadable = { ...noWait, waitMs: 600, ask: async () => ({ ok: true as const, answer: { unreadable: true as const } }) };
     expect(await solveHumanCheck(solverPage([puzzle()]).page, unreadable)).toEqual({ outcome: 'still-there', widget: 'recaptcha' });
-    const empty = { ...noWait, ask: askTiles([]) };
+    const empty = { ...noWait, waitMs: 600, ask: askTiles([]) };
     expect(await solveHumanCheck(solverPage([puzzle()]).page, empty)).toEqual({ outcome: 'still-there', widget: 'recaptcha' });
-    const failed = { ...noWait, ask: async () => ({ ok: false as const, error: 'gateway-off' }) };
+    const failed = { ...noWait, waitMs: 600, ask: async () => ({ ok: false as const, error: 'gateway-off' }) };
     expect(await solveHumanCheck(solverPage([puzzle()]).page, failed)).toEqual({ outcome: 'still-there', widget: 'recaptcha' });
   });
 
@@ -156,7 +157,7 @@ describe('the puzzle solver', () => {
     const trails: number[][] = [];
     for (let run = 0; run < 2; run++) {
       const { page, state } = solverPage([puzzle()], () => undefined);
-      await solveHumanCheck(page, { ...noWait, random: Math.random, ask: askTiles([0]), waitMs: 0 });
+      await solveHumanCheck(page, { ...noWait, random: Math.random, ask: askTiles([0]), waitMs: 600 });
       trails.push(state.moves.map(([x, y]) => Math.round(x * 10 + y)));
     }
     expect(trails[0]).not.toEqual(trails[1]);
