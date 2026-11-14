@@ -15,6 +15,7 @@
  * once a message has been rendered. The viewport is positioned by rows from the end, as before; an estimate only affects how
  * far the end of the scroll is thought to be, never what is on screen, because every change to the window keeps the viewport's
  * first row where it was. */
+import { terminalFacts } from '../probe.js';
 import { performance } from 'node:perf_hooks';
 import { stdout as output } from 'node:process';
 import { isClikCodeNotice } from '../../session/clikcode-notice.js';
@@ -405,11 +406,23 @@ function trimFront(p: TerminalHarnessPrompter, above: number, near: number): voi
   h.first = upTo;
 }
 
+/** The rows at the top of the conversation's `above` rows that the terminal covers (probe.ts). The conversation is drawn under
+ * them -- that is the point: it runs all the way up the screen -- and scrolling back goes this much further than its first line,
+ * so that line comes to rest below them instead of ending its life hidden. Never the whole view. */
+export function coveredTop(above: number): number {
+  return Math.min(terminalFacts.coveredTopRows, Math.max(0, above - 1));
+}
+
+/** Whether the rows held start at the conversation's first message: only then is there a first line to bring down. */
+export const heldFromStart = (p: TerminalHarnessPrompter): boolean => !p.scrollWindow.source || p.scrollWindow.first === 0;
+
 /** How far the view can be scrolled back, counting the messages not rendered (estimated), and how far with only what is held. */
 export function scrollReach(p: TerminalHarnessPrompter): { held: number; all: number } {
   const h = p.scrollWindow;
-  const held = Math.max(0, scrollBody(p, true) - p.alternateAbove);
-  return { held, all: held + (h.source ? h.rowsBetween(0, h.first) : 0) };
+  const body = scrollBody(p, true);
+  const cover = coveredTop(p.alternateAbove);
+  const held = Math.max(0, body - p.alternateAbove + (heldFromStart(p) ? cover : 0));
+  return { held, all: Math.max(0, body - p.alternateAbove + cover + (h.source ? h.rowsBetween(0, h.first) : 0)) };
 }
 
 /** A scroll to row-offset `next` that is further back than the window can reach in a few batches: go there directly. The message

@@ -8,6 +8,7 @@ import type { TerminalHarnessPrompter } from '../prompter.js';
 import { CURSOR_REPORT_MS, RESIZE_SETTLE_MS } from './state.js';
 import { askCursorRow } from '../input-decoder.js';
 import { keepPlace } from './history-window.js';
+import { askCoveredTop } from '../probe.js';
 
 /** The rows the screen announced, never fewer than five: the live block is never taller than this, so the walk back up to
  * the composer cannot clamp at the top edge. */
@@ -30,6 +31,8 @@ export function viewportRows(this: TerminalHarnessPrompter): number {
 export function onResize(this: TerminalHarnessPrompter): void {
   if (this.closed) return;
   logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
+  // The rows a phone covers at the top are so many points, so a change of size (its text made larger, the phone turned) changes how many.
+  askCoveredTop();
   this.requestRedraw('resize');
   const first = !this.resizePaintTimer;
   // The settle timer runs from here, so the first size's frame knows it is not the settled one (it does not clear).

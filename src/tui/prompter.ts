@@ -32,7 +32,7 @@ import type { DraftWithPastes } from './render/held-pastes.js';
 import { reducedMotion } from './capabilities.js';
 import { KEEP_STDIN_FLOWING, onTerminalFocus } from './input-decoder.js';
 import { sessionModesOn, setTerminalRawMode, type Redraw } from './modes.js';
-import { probeTerminal } from './probe.js';
+import { onCoveredTopChange, probeTerminal } from './probe.js';
 import { PlanEntry } from './render/plan-block.js';
 import { type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { takeHistoryDump } from './prompter/history-dump.js';
@@ -388,6 +388,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (!inlineHistoryMode()) historyDump.source = () => this.takeHistoryDump();
       // Asked, not believed; never waited for (see probe.ts for the fallback when nothing answers).
       void probeTerminal();
+      // The terminal covers a different number of rows at the top than it did: the view is drawn for that.
+      onCoveredTopChange(() => { if (!this.closed && !this.suspended) this.redrawScreen(); });
     }
     // The shell's own title is saved, to be put back on the way out; this
     // UI sets its own while it runs (syncTerminalSignals).
