@@ -372,3 +372,44 @@ export async function askCaptchaModel(image: ImageInput, options: { signal?: Abo
     return { ok: false, error: 'unreachable' };
   }
 }
+
+/** Speech-to-text models on the Gateway, best first for short noisy clips of spoken words or digits. */
+export const TRANSCRIBE_MODELS = ['whisper-large-v3', 'whisper-1', 'whisper-large-v3-turbo', 'gpt-4o-transcribe'];
+
+/** The words spoken in an audio challenge clip, through the account's own Gateway (`/v1/audio/transcriptions`).
+ * The first model that answers with text wins. `fetchImpl` and `connection` are the test seams. Never throws. */
+export async function askTranscript(audio: Buffer, mimeType: string, options: { signal?: AbortSignal; fetchImpl?: typeof fetch; connection?: { baseUrl: string; apiKey: string } } = {}): Promise<string | undefined> {
+  let connection = options.connection;
+  try {
+    if (!connection) {
+      const { gatewayConnection } = await import('../models/for-session.js');
+      const Conf = (await import('conf')).default;
+      connection = gatewayConnection(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
+    }
+  } catch (error) {
+    quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const name = /wav/i.test(mimeType) ? 'clip.wav' : /ogg/i.test(mimeType) ? 'clip.ogg' : 'clip.mp3';
+  for (const model of TRANSCRIBE_MODELS) {
+    try {
+      const form = new FormData();
+      form.append('model', model);
+      form.append('language', 'en');
+      form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), name);
+      const response = await fetchImpl(`${connection.baseUrl}/v1/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${connection.apiKey}` }, body: form, signal: options.signal ?? AbortSignal.timeout(45_000) });
+      if (!response.ok) continue;
+      const text = String(((await response.json()) as { text?: unknown }).text ?? '').trim();
+      if (text) return text;
+    } catch (error) {
+      quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return undefined;
+}
+
+/** What gets typed for an audio challenge: lower case, no punctuation, single spaces. */
+export function cleanTranscript(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s']/g, ' ').replace(/\s+/g, ' ').trim();
+}
