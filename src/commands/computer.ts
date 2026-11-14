@@ -61,7 +61,7 @@ export async function computerCaptcha(setting: string | undefined): Promise<void
   const on = await captchaSolvingAllowed(dir);
   if (isJsonDefaultMode()) return emitResult({ computer: { captchaSolving: on } });
   process.stdout.write(on
-    ? 'Captcha solving is on (the default): when a human check asks a puzzle, a picture of it goes to your own Gateway vision model and the answer is clicked like a visitor would -- no external solving service, nothing leaves this machine but the puzzle. Turn off with `clikcode computer captcha off`.\n'    : 'Captcha solving is off: a puzzle falls through to the managed cloud browser (when on) or you. Turn on with `clikcode computer captcha on`.\n');
+    ? 'Captcha solving is on (the default): when a human check asks a puzzle, a picture of it goes to your own Gateway vision model and the answer is clicked like a visitor would -- no external solving service, nothing leaves this machine but the puzzle. Turn off with `clikcode computer captcha off`.\n'    : 'Captcha solving is off: a check that wants more than one press is left for you. Turn on with `clikcode computer captcha on`.\n');
 }
 
 /** `clikcode computer headless on|off`: run ClikCode's browser with no window. A Linux computer with no display does this by itself. */

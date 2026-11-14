@@ -13,8 +13,8 @@ import { scrubSecrets } from './secret-scrubber.js';
 const DEFAULT_TAB = 'connectors';
 const clean = (text: string): string => scrubSecrets(text).replace(/\s+/g, ' ').trim().slice(0, 300);
 
-type PageView = { text: string; controls: KeyControl[]; fields: string[]; hasPassword: boolean; captchaFrame: boolean };
-/** Runs in the page (and in each frame): the visible text, what can be pressed, the visible boxes by label, and a real captcha challenge. */
+type PageView = { text: string; controls: KeyControl[]; fields: string[]; hasPassword: boolean };
+/** Runs in the page (and in each frame): the visible text, what can be pressed and the visible boxes by label. */
 function collectView(readControls: () => PageControl[]): PageView {
   const doc = (globalThis as unknown as { document: { body?: { innerText?: string }; querySelectorAll(s: string): ArrayLike<Record<string, unknown>> } }).document;
   type El = { closest(s: string): unknown; matches(s: string): boolean; getClientRects(): { length: number }; children: { length: number }; textContent: string | null; getAttribute(n: string): string | null; value?: string; href?: string; labels?: ArrayLike<{ textContent: string | null }>; type?: string; tagName: string };
@@ -38,21 +38,12 @@ function collectView(readControls: () => PageControl[]): PageView {
     const name = norm(n.getAttribute('aria-label')) || norm(n.labels?.[0]?.textContent) || norm(n.getAttribute('placeholder'));
     if (name && !fields.includes(name)) fields.push(name);
   }
-  // A real captcha shows a challenge frame of a usable size; the invisible badge and tracking frames do not count.
-  let captchaFrame = false;
-  for (const f of Array.from(doc.querySelectorAll('iframe')) as unknown as Array<{ getAttribute(n: string): string | null; getBoundingClientRect(): { width: number; height: number } }>) {
-    const src = f.getAttribute('src') ?? '', box = f.getBoundingClientRect();
-    if (/recaptcha\/api2\/bframe|hcaptcha\.com\/captcha|challenges\.cloudflare\.com|turnstile|funcaptcha|arkoselabs/i.test(src) && box.width >= 280 && box.height >= 70) captchaFrame = true;
-    else if (/recaptcha\/api2\/anchor/i.test(src) && box.width >= 280 && box.height >= 70) captchaFrame = true;
-  }
-  // A check that already holds its answer (ticked, accepted) is no longer in the way.
-  if (captchaFrame && Array.from(doc.querySelectorAll('#g-recaptcha-response, [name="g-recaptcha-response"], [name="cf-turnstile-response"], [name="h-captcha-response"]') as unknown as ArrayLike<{ value?: string }>).some(field => (field.value ?? '').length > 20)) captchaFrame = false;
   // innerText stops at a shadow root: add the text of each one.
   let text = doc.body?.innerText ?? '';
   for (const host of Array.from(doc.querySelectorAll('*')).slice(0, 4000) as unknown as Array<{ shadowRoot?: { children: ArrayLike<{ tagName: string; innerText?: string }> } | null }>) {
     if (host.shadowRoot) for (const child of Array.from(host.shadowRoot.children)) if (!/^(STYLE|SCRIPT|LINK)$/.test(child.tagName) && child.innerText) text += `\n${child.innerText}`;
   }
-  return { text: text.slice(0, 6000), controls, fields, hasPassword, captchaFrame };
+  return { text: text.slice(0, 6000), controls, fields, hasPassword };
 }
 
 /** collectView with the shared control reader in front of it, as one page function. */
@@ -65,7 +56,7 @@ const MAX_FRAMES = 6;
 /** What the page shows: its text, what can be pressed (with the address of a link), and the visible boxes by their label. The visible
  * controls and text of iframes (same-origin or not) are read too, so a sign-up form inside a frame is seen like any other. */
 export async function lookAt(page: Page): Promise<KeyView> {
-  const seen = await page.evaluate<PageView>(VIEW_SOURCE).catch(() => ({ text: '', controls: [] as KeyControl[], fields: [] as string[], hasPassword: false, captchaFrame: false }));
+  const seen = await page.evaluate<PageView>(VIEW_SOURCE).catch(() => ({ text: '', controls: [] as KeyControl[], fields: [] as string[], hasPassword: false }));
   const controls = [...seen.controls];
   const fields = [...seen.fields];
   let text = seen.text, hasPassword = seen.hasPassword;
@@ -88,7 +79,9 @@ export async function lookAt(page: Page): Promise<KeyView> {
       if (inside.text.trim()) text = `${text}\n${inside.text}`.slice(0, 8000);
     } catch { /* fail-open-ok: a frame that went away or cannot be read is skipped */ }
   }
-  return { url: page.url(), text, controls, fields, hasPassword, ...(seen.captchaFrame ? { captchaFrame: true } : {}) };
+  // Whether a human check is in the way is the solver's own answer (every family it knows), not a second guess here.
+  const check = await (await import('./human-check.js')).detectHumanCheck(page).catch(() => undefined);
+  return { url: page.url(), text, controls, fields, hasPassword, ...(check ? { captchaFrame: true } : {}) };
 }
 
 interface LiveKeygrabOptions { stateDir: string; id: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; /** The named tab this run works in (default 'connectors'). */ tab?: string; /** Leave the browser connection open when done: other vendors' tabs share it. */ keepBrowser?: boolean }
@@ -149,20 +142,10 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
       } catch { return undefined; }
     },
     humanCheck: async () => {
-      const at = await page();
-      const pressed = await (await import('./human-check.js')).pressHumanCheck(at);
-      // A check the one press cleared is counted too: it is by far the commonest ending.
-      if (pressed.outcome === 'cleared') { const { recordCaptcha } = await import('./captcha-log.js'); let host = ''; try { host = new URL(at.url()).host; } catch { host = ''; } void recordCaptcha(options.stateDir, { at: new Date().toISOString(), host, family: pressed.widget ?? 'unknown', outcome: 'cleared', seconds: 0, steps: ['press'] }); }
-      return pressed.outcome;
-    },
-    solveCaptcha: async () => {
       const { captchaSolvingAllowed } = await import('./settings.js');
-      if (!await captchaSolvingAllowed(options.stateDir)) return false;
-      const { solveHumanCheck } = await import('./human-check.js');
-      const { recordCaptcha } = await import('./captcha-log.js');
-      return (await solveHumanCheck(await page(), { ...(options.signal ? { signal: options.signal } : {}), record: entry => { void recordCaptcha(options.stateDir, entry); } })).outcome === 'cleared';
+      const { passHumanCheck } = await import('./human-check.js');
+      return (await passHumanCheck(await page(), { stateDir: options.stateDir, solve: await captchaSolvingAllowed(options.stateDir), ...(options.signal ? { signal: options.signal } : {}) })).outcome;
     },
-    escalate: async () => { const moved = await run({ action: 'cloud' }); return !moved.isError && /now in the managed cloud browser/.test(moved.output); },
     screenshot: async () => {
       try { const p = await page(); if (p.isClosed()) return undefined; const path = join(await shots(), `${options.id}.png`); await p.screenshot({ path, timeout: 10_000 }); return path; } catch { return undefined; }
     },

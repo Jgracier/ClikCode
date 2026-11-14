@@ -1,17 +1,25 @@
-/** The "I'm not a robot" / "Verify you are human" checkbox. ClikCode's browser is the user's own Chrome on their own
+/** The "I'm not a robot" / "Verify you are human" check. ClikCode's browser is the user's own Chrome on their own
  * connection, so most of these clear with the one press any visitor makes. That press is all `pressHumanCheck` does.
- * A puzzle that wants an answer is solved by `solveHumanCheck`: a picture of the challenge goes to the account's own
- * Gateway vision model, its answer is played back into the page at a visitor's pace -- jittered cursor paths, uneven
- * pauses between tiles, no two runs alike -- so the interaction reads as a person, not a script. This is ClikCode's
- * built-in captcha solving, the same capability other agents get from an external solving service, except nothing
- * leaves this machine but the puzzle's pixels. What it cannot read or answer still falls through to the managed cloud
- * browser or the user. */
+ * A check that wants an answer is solved by `solveHumanCheck`: pictures of the challenge go to the account's own
+ * Gateway models, and the answer they agree on is played back into the page at a visitor's pace -- jittered cursor
+ * paths, uneven pauses, no two runs alike -- so the interaction reads as a person, not a script. This is ClikCode's
+ * built-in captcha solving, the capability other agents get from an external solving service, except nothing leaves
+ * this machine but the puzzle's pixels. What it cannot answer is left for the user.
+ *
+ * This file is the way in: what is on the page (`detectHumanCheck`), the press, and the loop that hands each
+ * family to its own solver (human-check-grid, -hcaptcha, -geetest, -arkose, -inpage). */
 import type { Frame, Page } from 'playwright-core';
 import { sleep as realSleep } from '../../runtime/sleep.js';
+import { arkoseAudio, playArkose } from './human-check-arkose.js';
+import { GEETEST_STATE, geetestStep } from './human-check-geetest.js';
+import { gridRound, readLayout, solveRecaptchaAudio } from './human-check-grid.js';
+import { boxOf, fitPuzzle, frameShot, gatewayAsks, spot, visitorClick, within, type Asks, type Box, type Hands } from './human-check-hands.js';
+import { hcaptchaRound, type HcaptchaMemo } from './human-check-hcaptcha.js';
+import { HOLD_BUTTON, KNOWN_BOX, POW_STATE, SLIDER, TEXT_CAPTCHA, markGone, solveChallengeBox, solvePressHold, solveSlider, solveTextCaptcha, waitProofOfWork } from './human-check-inpage.js';
 
-export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose' | 'pow';
+export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose' | 'pow' | 'box';
 export interface HumanCheckResult {
-  /** cleared: the check accepted the press. puzzle: it asked for more than a press. still-there: pressed, nothing changed. none: no checkbox on the page. */
+  /** cleared: the check accepted the answer. puzzle: it asked for more than a press. still-there: tried, nothing changed. none: no check on the page. */
   outcome: 'cleared' | 'puzzle' | 'still-there' | 'none';
   widget?: HumanCheckWidget;
 }
@@ -22,12 +30,6 @@ const CHECKBOX: Array<[HumanCheckWidget, RegExp]> = [
   ['turnstile', /challenges\.cloudflare\.com\//i],
 ];
 const PUZZLE = /recaptcha\/(?:api2|enterprise)\/bframe|hcaptcha\.com\/.*frame=challenge|arkoselabs|funcaptcha/i;
-
-type Box = { x: number; y: number; width: number; height: number };
-async function boxOf(frame: Frame): Promise<Box | undefined> {
-  try { return (await (await frame.frameElement()).boundingBox()) ?? undefined; }
-  catch { return undefined; }
-}
 
 /** The checkbox widget on the page: a frame of checkbox size (a puzzle is far taller). */
 async function findCheckbox(page: Page): Promise<{ widget: HumanCheckWidget; box: Box } | undefined> {
@@ -62,12 +64,27 @@ async function findCheckbox(page: Page): Promise<{ widget: HumanCheckWidget; box
  * hang partly above a small window (hCaptcha centres its challenge on the checkbox), so any real overlap counts. */
 const shownPuzzleBox = (box: Box | undefined): box is Box => !!box && box.width >= 250 && box.height >= 200 && box.y > -1500 && box.x > -1500 && box.y + box.height > 60 && box.x + box.width > 60;
 
-/** A challenge that wants an answer is on screen. */
-async function puzzleShown(page: Page): Promise<boolean> {
+/** The challenge frame that is up: the visible puzzle frame, not a hidden one. */
+async function findPuzzle(page: Page): Promise<{ widget: HumanCheckWidget; frame: Frame; box: Box } | undefined> {
   for (const frame of page.frames()) {
-    if (PUZZLE.test(frame.url()) && shownPuzzleBox(await boxOf(frame))) return true;
+    if (!PUZZLE.test(frame.url())) continue;
+    const box = await boxOf(frame);
+    if (!shownPuzzleBox(box)) continue;
+    const widget: HumanCheckWidget = /hcaptcha/i.test(frame.url()) ? 'hcaptcha' : /arkoselabs|funcaptcha/i.test(frame.url()) ? 'arkose' : 'recaptcha';
+    // Arkose nests its game in a frame inside its own frame: the innermost one holds the puzzle.
+    if (widget === 'arkose') {
+      let inner = frame, innerBox = box;
+      for (const child of page.frames()) {
+        let up = child.parentFrame(), inside = false;
+        while (up) { if (up === frame) { inside = true; break; } up = up.parentFrame(); }
+        const childBox = inside ? await boxOf(child) : undefined;
+        if (childBox && childBox.width >= 200 && childBox.height >= 150) { inner = child; innerBox = childBox; }
+      }
+      return { widget, frame: inner, box: innerBox };
+    }
+    return { widget, frame, box };
   }
-  return false;
+  return undefined;
 }
 
 /** The page holds an accepted answer (the hidden field each widget fills in once it is satisfied). */
@@ -80,9 +97,37 @@ export async function humanCheckAnswered(page: Page): Promise<boolean> {
   }).catch(() => false);
 }
 
+/** The checks a page draws itself, each by its own finder, in one look (runs in the page). */
+const IN_PAGE = `(() => {
+  const geetest = ${GEETEST_STATE};
+  if (geetest && geetest.state !== 'done') return 'geetest';
+  if (${HOLD_BUTTON}) return 'hold';
+  const pow = ${POW_STATE};
+  if (pow && !pow.done) return 'pow';
+  if (${SLIDER}) return 'slider';
+  const text = ${TEXT_CAPTCHA};
+  if (text && !text.filled) return 'text';
+  if (${KNOWN_BOX}) return 'box';
+  return null;
+})()`;
+
+/** The one answer to "is a human check in this visitor's way?", for every caller: the browser tool, the connector
+ * runner and the sign-up qualifier. `stage` says how far along it is: a box to press, a puzzle that is up, or a
+ * check the page draws itself. Undefined when there is none or it already holds its answer. */
+export async function detectHumanCheck(page: Page): Promise<{ widget: HumanCheckWidget; stage: 'checkbox' | 'puzzle' | 'page' } | undefined> {
+  const puzzle = await findPuzzle(page);
+  if (puzzle) return { widget: puzzle.widget, stage: 'puzzle' };
+  if (await humanCheckAnswered(page)) return undefined;
+  const checkbox = await findCheckbox(page);
+  if (checkbox) return { widget: checkbox.widget, stage: 'checkbox' };
+  const drawn = await page.evaluate(IN_PAGE).catch(() => null) as HumanCheckWidget | null;
+  return drawn ? { widget: drawn, stage: 'page' } : undefined;
+}
+
 export async function pressHumanCheck(page: Page, deps: { sleep?: (ms: number) => Promise<void>; waitMs?: number } = {}): Promise<HumanCheckResult> {
   const sleep = deps.sleep ?? realSleep;
-  if (await puzzleShown(page)) return { outcome: 'puzzle' };
+  const up = await findPuzzle(page);
+  if (up) return { outcome: 'puzzle', widget: up.widget };
   const found = await findCheckbox(page);
   if (!found) return { outcome: 'none' };
   if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: found.widget };
@@ -93,7 +138,7 @@ export async function pressHumanCheck(page: Page, deps: { sleep?: (ms: number) =
   await page.mouse.click(x, y);
   for (let waited = 0; waited < (deps.waitMs ?? 12_000); waited += 500) {
     await sleep(500);
-    if (await puzzleShown(page)) return { outcome: 'puzzle', widget: found.widget };
+    if (await findPuzzle(page)) return { outcome: 'puzzle', widget: found.widget };
     if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: found.widget };
     // A whole-page check ("Just a moment…") has no answer field: it lets the visitor through by moving on or removing itself.
     if (page.url() !== startUrl || !await findCheckbox(page)) return { outcome: 'cleared', widget: found.widget };
@@ -101,891 +146,163 @@ export async function pressHumanCheck(page: Page, deps: { sleep?: (ms: number) =
   return { outcome: 'still-there', widget: found.widget };
 }
 
-// ── solving a puzzle ────────────────────────────────────────────────────────────────────────────────────────
-
-/** The challenge frame of the widget whose checkbox was pressed: the visible puzzle frame, not the hidden one. */
-async function findPuzzle(page: Page): Promise<{ widget: HumanCheckWidget; frame: Frame; box: Box } | undefined> {
-  for (const frame of page.frames()) {
-    if (!PUZZLE.test(frame.url())) continue;
-    const box = await boxOf(frame);
-    if (!shownPuzzleBox(box)) continue;
-    const widget: HumanCheckWidget = /hcaptcha/i.test(frame.url()) ? 'hcaptcha' : /arkoselabs|funcaptcha/i.test(frame.url()) ? 'arkose' : 'recaptcha';
-    // Arkose nests its game in a frame inside its own frame: the innermost one holds the puzzle.
-    if (widget === 'arkose') {
-      let inner = frame, innerBox = box;
-      for (const child of page.frames()) {
-        let up = child.parentFrame(), within = false;
-        while (up) { if (up === frame) { within = true; break; } up = up.parentFrame(); }
-        const childBox = within ? await boxOf(child) : undefined;
-        if (childBox && childBox.width >= 200 && childBox.height >= 150) { inner = child; innerBox = childBox; }
-      }
-      return { widget, frame: inner, box: innerBox };
-    }
-    return { widget, frame, box };
-  }
-  return undefined;
-}
-
-/** Where each tile of an N-tile grid sits inside the challenge frame: the grid fills the frame minus its edges,
- * so a tile's centre is found without knowing the site's exact markup. The grid does not fill the whole frame:
- * a reCAPTCHA challenge spends about 90px on its instruction header and about 60px on its button footer, so the
- * tile area is the frame minus those bands. */
-const GRID_HEADER = 90, GRID_FOOTER = 60;
-function tileCentres(box: Box, columns: number, rows: number): Array<{ x: number; x2: number; y: number; y2: number }> {
-  const out: Array<{ x: number; x2: number; y: number; y2: number }> = [];
-  const top = box.y + Math.min(GRID_HEADER, box.height * 0.2);
-  const gridHeight = Math.max(box.height - GRID_HEADER - GRID_FOOTER, box.height * 0.5);
-  const w = box.width / columns, h = gridHeight / rows;
-  for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
-    out.push({ x: box.x + column * w, x2: box.x + (column + 1) * w, y: top + row * h, y2: top + (row + 1) * h });
-  }
-  return out;
-}
-
-/** A move-and-click that reads like a person: the cursor wanders to the tile instead of teleporting, and every
- * pause is different. Two solves of the same page never produce the same mouse trail, which is what keeps
- * automation-blind widgets from noticing anything. */
-async function visitorClick(mouse: Page['mouse'], at: { x: number; x2: number; y: number; y2: number }, random: () => number, sleep: (ms: number) => Promise<void>): Promise<void> {
-  const tx = at.x + (at.x2 - at.x) * (0.35 + random() * 0.3), ty = at.y + (at.y2 - at.y) * (0.35 + random() * 0.3);
-  await mouse.move(tx - (30 + random() * 60), ty - (10 + random() * 30));
-  await mouse.move(tx + (random() - 0.5) * 24, ty + (random() - 0.5) * 16, { steps: 4 + Math.floor(random() * 5) });
-  await mouse.move(tx, ty, { steps: 3 + Math.floor(random() * 4) });
-  await sleep(80 + random() * 220);
-  await mouse.down();
-  await sleep(45 + random() * 90);
-  await mouse.up();
-  await sleep(120 + random() * 380);
-}
+// ── solving ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface SolveDeps {
   sleep?: (ms: number) => Promise<void>;
-  /** The whole-grid vision ask, used only when the challenge's layout cannot be read; defaults to the Gateway model. */
-  ask?: (image: { mimeType: string; data: string }) => Promise<{ ok: true; answer: CaptchaAskAnswer } | { ok: false; error: string }>;
-  /** The where-to-click ask for free-form challenges; defaults to the Gateway model (captcha-model.ts askClickPoints). */
-  askPoints?: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>;
-  /** Told what the run turned out to be once it ends (captcha-log.ts), for the tally of families met. */
-  record?: (entry: import('./captcha-log.js').CaptchaRecord) => void;
-  /** Answer only hCaptcha challenges whose instruction matches; others are swapped for another (for measuring one type). */
-  hcaptchaOnly?: RegExp;
-  /** Go to reCAPTCHA's audio challenge straight away instead of after two picture rounds. */
-  audioFirst?: boolean;
-  /** Speech-to-text for an audio challenge clip; defaults to the Gateway (captcha-model.ts askTranscript). */
-  transcribe?: (audio: Buffer, mimeType: string) => Promise<string | undefined>;
-  /** Reads a "type what you see" captcha picture; defaults to the Gateway model (captcha-model.ts askCaptchaText). */
-  askText?: (image: { mimeType: string; data: string }) => Promise<string | undefined>;
-  /** Where to drag on a drag puzzle; defaults to the Gateway model (captcha-model.ts askDrag). */
-  askDrag?: (image: { mimeType: string; data: string }, instruction: string) => Promise<import('./captcha-model.js').DragAnswer | undefined>;
-  /** The one-square ask; defaults to the Gateway model (captcha-model.ts askTileMatch). */
-  askTile?: (question: import('./captcha-model.js').TileQuestion) => Promise<boolean | undefined>;
+  /** The model asks; each one left out goes to the account's Gateway (captcha-model.ts). */
+  asks?: Partial<Asks>;
+  /** ClikCode's state directory. With it the run is added to the tally (captcha-log.ts), a site that has just
+   * refused three answers is left alone for a while, and challenge kinds that never clear are skipped. */
+  stateDir?: string;
   /** Source of randomness for the human-like pacing; tests inject a fixed one. */
   random?: () => number;
   signal?: AbortSignal;
   waitMs?: number;
-  /** One line per round (instruction, squares picked, what the widget said after Verify), for logs and diagnosis. */
+  /** One line per step (instruction, squares picked, what the widget said after Verify), for logs and diagnosis. */
   trace?: (line: string) => void;
 }
 
-/** What the vision ask answers: which tiles match, or that it could not read the challenge. */
-export type CaptchaAskAnswer = { tiles: number[] } | { unreadable: true };
-
-/** A challenge as the widget itself lays it out: the instruction, the target word, each square's place on the page
- * (frame offset added), a key per square that changes when the widget swaps its picture, and the confirm button. */
-interface PuzzleLayout { instruction: string; target: string; tiles: Array<Box & { key: string; selected: boolean }>; verify?: Box; dynamic: boolean; tileSelector: string }
-
-/** Runs inside the challenge frame (a string: this project has no DOM types). Returns the layout or null. */
-const READ_LAYOUT = `(() => {
-  const rect = el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
-  const clean = text => (text || '').replace(/\\s+/g, ' ').trim();
-  const recaptcha = Array.from(document.querySelectorAll('td.rc-imageselect-tile'));
-  if (recaptcha.length) {
-    const desc = document.querySelector('.rc-imageselect-desc, .rc-imageselect-desc-no-canonical');
-    const instruction = clean(desc && desc.innerText);
-    const strong = desc && desc.querySelector('strong');
-    const verify = document.querySelector('#recaptcha-verify-button');
-    return {
-      instruction, target: clean(strong && strong.textContent) || instruction,
-      tiles: recaptcha.map(td => { const img = td.querySelector('img'); return Object.assign(rect(td), { key: (img ? img.src + '|' + img.style.top + '|' + img.style.left : ''), selected: td.classList.contains('rc-imageselect-tileselected') }); }),
-      verify: verify ? rect(verify) : undefined, dynamic: /none left/i.test(instruction), tileSelector: 'td.rc-imageselect-tile',
-    };
-  }
-  const hcaptcha = Array.from(document.querySelectorAll('.task-image'));
-  if (hcaptcha.length) {
-    const prompt = document.querySelector('.prompt-text');
-    const instruction = clean(prompt && prompt.innerText);
-    const verify = document.querySelector('.button-submit');
-    return {
-      instruction, target: instruction.replace(/^please (?:click|select)(?: on)?(?: each| all)?(?: images?| squares?)?(?: containing| with| of)?\\s*/i, '') || instruction,
-      tiles: hcaptcha.map((tile, index) => { const image = tile.querySelector('.image'); return Object.assign(rect(tile), { key: index + '|' + (image ? image.style.background : ''), selected: tile.getAttribute('aria-pressed') === 'true' }); }),
-      verify: verify ? rect(verify) : undefined, dynamic: false, tileSelector: '.task-image',
-    };
-  }
-  return null;
-})()`;
-
-async function readLayout(frame: Frame, box: Box): Promise<PuzzleLayout | undefined> {
-  try {
-    const read = await frame.evaluate(READ_LAYOUT) as (Omit<PuzzleLayout, 'verify'> & { verify?: Box }) | null;
-    if (!read || !read.tiles.length) return undefined;
-    const shift = <T extends Box>(b: T): T => ({ ...b, x: b.x + box.x, y: b.y + box.y });
-    return { ...read, tiles: read.tiles.map(shift), ...(read.verify ? { verify: shift(read.verify) } : {}) };
-  } catch { return undefined; }
-}
-
-const toTarget = (b: Box) => ({ x: b.x, x2: b.x + b.width, y: b.y, y2: b.y + b.height });
-
-/** Outline one square in red inside the challenge, take a picture of the whole challenge, take the outline away. */
-async function outlinedShot(frame: Frame, layout: PuzzleLayout, index: number): Promise<Buffer | undefined> {
-  const mark = `(() => { const tile = document.querySelectorAll(${JSON.stringify(layout.tileSelector)})[${index}]; if (!tile) return false;
-    const r = tile.getBoundingClientRect(); const box = document.createElement('div'); box.id = 'clikcode-outline';
-    box.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:4px solid #ff0000;box-sizing:border-box;left:' + r.left + 'px;top:' + r.top + 'px;width:' + r.width + 'px;height:' + r.height + 'px';
-    document.body.appendChild(box); return true; })()`;
-  const unmark = `(() => { const box = document.getElementById('clikcode-outline'); if (box) box.remove(); })()`;
-  try {
-    if (!await frame.evaluate(mark)) return undefined;
-    return await (await frame.frameElement()).screenshot({ type: 'jpeg', quality: 88, timeout: 8_000 }) as Buffer;
-  } catch { return undefined; }
-  finally { await frame.evaluate(unmark).catch(() => undefined); }
-}
-
-/** Ask about each listed square and return the indices that hold the target. The pictures are taken one after
- * another (the outline is shared page state); the asks then run together. */
-async function matchingTiles(frame: Frame, layout: PuzzleLayout, indices: number[], askTile: NonNullable<SolveDeps['askTile']>, timing: { shotsMs: number; asksMs: number } = { shotsMs: 0, asksMs: 0 }): Promise<number[]> {
-  const size = Math.round(Math.sqrt(layout.tiles.length)) || 3;
-  const shots: Array<[number, Buffer]> = [];
-  let at = Date.now();
-  for (const index of indices) { const shot = await outlinedShot(frame, layout, index); if (shot) shots.push([index, shot]); }
-  timing.shotsMs = Date.now() - at; at = Date.now();
-  const answers = await Promise.all(shots.map(async ([index, shot]) => {
-    const yes = await askTile({ image: { mimeType: 'image/jpeg', data: shot.toString('base64') }, instruction: layout.instruction, target: layout.target, size }).catch(() => undefined);
-    return yes ? index : -1;
-  }));
-  timing.asksMs = Date.now() - at;
-  return answers.filter(index => index >= 0);
-}
-
-/** Make room for a challenge that hangs off a small window: the tab's viewport grows to hold the whole frame (only
- * this tab, and only when needed). Says whether it changed anything, so the caller re-reads the moved frame. */
-async function fitPuzzle(page: Page, box: Box): Promise<boolean> {
-  try {
-    const [width, height] = await page.evaluate('[innerWidth, innerHeight]') as [number, number];
-    if (box.y >= 0 && box.x >= 0 && box.y + box.height <= height && box.x + box.width <= width) return false;
-    const want = { width: Math.max(width, Math.ceil(box.width + 80)), height: Math.max(height, Math.ceil(box.height + 120)) };
-    if (want.width === width && want.height === height) return false;
-    await page.setViewportSize(want);
-    return true;
-  } catch { return false; }
-}
-
-/** A drag like a hand makes it: press on the piece, set off slowly, speed up, overshoot a little, settle back,
- * pause, let go. The path wobbles vertically and is never the same twice. */
-async function visitorDrag(mouse: Page['mouse'], from: { x: number; y: number }, to: { x: number; y: number }, random: () => number, sleep: (ms: number) => Promise<void>, settle = 2): Promise<void> {
-  await mouse.move(from.x - 20 - random() * 30, from.y + (random() - 0.5) * 20);
-  await mouse.move(from.x, from.y, { steps: 5 + Math.floor(random() * 4) });
-  await sleep(120 + random() * 200);
-  await mouse.down();
-  await sleep(90 + random() * 150);
-  const overshoot = 3 + random() * 6, dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
-  const steps = 18 + Math.floor(random() * 10);
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps, ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-    const reach = ease * (1 + overshoot / len);
-    await mouse.move(from.x + dx * reach, from.y + dy * reach + Math.sin(t * Math.PI) * (random() - 0.5) * 6);
-    await sleep(8 + random() * 22);
-  }
-  await mouse.move(to.x + (random() - 0.5) * settle, to.y + (random() - 0.5) * settle, { steps: 4 });
-  await sleep(150 + random() * 250);
-  await mouse.up();
-}
-
-/** Finds a press-and-hold button on the page (runs in the page). */
-const HOLD_BUTTON = `(() => {
-    const el = Array.from(document.querySelectorAll('#px-captcha, [id^="px-captcha"], [class*="px-captcha"], [aria-label*="Press & Hold" i], [aria-label*="Press and Hold" i]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 60 && r.height > 20 && r.bottom > 0 && r.top < innerHeight; })
-      || Array.from(document.querySelectorAll('button, [role="button"], div, p')).find(e => { const r = e.getBoundingClientRect(); return r.width > 60 && r.width < 500 && r.height > 20 && r.height < 140 && /^press (and|&) hold$/i.test((e.textContent || '').trim()) && r.bottom > 0 && r.top < innerHeight; });
-    if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height };
-  })()`;
-
-/** "Press and hold" (PerimeterX / HUMAN): a button that wants the pointer held down for several seconds. It is
- * held like a finger -- small tremors, no fixed duration -- until the button goes away or says it is done. */
-async function solvePressHold(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
-  const button = await page.evaluate(HOLD_BUTTON).catch(() => null) as Box | null;
-  if (!button) return false;
-  trace?.('press and hold: holding the button');
-  const x = button.x + button.width * (0.4 + random() * 0.2), y = button.y + button.height * (0.4 + random() * 0.2);
-  await page.mouse.move(x - 40 - random() * 40, y - 20 + random() * 10);
-  await page.mouse.move(x, y, { steps: 6 + Math.floor(random() * 5) });
-  await sleep(150 + random() * 250);
-  await page.mouse.down();
-  const startUrl = page.url();
-  // Held until the button is gone, the page moves on, or 15 seconds pass; then a moment longer, as people do.
-  for (let held = 0; held < 15_000; held += 400) {
-    await sleep(400);
-    await page.mouse.move(x + (random() - 0.5) * 1.6, y + (random() - 0.5) * 1.6);
-    if (page.url() !== startUrl || !await page.evaluate(HOLD_BUTTON).catch(() => null)) break;
-  }
-  await sleep(200 + random() * 300);
-  await page.mouse.up();
-  return true;
-}
-
-/** Where a jigsaw piece fits in its background, by pixels, not by asking a model: the piece's outline (from its
- * transparency) is slid across the background's edge map at the piece's own height, and the offset where the most
- * edges line up is the gap. Runs in a blank tab so no site rule or tainted canvas gets in the way. Returns the
- * gap's left edge in displayed pixels, or undefined. */
-async function gapOffset(page: Page, background: Buffer, piece: Buffer, shown: { width: number; height: number; pieceWidth: number; pieceHeight: number; pieceTop: number }): Promise<number | undefined> {
-  const blank = await page.context().newPage();
-  try {
-    const script = `(async () => {
-      const [BG, PIECE, S] = ${JSON.stringify(['data:image/png;base64,' + background.toString('base64'), 'data:image/png;base64,' + piece.toString('base64'), shown])};
-      const load = src => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('image')); i.src = src; });
-      const [bg, pc] = await Promise.all([load(BG), load(PIECE)]);
-      const W = Math.round(S.width), H = Math.round(S.height), pw = Math.round(S.pieceWidth), ph = Math.round(S.pieceHeight), top = Math.round(S.pieceTop);
-      const draw = (img, w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'); x.drawImage(img, 0, 0, w, h); return x.getImageData(0, 0, w, h).data; };
-      const b = draw(bg, W, H), p = draw(pc, pw, ph);
-      const gray = new Float32Array(W * H);
-      for (let i = 0; i < W * H; i++) gray[i] = 0.299 * b[i * 4] + 0.587 * b[i * 4 + 1] + 0.114 * b[i * 4 + 2];
-      const grad = new Float32Array(W * H);
-      for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) grad[y * W + x] = Math.abs(gray[y * W + x + 1] - gray[y * W + x - 1]) + Math.abs(gray[(y + 1) * W + x] - gray[(y - 1) * W + x]);
-      const solid = (x, y) => x >= 0 && y >= 0 && x < pw && y < ph && p[(y * pw + x) * 4 + 3] > 128;
-      const edge = [];
-      for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) if (solid(x, y) && !(solid(x - 1, y) && solid(x + 1, y) && solid(x, y - 1) && solid(x, y + 1))) edge.push([x, y]);
-      if (edge.length < 20) return null;
-      let best = -1, bestScore = -1, second = -1;
-      for (let x0 = Math.round(pw * 0.6); x0 <= W - pw; x0++) {
-        let score = 0;
-        for (const [ex, ey] of edge) { const y = ey + top; if (y > 0 && y < H) score += Math.min(grad[y * W + ex + x0], 120); }
-        if (score > bestScore) { second = bestScore; bestScore = score; best = x0; } else if (score > second) second = score;
-      }
-      return best < 0 ? null : best;
-    })()`;
-    const found = await blank.evaluate(script).catch(() => null) as number | null;
-    return typeof found === 'number' ? found : undefined;
-  } finally { await blank.close().catch(() => undefined); }
-}
-
-/** GeeTest's jigsaw slider: both pictures are fetched, the gap is found by pixels, and the handle is dragged so
- * the piece lands on it. */
-async function solveGeetestSlide(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
-  const info = await page.evaluate(`(() => {
-    const pick = sel => Array.from(document.querySelectorAll(sel)).find(e => { const r = e.getBoundingClientRect(); return r.width > 10 && r.height > 10 && r.bottom > 0 && r.top < innerHeight; });
-    const named = name => Array.from(document.querySelectorAll('[class*="' + name + '"]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 10 && r.height > 10 && r.bottom > 0 && r.top < innerHeight && String(e.className).split(/\\s+/).some(c => c === name || new RegExp('^' + name + '_[0-9a-f]{6,}$').test(c)); });
-    const bg = named('geetest_bg'), slice = named('geetest_slice_bg') || named('geetest_slice'), btn = named('geetest_btn');
-    if (!bg || !slice || !btn) return null;
-    const url = e => { const m = /url\\(["']?([^"')]+)["']?\\)/.exec(getComputedStyle(e).backgroundImage); return m ? m[1] : ''; };
-    const r = e => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; };
-    return { bgUrl: url(bg), sliceUrl: url(slice), bg: r(bg), slice: r(slice), btn: r(btn) };
-  })()`).catch(() => null) as { bgUrl: string; sliceUrl: string; bg: Box; slice: Box; btn: Box } | null;
-  if (!info || !info.bgUrl || !info.sliceUrl) return false;
-  let background: Buffer, piece: Buffer;
-  try {
-    const [a, b] = await Promise.all([page.context().request.get(info.bgUrl, { timeout: 10_000 }), page.context().request.get(info.sliceUrl, { timeout: 10_000 })]);
-    if (!a.ok() || !b.ok()) return false;
-    background = await a.body(); piece = await b.body();
-  } catch { return false; }
-  const gap = await gapOffset(page, background, piece, { width: info.bg.width, height: info.bg.height, pieceWidth: info.slice.width, pieceHeight: info.slice.height, pieceTop: info.slice.y - info.bg.y });
-  if (gap === undefined) return false;
-  const distance = gap - (info.slice.x - info.bg.x);
-  if (!(distance > 4)) return false;
-  trace?.(`GeeTest slide: the gap is ${Math.round(gap)}px in, dragging ${Math.round(distance)}px`);
-  const start = { x: info.btn.x + info.btn.width / 2, y: info.btn.y + info.btn.height / 2 };
-  await visitorDrag(page.mouse, start, { x: start.x + distance, y: start.y }, random, sleep, 0);
-  return true;
-}
-
-/** A board cell as the page lays it out: where it is, and which picture (if any) sits on it. */
-export interface BoardCell { row: number; column: number; kind: string | null }
-
-/** Gobang ("move one piece to line up five"): the piece to move and the empty cell to move it to, so that a row,
- * column or diagonal of the board holds the same picture in every cell. Undefined when no single move does it. */
-export function lineUpMove(cells: BoardCell[]): { from: BoardCell; to: BoardCell } | undefined {
-  const size = Math.max(...cells.map(c => Math.max(c.row, c.column))) + 1;
-  const at = (row: number, column: number) => cells.find(c => c.row === row && c.column === column);
-  const lines: BoardCell[][] = [];
-  for (let i = 0; i < size; i++) {
-    lines.push(cells.filter(c => c.row === i).sort((a, b) => a.column - b.column), cells.filter(c => c.column === i).sort((a, b) => a.row - b.row));
-  }
-  lines.push(Array.from({ length: size }, (_, i) => at(i, i)).filter((c): c is BoardCell => !!c), Array.from({ length: size }, (_, i) => at(i, size - 1 - i)).filter((c): c is BoardCell => !!c));
-  for (const line of lines.filter(l => l.length === size)) {
-    const empty = line.filter(c => c.kind === null);
-    const kinds = new Set(line.filter(c => c.kind !== null).map(c => c.kind));
-    if (empty.length !== 1 || kinds.size !== 1) continue;
-    const kind = [...kinds][0]!;
-    const from = cells.find(c => c.kind === kind && !line.includes(c));
-    if (from) return { from, to: empty[0]! };
-  }
-  return undefined;
-}
-
-/** IconCrush ("swap two to line up three"): the two neighbouring cells to swap so a whole row or column matches. */
-export function swapMove(cells: BoardCell[]): { from: BoardCell; to: BoardCell } | undefined {
-  const size = Math.max(...cells.map(c => Math.max(c.row, c.column))) + 1;
-  const wins = (board: BoardCell[]) => Array.from({ length: size }, (_, i) => i).some(i =>
-    new Set(board.filter(c => c.row === i).map(c => c.kind)).size === 1 || new Set(board.filter(c => c.column === i).map(c => c.kind)).size === 1);
-  for (const a of cells) for (const b of cells) {
-    if (!(a.row === b.row && b.column === a.column + 1) && !(a.column === b.column && b.row === a.row + 1)) continue;
-    if (a.kind === b.kind) continue;
-    const swapped = cells.map(c => c === a ? { ...c, kind: b.kind } : c === b ? { ...c, kind: a.kind } : c);
-    if (wins(swapped)) return { from: a, to: b };
-  }
-  return undefined;
-}
-
-/** GeeTest's board games (Gobang, IconCrush): every cell and its picture are in the page, so the move is worked
- * out by rule and played with two clicks -- no model involved. */
-async function solveGeetestBoard(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
-  const read = await page.evaluate(`(() => {
-    const shown = e => { const r = e.getBoundingClientRect(); return r.width > 10 && r.height > 10 && r.bottom > 0 && r.top < innerHeight; };
-    const game = Array.from(document.querySelectorAll('[class*="geetest_winlinze"], [class*="geetest_match"]')).find(shown);
-    if (!game) return null;
-    const mode = /geetest_winlinze/.test(String(game.className)) ? 'lineup' : 'swap';
-    const url = e => { const m = /url\\(["']?([^"')]+)["']?\\)/.exec(getComputedStyle(e).backgroundImage); return m ? m[1] : null; };
-    const token = mode === 'lineup' ? /^geetest_item-\\d+-\\d+(?:_[0-9a-f]{6,})?$/ : /^geetest_img-\\d+(?:_[0-9a-f]{6,})?$/;
-    const cells = Array.from(game.querySelectorAll('[class*="geetest_item-"], [class*="geetest_img-"]')).filter(e => shown(e) && String(e.className).split(/\\s+/).some(c => token.test(c)))
-      .map(e => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, kind: /geetest_isEmpty/.test(String(e.className)) ? null : url(e) }; });
-    return { mode, cells };
-  })()`).catch(() => null) as { mode: 'lineup' | 'swap'; cells: Array<{ x: number; y: number; kind: string | null }> } | null;
-  if (!read || read.cells.length < 9) return false;
-  // Rows and columns come from where the cells sit, not from their names (the two games number them differently).
-  const rank = (values: number[]) => { const sorted = [...new Set(values.map(v => Math.round(v / 8)))].sort((a, b) => a - b); return (v: number) => sorted.indexOf(Math.round(v / 8)); };
-  const rowOf = rank(read.cells.map(c => c.y)), columnOf = rank(read.cells.map(c => c.x));
-  const placed = read.cells.map(c => ({ ...c, row: rowOf(c.y), column: columnOf(c.x) }));
-  const move = read.mode === 'lineup' ? lineUpMove(placed) : swapMove(placed);
-  if (!move) { trace?.(`GeeTest board (${read.mode}): no winning move found`); return false; }
-  trace?.(`GeeTest board (${read.mode}): moving row ${move.from.row + 1} column ${move.from.column + 1} to row ${move.to.row + 1} column ${move.to.column + 1}`);
-  const from = placed.find(c => c.row === move.from.row && c.column === move.from.column)!, to = placed.find(c => c.row === move.to.row && c.column === move.to.column)!;
-  // Both games are played with two clicks: the piece, then where it goes.
-  const spot = (c: { x: number; y: number }) => ({ x: c.x - 6, x2: c.x + 6, y: c.y - 6, y2: c.y + 6 });
-  await visitorClick(page.mouse, spot(from), random, sleep);
-  await sleep(250 + random() * 300);
-  await visitorClick(page.mouse, spot(to), random, sleep);
-  return true;
-}
-
-/** GeeTest's "select in this order": small example icons and a picture holding a rough drawing of each. A picture
- * of the whole challenge goes to the voting models, the spots they agree on are clicked in order, then the confirm
- * button. With no agreement nothing is clicked and another challenge is asked for. */
-async function solveGeetestIcons(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
-  const info = await page.evaluate(`(() => {
-    const shown = e => { const r = e.getBoundingClientRect(); return r.width > 10 && r.height > 10 && r.bottom > 0 && r.top < innerHeight; };
-    const game = Array.from(document.querySelectorAll('[class*="geetest_click"]')).find(e => shown(e) && /geetest_subitem/.test(String(e.className)));
-    const asks = Array.from(document.querySelectorAll('[class*="geetest_ques_back"] img, [class*="geetest_ques_tips"] img')).map(i => i.src).filter(Boolean);
-    const bg = Array.from(document.querySelectorAll('[class*="geetest_bg"]')).find(shown);
-    const submit = Array.from(document.querySelectorAll('[class*="geetest_submit"]')).find(shown);
-    const box = Array.from(document.querySelectorAll('[class*="geetest_box"]')).find(shown);
-    if (!game || !bg || !box || !asks.length) return null;
-    const r = e => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; };
-    return { count: new Set(asks).size, box: r(box), submit: submit ? r(submit) : null };
-  })()`).catch(() => null) as { count: number; box: Box; submit: Box | null } | null;
-  if (!info) return false;
-  let picture: Buffer;
-  try { picture = await page.screenshot({ type: 'png', clip: info.box, timeout: 8_000 }); } catch { return false; }
-  const { askOrderedPoints } = await import('./captcha-model.js');
-  const spots = await askOrderedPoints({ mimeType: 'image/png', data: picture.toString('base64') });
-  if (!spots || spots.length !== info.count) {
-    trace?.(`GeeTest icons: no agreed answer for ${info.count} symbols, asking for another`);
-    return refreshGeetest(page, random, sleep);
-  }
-  trace?.(`GeeTest icons: clicking ${spots.map(p => `(${p.x.toFixed(2)},${p.y.toFixed(2)})`).join(' then ')}`);
-  for (const p of spots) {
-    const x = info.box.x + p.x * info.box.width, y = info.box.y + p.y * info.box.height;
-    await visitorClick(page.mouse, { x: x - 4, x2: x + 4, y: y - 4, y2: y + 4 }, random, sleep);
-  }
-  await sleep(400);
-  if (info.submit) await visitorClick(page.mouse, toTarget(info.submit), random, sleep);
-  return true;
-}
-
-/** Ask GeeTest for another challenge (its refresh button), for when the shown one could not be answered. */
-async function refreshGeetest(page: Page, random: () => number, sleep: (ms: number) => Promise<void>): Promise<boolean> {
-  const refresh = await page.evaluate(`(() => { const b = Array.from(document.querySelectorAll('[class*="geetest_refresh"]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 8 && r.width < 60 && r.bottom > 0 && r.top < innerHeight; }); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
-  if (!refresh) return false;
-  await visitorClick(page.mouse, toTarget(refresh), random, sleep);
-  await sleep(2_500);
-  return true;
-}
-
-/** Proof-of-work checks (Friendly Captcha, ALTCHA): nothing to answer, the browser does a sum. Their box is
- * pressed if it wants a press, then the work is waited out (up to 45 seconds). */
-async function waitProofOfWork(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
-  const READ = `(() => {
-    const r = e => { if (!e) return null; const b = e.getBoundingClientRect(); return b.width > 4 && b.height > 4 && b.bottom > 0 && b.top < innerHeight ? { x: b.x, y: b.y, width: b.width, height: b.height } : null; };
-    const frc = document.querySelector('.frc-captcha, frc-captcha');
-    const altcha = document.querySelector('altcha-widget');
-    if (!frc && !altcha) return null;
-    const value = sel => { const f = document.querySelector(sel); return f ? String(f.value || '') : ''; };
-    const frcValue = value('[name="frc-captcha-solution"], [name="frc-captcha-response"]');
-    const altchaRoot = altcha ? (altcha.shadowRoot || altcha) : null;
-    const done = (frc && frcValue.length > 20 && !frcValue.startsWith('.')) || (altcha && (value('[name="altcha"]').length > 20 || !!(altchaRoot && altchaRoot.querySelector('[data-state="verified"], .altcha[data-state="verified"]'))));
-    const box = frc || altcha;
-    const where = box.getBoundingClientRect();
-    if (where.top > innerHeight - 40 || where.bottom < 40) box.scrollIntoView({ block: 'center' });
-    // Friendly Captcha v2 draws its box in a frame; v1 has a start button; ALTCHA has a checkbox.
-    const press = frc ? (frc.querySelector('iframe.frc-i-widget') || (frc.shadowRoot || frc).querySelector('button.frc-button, button')) : altchaRoot ? altchaRoot.querySelector('input[type="checkbox"]') : null;
-    return { done: !!done, press: r(press), kind: frc ? 'Friendly Captcha' : 'ALTCHA' };
-  })()`;
-  type Read = { done: boolean; press: Box | null; kind: string } | null;
-  let state = await page.evaluate(READ).catch(() => null) as Read;
-  if (!state) return false;
-  if (state.done) return true;
-  trace?.(`proof of work (${state.kind}): ${state.press ? 'pressing its box and ' : ''}waiting for the browser to finish`);
-  // Its box is pressed near the left edge, where the tick is.
-  if (state.press) await visitorClick(page.mouse, toTarget({ ...state.press, width: Math.min(state.press.width, 60) }), random, sleep);
-  for (let waited = 0; waited < 45_000; waited += 1_000) {
-    await sleep(1_000);
-    state = await page.evaluate(READ).catch(() => null) as Read;
-    if (!state || state.done) return true;
-  }
-  return false;
-}
-
-/** A slider check drawn in the page itself (GeeTest, Alibaba's "slide to verify", similar): a handle on a track,
- * usually under a picture with a gap. The model says where the handle is and where the piece fits; the handle is
- * dragged that far along its track. A plain "slide to the end" track is dragged to its end. */
-async function solveSlider(page: Page, askDrag: (image: { mimeType: string; data: string }, instruction: string) => Promise<import('./captcha-model.js').DragAnswer | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void, pressedTrigger = false, askPoints?: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>): Promise<boolean> {
-  const found = await page.evaluate(`(() => {
-    const seen = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 8 && r.height > 8 && s.visibility !== 'hidden' && s.display !== 'none' && r.bottom > 0 && r.top < innerHeight; };
-    const handle = Array.from(document.querySelectorAll('.geetest_btn, .geetest_slider_button, .geetest_slider_button_new, .btn_slide, .nc_iconfont.btn_slide, [class*="slider"][class*="btn"], [class*="slider"][class*="handle"], [class*="slide"][class*="button"], [class*="captcha"][class*="slider"] [role="slider"]')).find(seen);
-    if (!handle) return null;
-    const box = handle.closest('.geetest_box, .geetest_panel_box, .geetest_widget, .geetest_holder, .nc-container, [class*="captcha"], [class*="verify"]') || handle.parentElement;
-    const track = handle.parentElement;
-    const r = el => { const b = el.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; };
-    box.setAttribute('data-clikcode-slider', '1');
-    const text = (box.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160);
-    const picture = !!box.querySelector('canvas, img, [class*="bg"]');
-    return { handle: r(handle), track: r(track), box: r(box), text, picture };
-  })()`).catch(() => null) as { handle: Box; track: Box; box: Box; text: string; picture: boolean } | null;
-  if (await solveGeetestSlide(page, random, sleep, trace) || await solveGeetestBoard(page, random, sleep, trace) || await solveGeetestIcons(page, random, sleep, trace)) return true;
-  if (!found) {
-    // A slider check often starts as a button ("Click to verify"); press it once and look again.
-    const trigger = await page.evaluate(`(() => {
-      const el = Array.from(document.querySelectorAll('[class*="geetest_btn_click"], .geetest_radar_tip, .geetest_radar_btn, .nc_iconfont.btn_slide')).find(e => { const r = e.getBoundingClientRect(); return r.width > 8 && r.height > 8 && r.bottom > 0 && r.top < innerHeight; });
-      if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height };
-    })()`).catch(() => null) as Box | null;
-    if (!trigger || pressedTrigger) return askPoints ? solveInPageBox(page, askPoints, random, sleep, trace) : false;
-    trace?.('slider check: pressing its button');
-    await visitorClick(page.mouse, toTarget(trigger), random, sleep);
-    await sleep(3_000);
-    return solveSlider(page, askDrag, random, sleep, trace, true, askPoints);
-  }
-  const start = { x: found.handle.x + found.handle.width / 2, y: found.handle.y + found.handle.height / 2 };
-  let distance = found.track.x + found.track.width - found.handle.width / 2 - start.x;
-  if (found.picture) {
-    let shot: Buffer;
-    try { shot = await page.locator('[data-clikcode-slider="1"]').first().screenshot({ type: 'jpeg', quality: 88, timeout: 8_000 }); } catch { return false; }
-    const answer = await askDrag({ mimeType: 'image/jpeg', data: shot.toString('base64') }, found.text || 'Drag the slider so the piece fits into its gap');
-    if (!answer) return false;
-    distance = (answer.to.x - answer.from.x) * found.box.width;
-  }
-  if (!(distance > 4)) return false;
-  trace?.(`slider ("${found.text}"): dragging ${Math.round(distance)}px`);
-  await visitorDrag(page.mouse, start, { x: start.x + distance, y: start.y }, random, sleep);
-  return true;
-}
-
-/** GeeTest's "select N images with <example>": a 3x3 drawing and a small example picture. The example is taken at
- * its full size, each square is cut out and compared with it by the voting models, and the N best are clicked. */
-async function solveGeetestMatch(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
-  const info = await page.evaluate(`(() => {
-    const ex = document.querySelector('[class*="geetest_ques_tips"] img');
-    const grid = Array.from(document.querySelectorAll('[class*="geetest_svg_item"], [class*="geetest_subitem"][class*="geetest_svg"], [class*="geetest_subitem"][class*="geetest_nine"]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 150 && r.height > 150; });
-    const tips = document.querySelector('[class*="geetest_text_tips"]');
-    if (!ex || !grid) return null;
-    const r = grid.getBoundingClientRect();
-    return { src: ex.src, grid: { x: r.x, y: r.y, width: r.width, height: r.height }, text: tips ? tips.textContent.trim() : '' };
-  })()`).catch(() => null) as { src: string; grid: Box; text: string } | null;
-  if (!info) return false;
-  let example: Buffer | undefined;
-  try {
-    if (info.src.startsWith('data:')) example = Buffer.from(info.src.slice(info.src.indexOf(',') + 1), 'base64');
-    else { const res = await page.request.get(info.src, { timeout: 10_000 }); if (res.ok()) example = await res.body(); }
-  } catch { example = undefined; }
-  if (!example) return false;
-  const mime = /\.png(?:$|\?)/i.test(info.src) || example[0] === 0x89 ? 'image/png' : 'image/jpeg';
-  const want = Math.max(1, Number(/select\s+(\d+)/i.exec(info.text)?.[1] ?? 1));
-  const { askSameAsExample } = await import('./captcha-model.js');
-  const w = info.grid.width / 3, h = info.grid.height / 3;
-  const cells = Array.from({ length: 9 }, (_, i) => ({ x: info.grid.x + (i % 3) * w, y: info.grid.y + Math.floor(i / 3) * h, width: w, height: h }));
-  const shots = await Promise.all(cells.map(cell => page.screenshot({ type: 'png', clip: { x: cell.x + 3, y: cell.y + 3, width: cell.width - 6, height: cell.height - 6 }, timeout: 8_000 }).catch(() => undefined)));
-  const scores = await Promise.all(shots.map(shot => shot ? askSameAsExample({ mimeType: mime, data: example!.toString('base64') }, { mimeType: 'image/png', data: shot.toString('base64') }) : Promise.resolve(undefined)));
-  const ranked = scores.map((score, index) => ({ index, score: score ?? 0 })).filter(c => c.score > 0).sort((a, b) => b.score - a.score).slice(0, want);
-  if (!ranked.length) { trace?.(`GeeTest match ("${info.text}"): nothing matched the example`); return false; }
-  trace?.(`GeeTest match ("${info.text}"): clicking ${ranked.map(c => `${c.index}(${c.score.toFixed(2)})`).join(' ')}`);
-  for (const { index } of ranked) await visitorClick(page.mouse, toTarget(cells[index]!), random, sleep);
-  return true;
-}
-
-/** A challenge drawn in the page itself with no slider (GeeTest's "select the image that matches", icon order,
- * nine-square): a picture of the challenge box goes to the voting models, the spots they agree on are clicked,
- * then the box's own confirm button if it has one. */
-async function solveInPageBox(page: Page, askPoints: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
-  const box = await page.evaluate(`(() => {
-    const shown = e => { const r = e.getBoundingClientRect(); return r.width > 200 && r.height > 150 && r.bottom > 0 && r.top < innerHeight && getComputedStyle(e).visibility !== 'hidden'; };
-    const el = Array.from(document.querySelectorAll('[class*="geetest_box"], [class*="geetest_panel_box"], awswaf-captcha, #captcha-container awswaf-captcha, [id*="aws-waf-captcha"], [class*="amzn-captcha"]')).find(shown);
-    if (!el) return null;
-    document.querySelectorAll('[data-clikcode-box]').forEach(e => e.removeAttribute('data-clikcode-box'));
-    el.setAttribute('data-clikcode-box', '1');
-    const r = el.getBoundingClientRect();
-    const text = (el.shadowRoot ? el.shadowRoot.textContent : el.innerText) || '';
-    return { x: r.x, y: r.y, width: r.width, height: r.height, text: text.replace(/\\s+/g, ' ').trim().slice(0, 160) };
-  })()`).catch(() => null) as (Box & { text: string }) | null;
-  if (!box) return false;
-  if (await solveGeetestMatch(page, random, sleep, trace)) return true;
-  let shot: Buffer;
-  try { shot = await page.locator('[data-clikcode-box="1"]').first().screenshot({ type: 'jpeg', quality: 88, timeout: 8_000 }); } catch { return false; }
-  const instruction = `${box.text}. A small picture in the top corner, if any, is the example to match.`;
-  const points = await askPoints([{ mimeType: 'image/jpeg', data: shot.toString('base64') }], instruction);
-  if (!points?.length) { trace?.(`in-page check ("${box.text}"): no agreed spot`); return false; }
-  trace?.(`in-page check ("${box.text}"): clicking ${points.map(p => `(${p.x.toFixed(2)},${p.y.toFixed(2)})`).join(' ')}`);
-  for (const p of points.slice(0, 9)) {
-    const x = box.x + p.x * box.width, y = box.y + p.y * box.height;
-    await visitorClick(page.mouse, { x: x - 4, x2: x + 4, y: y - 4, y2: y + 4 }, random, sleep);
-  }
-  await sleep(500);
-  const submit = await page.evaluate(`(() => {
-    const box = document.querySelector('[data-clikcode-box="1"]'); if (!box) return null;
-    const root = box.shadowRoot || box;
-    const b = Array.from(root.querySelectorAll('[class*="geetest_submit"], [class*="geetest_commit"], button, [role="button"]')).find(e => { const r = e.getBoundingClientRect(); const c = typeof e.className === 'string' ? e.className : ''; return r.width > 0 && (/geetest_(submit|commit)/.test(c) || /^(confirm|verify|submit|done|next|check)$/i.test((e.textContent || '').trim())); });
-    if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height };
-  })()`).catch(() => null) as Box | null;
-  if (submit) await visitorClick(page.mouse, toTarget(submit), random, sleep);
-  return true;
-}
-
-/** A classic "type the characters you see" captcha: a small picture beside a field asking for its code. The picture
- * is read by the vision model and typed in at a visitor's pace. Says whether it typed anything; whether the site
- * accepts it shows when the form is sent. */
-async function solveTextCaptcha(page: Page, askText: (image: { mimeType: string; data: string }) => Promise<string | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
-  const marked = await page.evaluate(`(() => {
-    const seen = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 4 && r.height > 4 && s.visibility !== 'hidden' && s.display !== 'none' && el.type !== 'hidden'; };
-    const asks = /captcha|security ?code|verification ?code|verify ?code|characters|code (shown|above|below|in the image)|text (shown|in the image)|type the (code|text|characters)|enter the (code|text|characters)|antispam|human/i;
-    const labelOf = input => { const l = input.id && document.querySelector('label[for="' + CSS.escape(input.id) + '"]'); return [input.name, input.id, input.placeholder, input.getAttribute('aria-label'), l ? l.textContent : '', input.closest('label') ? input.closest('label').textContent : ''].join(' '); };
-    const input = Array.from(document.querySelectorAll('input:not([type]), input[type=text], input[type=tel], input[type=number]')).find(i => seen(i) && asks.test(labelOf(i)) && !/recaptcha|hcaptcha|turnstile|email|phone|name|company/i.test((i.name || '') + ' ' + (i.id || '')));
-    if (!input) return false;
-    const near = input.getBoundingClientRect();
-    const pics = Array.from(document.querySelectorAll('img, canvas')).filter(p => { if (!seen(p)) return false; const r = p.getBoundingClientRect(); return r.width >= 50 && r.width <= 450 && r.height >= 18 && r.height <= 180; });
-    const score = p => { const r = p.getBoundingClientRect(); const named = /captcha|securimage|code|verif|kaptcha/i.test([p.src, p.alt, p.id, p.className].join(' ')) ? 0 : 400; return named + Math.hypot(r.x + r.width / 2 - (near.x + near.width / 2), r.y + r.height / 2 - (near.y + near.height / 2)); };
-    const pic = pics.sort((a, b) => score(a) - score(b))[0];
-    if (!pic || score(pic) > 600) return false;
-    input.setAttribute('data-clikcode-captcha-field', '1');
-    pic.setAttribute('data-clikcode-captcha-picture', '1');
-    return true;
-  })()`).catch(() => false);
-  if (!marked) return false;
-  let shot: Buffer;
-  try { shot = await page.locator('[data-clikcode-captcha-picture="1"]').first().screenshot({ type: 'png', timeout: 8_000 }); } catch { return false; }
-  const text = await askText({ mimeType: 'image/png', data: shot.toString('base64') });
-  if (!text) { trace?.('text captcha: the picture could not be read'); return false; }
-  trace?.(`text captcha: typing ${text.length} characters`);
-  const field = page.locator('[data-clikcode-captcha-field="1"]').first();
-  await field.click({ timeout: 5_000 }).catch(() => undefined);
-  await field.fill('').catch(() => undefined);
-  for (const char of text) { await page.keyboard.type(char); await sleep(60 + random() * 140); }
-  return true;
-}
-
-/** reCAPTCHA's audio challenge: switch to it, fetch the clip, have it transcribed, type the words, verify.
- * `refused` means Google would not serve audio here (or it could not be heard) and the pictures are back. */
-async function solveRecaptchaAudio(page: Page, frame: Frame, box: Box, transcribe: (audio: Buffer, mimeType: string) => Promise<string | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<'typed' | 'refused'> {
-  const READ = `(() => {
-    const r = el => { if (!el) return null; const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 ? { x: b.x, y: b.y, width: b.width, height: b.height } : null; };
-    const source = document.querySelector('#audio-source');
-    const link = document.querySelector('.rc-audiochallenge-tdownload-link');
-    const refused = document.querySelector('.rc-doscaptcha-header, .rc-doscaptcha-body');
-    return { toAudio: r(document.querySelector('#recaptcha-audio-button')), toImage: r(document.querySelector('#recaptcha-image-button')), field: r(document.querySelector('#audio-response')), verify: r(document.querySelector('#recaptcha-verify-button')),
-      src: (source && source.src) || (link && link.href) || '', refused: !!(refused && refused.getBoundingClientRect().height > 0), said: (document.querySelector('.rc-audiochallenge-error-message') || {}).innerText || '' };
-  })()`;
-  type Read = { toAudio: Box | null; toImage: Box | null; field: Box | null; verify: Box | null; src: string; refused: boolean; said: string };
-  const read = async (): Promise<Read | undefined> => { try { return await frame.evaluate(READ) as Read; } catch { return undefined; } };
-  const inPage = (b: Box) => toTarget({ ...b, x: b.x + box.x, y: b.y + box.y });
-  const backToPictures = async (state: Read | undefined): Promise<'refused'> => { if (state?.toImage) await visitorClick(page.mouse, inPage(state.toImage), random, sleep); return 'refused'; };
-  let state = await read();
-  if (!state) return 'refused';
-  if (!state.field) {
-    if (!state.toAudio) return 'refused';
-    trace?.('audio: switching to the spoken challenge');
-    await visitorClick(page.mouse, inPage(state.toAudio), random, sleep);
-    // The spoken challenge takes a moment to load; a refusal shows at once.
-    for (let waited = 0; waited < 7_000; waited += 700) { await sleep(700); state = await read(); if (!state || state.refused || (state.field && state.src)) break; }
-  }
-  if (!state || state.refused || !state.field || !state.src) { trace?.(`audio: not offered here${state?.refused ? ' (Google refused it)' : ''}`); return backToPictures(state); }
-  let clip: Buffer | undefined;
-  try { const res = await page.context().request.get(state.src, { timeout: 15_000 }); if (res.ok()) clip = await res.body(); } catch { clip = undefined; }
-  if (!clip || clip.length < 1_000) { trace?.('audio: the clip could not be fetched'); return backToPictures(state); }
-  const heard = await transcribe(clip, 'audio/mpeg');
-  const { cleanTranscript } = await import('./captcha-model.js');
-  const words = heard ? cleanTranscript(heard) : '';
-  if (words.length < 3) { trace?.('audio: nothing could be made out'); return backToPictures(state); }
-  trace?.(`audio: typing ${words.split(' ').length} words`);
-  await visitorClick(page.mouse, inPage(state.field), random, sleep);
-  for (const char of words) { await page.keyboard.type(char); await sleep(40 + random() * 110); }
-  await sleep(300 + random() * 400);
-  const after = await read();
-  if (after?.verify) await visitorClick(page.mouse, inPage(after.verify), random, sleep);
-  else await page.keyboard.press('Enter');
-  return 'typed';
-}
-
-/** One step of an Arkose (FunCaptcha) game. Its puzzles share one shape: an instruction, sometimes a start
- * button, then either arrows that step through candidate pictures with a Submit button, or a set of pictures to
- * click one of. With arrows, every candidate is looked at once, the voting models pick the one that answers the
- * instruction, and the arrows are pressed back to it before Submit. Without arrows the models say where to click.
- * `stuck` means nothing could be done this round. */
-async function playArkose(page: Page, frame: Frame, box: Box, askPoints: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<'played' | 'stuck'> {
-  const READ = `(() => {
-    const seen = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 6 && r.height > 6 && s.visibility !== 'hidden' && s.display !== 'none'; };
-    const r = e => { if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; };
-    const clickable = Array.from(document.querySelectorAll('button, a, [role="button"]')).filter(seen);
-    const label = e => ((e.getAttribute('aria-label') || '') + ' ' + (e.textContent || '')).replace(/\\s+/g, ' ').trim();
-    const find = re => clickable.find(e => re.test(label(e)));
-    const heading = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"], [role="text"], legend, p')).filter(seen).map(e => (e.textContent || '').replace(/\\s+/g, ' ').trim()).filter(t => t.length > 12).sort((a, b) => b.length - a.length)[0] || '';
-    const of = /(\\d+)\\s*(?:of|\\/)\\s*(\\d+)/.exec(document.body.innerText || '');
-    return { instruction: heading.slice(0, 240), start: r(find(/^(verify|start|begin|start puzzle|solve|continue|try again)\\b/i)), next: r(find(/next|right arrow/i) || document.querySelector('.right-arrow')), submit: r(find(/^submit\\b/i)), total: of ? Number(of[2]) : 0 };
-  })()`;
-  type Read = { instruction: string; start: Box | null; next: Box | null; submit: Box | null; total: number };
-  const read = async (): Promise<Read | undefined> => { try { return await frame.evaluate(READ) as Read; } catch { return undefined; } };
-  const inPage = (b: Box) => toTarget({ ...b, x: b.x + box.x, y: b.y + box.y });
-  const shot = async (): Promise<{ mimeType: string; data: string } | undefined> => { try { return { mimeType: 'image/jpeg', data: (await (await frame.frameElement()).screenshot({ type: 'jpeg', quality: 85, timeout: 8_000 }) as Buffer).toString('base64') }; } catch { return undefined; } };
-  let state = await read();
-  if (!state) return 'stuck';
-  if (state.start && !state.next && !state.submit) {
-    trace?.('Arkose: starting the puzzle');
-    await visitorClick(page.mouse, inPage(state.start), random, sleep);
-    await sleep(2_500);
-    state = await read();
-    if (!state) return 'stuck';
-  }
-  if (state.next && state.submit) {
-    // Step through every candidate once. Arkose's carousel wraps, so after the last one it is back at the first.
-    const options: Array<{ mimeType: string; data: string }> = [];
-    const count = Math.min(state.total >= 2 ? state.total : 6, 10);
-    for (let i = 0; i < count; i++) {
-      const picture = await shot();
-      if (!picture) return 'stuck';
-      // A carousel of unknown length: stop when the first picture comes round again.
-      if (!state.total && i > 1 && picture.data === options[0]!.data) break;
-      options.push(picture);
-      await visitorClick(page.mouse, inPage(state.next), random, sleep);
-      await sleep(500 + random() * 300);
-    }
-    const { askPick } = await import('./captcha-model.js');
-    const pick = await askPick(options, state.instruction);
-    if (!pick) { trace?.(`Arkose ("${state.instruction}"): the voters did not agree on one of ${options.length}`); return 'stuck'; }
-    trace?.(`Arkose ("${state.instruction}"): picture ${pick} of ${options.length}`);
-    // Every candidate was stepped past once, so the carousel is back at the first picture.
-    for (let i = 0; i < pick - 1; i++) { await visitorClick(page.mouse, inPage(state.next), random, sleep); await sleep(350 + random() * 250); }
-    const again = await read();
-    if (again?.submit) await visitorClick(page.mouse, inPage(again.submit), random, sleep);
-    return 'played';
-  }
-  const picture = await shot();
-  if (!picture || !state.instruction) return 'stuck';
-  const points = await askPoints([picture], state.instruction);
-  if (!points?.length) { trace?.(`Arkose ("${state.instruction}"): no agreed spot`); return 'stuck'; }
-  trace?.(`Arkose ("${state.instruction}"): clicking (${points[0]!.x.toFixed(2)},${points[0]!.y.toFixed(2)})`);
-  const x = box.x + points[0]!.x * box.width, y = box.y + points[0]!.y * box.height;
-  await visitorClick(page.mouse, { x: x - 4, x2: x + 4, y: y - 4, y2: y + 4 }, random, sleep);
-  const after = await read();
-  if (after?.submit) await visitorClick(page.mouse, inPage(after.submit), random, sleep);
-  return 'played';
-}
-
-/** Answer a shown puzzle the way a person does. The challenge's own layout is read from the page (instruction,
- * target, every square's position, the Verify button), each square is asked about on its own -- far more reliable
- * than asking for a list of indices over the whole grid -- and the matches are clicked at a visitor's pace. A
- * "click until none are left" grid swaps in new pictures where it was clicked; those are asked about again until
- * none match. Rounds continue while the widget keeps asking (reCAPTCHA often serves several grids), an expired
- * challenge is pressed again, and when the layout cannot be read the whole picture is asked about instead.
- * Resolves `cleared` when the page holds an accepted answer, else `still-there` when the budget runs out. Never throws. */
+/** Answer whatever human check is on the page the way a person does, family by family, until the page holds an
+ * accepted answer or the budget runs out. Rounds continue while a widget keeps asking (reCAPTCHA often serves
+ * several grids) and an expired challenge is pressed again. Resolves `cleared`, `still-there` (tried, not
+ * accepted) or `none` (nothing found to answer). Never throws. */
 export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise<HumanCheckResult> {
-  if (!deps.record) return solveShownCheck(page, deps);
+  if (!deps.stateDir) return solveShownCheck(page, deps, { refreshed: 0, kinds: [] });
+  const log = await import('./captcha-log.js');
   const began = Date.now();
-  const { stepOf, familyOf } = await import('./captcha-log.js');
-  const steps: string[] = [];
-  const result = await solveShownCheck(page, { ...deps, trace: line => { const step = stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } });
   let host = '';
   try { host = new URL(page.url()).host; } catch { host = ''; }
-  try { deps.record({ at: new Date().toISOString(), host, family: familyOf(result.widget, steps), outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps }); } catch { /* the log never fails a solve */ }
+  if (await log.shouldHoldOff(deps.stateDir, host)) {
+    deps.trace?.(`holding off: ${host} refused the last three answers`);
+    return { outcome: 'still-there' };
+  }
+  const steps: string[] = [];
+  const memo: HcaptchaMemo = { refreshed: 0, kinds: [], avoid: await log.weakKinds(deps.stateDir) };
+  const result = await solveShownCheck(page, { ...deps, trace: line => { const step = log.stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } }, memo);
+  await log.recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family: log.familyOf(result.widget, steps), outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps, ...(memo.kinds.length ? { kinds: memo.kinds } : {}) });
   return result;
 }
 
-async function solveShownCheck(page: Page, deps: SolveDeps = {}): Promise<HumanCheckResult> {
+/** The whole way past a human check, for every caller: the one press a visitor makes, then -- unless `solve` is
+ * false (the user turned captcha solving off) -- the answer to whatever the press brought up or the page draws
+ * itself. A press that clears is counted in the tally too: it is by far the commonest ending. */
+export async function passHumanCheck(page: Page, deps: SolveDeps & { solve?: boolean } = {}): Promise<HumanCheckResult> {
+  const pressed = await pressHumanCheck(page, deps.sleep ? { sleep: deps.sleep } : {});
+  if (pressed.outcome === 'cleared') {
+    if (deps.stateDir) { let host = ''; try { host = new URL(page.url()).host; } catch { host = ''; } await (await import('./captcha-log.js')).recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family: pressed.widget ?? 'unknown', outcome: 'cleared', seconds: 0, steps: ['press'] }); }
+    return pressed;
+  }
+  if (deps.solve === false) return pressed;
+  const solved = await solveHumanCheck(page, deps);
+  return solved.outcome === 'none' && pressed.outcome !== 'none' ? pressed : { ...solved, ...(solved.widget ?? pressed.widget ? { widget: solved.widget ?? pressed.widget } : {}) } as HumanCheckResult;
+}
+
+/** One go at the checks a page draws itself. A result ends the run; `acted` means something was done and the
+ * page should be looked at again; undefined means nothing here could be answered. */
+async function inPageStep(hands: Hands, memo: { tries: number; held: boolean; textTyped: boolean }): Promise<HumanCheckResult | 'acted' | undefined> {
+  const { page, random, sleep, trace, asks } = hands;
+  const settled = async (done: () => Promise<boolean>): Promise<boolean> => {
+    // An in-page check shows its verdict after its own animation: watch for it before judging.
+    for (let waited = 0; waited < 7_000; waited += 500) { await sleep(500); if (await done()) return true; }
+    return false;
+  };
+  if (memo.tries++ === 0 && await waitProofOfWork(page, random, sleep, trace)) return { outcome: 'cleared', widget: 'pow' };
+  if (memo.held && !await page.evaluate(HOLD_BUTTON).catch(() => null)) return { outcome: 'cleared', widget: 'hold' };
+  if (await solvePressHold(page, random, sleep, trace)) { memo.held = true; await sleep(2_000); return 'acted'; }
+  if (await geetestStep(hands)) return await settled(() => humanCheckAnswered(page)) ? { outcome: 'cleared', widget: 'geetest' } : 'acted';
+  if (await solveSlider(hands)) return await settled(async () => await humanCheckAnswered(page) || await markGone(page, 'slider') || !await page.evaluate(SLIDER).catch(() => null)) ? { outcome: 'cleared', widget: 'slider' } : 'acted';
+  if (!memo.textTyped && await solveTextCaptcha(page, asks.text, random, sleep, trace)) { memo.textTyped = true; return { outcome: 'cleared', widget: 'text' }; }
+  if (await solveChallengeBox(hands)) return await settled(async () => await humanCheckAnswered(page) || await markGone(page, 'box')) ? { outcome: 'cleared', widget: 'box' } : 'acted';
+  return undefined;
+}
+
+async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMemo): Promise<HumanCheckResult> {
   const sleep = deps.sleep ?? realSleep;
   const random = deps.random ?? Math.random;
-  const signal = deps.signal ? { signal: deps.signal } : {};
-  const ask = deps.ask ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaModel(image, signal)));
-  const askTile = deps.askTile ?? ((question) => import('./captcha-model.js').then(m => m.askTileMatch(question, signal)));
-  const transcribe = deps.transcribe ?? ((audio, mimeType) => import('./captcha-model.js').then(m => m.askTranscript(audio, mimeType, signal)));
-  const askText = deps.askText ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaText(image, signal)));
-  const askDrag = deps.askDrag ?? ((image, instruction) => import('./captcha-model.js').then(m => m.askDrag(image, instruction, signal)));
-  const askPoints = deps.askPoints ?? ((images, instruction) => import('./captcha-model.js').then(m => m.askClickPoints(images, instruction, signal)));
+  const hands: Hands = { page, random, sleep, asks: { ...gatewayAsks(deps.signal), ...deps.asks }, ...(deps.trace ? { trace: deps.trace } : {}) };
   const budgetMs = deps.waitMs ?? 240_000;
   const began = Date.now();
-  let firstWidget: HumanCheckWidget | undefined;
-  let repressed = 0;
-  let refreshed = 0;
-  let inPageTries = 0, textTried = false, heldOnce = false, arkoseStuck = 0;
-  let pictureRounds = deps.audioFirst ? 2 : 0, audio: 'untried' | 'on' | 'refused' = 'untried';
+  let widget: HumanCheckWidget | undefined;
+  const ended = (outcome: HumanCheckResult['outcome']): HumanCheckResult => ({ outcome, ...(widget ? { widget } : {}) });
+  let repressed = 0, arkoseStuck = 0, unread = 0;
+  const inPage = { tries: 0, held: false, textTyped: false };
+  let pictureRounds = 0, audio: 'untried' | 'on' | 'refused' = 'untried';
   while (Date.now() - began < budgetMs) {
     if (deps.signal?.aborted) break;
     const found = await findPuzzle(page);
     if (!found) {
+      if (await humanCheckAnswered(page)) return ended('cleared');
       // The challenge may have expired ("Verification challenge expired"): the checkbox is back and a visitor
       // presses it again. Up to three presses; the answer field says whether any of them was accepted.
-      if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
       if (await findCheckbox(page) && repressed < 3) {
         repressed++;
-        await pressHumanCheck(page, { waitMs: 8_000 });
+        const pressed = await pressHumanCheck(page, { waitMs: 8_000, sleep });
+        widget ??= pressed.widget;
         await sleep(1_500);
         continue;
       }
-      if (await humanCheckAnswered(page)) return { outcome: 'cleared', ...(firstWidget ? { widget: firstWidget } : {}) };
-      // No widget challenge: the page may carry its own check -- a slider to drag, or a picture of characters to type.
-      if (!firstWidget && inPageTries < 4) {
-        inPageTries++;
-        if (inPageTries === 1 && await waitProofOfWork(page, random, sleep, deps.trace)) return { outcome: 'cleared', widget: 'pow' };
-        if (heldOnce && !await page.evaluate(HOLD_BUTTON).catch(() => null)) return { outcome: 'cleared', widget: 'hold' };
-        if (await solvePressHold(page, random, sleep, deps.trace)) { heldOnce = true; await sleep(2_000); continue; }
-        const slid = await solveSlider(page, askDrag, random, sleep, deps.trace, false, askPoints);
-        if (slid) {
-          // An in-page check shows its verdict after its own animation: watch for it before judging.
-          for (let waited = 0; waited < 7_000; waited += 500) { await sleep(500); if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: 'geetest' }; }
-          continue;
-        }
+      // No widget: the page may draw its own check.
+      if (!widget && inPage.tries < 6) {
+        const step = await inPageStep(hands, inPage);
+        if (step === 'acted') continue;
+        if (step) return step;
       }
-      if (!firstWidget && !textTried) {
-        textTried = true;
-        const typed = await solveTextCaptcha(page, askText, random, sleep, deps.trace);
-        if (typed) return { outcome: 'cleared', widget: 'text' };
-      }
-      return { outcome: 'none', ...(firstWidget ? { widget: firstWidget } : {}) };
+      return ended(inPage.tries > 1 || inPage.held ? 'still-there' : 'none');
     }
-    firstWidget ??= found.widget;
-    if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
+    widget ??= found.widget;
+    if (await humanCheckAnswered(page)) return ended('cleared');
     // Every square must be on screen to be clicked: a challenge taller than a small window is given room first.
     if (await fitPuzzle(page, found.box)) { await sleep(800); continue; }
-    let bytes: Buffer;
-    try { bytes = await (await found.frame.frameElement()).screenshot({ type: 'jpeg', quality: 85, timeout: 10_000 }) as Buffer; }
-    catch { return { outcome: 'still-there', widget: firstWidget }; }
-    const grid = { mimeType: 'image/jpeg', data: bytes.toString('base64') };
     let confirm: { x: number; x2: number; y: number; y2: number };
+    if (found.widget === 'arkose') {
+      // After two rounds the pictures could not be answered, the spoken challenge is tried instead.
+      const played = arkoseStuck >= 2 && await arkoseAudio(hands, found.frame, found.box) ? 'played' : await playArkose(hands, found.frame, found.box);
+      if (played === 'stuck') { if (++arkoseStuck >= 4) return ended('still-there'); await sleep(2_000); }
+      else await sleep(2_500);
+      // The game shows its next round or goes away by itself: there is no separate confirm to press here.
+      if (await humanCheckAnswered(page) || !await findPuzzle(page)) return ended('cleared');
+      continue;
+    }
     // reCAPTCHA offers the same check as a spoken clip. After two picture rounds that did not clear, the clip is
     // listened to instead: it is transcribed by the Gateway's speech-to-text and typed in. Google sometimes refuses
     // audio ("automated queries"); then it is back to the pictures for the rest of the budget.
     if (found.widget === 'recaptcha' && audio !== 'refused' && (audio === 'on' || pictureRounds >= 2)) {
-      const heard = await solveRecaptchaAudio(page, found.frame, found.box, transcribe, random, sleep, deps.trace);
+      const heard = await solveRecaptchaAudio(page, found.frame, found.box, hands.asks.transcribe, random, sleep, deps.trace);
       if (heard === 'refused') { audio = 'refused'; await sleep(1_000); continue; }
       audio = 'on';
-      for (let waited = 0; waited < 8_000; waited += 500) { await sleep(500); if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget }; if (!await findPuzzle(page)) break; }
+      for (let waited = 0; waited < 8_000; waited += 500) { await sleep(500); if (await humanCheckAnswered(page)) return ended('cleared'); if (!await findPuzzle(page)) break; }
       continue;
     }
     pictureRounds++;
-    const layout = await readLayout(found.frame, found.box);
-    if (layout) {
-      // Squares already selected (a half-finished round) are left as they are; only the others are asked about.
-      let pending = layout.tiles.map((tile, index) => tile.selected ? -1 : index).filter(index => index >= 0);
-      let current = layout;
-      for (let pass = 0; pass < 6 && pending.length; pass++) {
-        const timing = { shotsMs: 0, asksMs: 0 };
-        const hits = await matchingTiles(found.frame, current, pending, askTile, timing);
-        deps.trace?.(`${current.tiles.length} squares, "${current.instruction}" pass ${pass + 1}: asked ${pending.length}, picked [${hits.join(',')}] (pictures ${Math.round(timing.shotsMs / 100) / 10}s, answers ${Math.round(timing.asksMs / 100) / 10}s)`);
-        for (const index of hits) { const at = current.tiles[index]; if (at) await visitorClick(page.mouse, toTarget(at), random, sleep); }
-        if (!current.dynamic || !hits.length) break;
-        // A dynamic grid fades a new picture into each clicked square; ask only about the squares that changed.
-        await sleep(3_500 + random() * 1_000);
-        const next = await readLayout(found.frame, found.box);
-        if (!next) break;
-        pending = hits.filter(index => next.tiles[index] && next.tiles[index]!.key !== current.tiles[index]?.key);
-        current = next;
-      }
-      const verify = (await readLayout(found.frame, found.box))?.verify ?? layout.verify;
-      confirm = verify ? toTarget(verify) : { x: found.box.x + found.box.width * 0.7, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 15 };
-    } else if (found.widget === 'arkose') {
-      const played = await playArkose(page, found.frame, found.box, askPoints, random, sleep, deps.trace);
-      if (played === 'stuck') { if (++arkoseStuck >= 3) return { outcome: 'still-there', widget: firstWidget }; await sleep(2_000); }
-      else await sleep(2_500);
-      // The game shows its next round or goes away by itself: there is no separate confirm to press here.
-      if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
-      if (!await findPuzzle(page)) return { outcome: 'cleared', widget: firstWidget };
-      continue;
-    } else if (found.widget === 'hcaptcha') {
-      // hCaptcha fades its pictures in: wait until two looks half a second apart match (a moving puzzle never
-      // will, so this gives up after three seconds and carries on).
-      for (let settle = 0, last = grid.data; settle < 6; settle++) {
-        await sleep(500);
-        let now: string;
-        try { now = (await (await found.frame.frameElement()).screenshot({ type: 'jpeg', quality: 85, timeout: 8_000 }) as Buffer).toString('base64'); } catch { break; }
-        const same = now === last;
-        last = now; grid.data = now;
-        if (same) break;
-      }
-      // hCaptcha draws most challenges on a canvas: a grid of pictures, or one picture to click a spot on. A visitor
-      // clicks where the answer is, so the model is asked where; a drag puzzle (or one it cannot place) is swapped
-      // for another challenge, up to twelve times, before this check is left to a person.
-      const instruction = String(await found.frame.evaluate(`((document.querySelector('.prompt-text') || {}).innerText || '').replace(/\\s+/g, ' ').trim()`).catch(() => ''));
-      // No instruction yet: the challenge is still loading (or changing over). Look again shortly.
-      if (!instruction) { await sleep(1_200); continue; }
-      const skipType = !!deps.hcaptchaOnly && !deps.hcaptchaOnly.test(instruction);
-      const wantsDrag = !skipType && !!instruction && /\b(?:drag|slide|move)\b/i.test(instruction);
-      const drags = wantsDrag ? await import('./captcha-model.js').then(m => m.askDrags(grid, instruction, signal)).catch(() => undefined) : undefined;
-      let points: Array<{ x: number; y: number }> | undefined;
-      if (instruction && !wantsDrag && !skipType) {
-        // A puzzle about motion is answered from a few frames, half a second apart, not one still.
-        const frames = [grid];
-        if (/\b(?:mov(?:e|es|ing)|visit(?:ed|s)?|path|went|travel(?:s|led)?|jump(?:s|ed)?)\b/i.test(instruction)) {
-          for (let i = 0; i < 4; i++) {
-            await sleep(500);
-            try { frames.push({ mimeType: 'image/jpeg', data: (await (await found.frame.frameElement()).screenshot({ type: 'jpeg', quality: 80, timeout: 8_000 }) as Buffer).toString('base64') }); } catch { break; }
-          }
-        }
-        points = await askPoints(frames, instruction);
-      }
-      const submitBox = async (): Promise<{ x: number; x2: number; y: number; y2: number }> => {
-        const submit = await found.frame.evaluate(`(() => { const b = document.querySelector('.button-submit'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
-        return submit ? toTarget({ ...submit, x: submit.x + found.box.x, y: submit.y + found.box.y }) : { x: found.box.x + found.box.width * 0.8, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 20 };
-      };
-      if (drags?.length) {
-        deps.trace?.(`"${instruction}": dragging ${drags.map(d => `piece ${d.n} to (${d.to.x.toFixed(2)},${d.to.y.toFixed(2)})`).join(', ')}`);
-        const at = (p: { x: number; y: number }) => ({ x: found.box.x + p.x * found.box.width, y: found.box.y + p.y * found.box.height });
-        for (const d of drags) { await visitorDrag(page.mouse, at(d.from), at(d.to), random, sleep, 1); await sleep(400 + random() * 400); }
-        confirm = await submitBox();
-      } else if (points?.length) {
-        deps.trace?.(`"${instruction}": clicking ${points.map(p => `(${p.x.toFixed(2)},${p.y.toFixed(2)})`).join(' ')}`);
-        for (const p of points.slice(0, 9)) {
-          const x = found.box.x + p.x * found.box.width, y = found.box.y + p.y * found.box.height;
-          await visitorClick(page.mouse, { x: x - 4, x2: x + 4, y: y - 4, y2: y + 4 }, random, sleep);
-        }
-        const submit = await found.frame.evaluate(`(() => { const b = document.querySelector('.button-submit'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
-        confirm = submit ? toTarget({ ...submit, x: submit.x + found.box.x, y: submit.y + found.box.y }) : { x: found.box.x + found.box.width * 0.8, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 20 };
-      } else {
-        if (refreshed >= 12) return { outcome: 'still-there', widget: firstWidget };
-        if (!skipType) refreshed++;
-        deps.trace?.(`"${instruction}": no spot to click, asking for another challenge`);
-        const refresh = await found.frame.evaluate(`(() => { const b = document.querySelector('.refresh.button, .refresh'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
-        if (!refresh) return { outcome: 'still-there', widget: firstWidget };
-        await visitorClick(page.mouse, toTarget({ ...refresh, x: refresh.x + found.box.x, y: refresh.y + found.box.y }), random, sleep);
-        await sleep(2_500);
-        continue;
-      }
+    const grid = await gridRound(hands, found.frame, found.box);
+    if (grid) confirm = grid.confirm;
+    else if (found.widget === 'hcaptcha') {
+      const round = await hcaptchaRound(hands, found.frame, found.box, hcaptcha);
+      if (round === 'gave-up') return ended('still-there');
+      if (round === 'again') continue;
+      confirm = round.confirm;
     } else {
-      const reply = await ask(grid);
-      // An unreadable or empty answer is not a refusal: reCAPTCHA deliberately blurs and noises its grids.
-      // Wait out the widget's own refresh and try the next round with a fresh screenshot.
-      if (!reply.ok || 'unreadable' in reply.answer || !reply.answer.tiles.length) { await sleep(3_000); continue; }
-      const tiles: number[] = reply.answer.tiles;
-      const side = Math.max(...tiles) >= 9 ? 4 : 3;
-      const centres = tileCentres(found.box, side, side);
-      for (const index of [...new Set(tiles)].sort((a: number, b: number) => a - b).slice(0, side * side)) {
-        const at = centres[index];
-        if (at) await visitorClick(page.mouse, at, random, sleep);
-      }
-      confirm = { x: found.box.x + found.box.width * 0.5, x2: found.box.x + found.box.width, y: found.box.y + found.box.height * 0.85, y2: found.box.y + found.box.height };
+      // A challenge with no layout this solver reads (a new kind, or one still loading): the voting models are
+      // shown the whole challenge and asked where a visitor would click. Three such looks, then it is left.
+      if (++unread > 3) return ended('still-there');
+      await sleep(2_000);
+      if (await readLayout(found.frame, found.box)) continue;
+      const picture = await frameShot(found.frame);
+      const points = picture ? await hands.asks.points([picture], 'Answer the challenge as its own instruction says, then click its confirm button') : undefined;
+      if (!points?.length) continue;
+      deps.trace?.(`unread challenge: clicking ${points.map(p => `(${p.x.toFixed(2)},${p.y.toFixed(2)})`).join(' ')}`);
+      for (const p of points.slice(0, 10)) await visitorClick(page.mouse, spot(within(found.box, p)), random, sleep);
+      await sleep(2_000);
+      continue;
     }
     await visitorClick(page.mouse, confirm, random, sleep);
     for (let waited = 0; waited < 20_000; waited += 600) {
       await sleep(600);
-      if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
+      if (await humanCheckAnswered(page)) return ended('cleared');
       const again = await findPuzzle(page);
       // No puzzle left and the page moved on: solved.
-      if (!again && !await findCheckbox(page)) return { outcome: 'cleared', widget: firstWidget };
+      if (!again && !await findCheckbox(page)) return ended('cleared');
       // The widget asked again (a fresh grid, or "please also check the new images"): another round.
       if (again) {
         if (deps.trace) {
@@ -997,5 +314,5 @@ async function solveShownCheck(page: Page, deps: SolveDeps = {}): Promise<HumanC
       }
     }
   }
-  return (await humanCheckAnswered(page)) ? { outcome: 'cleared' } : { outcome: 'still-there', ...(firstWidget ? { widget: firstWidget } : {}) };
+  return ended(await humanCheckAnswered(page) ? 'cleared' : 'still-there');
 }

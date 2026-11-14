@@ -8,7 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ModelClient } from '../model-client.js';
-import { askCaptchaModel, CAPTCHA_MODEL_PROMPT } from './captcha-model.js';
+import { askClickPoints } from './captcha-model.js';
 
 let server: http.Server;
 let baseUrl: string;
@@ -49,44 +49,33 @@ const clientOf = async (): Promise<ModelClient> => {
   return new OpenAIModelClient({ baseUrl, apiKey: 'k', model: 'vision-test', vision: true });
 };
 
-describe('askCaptchaModel', () => {
-  it('sends the puzzle picture with the strict prompt, no tools, and parses the tile answer', async () => {
-    reply = { chunks: ['{"tiles": [0, 3]}'] };
-    const result = await askCaptchaModel(image, { modelClientOf: clientOf });
-    expect(result).toEqual({ ok: true, answer: { tiles: [0, 3] } });
-    const sent = received[0];
+describe('an ask over the Gateway', () => {
+  it('sends the picture with a system prompt and no tools, to every voter, and answers what they share', async () => {
+    reply = { chunks: ['```json\n{"points": [{"x": 0.4, "y": 0.6}]}\n```'] };
+    const points = await askClickPoints(image, 'Click the odd one out', { modelClientsOf: async () => [await clientOf(), await clientOf()] });
+    expect(points).toHaveLength(1);
+    expect(points![0]!.x).toBeCloseTo(0.4);
+    expect(received).toHaveLength(2);
+    const sent = received[0]!;
     expect(sent.url).toBe('/v1/chat/completions');
     expect(sent.body.tools).toBeUndefined();
     const messages = sent.body.messages as Array<{ role: string; content: unknown }>;
-    expect(messages[0]).toMatchObject({ role: 'system', content: CAPTCHA_MODEL_PROMPT });
+    expect(messages[0]!.role).toBe('system');
     // The picture rides on the user message as an inline data part.
-    const parts = messages[1].content as Array<{ type: string }>;
-    expect(parts[0].type).toBe('text');
-    expect(parts[1].type).toBe('image_url');
+    const parts = messages[1]!.content as Array<{ type: string }>;
+    expect(parts[0]!.type).toBe('text');
+    expect(parts[1]!.type).toBe('image_url');
   });
 
-  it('reads an unreadable verdict and strips a chatty fence around the JSON', async () => {
-    reply = { chunks: ['sure!\n```json\n{"unreadable": true}\n```\n'] };
-    expect(await askCaptchaModel(image, { modelClientOf: clientOf })).toEqual({ ok: true, answer: { unreadable: true } });
-  });
-
-  it('drops non-integer or negative tile numbers instead of trusting them', async () => {
-    reply = { chunks: ['{"tiles": [1, "2", -1, 3.5, null, 4]}'] };
-    expect(await askCaptchaModel(image, { modelClientOf: clientOf })).toEqual({ ok: true, answer: { tiles: [1, 4] } });
-  });
-
-  it('reports a bad answer rather than guessing', async () => {
-    reply = { chunks: ['I cannot see any tiles in this image.'] };
-    expect(await askCaptchaModel(image, { modelClientOf: clientOf })).toEqual({ ok: false, error: 'bad-answer' });
-  });
-
-  it('says unreachable when the model server cannot be reached', async () => {
-    reply = {};
+  it('answers nothing, rather than guessing, when no voter can be reached or none makes sense', async () => {
     const broken = async (): Promise<ModelClient> => {
       const { OpenAIModelClient } = await import('../models/openai-client.js');
       return new OpenAIModelClient({ baseUrl: 'http://127.0.0.1:1', apiKey: 'k', model: 'x' });
     };
-    expect(await askCaptchaModel(image, { modelClientOf: broken })).toEqual({ ok: false, error: 'unreachable' });
+    expect(await askClickPoints(image, 'Click the odd one out', { modelClientsOf: async () => [await broken(), await broken()] })).toBeUndefined();
+    reply = { chunks: ['I cannot see anything to click.'] };
+    expect(await askClickPoints(image, 'Click the odd one out', { modelClientsOf: async () => [await clientOf(), await clientOf()] })).toBeUndefined();
+    expect(await askClickPoints(image, 'Click the odd one out', { modelClientsOf: async () => [] })).toBeUndefined();
   });
 });
 
@@ -120,16 +109,7 @@ describe('where to click on a free-form challenge', () => {
   });
 });
 
-describe('voting on spots, reading text, reading a drag', () => {
-  it('keeps only spots two or more voters agree on, averaged', async () => {
-    const { agreedPoints } = await import('./captcha-model.js');
-    const agreed = agreedPoints([[{ x: 0.5, y: 0.34 }, { x: 0.28, y: 0.72 }], [{ x: 0.52, y: 0.36 }, { x: 0.9, y: 0.1 }], [{ x: 0.29, y: 0.71 }]]);
-    expect(agreed).toHaveLength(2);
-    expect(agreed[0]!.x).toBeCloseTo(0.51); expect(agreed[1]!.y).toBeCloseTo(0.715);
-    // One voter alone, however sure, is not enough.
-    expect(agreedPoints([[{ x: 0.5, y: 0.5 }], undefined, []])).toEqual([]);
-  });
-
+describe('reading text and spoken digits', () => {
   it('reads the typed text, without spaces, and refuses an implausibly long one', async () => {
     const { parseCaptchaText, askCaptchaText } = await import('./captcha-model.js');
     expect(parseCaptchaText('```json\n{"text": "Xk d7DE"}\n```')).toBe('Xkd7DE');
@@ -140,10 +120,10 @@ describe('voting on spots, reading text, reading a drag', () => {
     expect(await askCaptchaText({ mimeType: 'image/png', data: 'eA==' }, { modelClientsOf: async () => [fake('{"text":"ab12"}'), fake('{"text":"ab1z"}')] })).toBe('ab12');
   });
 
-  it('reads a drag answer and refuses points outside the picture', async () => {
-    const { parseDrag } = await import('./captcha-model.js');
-    expect(parseDrag('{"from": {"x": 0.1, "y": 0.8}, "to": {"x": 0.62, "y": 0.8}}')).toEqual({ from: { x: 0.1, y: 0.8 }, to: { x: 0.62, y: 0.8 } });
-    expect(parseDrag('{"from": {"x": 0.1, "y": 0.8}, "to": {"x": 1.4, "y": 0.8}}')).toBeUndefined();
+  it('turns spoken numbers into digits', async () => {
+    const { spokenDigits } = await import('./captcha-model.js');
+    expect(spokenDigits('Seven, two. oh four 9')).toBe('72049');
+    expect(spokenDigits('thank you')).toBe('');
   });
 });
 
