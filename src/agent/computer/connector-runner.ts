@@ -282,7 +282,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     const human = stop.human ?? humanStepFor(id, stop);
     const resume = stop.parked ? resumeCommand(id) : undefined;
     if (!human) return handoff(`${stop.kind === 'unknown' ? 'an unrecognized screen' : stop.kind}: ${stop.message}`, stop);
-    // A captcha ("confirm you are human") means the vendor is watching: do not come back for six hours. The end time goes in the attention item.
+    // A captcha the solver could not get past: do not come back for an hour. The end time goes in the attention item.
     let until: Date | undefined;
     if (human.kind === 'captcha' && driver.recordBackoff) until = await driver.recordBackoff(id).catch(quiet('agent/computer/connector-runner'));
     const note = until ? ` Backed off ${BACKOFF_HOURS} hours: the runner will not try ${id} again before ${until.toISOString()}.` : '';

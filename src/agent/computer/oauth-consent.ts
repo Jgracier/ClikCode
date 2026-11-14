@@ -497,6 +497,7 @@ async function driveConsent(connector: string, firstPage: Page, options: OAuthCo
     };
     await open();
     const deadline = Date.now() + (options.timeoutMs ?? 120_000);
+    let captchaTried = false;
     let idle = 0, stopSeen = 0, accountPresses = 0, restarts = 0, lastPress = { key: '', at: 0 }, controls: Control[] = [], lastText = '';
     /** Google's transient re-verify (a password challenge) or an error page: the same authorization URL in a fresh tab usually passes. Once. */
     const restart = async (why: string): Promise<boolean> => {
@@ -538,7 +539,16 @@ async function driveConsent(connector: string, firstPage: Page, options: OAuthCo
       }
       const hasPassword = await page.locator('input[type=password]:visible').count().catch(() => 0) > 0;
       const hasCode = await page.locator('input[autocomplete=one-time-code]:visible').count().catch(() => 0) > 0;
-      const why = stopReason(text, hasPassword, hasCode);
+      let why = stopReason(text, hasPassword, hasCode);
+      // A captcha on the way to the consent screen is answered here, once, like any visitor would; one that stays is a stop.
+      if (why === 'a captcha' && !captchaTried && options.stateDir) {
+        captchaTried = true;
+        const { captchaSolvingAllowed } = await import('./settings.js');
+        const { passHumanCheck } = await import('./human-check.js');
+        const passed = await passHumanCheck(page, { stateDir: options.stateDir, solve: await captchaSolvingAllowed(options.stateDir) }).catch(() => undefined);
+        if (passed?.outcome === 'cleared') { stopSeen = 0; continue; }
+        why = stopReason(text, hasPassword, hasCode);
+      }
       if (why) {
         // Two looks in a row, so a page still settling does not stop it.
         if (++stopSeen >= 2) throw new ConsentStop(`Stopped at ${why}. Nothing was typed. ${stuckOn(page, controls, text)}`, classifyStuck(text)?.reason, stopDetail(page, controls, text, hasPassword ? 'password' : hasCode ? 'mfa' : undefined));

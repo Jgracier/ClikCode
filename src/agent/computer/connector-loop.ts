@@ -91,6 +91,8 @@ export interface WorkContext { tab: string; budget: CallBudget; limits: LoopLimi
 /** A browser that did not open is a fault of ours, not a verdict on the vendor: try the vendor again in minutes, not hours. */
 const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)/i;
 const BROWSER_RETRY_MS = 5 * 60_000;
+/** A vendor whose captcha was not cleared is tried again after this (keygrab-park.ts BACKOFF_HOURS holds it as long). */
+const CAPTCHA_RETRY_MS = 3_600_000;
 
 export interface LoopReport { outcome: 'done' | 'blocked' | 'retry'; reason: string; retryAfterMs?: number; humanStep?: VendorOutcome['humanStep'] }
 export interface LoopState {
@@ -153,7 +155,8 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     summary.done[kind] = (summary.done[kind] ?? 0) + 1;
     if (wall) summary.walls[wall] = (summary.walls[wall] ?? 0) + 1;
     const browserDown = !wall && outcome.status !== 'published' && BROWSER_DOWN.test(outcome.summary);
-    cooldown.mark(id, browserDown ? BROWSER_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs);
+    // A captcha wall is the one wall worth an early second try: the solver may clear it once the site has cooled.
+    cooldown.mark(id, browserDown ? BROWSER_RETRY_MS : wall === 'captcha' ? CAPTCHA_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs);
     const reason = scrubSecrets(outcome.summary).replace(/\s+/g, ' ').slice(0, 400);
     let report: LoopReport | undefined;
     if (outcome.status === 'published') report = { outcome: 'done', reason: reason || 'published' };

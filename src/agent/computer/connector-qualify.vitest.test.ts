@@ -28,6 +28,9 @@ describe('qualify classification', () => {
     expect(classify('v', [page('signup', 'Join us. This site is protected by reCAPTCHA.', form)]).kinds).toEqual([]);
     expect(classify('v', [page('signup', 'Please confirm you are human to continue', form)]).kinds).toEqual(['captcha']);
     expect(classify('v', [page('signup', 'Create account', { ...form, captchaWidget: true })]).kinds).toEqual(['captcha']);
+    // Seen, but no reason to wait for a person: the runner answers it.
+    expect(classify('v', [page('signup', 'Create account', { ...form, captchaWidget: true })]).lane).toBe('auto');
+    expect(classify('v', [page('signup', 'Create account. We will text you a code: verify your phone', { ...form, captchaWidget: true })]).lane).toBe('human');
     expect(classify('v', [page('docs', 'Our captcha policy for the API')]).kinds).toEqual([]);
   });
 

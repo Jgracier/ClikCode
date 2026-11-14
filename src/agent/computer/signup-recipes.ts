@@ -4,6 +4,7 @@
  * key or password is refused, and a fill with no text is filled from the user's profile at replay time.
  * A replay stops at, and reports, a captcha, an SMS/authenticator code, a payment page or a review page:
  * those are for the person, and nothing here tries to get past them. */
+import { CAPTCHA_WORDS } from './human-check-words.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { keyShaped } from './secret-finder.js';
@@ -100,7 +101,7 @@ export function describeRecipe(recipe: Recipe): string {
 
 /** Pages a replay must hand back to the person. Matches words a page shows, not hidden markup. */
 const BLOCKERS: ReadonlyArray<readonly [string, RegExp]> = [
-  ['a captcha', /captcha|verify (?:that )?you(?:'| a)?re (?:a )?human|i'?m not a robot|are you a robot|cloudflare turnstile|checking (?:if|that) you are human|press (?:and|&) hold/i],
+  ['a captcha', new RegExp(`captcha|${CAPTCHA_WORDS.source}`, 'i')],
   ['an SMS or authenticator code', /(?:sent|texted) (?:a|the|your)? ?(?:\w+ )?(?:code )?(?:to|via) (?:your )?(?:phone|mobile|number|\+?\d)|text message|\bsms\b|authenticator app|two-factor|2-step verification|two-step verification|\bmfa\b|security key|enter the \d-digit code from your (?:phone|device)/i],
   ['a payment page', /card number|credit card|debit card|add (?:a )?payment method|payment (?:method|details|information)|billing (?:details|information|address)|enter your card|\bcvv\b|\bcvc\b|expiry date/i],
   ['a review page', /(?:under|pending|awaiting) (?:manual )?review|being reviewed|submit for review|review (?:can|may|will) take|we(?:'| a)re reviewing|application (?:is )?(?:pending|under)|waitlist/i],
@@ -115,14 +116,21 @@ interface Replay { output: string; isError?: boolean; completed: boolean; blocke
 
 /** Replays a recipe through `run` (the existing steps runner, which calls `guard` after each step and stops
  * when it returns text). Stops at the first failure or at a blocker page and says what to do from there. */
-export async function replayRecipe(recipe: Recipe, run: (steps: RecipeStep[], guard: () => Promise<string | undefined>) => Promise<{ output: string; isError?: boolean }>, readPage: () => Promise<string>): Promise<Replay> {
+export async function replayRecipe(recipe: Recipe, run: (steps: RecipeStep[], guard: () => Promise<string | undefined>) => Promise<{ output: string; isError?: boolean }>, readPage: () => Promise<string>, pastCaptcha?: () => Promise<boolean>): Promise<Replay> {
   let blocker: string | undefined;
+  let answered = 0;
   const result = await run(recipe.steps.map(s => ({ ...s })), async () => {
     blocker = detectBlocker(await readPage().catch(() => ''));
+    // A captcha is answered on the spot (twice at most in one replay) and the replay carries on; only one that stays is a stop.
+    if (blocker === 'a captcha' && pastCaptcha && answered < 2) {
+      answered++;
+      // The solver's word that the check took the answer is what counts: a ticked box still says "I'm not a robot".
+      if (await pastCaptcha().catch(() => false)) blocker = undefined;
+    }
     return blocker;
   });
   const head = `Recipe for ${recipe.host} (${recipe.loginRoute})`;
-  if (blocker) return { output: `${head} stopped at ${blocker}. That step is for the person: not bypassed. Hand it over (handoff for a captcha or code, ask_user, or record it with queue), then carry on from the page below.\n\n${result.output}`, completed: false, blocker };
+  if (blocker) return { output: `${head} stopped at ${blocker}. That step is for the person: not bypassed. Hand it over (handoff, ask_user, or record it with queue), then carry on from the page below.\n\n${result.output}`, completed: false, blocker };
   if (result.isError) return { output: `${head} stopped at the first step that failed; the page below is where it is now, so take over from here. Save a corrected recipe when you finish.\n\n${result.output}`, isError: true, completed: false };
   if (/\d+ later steps? (?:was|were) not run/.test(result.output)) return { output: `${head} stopped early (a step is waiting on the page); take over from the page below.\n\n${result.output}`, completed: false };
   return { output: `${head} ran all ${recipe.steps.length} steps.${recipe.keyPage ? ` Key page: ${recipe.keyPage}.` : ''}${recipe.captureHint ? ` Capture: ${recipe.captureHint}` : ''}\n\n${result.output}`, completed: true };

@@ -111,7 +111,8 @@ export function classify(id: string, pages: RenderedPage[]): QualifyResult {
   const priced = loaded.find(p => p.role === 'pricing' && /[$€£]\s?\d/.test(p.text) && !/\bfree (?:plan|forever|tier)\b|\bforever free\b|use free plan|[$€£]\s?0\b/i.test(p.text));
   if (priced && evidence.some(e => e.kind === 'card')) add('paid-plan', 'a card is asked for, and the pricing page has prices and no free plan', priced.url);
   const kinds = [...new Set(evidence.map(e => e.kind))];
-  const lane: Lane = kinds.includes('dead-host') || kinds.includes('no-api') ? 'dead' : kinds.length ? 'human' : loaded.some(p => (p.role === 'signup' || p.role === 'home') && p.hasForm) ? 'auto' : 'research';
+  // A captcha is no wall: the runner answers it (human-check.ts). It stays in `kinds` as something seen.
+  const lane: Lane = kinds.includes('dead-host') || kinds.includes('no-api') ? 'dead' : kinds.some(k => k !== 'captcha') ? 'human' : loaded.some(p => (p.role === 'signup' || p.role === 'home') && p.hasForm) ? 'auto' : 'research';
   return { id, lane, kinds, evidence, ...(hints.length ? { hints: [...new Set(hints)] } : {}), pages: pages.map(p => ({ role: p.role, url: p.url, ok: !p.error && (p.status === undefined || p.status < 400) && p.text.trim().length > 0, ...(p.error ? { error: p.error.slice(0, 120) } : {}) })) };
 }
 
@@ -177,7 +178,7 @@ const QUALIFY_WALL: Partial<Record<QualifyKind, { wall: string; kind: 'captcha' 
   'dead-host': { wall: 'dead-host', kind: 'retire', say: 'the vendor\'s site does not load' },
 };
 export function humanStepForQualify(r: QualifyResult): { kind: 'captcha' | 'sms' | 'payment' | 'vendor-contact' | 'app-review' | 'decision' | 'retire'; url?: string; instructions: string; reasonCode: string } | undefined {
-  const order: QualifyKind[] = ['dead-host', 'no-api', 'captcha', 'sms', 'card', 'paid-plan', 'sales', 'enterprise', 'approval', 'work-email', 'free-mail'];
+  const order: QualifyKind[] = ['dead-host', 'no-api', 'sms', 'card', 'paid-plan', 'sales', 'enterprise', 'approval', 'work-email', 'free-mail'];
   const kind = order.find(k => r.kinds.includes(k));
   const w = kind ? QUALIFY_WALL[kind] : undefined;
   if (!kind || !w) return undefined;
