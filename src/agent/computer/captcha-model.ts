@@ -347,6 +347,50 @@ export async function askDrags(image: ImageInput, instruction: string, options: 
   return clients.length === 1 ? (answers[0] ?? []) : agreedDrags(answers);
 }
 
+/** Which of several numbered pictures answers an instruction (Arkose's "use the arrows to pick the image that..."):
+ * the ordering models each name one and the majority wins; a tie or no answer is undefined. Pictures are numbered
+ * from 1 in the order given. `modelClientsOf` is the test seam. Never throws. */
+export async function askPick(images: ImageInput[], instruction: string, options: { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; now?: () => number } = {}): Promise<number | undefined> {
+  const now = options.now ?? Date.now;
+  let clients: ModelClient[];
+  try {
+    if (options.modelClientsOf) clients = await options.modelClientsOf();
+    else {
+      if (!cachedOrderModels || now() - cachedOrderModels.at > VISION_TTL_MS) {
+        const { gatewayModels } = await import('../../gateway/models.js');
+        const vision = (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id);
+        const ids = ORDER_VOTERS.filter(name => vision.includes(name));
+        cachedOrderModels = { ids: ids.length ? ids : vision.slice(0, 1), at: now() };
+      }
+      clients = await Promise.all(cachedOrderModels.ids.map(id => gatewayModelClientOnce(id)));
+    }
+  } catch (error) {
+    quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+  const text = `These ${images.length} pictures are the options of one visual puzzle, numbered 1 to ${images.length} in the order given. The instruction is: "${instruction}". `
+    + 'Which one option is the correct answer? Answer with JSON only: {"pick": <number>}.';
+  const picks = (await Promise.all(clients.map(async client => {
+    try {
+      const result = await client.step({
+        system: 'You choose the option that answers a visual puzzle and reply with JSON only.',
+        items: [{ type: 'text', role: 'user', text, images }],
+        tools: [], toolChoice: 'none', maxOutputTokens: 800,
+        ...(options.signal ? { signal: options.signal } : {}),
+        onTextDelta: () => undefined,
+      });
+      const pick = Number(/"pick"\s*:\s*(\d+)/.exec(result.text)?.[1]);
+      return Number.isInteger(pick) && pick >= 1 && pick <= images.length ? pick : undefined;
+    } catch { return undefined; }
+  }))).filter((v): v is number => v !== undefined);
+  if (!picks.length) return undefined;
+  const counts = new Map<number, number>();
+  for (const pick of picks) counts.set(pick, (counts.get(pick) ?? 0) + 1);
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  if (ranked.length > 1 && ranked[0]![1] === ranked[1]![1]) return clients.length === 1 ? ranked[0]![0] : undefined;
+  return ranked[0]![0];
+}
+
 /** The client for the pointing model, cached like the list: the model that answers "where" and "what does it say". */
 async function pointClient(now: () => number, modelClientOf?: ModelClientOf): Promise<ModelClient | undefined> {
   if (modelClientOf) return modelClientOf();

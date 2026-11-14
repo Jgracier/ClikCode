@@ -186,3 +186,14 @@ describe('several pieces to drag', () => {
     expect(parseDrags('{"drags":[{"n":1,"from":{"x":2,"y":0},"to":{"x":0,"y":0}}]}')).toEqual([]);
   });
 });
+
+describe('picking one of several pictures', () => {
+  it('takes the majority pick and refuses a tie or an out-of-range answer', async () => {
+    const { askPick } = await import('./captcha-model.js');
+    const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);
+    const images = Array.from({ length: 5 }, () => ({ mimeType: 'image/jpeg', data: 'eA==' }));
+    expect(await askPick(images, 'pick the circle', { modelClientsOf: async () => [fake('{"pick": 3}'), fake('```json\n{"pick":3}\n```'), fake('{"pick": 1}')] })).toBe(3);
+    expect(await askPick(images, 'pick the circle', { modelClientsOf: async () => [fake('{"pick": 3}'), fake('{"pick": 1}')] })).toBeUndefined();
+    expect(await askPick(images, 'pick the circle', { modelClientsOf: async () => [fake('{"pick": 9}'), fake('no idea')] })).toBeUndefined();
+  });
+});
