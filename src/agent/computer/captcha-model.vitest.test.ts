@@ -160,3 +160,15 @@ describe('listening to an audio challenge', () => {
     expect(cleanTranscript(heard!)).toBe('their plan was simple');
   });
 });
+
+describe('ordered spots', () => {
+  it('takes, position by position, the point two voters agree on, and gives up when a position has none', async () => {
+    const { agreedInOrder } = await import('./captcha-model.js');
+    const a = [{ x: 0.3, y: 0.55 }, { x: 0.19, y: 0.34 }], b = [{ x: 0.31, y: 0.54 }, { x: 0.2, y: 0.33 }], stray = [{ x: 0.7, y: 0.2 }, { x: 0.36, y: 0.41 }];
+    const agreed = agreedInOrder([a, stray, b]);
+    expect(agreed).toHaveLength(2);
+    expect(agreed![0]!.x).toBeCloseTo(0.305);
+    expect(agreedInOrder([a, stray])).toBeUndefined();
+    expect(agreedInOrder([a, undefined])).toBeUndefined();
+  });
+});

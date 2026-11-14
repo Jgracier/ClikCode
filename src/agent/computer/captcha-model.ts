@@ -213,6 +213,70 @@ export async function askSameAsExample(example: ImageInput, tile: ImageInput, op
   return votes.length ? votes.filter(Boolean).length / votes.length : undefined;
 }
 
+/** Models that match small icons to rough drawings of them, in order (measured 2026-11-14 on GeeTest's "select
+ * in this order": each got all three right where four other models did not). */
+export const ORDER_VOTERS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'gemini-3-flash'];
+let cachedOrderModels: { ids: string[]; at: number } | undefined;
+
+/** Position by position, the point at least two voters agree on (within `radius`); undefined if any position
+ * has no agreement or the voters disagree on how many there are. */
+export function agreedInOrder(answers: Array<Array<{ x: number; y: number }> | undefined>, radius = 0.09): Array<{ x: number; y: number }> | undefined {
+  const given = answers.filter((a): a is Array<{ x: number; y: number }> => !!a && a.length > 0);
+  if (given.length < 2) return undefined;
+  const lengths = new Map<number, number>();
+  for (const a of given) lengths.set(a.length, (lengths.get(a.length) ?? 0) + 1);
+  const count = [...lengths.entries()].sort((x, y) => y[1] - x[1])[0]![0];
+  const same = given.filter(a => a.length === count);
+  if (same.length < 2) return undefined;
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < count; i++) {
+    const points = same.map(a => a[i]!);
+    const anchor = points.find(p => points.filter(q => Math.hypot(q.x - p.x, q.y - p.y) <= radius).length >= 2);
+    if (!anchor) return undefined;
+    const near = points.filter(q => Math.hypot(q.x - anchor.x, q.y - anchor.y) <= radius);
+    out.push({ x: near.reduce((t, q) => t + q.x, 0) / near.length, y: near.reduce((t, q) => t + q.y, 0) / near.length });
+  }
+  return out;
+}
+
+/** The spots to click, in order, on a "select in this order" challenge: small example icons and a picture holding
+ * a rough drawing of each. `modelClientsOf` is the test seam. Never throws; undefined is no agreed answer. */
+export async function askOrderedPoints(image: ImageInput, options: { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; now?: () => number } = {}): Promise<Array<{ x: number; y: number }> | undefined> {
+  const now = options.now ?? Date.now;
+  let clients: ModelClient[];
+  try {
+    if (options.modelClientsOf) clients = await options.modelClientsOf();
+    else {
+      if (!cachedOrderModels || now() - cachedOrderModels.at > VISION_TTL_MS) {
+        const { gatewayModels } = await import('../../gateway/models.js');
+        const vision = (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id);
+        const ids = ORDER_VOTERS.filter(name => vision.includes(name));
+        cachedOrderModels = { ids: ids.length ? ids : vision.slice(0, 1), at: now() };
+      }
+      clients = await Promise.all(cachedOrderModels.ids.map(id => gatewayModelClientOnce(id)));
+    }
+  } catch (error) {
+    quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+  const text = 'This is a "select in this order" puzzle. At the top right are small black icons, in order from left to right. The large picture below contains hand-drawn coloured outline drawings; '
+    + 'each small icon matches exactly one drawing (the same object, drawn as a rough outline). For each small icon, in order, give the centre of its matching drawing as fractions of the whole image width and height. '
+    + 'Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}, one point per icon.';
+  const answers = await Promise.all(clients.map(async client => {
+    try {
+      const result = await client.step({
+        system: 'You match icons to drawings and reply with JSON only.',
+        items: [{ type: 'text', role: 'user', text, images: [image] }],
+        tools: [], toolChoice: 'none', maxOutputTokens: 1500,
+        ...(options.signal ? { signal: options.signal } : {}),
+        onTextDelta: () => undefined,
+      });
+      return parsePoints(result.text);
+    } catch { return undefined; }
+  }));
+  return clients.length === 1 ? answers[0] : agreedInOrder(answers);
+}
+
 /** The client for the pointing model, cached like the list: the model that answers "where" and "what does it say". */
 async function pointClient(now: () => number, modelClientOf?: ModelClientOf): Promise<ModelClient | undefined> {
   if (modelClientOf) return modelClientOf();

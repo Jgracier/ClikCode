@@ -163,3 +163,23 @@ describe('the puzzle solver', () => {
     expect(trails[0]).not.toEqual(trails[1]);
   });
 });
+
+describe('GeeTest board games, worked out by rule', () => {
+  const board = (rows: string[]) => rows.flatMap((line, row) => [...line].map((ch, column) => ({ row, column, kind: ch === '.' ? null : ch })));
+
+  it('finds the piece and the empty cell that line up five', async () => {
+    const { lineUpMove } = await import('./human-check.js');
+    // Column 4 holds four whites with a hole in row 2; the stray white at row 3 column 2 fills it.
+    const move = lineUpMove(board(['...w.', '....y', '.w.w.', '...w.', '...w.']));
+    expect(move && [move.from.row, move.from.column, move.to.row, move.to.column]).toEqual([2, 1, 1, 3]);
+    expect(lineUpMove(board(['.....', '.....', '..w..', '.....', '.....']))).toBeUndefined();
+  });
+
+  it('finds the two neighbours to swap for three in a row', async () => {
+    const { swapMove } = await import('./human-check.js');
+    const move = swapMove(board(['aba', 'cbd', 'bac']));
+    // Swapping row 3's first two gives column 2 three b's.
+    expect(move && [move.from.row, move.from.column, move.to.row, move.to.column]).toEqual([2, 0, 2, 1]);
+    expect(swapMove(board(['abc', 'def', 'ghi']))).toBeUndefined();
+  });
+});
