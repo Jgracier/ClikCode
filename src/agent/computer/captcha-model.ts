@@ -10,7 +10,8 @@ export const CAPTCHA_MODEL_PROMPT = [
   'You are shown a screenshot of one web human-verification challenge (reCAPTCHA or hCaptcha image tiles).',
   'Answer with JSON only, no other text.',
   'For an image grid: {"tiles": [numbers]} where each number is a tile index counting from 0 in reading order (left to right, top to bottom) whose picture matches the challenge instruction written above the grid. An empty list means no tile matches.',
-  'If you cannot read the challenge at all: {"unreadable": true}.',
+  'The picture may be noisy or partially obscured on purpose: look past the noise and answer with the tiles that match.',
+  'If the picture is truly unreadable: {"unreadable": true}.',
 ].join(' ');
 
 export type CaptchaAnswer = { tiles: number[] } | { unreadable: true };
@@ -26,12 +27,13 @@ const VISION_TTL_MS = 60_000;
 /** A client factory seam so tests can supply a fake step(). */
 export type ModelClientOf = () => Promise<ModelClient>;
 
-async function gatewayModelClientOnce(): Promise<ModelClient> {
+async function gatewayModelClientOnce(model?: string): Promise<ModelClient> {
   const { gatewayConnection, gatewayModelClient } = await import('../models/for-session.js');
   const Conf = (await import('conf')).default;
   const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
   const { baseUrl, apiKey } = gatewayConnection(config);
-  return gatewayModelClient({ baseUrl, apiKey, vision: true });
+  // The picked vision model is named explicitly: `auto` can land on a text-only provider that refuses the picture.
+  return gatewayModelClient({ baseUrl, apiKey, vision: true, ...(model ? { model } : {}) });
 }
 
 function parseAnswer(text: string): CaptchaAsk {
@@ -63,7 +65,7 @@ export async function askCaptchaModel(image: ImageInput, options: { signal?: Abo
         cachedVision = { ...(seen ? { id: seen } : {}), at: now() };
       }
       if (!cachedVision.id) return { ok: false, error: 'no-vision-model' };
-      client = await gatewayModelClientOnce();
+      client = await gatewayModelClientOnce(cachedVision.id);
     }
   } catch (error) {
     quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
