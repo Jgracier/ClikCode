@@ -130,7 +130,8 @@ export async function openWindow(config: Conf, startId: string): Promise<ChatWin
   if (!opened) return undefined;
   session = opened;
   const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
-  const warmCatalogFor = createCatalogWarmer();
+  // The harness's own commands, learnt while the prompt is open, reach that prompt's menu.
+  const warmCatalogFor = createCatalogWarmer((target) => terminal?.refreshPaletteCommands(slashCommandsFor(target)));
   warmCatalogFor(session, state);
   if (terminal) { terminal.render(session, initialAccount); if (selectionNotice) terminal.activity(selectionNotice); }
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
@@ -147,7 +148,7 @@ export async function openWindow(config: Conf, startId: string): Promise<ChatWin
 
 /** Warm `/model` while the composer is up, so the first open is not a wait.
  * Re-warmed when the chat's provider or account changes (see the loop). */
-function createCatalogWarmer(): ChatWindow['warmCatalogFor'] {
+function createCatalogWarmer(onCommands?: (target: HarnessSession) => void): ChatWindow['warmCatalogFor'] {
   let warmedCatalogKey = '';
   return (target: HarnessSession, targetState: HarnessState): void => {
     const key = `${target.nativeHarness ?? ''}\0${target.provider ?? ''}\0${target.accountId ?? ''}`;
@@ -157,7 +158,7 @@ function createCatalogWarmer(): ChatWindow['warmCatalogFor'] {
     const account = target.accountId ? targetState.accounts.find((item) => item.id === target.accountId) : undefined;
     warmNativeModelCatalog(harness, account);
     // The harness's own commands for the / menu, before this chat's first turn.
-    void probeVendorCommands(harness, account);
+    void probeVendorCommands(harness, account).then((learnt) => { if (learnt) onCommands?.(target); });
   };
 }
 

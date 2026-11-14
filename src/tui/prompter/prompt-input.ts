@@ -68,16 +68,16 @@ class PromptSession {
 
   // Every match, not the first eight: paint() windows a longer list, so
   // the selection can reach all of them.
-  private matches() { return commandPaletteMatches(this.composer.text, this.commands); }
+  private matches() { return commandPaletteMatches(this.composer.text, this.p.paletteCommands); }
 
   // The row that runs is the row that is highlighted. When what was typed
   // names a command outright (`/new`), that command's row starts
   // highlighted, wherever its group ranks it -- so Enter and Right Arrow,
   // which both run the highlighted row, run what was typed.
   private highlightFor(text: string): number {
-    const typed = exactPaletteCommand(text, this.commands)?.toLowerCase();
+    const typed = exactPaletteCommand(text, this.p.paletteCommands)?.toLowerCase();
     if (!typed) return 0;
-    const rows = commandPaletteMatches(text, this.commands);
+    const rows = commandPaletteMatches(text, this.p.paletteCommands);
     const at = rows.findIndex((row) => row.value.toLowerCase() === typed || row.aliases?.some((alias) => alias.toLowerCase() === typed));
     return Math.max(0, at);
   }
@@ -97,7 +97,7 @@ class PromptSession {
   draw(): void {
     const { p, prompt, settings } = this;
     const { text: value, cursor } = this.composer;
-    const options = commandPaletteMatches(value, this.commands);
+    const options = commandPaletteMatches(value, this.p.paletteCommands);
     if (this.selected >= options.length) this.selected = 0;
     if (options.length) {
       // After a space the palette is that command's own values to choose
