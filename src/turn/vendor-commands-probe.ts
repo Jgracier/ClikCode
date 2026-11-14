@@ -18,12 +18,13 @@ const ANNOUNCE_WAIT_MS = 3_000;
 
 const asking = new Set<string>();
 
+/** True when it learnt commands the menu did not have. */
 export async function probeVendorCommands(
   harness: AiLocalHarnessDefinition | undefined, account: AiHarnessAccount | undefined, now = Date.now(),
-): Promise<void> {
-  if (!harness?.acp || asking.has(harness.command)) return;
+): Promise<boolean> {
+  if (!harness?.acp || asking.has(harness.command)) return false;
   const checked = vendorCommandsCheckedAt(harness.command);
-  if (checked !== undefined && (knownVendorCommands(harness.command).length || now - checked < ASK_AGAIN_MS)) return;
+  if (checked !== undefined && (knownVendorCommands(harness.command).length || now - checked < ASK_AGAIN_MS)) return false;
   asking.add(harness.command);
   try {
     let heard: HarnessAvailableCommand[] | undefined;
@@ -43,5 +44,6 @@ export async function probeVendorCommands(
       });
     // An agent that could not be asked (signed out, not installed) is asked another time.
     if (answered) await rememberVendorCommands(harness.command, heard ?? [], { probed: true });
-  } catch (error) { quiet('turn/vendor-commands-probe')(error); } finally { asking.delete(harness.command); }
+    return Boolean(heard?.length);
+  } catch (error) { quiet('turn/vendor-commands-probe')(error); return false; } finally { asking.delete(harness.command); }
 }

@@ -224,6 +224,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * question() so a turn in flight can offer the same commands. A turn does
    * not change which commands exist; each is re-checked when it runs. */
   paletteCommands: readonly PaletteEntry[] = [];
+  /** A newer list for the conversation's open prompt: the harness's own
+   * commands, learnt after the prompt opened (vendor-commands-probe.ts). A
+   * prompt with no palette (a name, a key) is left alone. */
+  refreshPaletteCommands(commands: readonly PaletteEntry[]): void {
+    if (this.paletteCommands.length) this.paletteCommands = commands;
+  }
   /** The prompt this client submitted, held from Enter until the turn ends.
    * See render/pending-prompt.ts: the snapshot alone cannot draw it for the
    * whole turn, so the client keeps its own copy of what it sent. */
