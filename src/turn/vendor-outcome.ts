@@ -4,6 +4,7 @@ import { diagnostic } from '../runtime/lifecycle-log.js';
 import { harnessReplyError } from '../runtime/lazy-bridge.js';
 import { adoptListedNativeId } from '../session/discovery/cli-listing.js';
 import { keepsNoHistory, rememberStatelessRoute } from './thread-start.js';
+import { withoutReplyNotice } from './reply-notice.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import { emitHarnessOutput } from '../harness/output.js';
@@ -26,6 +27,14 @@ export async function settleAttempt(ctx: VendorTurnContext, observer: VendorObse
   let result = record.result;
   // A harness that reports a failed call as its reply (Hermes, over ACP
   // and the CLI alike) declares what those replies look like.
+  // A vendor notice at the start of the answer is not part of it.
+  const answered = !result.isError && result.text ? withoutReplyNotice(harness, result.text) : undefined;
+  if (answered !== undefined) {
+    const shown = withoutReplyNotice(harness, session.pendingTurn?.response ?? '');
+    if (shown !== undefined) { checkpoint.response(shown, 'replace'); prompter?.response(shown, 'replace'); }
+    result = { ...result, text: answered };
+    record.result = result;
+  }
   const replyError = !result.isError ? harnessReplyError(harness, result.text ?? '') : undefined;
   if (replyError) {
     // The notice is not the answer: take it off what is shown and saved, so
