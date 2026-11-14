@@ -241,6 +241,12 @@ export interface AiHarnessTurnDefinition {
    * instead. OpenClaw's CLI back ends (`claude-cli`) refuse to reseed history
    * in `agent --local`. */
   statelessRoute?: { path: readonly string[]; values: readonly string[] };
+  /** The agent works in a folder of its own whatever directory it is started
+   * in, and its CLI takes none (OpenClaw: `agents.defaults.workspace`,
+   * ~/.openclaw/workspace). Asked to create a file, it created it there and
+   * said DONE; the chat's folder stayed empty. Each turn then says where the
+   * chat's folder is. */
+  ownWorkspace?: true;
   /** Model providers (the provider half of a model id) whose route keeps no
    * history between turns, known from the id before the turn runs. Goose's
    * `claude-code` provider runs Claude Code fresh each turn: Goose stores
@@ -1089,7 +1095,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
       cerebras: ['More…', 'Cerebras'], deepseek: ['More…', 'DeepSeek'], fireworks: ['More…', 'Fireworks'], groq: ['More…', 'Groq'], huggingface: ['More…', 'Hugging Face'],
       minimax: ['More…', 'MiniMax', 'MiniMax API key (Global)'], mistral: ['More…', 'Mistral AI'], moonshot: ['More…', 'Moonshot AI', 'Moonshot API key (.ai)'],
       'moonshot-cn': ['More…', 'Moonshot AI', 'Moonshot API key (.cn)'], together: ['More…', 'Together AI'], zai: ['More…', 'Z.AI', 'Global'],
-    }).map((route) => ({ ...route, choose: [...route.choose, '?Download from npm', 'Skip for now'] })), providerLoginArgv: ['models', 'auth', 'login', '--provider', '{provider}'], modelProviderSeparator: '/', authFiles: [{ path: '${OPENCLAW_STATE_DIR:-~/.openclaw}/openclaw.json' }], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'adaptive', 'max', 'ultra'], profileEnv: 'OPENCLAW_STATE_DIR', turn: { startArgv: ['agent', '--local', '--json', '--agent', 'main'], resumeArgv: ['agent', '--local', '--json', '--agent', 'main'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], promptArgvPrefix: ['--message'], output: 'json', responseFields: ['finalAssistantVisibleText'], statelessRoute: { path: ['meta', 'systemPromptReport', 'provider'], values: ['claude-cli', 'google-gemini-cli'] } }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], discoverArgv: ['sessions', '--json', '--limit', '50'], discoverFormat: 'json', discoverAllFolders: true } },
+    }).map((route) => ({ ...route, choose: [...route.choose, '?Download from npm', 'Skip for now'] })), providerLoginArgv: ['models', 'auth', 'login', '--provider', '{provider}'], modelProviderSeparator: '/', authFiles: [{ path: '${OPENCLAW_STATE_DIR:-~/.openclaw}/openclaw.json' }], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'adaptive', 'max', 'ultra'], profileEnv: 'OPENCLAW_STATE_DIR', turn: { startArgv: ['agent', '--local', '--json', '--agent', 'main'], resumeArgv: ['agent', '--local', '--json', '--agent', 'main'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], promptArgvPrefix: ['--message'], output: 'json', responseFields: ['finalAssistantVisibleText'], statelessRoute: { path: ['meta', 'systemPromptReport', 'provider'], values: ['claude-cli', 'google-gemini-cli'] }, ownWorkspace: true }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], discoverArgv: ['sessions', '--json', '--limit', '50'], discoverFormat: 'json', discoverAllFolders: true } },
   // Stays on its one-shot CLI, not `cmdc acp` (checked on 1.74.1, sandbox):
   // the ACP agent initializes, opens, loads (a written thread replays) and
   // shares the CLI's session files, but offers and accepts only Command
