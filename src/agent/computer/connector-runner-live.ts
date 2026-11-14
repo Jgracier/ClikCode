@@ -148,6 +148,9 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
     async qualify(id: string) {
       const [{ qualifyVendor, humanStepForQualify }, { qualifyPorts }] = await Promise.all([import('./connector-qualify.js'), import('./connector-qualify-live.js')]);
       const result = await qualifyVendor(id, qualifyPorts(options.stateDir, liveClient(options.signal)));
+      // A captcha is not a wall here: key capture presses the human-check box and has the vision model solve a puzzle
+      // (keygrab.ts pastCaptcha), and parks only if that fails. Only the other walls stop before it runs.
+      if (result.lane === 'human' && result.kinds.length > 0 && result.kinds.every((kind) => kind === 'captcha')) result.lane = 'auto';
       const human = result.lane === 'auto' ? undefined : humanStepForQualify(result);
       return { lane: result.lane, summary: `${result.kinds.join(', ') || (result.lane === 'research' ? result.hints?.join('; ') || 'no usable signup form was observed' : 'no wall observed on signup')}${result.evidence[0] ? ` (${result.evidence[0].phrase.slice(0, 80)})` : ''}`, ...(human ? { human } : {}) };
     },
