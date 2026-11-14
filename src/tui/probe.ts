@@ -40,6 +40,16 @@ const COVERED_TOP_REPLY = /^\u001b\]7701;(\d{1,3})(?:\u0007|\u001b\\)$/;
 export const uncoveredRows = (rows: number): number => Math.max(5, rows - terminalFacts.coveredTopRows);
 
 export const asksCoveredTop = (env: NodeJS.ProcessEnv = process.env): boolean => env.CLIKDEPLOY_CLIENT === 'mobile';
+/** Resolves when the terminal has said how many rows it covers, or after `ms`, whichever is first. */
+export function coveredTopKnown(ms = 250): Promise<void> {
+  if (!asksCoveredTop()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const off = onCoveredTopChange(() => { clearTimeout(timer); off(); resolve(); });
+    const timer = setTimeout(() => { off(); resolve(); }, ms);
+    timer.unref?.();
+  });
+}
+
 export function askCoveredTop(): void {
   if (!output.isTTY || !terminalModes.rawMode || !asksCoveredTop()) return;
   output.write(COVERED_TOP_QUERY);
@@ -49,6 +59,7 @@ const MODE_REPORT = /^\u001b\[\?(\d+);(\d)\$y$/;
 const PRIMARY_DA = /^\u001b\[\?[0-9;]*c$/;
 const waiting = new Set<() => void>();
 const coveredTopListeners = new Set<() => void>();
+let coveredTopHeard = false;
 /** Called when the terminal says it covers a different number of rows: the view is drawn again for it. */
 export function onCoveredTopChange(listener: () => void): () => void {
   coveredTopListeners.add(listener);
@@ -65,7 +76,8 @@ export function noteProbeReply(key: string): boolean {
   const covered = COVERED_TOP_REPLY.exec(key);
   if (covered) {
     const rows = Number(covered[1]);
-    if (rows !== terminalFacts.coveredTopRows) {
+    if (rows !== terminalFacts.coveredTopRows || !coveredTopHeard) {
+      coveredTopHeard = true;
       terminalFacts.coveredTopRows = rows;
       logCursorEvent(`terminal covers the top ${rows} row(s)`);
       for (const changed of [...coveredTopListeners]) changed();

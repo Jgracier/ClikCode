@@ -4,7 +4,7 @@ import { stdin } from 'node:process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { boardCapacity } from './conversation-board.js';
 import { KEEP_STDIN_FLOWING, TerminalInputDecoder } from './input-decoder.js';
-import { asksCoveredTop, noteProbeReply, terminalFacts, uncoveredRows } from './probe.js';
+import { asksCoveredTop, coveredTopKnown, noteProbeReply, terminalFacts, uncoveredRows } from './probe.js';
 import { TerminalHarnessPrompter } from './prompter.js';
 
 const realTty = process.stdout.isTTY;
@@ -122,5 +122,24 @@ describe('a terminal that covers its top rows', () => {
       expect(rl.alternatePrevious.some((row) => /^row \d+/.test(row))).toBe(false);
       expect(rl.alternatePrevious.slice(0, 4).every((row) => row.trim() === '')).toBe(true);
     } finally { rl.close(); }
+  });
+
+  it('the first frame on the phone waits for its answer, briefly: never drawn twice, never held for long', async () => {
+    vi.useRealTimers();
+    const env = process.env.CLIKDEPLOY_CLIENT;
+    process.env.CLIKDEPLOY_CLIENT = 'mobile';
+    try {
+      const started = Date.now();
+      const waiting = coveredTopKnown(1000);
+      setTimeout(() => noteProbeReply('\u001b]7701;5\u001b\\'), 20);
+      await waiting;
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(terminalFacts.coveredTopRows).toBe(5);
+      const silent = Date.now();
+      await coveredTopKnown(60); // a terminal that never answers costs at most the bound
+      expect(Date.now() - silent).toBeLessThan(400);
+    } finally {
+      if (env === undefined) delete process.env.CLIKDEPLOY_CLIENT; else process.env.CLIKDEPLOY_CLIENT = env;
+    }
   });
 });
