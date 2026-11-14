@@ -6,6 +6,7 @@ import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { turnEnvironment } from './turn-environment.js';
+import { withWorkspaceNote } from './workspace-note.js';
 import { gooseDrivenEnvironment } from './goose-driven-account.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
@@ -73,7 +74,7 @@ export async function runAttempt(ctx: VendorTurnContext, observer: VendorObserve
       throw new Error(`Image attachments are not available for ${harness.displayName} over its CLI. Clear them with /attachments clear.`);
     }
     return runVendorCliAttempt({
-      harness, session, turnText: ctx.turnText, model: ctx.model, environment,
+      harness, session, turnText: withWorkspaceNote(harness, ctx.turnText, session.workspace), model: ctx.model, environment,
       images: ctx.images, signal: ctx.signal, run: ctx.run, checkpoint,
       effort: turnEffort(ctx), sharedObserver: observer.sharedObserver,
       onOutputStart: () => { cliOutputStarted = true; },
@@ -86,7 +87,7 @@ export async function runAttempt(ctx: VendorTurnContext, observer: VendorObserve
       result = await runStructuredCliTurn();
     } else {
       result = await runVendorSessionAttempt({
-        harness, account: ctx.account, session, transport, turnText: ctx.turnText, model: ctx.model, environment,
+        harness, account: ctx.account, session, transport, turnText: withWorkspaceNote(harness, ctx.turnText, session.workspace), model: ctx.model, environment,
         images: ctx.images, signal: ctx.signal, run: ctx.run, checkpoint,
         sharedObserver: observer.sharedObserver, effort: turnEffort(ctx), onSessionId: observer.onSessionId,
         runCli: runStructuredCliTurn,
