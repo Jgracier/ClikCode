@@ -77,7 +77,8 @@ interface RunnerOptions {
   published?: boolean;
   /** Most actions per vendor (default 12). */ maxSteps?: number;
   /** Most time per vendor in ms (default 300000). */ maxMs?: number;
-  /** Most tool calls the agent micro-task may make on one unknown screen (default 25). */ agentCalls?: number;
+  /** Most tool calls the agent may make on one hand-off (default 25). */ agentCalls?: number;
+  /** Time one agent hand-off may take, on top of maxMs: judgement work (a spec from docs, proof review) needs minutes, not the leftovers (default: what is left of maxMs). */ agentMs?: number;
   dryRun?: boolean;
   now?: () => number; sleep?: (ms: number) => Promise<void>;
   /** Where hand-off requests are written (default: a fresh temp directory). */ handoffDir?: () => Promise<string>;
@@ -210,7 +211,10 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? sleepFor;
   const maxSteps = options.maxSteps ?? 12, maxMs = options.maxMs ?? 300_000;
-  const began = now();
+  // Time spent in an agent hand-off is the agent's own budget, not the deterministic steps'.
+  let agentSpent = 0;
+  const startedAt = now();
+  const elapsed = (): number => now() - startedAt - agentSpent;
   const id = first.id;
   const actions: string[] = [];
   let result = fix(first), steps = 0, browserActions = 0, recipeSaved = false;
@@ -266,7 +270,9 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     if (agentTasksTried.has(taskKey) || !driver.agentTask || !wholeTask && (stop.human || humanStepFor(id, stop))) return undefined;
     agentTasksTried.add(taskKey);
     actions.push('an unrecognized screen: one bounded agent micro-task');
-    const done = await gate(() => driver.agentTask!(id, stop, { maxCalls: options.agentCalls ?? 25, maxMs: Math.max(30_000, maxMs - (now() - began)) }));
+    const agentBegan = now();
+    const done = await gate(() => driver.agentTask!(id, stop, { maxCalls: options.agentCalls ?? 25, maxMs: options.agentMs ?? Math.max(30_000, maxMs - elapsed()) }));
+    if (options.agentMs) agentSpent += now() - agentBegan;
     if (done.ok && done.recipe) recipeSaved = true;
     return done;
   };
@@ -287,7 +293,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   let reusedCredential = false;
   for (;;) {
     if (steps >= maxSteps) return out('budget', `step budget of ${maxSteps} used; ${result.stage} is where it stands`);
-    if (now() - began > maxMs) return out('budget', `time budget of ${Math.round(maxMs / 1000)}s used; ${result.stage} is where it stands`);
+    if (elapsed() > maxMs) return out('budget', `time budget of ${Math.round(maxMs / 1000)}s used; ${result.stage} is where it stands`);
     const key = `${result.stage}|${result.next.kind}|${result.next.task}`;
     const times = (seen.get(key) ?? 0) + 1;
     seen.set(key, times);
@@ -371,7 +377,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           if (wait) return out('waiting', `backed off after a captcha until ${wait.toISOString()}; not retried before then`, { backoffUntil: wait.toISOString() });
           const generic = async (url: string, alternates = plan.alternates): Promise<DriveOutcome> => {
             actions.push('no saved recipe fits: keygrab signs in, finds the key page, creates and captures a key');
-            return gate(() => driver.keygrab(id, url, { maxMs: Math.max(30_000, maxMs - (now() - began)), ...(alternates?.length ? { alternates } : {}) }));
+            return gate(() => driver.keygrab(id, url, { maxMs: Math.max(30_000, maxMs - (elapsed())), ...(alternates?.length ? { alternates } : {}) }));
           };
           let done: DriveOutcome;
           if (plan.generic && plan.url) done = await generic(plan.url);
@@ -420,7 +426,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
             state = stateOf(reply);
             if (state !== 'running') break;
             await sleep(5_000);
-            if (now() - began > maxMs) break;
+            if (elapsed() > maxMs) break;
           }
           actions.push(`${plan.call.tool} answered ${state || 'with no state'}`);
           result = fix(await client.onboard(id));

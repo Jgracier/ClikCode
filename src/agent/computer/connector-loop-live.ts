@@ -70,20 +70,16 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       const counted = budgeted(ctx.signal && client.withSignal ? client.withSignal(ctx.signal) : client, ctx.budget);
       const driver = liveDriver({ stateDir, tab: ctx.tab, keepBrowser: true, signal: ctx.signal });
       const micro = driver.agentTask;
-      if (micro) driver.agentTask = async (id, stop, budget) => {
-        const remaining = Math.max(0, ctx.budget.max - ctx.budget.used);
-        if (!remaining) throw new Error('The vendor call budget is exhausted.');
-        const result = await micro(id, stop, { ...budget, maxCalls: Math.min(budget.maxCalls, remaining) });
-        for (let n = 0; n < (result.agentCalls ?? 0); n++) ctx.budget.spend();
-        return result;
-      };
+      // An agent hand-off has its own call and time budget (limits.agentCalls, limits.agentMs): the vendor's call budget guards
+      // the deterministic steps, and spending it on the agent left judgement work a few calls and the last seconds of the vendor.
+      if (micro) driver.agentTask = (id, stop, budget) => micro(id, stop, budget);
       const first = tasks.get(id) ?? await counted.onboard(id);
       tasks.delete(id);
       const saved = notes.get(id);
       notes.delete(id);
       if (saved && first.next.kind === 'agent') first.next.task += `\nSaved progress from the previous worker (verify before continuing):\n${saved}`;
       const { limits } = ctx;
-      return runVendor(first, counted, driver, { maxSteps: limits.maxSteps, maxMs: Math.max(30_000, ctx.deadline - Date.now()), agentCalls: 25, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
+      return runVendor(first, counted, driver, { maxSteps: limits.maxSteps, maxMs: limits.maxMs, agentMs: limits.agentMs, agentCalls: limits.agentCalls, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
     },
     async report(id, report) {
       await client.report({ id, outcome: report.outcome, reason: report.reason, ...(report.retryAfterMs ? { retryAfterMs: report.retryAfterMs } : {}), ...(report.humanStep ? { humanStep: report.humanStep as HumanStep } : {}) });

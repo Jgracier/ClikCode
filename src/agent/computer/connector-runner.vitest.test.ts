@@ -50,6 +50,18 @@ describe('connectors run', () => {
     expect((await runConnectors(c.client, d.driver, quick)).outcomes[0]?.status).toBe('published');
   });
 
+  it('gives an agent hand-off its own time: the agent gets agentMs, and its minutes do not end the vendor', async () => {
+    const docs: OnboardResult = { id: 'docs', state: 'needs-agent', stage: 'spec', reason: 'reference needed', next: { kind: 'agent', task: 'docs-to-spec: read the vendor documentation' } };
+    const c = fakeClient([docs], { docs: [published('docs')] });
+    const d = fakeDriver([]);
+    let clock = 0;
+    const given: number[] = [];
+    d.driver.agentTask = async (_id, _stop, budget) => { given.push(budget.maxMs); clock += 15 * 60_000; return { ok: true }; };
+    const { outcomes } = await runConnectors(c.client, d.driver, { ...quick, maxMs: 60_000, agentMs: 20 * 60_000, now: () => clock });
+    expect(given).toEqual([20 * 60_000]);
+    expect(outcomes[0]?.status).toBe('published');
+  });
+
   it('uses an existing credential before signup qualification', async () => {
     const c = fakeClient([oauthTask('saved')], { saved: [published('saved')] });
     const d = fakeDriver([]);

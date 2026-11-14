@@ -98,7 +98,7 @@ async function reportQualify(client: import('../agent/computer/connector-runner.
   await client.note(r.id, `clikcode connectors qualify: lane ${r.lane}${r.kinds.length ? `, ${r.kinds.join('/')}` : ''}. ${why}`.slice(0, 3900));
 }
 
-export interface ConnectorsLoopFlags { parallel?: string; maxSteps?: string; maxMinutes?: string; maxCalls?: string; maxHours?: string; cooldownHours?: string }
+export interface ConnectorsLoopFlags { parallel?: string; maxSteps?: string; maxMinutes?: string; maxCalls?: string; maxHours?: string; cooldownHours?: string; agentMinutes?: string; agentCalls?: string }
 
 /** `clikcode connectors run --loop`: the daemon. Takes due vendors from the queue until --max-hours, never needing a person. */
 export async function connectorsLoop(flags: ConnectorsLoopFlags): Promise<void> {
@@ -112,6 +112,8 @@ export async function connectorsLoop(flags: ConnectorsLoopFlags): Promise<void> 
     maxSteps: number(flags.maxSteps, 'max-steps', 1, 50) ?? d.maxSteps,
     maxMs: (number(flags.maxMinutes, 'max-minutes', 1, 60) ?? d.maxMs / 60_000) * 60_000,
     maxCalls: number(flags.maxCalls, 'max-calls', 5, 500) ?? d.maxCalls,
+    agentMs: (number(flags.agentMinutes, 'agent-minutes', 1, 60) ?? d.agentMs / 60_000) * 60_000,
+    agentCalls: number(flags.agentCalls, 'agent-calls', 5, 400) ?? d.agentCalls,
     maxHoursMs: (number(flags.maxHours, 'max-hours', 1, 168) ?? d.maxHoursMs / 3_600_000) * 3_600_000,
     cooldownMs: (number(flags.cooldownHours, 'cooldown-hours', 1, 168) ?? d.cooldownMs / 3_600_000) * 3_600_000,
   };

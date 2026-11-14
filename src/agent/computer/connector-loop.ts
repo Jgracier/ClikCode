@@ -74,6 +74,7 @@ export class Cooldown {
 export interface LoopLimits {
   parallel: number;
   /** Hard budget per vendor. */ maxSteps: number; maxMs: number; maxCalls: number;
+  /** One agent hand-off's own budget, on top of the vendor's: minutes and tool calls for judgement work. */ agentMs: number; agentCalls: number;
   /** No second try of one vendor before this. */ cooldownMs: number;
   /** A wall holds longer than a budget stop. */ wallCooldownMs: number;
   /** Stop starting vendors after this long, finish those running. */ maxHoursMs: number;
@@ -82,7 +83,7 @@ export interface LoopLimits {
   /** Extra time past maxMs before a hung vendor is cut off. */ graceMs: number;
 }
 export const DEFAULT_LIMITS: LoopLimits = {
-  parallel: 2, maxSteps: 12, maxMs: 5 * 60_000, maxCalls: 60, cooldownMs: 6 * 3_600_000, wallCooldownMs: 24 * 3_600_000, maxHoursMs: 8 * 3_600_000,
+  parallel: 2, maxSteps: 12, maxMs: 5 * 60_000, maxCalls: 60, agentMs: 20 * 60_000, agentCalls: 120, cooldownMs: 6 * 3_600_000, wallCooldownMs: 24 * 3_600_000, maxHoursMs: 8 * 3_600_000,
   renewMs: 10 * 60_000, tickMs: 15_000, idleMs: 60_000, pauseBaseMs: 30_000, pauseMaxMs: 5 * 60_000, pressureLimit: 10, graceMs: 90_000,
 };
 
@@ -171,7 +172,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     const tab = tabName(id);
     const job = (async (): Promise<void> => {
       const abort = new AbortController();
-      const ctx: WorkContext = { signal: abort.signal, tab, budget, limits, deadline: began + limits.maxMs };
+      const ctx: WorkContext = { signal: abort.signal, tab, budget, limits, deadline: began + limits.maxMs + limits.agentMs };
       const hard = new Promise<'timeout'>(resolve => { void sleep(limits.maxMs + limits.graceMs).then(() => resolve('timeout')); });
       const run = async (): Promise<VendorOutcome> => {
         try { return await ports.work(id, ctx); } catch (error) {
