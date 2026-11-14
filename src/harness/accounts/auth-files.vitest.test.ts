@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { adoptAuthFiles, authEvidencePresent, authFilesStamp, expandAuthPath, prepareAuthFilesForLogin, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files.js';
+import { adoptAuthFiles, authEvidencePresent, authFilePresent, authFilesStamp, expandAuthPath, prepareAuthFilesForLogin, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 
@@ -14,6 +14,22 @@ describe('vendor credential files', () => {
   let root: string;
   beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'auth-files-')); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+  it('is signed in only once a file the vendor cannot do without is there too', async () => {
+    // OpenHands: the cloud key is written first, the agent settings it needs a moment later.
+    const openhands = AI_LOCAL_HARNESSES.find((item) => item.command === 'openhands')!;
+    const environment = { HOME: root, OPENHANDS_PERSISTENCE_DIR: join(root, '.openhands') };
+    await mkdir(join(root, '.openhands', 'cloud'), { recursive: true });
+    await writeFile(join(root, '.openhands', 'cloud', 'api_key.txt'), 'sk-oh-1');
+    expect(await authFilePresent(openhands, environment, {})).toBe(false);
+    expect(await authEvidencePresent(openhands, environment, {})).toBe(false);
+    await writeFile(join(root, '.openhands', 'agent_settings.json'), '{"llm":{"api_key":"k"}}');
+    expect(await authFilePresent(openhands, environment, {})).toBe(true);
+    // Without a required file, any one is still enough (Droid's alternatives).
+    const either = harness({ authFiles: [{ path: '~/a' }, { path: '~/b' }] });
+    await writeFile(join(root, 'b'), 'x');
+    expect(await authFilePresent(either, { HOME: root }, {})).toBe(true);
+  });
 
   it('carries a fresh sign-in into the account\'s own profile, credential only', async () => {
     const fresh = join(root, 'fresh');

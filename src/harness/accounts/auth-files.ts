@@ -134,15 +134,27 @@ export async function authFilesStamp(
   return parts.join('|');
 }
 
+/** The files say signed in: one of them is there, and so is every one the
+ * vendor itself cannot do without (`required`). OpenHands' local agent counts
+ * as signed in only once its agent settings exist; its cloud key alone read
+ * as ready here while every session it was asked for was refused. */
+async function filesSignIn(entries: readonly AuthFile[], environment: Environment): Promise<boolean> {
+  let any = false;
+  for (const entry of entries) {
+    const there = await present(entry, environment);
+    if (entry.required && !there) return false;
+    any ||= there;
+  }
+  return any;
+}
+
 /** Signed in by a credential on disk (not an API-key variable). */
 export async function authFilePresent(
   harness: Pick<AiLocalHarnessDefinition, 'authFiles'>,
   profileEnvironment: Readonly<Record<string, string>>,
   processEnvironment: Environment = process.env,
 ): Promise<boolean> {
-  const environment = { ...processEnvironment, ...profileEnvironment };
-  for (const entry of harness.authFiles ?? []) if (await present(entry, environment)) return true;
-  return false;
+  return filesSignIn(harness.authFiles ?? [], { ...processEnvironment, ...profileEnvironment });
 }
 
 /** A profile of one harness: its directory and the environment the vendor
@@ -214,10 +226,7 @@ export async function authEvidencePresent(
 ): Promise<boolean> {
   const environment = { ...processEnvironment, ...profileEnvironment };
   if (harness.authEnv?.some((name) => environment[name]?.trim())) return true;
-  for (const entry of harness.authFiles ?? []) {
-    if (await present(entry, environment)) return true;
-  }
-  return false;
+  return filesSignIn(harness.authFiles ?? [], environment);
 }
 
 /** What logout may remove: whole files holding nothing but the credential,
