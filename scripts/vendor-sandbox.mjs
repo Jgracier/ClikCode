@@ -65,6 +65,9 @@ const env = {
   GEMINI_FORCE_FILE_STORAGE: 'true',
   GOOSE_DISABLE_KEYRING: '1',
   VIBE_TEST_DISABLE_KEYRING: '1',
+  // A Java vendor takes its home from the system account, not $HOME: Junie
+  // wrote its sessions and logs into the user's own ~/.junie from here.
+  JAVA_TOOL_OPTIONS: [process.env.JAVA_TOOL_OPTIONS, `-Duser.home=${home}`].filter(Boolean).join(' '),
 };
 for (const [name, fallback] of Object.entries(HOME_REDIRECT_ENV_DEFAULTS)) {
   if (fallback && env[name] === undefined) env[name] = fallback.replace(/^~/, realHome);
