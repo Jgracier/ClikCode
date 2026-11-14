@@ -10,4 +10,5 @@ export { IDE_PROTOCOL } from '../../src/ide/protocol-version.js';
 export type {
   IdeAccount, IdeChoice, IdeConversation, IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeModelLabel, IdeModels, IdePickItem, IdeProvider,
   IdeQueryName, IdeRequest, IdeSlashCommand, IdeUiRequest, IdeUiResult, WorkerEvent, HarnessSession, FileDiff, HarnessQuestion, HarnessQuestionRequest, HarnessQuestionResult,
+  HostedPlan, HostedRow, HostedTarget,
 } from '../vscode/src/protocol.js';
