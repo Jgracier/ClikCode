@@ -30,8 +30,22 @@ const VISION_TTL_MS = 60_000;
 /** The account's vision models, cached for a minute (the Gateway list itself is cached about as long). */
 let cachedVision: { ids: string[]; at: number } | undefined;
 
-/** Seams for tests: fake voters, a fixed clock, a signal. */
-export interface AskOptions { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; now?: () => number }
+/** What one solver run asked of the models: how many asks went to which model, how each voter sided with the
+ * answer that was given, and the hard questions themselves (for the tally and the stored answer set). */
+export interface AskMeter {
+  asks: number;
+  models: Record<string, number>;
+  votes: Array<{ roster: Roster; model: string; withWinner: boolean }>;
+  samples: Array<{ roster: Roster; text: string; images: ImageInput[]; answers: Record<string, string> }>;
+}
+export const newMeter = (): AskMeter => ({ asks: 0, models: {}, votes: [], samples: [] });
+
+/** `order`: the roster's models in the order measured on this machine (captcha-log.ts voterOrder), when known.
+ * `meter`: where to count the asks. The rest are seams for tests: fake voters, a fixed clock, a signal. */
+export interface AskOptions { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; now?: () => number; meter?: AskMeter; order?: Partial<Record<Roster, readonly string[]>> }
+
+/** The questions worth a subscription voter: one or two pictures, an answer that takes thought. */
+const HARD: ReadonlySet<Roster> = new Set<Roster>(['click', 'order']);
 
 async function gatewayClient(model: string): Promise<ModelClient> {
   const { gatewayConnection, gatewayModelClient } = await import('../models/for-session.js');
@@ -58,10 +72,20 @@ async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> 
     cachedVision = { ids: (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id), at: now() };
   }
   const vision = cachedVision.ids;
-  const preferred = ROSTERS[roster].filter(name => vision.includes(name));
+  const measured = options.order?.[roster] ?? [];
+  const listed: readonly string[] = ROSTERS[roster];
+  // Models measured on this machine go first, in their measured order; the rest keep the roster's order.
+  const preferred = [...measured.filter(name => listed.includes(name)), ...listed.filter(name => !measured.includes(name))].filter(name => vision.includes(name));
   const fit = preferred.filter(name => (benched.get(name) ?? 0) <= now());
   const names = preferred.length ? [...fit, ...preferred.filter(name => !fit.includes(name))] : vision.slice(0, 1);
-  return Promise.all(names.map(async name => ({ name, client: await gatewayClient(name) })));
+  const gateway = await Promise.all(names.map(async name => ({ name, client: await gatewayClient(name) })));
+  // The user's own subscription votes third on a hard question (two Gateway voters agreeing still ends the vote
+  // before it is waited for) and stands in last on reading text; it never takes the many yes/no asks of a grid.
+  if (roster === 'tile') return gateway;
+  const { subscriptionVoter } = await import('./captcha-subscription.js');
+  const own = await subscriptionVoter(now).catch(() => undefined);
+  if (!own) return gateway;
+  return HARD.has(roster) ? [...gateway.slice(0, VOTERS - 1), own, ...gateway.slice(VOTERS - 1)] : [...gateway, own];
 }
 
 // ── asking and agreeing ─────────────────────────────────────────────────────────────────────────────────────────
@@ -85,41 +109,64 @@ export async function untilAgreed<T>(asks: Array<Promise<T | undefined>>, agreed
 
 interface Question<T> { roster: Roster; system: string; text: string; images: ImageInput[]; parse: (text: string) => T | undefined; maxOutputTokens?: number;
   /** Enough answers are in: stop waiting for the rest. */ enough?: (answers: Array<T | undefined>) => boolean }
+interface Polled<T> { answers: Array<T | undefined>; voters: number; /** Who gave each answer. */ names: string[]; roster: Roster }
 
 /** Put one question to the roster's voters. Returns each voter's parsed answer (undefined for one that failed or
  * said nothing usable) and how many voters there were; `undefined` when no voter could be reached. Never throws. */
-async function poll<T>(question: Question<T>, options: AskOptions): Promise<{ answers: Array<T | undefined>; voters: number } | undefined> {
+async function poll<T>(question: Question<T>, options: AskOptions): Promise<Polled<T> | undefined> {
   let all: Voter[];
   try { all = await votersFor(question.roster, options); }
   catch (error) { quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error)); return undefined; }
   if (!all.length) return undefined;
-  // Fakes handed in by a test all vote; the Gateway's are three voters and the rest spares.
+  // Fakes handed in by a test all vote; otherwise three vote and the rest are spares.
   const voting = options.modelClientsOf ? all : all.slice(0, VOTERS);
   const spares = options.modelClientsOf ? [] : all.slice(VOTERS);
-  const ask = async (voter: Voter): Promise<T | undefined> => {
+  const names = voting.map(voter => voter.name);
+  // Voters still thinking when the vote is settled are told to stop: nobody waits for them or pays for the rest.
+  const settled = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, settled.signal]) : settled.signal;
+  const meter = options.meter;
+  const sample = meter && question.roster !== 'tile' && meter.samples.length < 12 ? { roster: question.roster, text: question.text, images: question.images, answers: {} as Record<string, string> } : undefined;
+  if (sample) meter!.samples.push(sample);
+  const ask = async (voter: Voter, seat: number): Promise<T | undefined> => {
+    names[seat] = voter.name;
+    if (meter) { meter.asks++; meter.models[voter.name || 'test'] = (meter.models[voter.name || 'test'] ?? 0) + 1; }
     try {
       const result = await voter.client.step({
         system: question.system,
         items: [{ type: 'text', role: 'user', text: question.text, images: question.images }],
         tools: [], toolChoice: 'none', maxOutputTokens: question.maxOutputTokens ?? 800,
-        ...(options.signal ? { signal: options.signal } : {}),
+        signal,
         onTextDelta: () => undefined,
       });
       if (process.env.CLIKCODE_CAPTCHA_VOTES) console.error(`vote ${question.roster} ${voter.name}: ${JSON.stringify(result.text.slice(0, 160))}`);
+      if (sample) sample.answers[voter.name || `voter-${seat + 1}`] = result.text.slice(0, 600);
       return question.parse(result.text);
     } catch (error) {
+      if (signal.aborted) return undefined;
       const message = error instanceof Error ? error.message : String(error);
       if (process.env.CLIKCODE_CAPTCHA_VOTES) console.error(`vote ${question.roster} ${voter.name} failed: ${message.slice(0, 160)}`);
       quiet('agent/computer/captcha-model')(message);
-      if (options.signal?.aborted) return undefined;
       // A voter that cannot answer sits out for a while and the next model in the roster votes in its place.
       if (voter.name) benched.set(voter.name, (options.now ?? Date.now)() + BENCH_MS);
       const spare = spares.shift();
-      return spare ? ask(spare) : undefined;
+      return spare ? ask(spare, seat) : undefined;
     }
   };
   const enough = question.enough;
-  return { answers: await untilAgreed(voting.map(ask), got => voting.length > 1 && !!enough && enough(got)), voters: voting.length };
+  const answers = await untilAgreed(voting.map(ask), got => voting.length > 1 && !!enough && enough(got));
+  settled.abort();
+  return { answers, voters: voting.length, names: [...names], roster: question.roster };
+}
+
+/** Note, for the answer that was given, which voters sided with it (the measure a roster is later ordered by). */
+function credit<T>(polled: Polled<T>, options: AskOptions, sides: (answer: T) => boolean): void {
+  const meter = options.meter;
+  if (!meter) return;
+  polled.answers.forEach((answer, seat) => {
+    const model = polled.names[seat];
+    if (answer !== undefined && model && meter.votes.length < 600) meter.votes.push({ roster: polled.roster, model, withWinner: sides(answer) });
+  });
 }
 
 /** The value most voters gave, or undefined on a tie for first place (unless there was only one voter). */
@@ -208,7 +255,10 @@ export async function askTileMatch(question: TileQuestion, options: AskOptions =
   const polled = await poll({ roster: 'tile', system: 'You answer image-selection questions with one word: yes or no.', text: tileQuestionText(question), images: [question.image], parse: yesNo, maxOutputTokens: 300, enough: got => sharedBy(got, 2) }, options);
   if (!polled) return undefined;
   const votes = polled.answers.filter((v): v is boolean => v !== undefined);
-  return votes.length ? votes.filter(Boolean).length * 2 > votes.length : undefined;
+  if (!votes.length) return undefined;
+  const yes = votes.filter(Boolean).length * 2 > votes.length;
+  credit(polled, options, answer => answer === yes);
+  return yes;
 }
 
 /** Which squares of a grid show the same thing as an example picture (GeeTest's "select N images with" + a
@@ -229,7 +279,9 @@ export async function askSquaresLikeExample(example: ImageInput, grid: ImageInpu
   const votes = new Map<number, number>();
   for (const answer of polled.answers) for (const square of answer ?? []) votes.set(square, (votes.get(square) ?? 0) + 1);
   const need = polled.voters > 1 ? 2 : 1;
-  return [...votes].filter(([, count]) => count >= need).sort((a, b) => b[1] - a[1]).slice(0, want).map(([square]) => square);
+  const picked = [...votes].filter(([, count]) => count >= need).sort((a, b) => b[1] - a[1]).slice(0, want).map(([square]) => square);
+  if (picked.length) credit(polled, options, answer => picked.every(square => answer.includes(square)));
+  return picked;
 }
 
 /** Where to click on a free-form challenge ("click the icon that is different", "find all foods eaten hot"): the
@@ -246,7 +298,9 @@ export async function askClickPoints(images: ImageInput | ImageInput[], instruct
   const polled = await poll({ roster: 'click', system: 'You locate answers to visual puzzles and reply with JSON only.', text, images: frames, parse: parsePoints, maxOutputTokens: 1500, enough: got => sameAnswer(got).length > 0 }, options);
   if (!polled || polled.answers.every(a => a === undefined)) return undefined;
   // One voter (an account with a single vision model): its answer stands.
-  return polled.voters === 1 ? (polled.answers[0] ?? []) : sameAnswer(polled.answers);
+  const spots = polled.voters === 1 ? (polled.answers[0] ?? []) : sameAnswer(polled.answers);
+  if (spots.length) credit(polled, options, answer => sameAnswer([answer, spots]).length > 0);
+  return spots;
 }
 
 /** The spots to click, in order, on a "select in this order" challenge: small example icons and a picture holding
@@ -257,7 +311,9 @@ export async function askOrderedPoints(image: ImageInput, options: AskOptions = 
     + 'Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}, one point per icon.';
   const polled = await poll({ roster: 'order', system: 'You match icons to drawings and reply with JSON only.', text, images: [image], parse: parsePoints, maxOutputTokens: 1500, enough: got => !!agreedInOrder(got) }, options);
   if (!polled) return undefined;
-  return polled.voters === 1 ? polled.answers[0] : agreedInOrder(polled.answers);
+  const inOrder = polled.voters === 1 ? polled.answers[0] : agreedInOrder(polled.answers);
+  if (inOrder?.length) credit(polled, options, answer => !!agreedInOrder([answer, inOrder]));
+  return inOrder;
 }
 
 /** One piece to drag: its number, where to grab it and where to drop it (fractions of the picture). */
@@ -300,7 +356,9 @@ export async function askDrags(image: ImageInput, instruction: string, options: 
     + 'Answer with JSON only: {"drags": [{"n": 2, "from": {"x": 0.0, "y": 0.0}, "to": {"x": 0.0, "y": 0.0}}]}.';
   const polled = await poll({ roster: 'order', system: 'You solve drag puzzles and reply with JSON only.', text, images: [image], parse: parseDrags, maxOutputTokens: 1500, enough: got => agreedDrags(got).length > 0 && got.filter(Boolean).length >= 2 }, options);
   if (!polled || polled.answers.every(a => a === undefined)) return undefined;
-  return polled.voters === 1 ? (polled.answers[0] ?? []) : agreedDrags(polled.answers);
+  const drags = polled.voters === 1 ? (polled.answers[0] ?? []) : agreedDrags(polled.answers);
+  if (drags.length) credit(polled, options, answer => agreedDrags([answer, drags]).length === drags.length);
+  return drags;
 }
 
 /** Which of several numbered pictures answers an instruction (Arkose's "use the arrows to pick the image that..."):
@@ -310,7 +368,9 @@ export async function askPick(images: ImageInput[], instruction: string, options
     + 'Which one option is the correct answer? Answer with JSON only: {"pick": <number>}.';
   const parse = (answer: string): number | undefined => { const pick = Number(/"pick"\s*:\s*(\d+)/.exec(answer)?.[1]); return Number.isInteger(pick) && pick >= 1 && pick <= images.length ? pick : undefined; };
   const polled = await poll({ roster: 'order', system: 'You choose the option that answers a visual puzzle and reply with JSON only.', text, images, parse, enough: got => sharedBy(got, 2) }, options);
-  return polled ? majority(polled.answers, polled.voters) : undefined;
+  const pick = polled ? majority(polled.answers, polled.voters) : undefined;
+  if (polled && pick !== undefined) credit(polled, options, answer => answer === pick);
+  return pick;
 }
 
 export function parseCaptchaText(text: string): string | undefined {
@@ -344,7 +404,9 @@ export async function askCaptchaText(image: ImageInput, options: AskOptions = {}
     text: 'This picture is a text captcha: distorted letters and digits on a noisy background. Read the characters exactly as drawn, keeping upper and lower case, ignoring lines and noise. '
       + 'If it shows a simple sum (like 3 + 4), give the result instead. Answer with JSON only: {"text": "..."}.' }, options);
   if (!polled) return undefined;
-  return majority(polled.answers, polled.voters) ?? characterVote(polled.answers) ?? polled.answers.find(reading => reading !== undefined);
+  const reading = majority(polled.answers, polled.voters) ?? characterVote(polled.answers) ?? polled.answers.find(answer => answer !== undefined);
+  if (reading) credit(polled, options, answer => answer === reading);
+  return reading;
 }
 
 // ── listening ───────────────────────────────────────────────────────────────────────────────────────────────────

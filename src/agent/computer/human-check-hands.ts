@@ -2,7 +2,7 @@
  * person's, room for a challenge that hangs off a small window, and the questions put to the models. */
 import type { Frame, Page } from 'playwright-core';
 import type { ImageInput } from '../model-client.js';
-import type { NumberedDrag, TileQuestion } from './captcha-model.js';
+import type { AskOptions, NumberedDrag, TileQuestion } from './captcha-model.js';
 
 export type Box = { x: number; y: number; width: number; height: number };
 export type Point = { x: number; y: number };
@@ -20,8 +20,8 @@ export interface Asks {
   transcribe(audio: Buffer, mimeType: string): Promise<string | undefined>;
 }
 
-export function gatewayAsks(signal?: AbortSignal): Asks {
-  const options = signal ? { signal } : {};
+export function gatewayAsks(signal?: AbortSignal, more: Pick<AskOptions, 'meter' | 'order'> = {}): Asks {
+  const options: AskOptions = { ...more, ...(signal ? { signal } : {}) };
   const model = () => import('./captcha-model.js');
   return {
     tile: question => model().then(m => m.askTileMatch(question, options)),

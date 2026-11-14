@@ -10,6 +10,7 @@
  * family to its own solver (human-check-grid, -hcaptcha, -geetest, -arkose, -inpage). */
 import type { Frame, Page } from 'playwright-core';
 import { sleep as realSleep } from '../../runtime/sleep.js';
+import { newMeter, type AskOptions } from './captcha-model.js';
 import { arkoseAudio, playArkose } from './human-check-arkose.js';
 import { GEETEST_STATE, geetestStep } from './human-check-geetest.js';
 import { gridRound, readLayout, solveRecaptchaAudio } from './human-check-grid.js';
@@ -179,8 +180,14 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   }
   const steps: string[] = [];
   const memo: HcaptchaMemo = { refreshed: 0, kinds: [], avoid: await log.weakKinds(deps.stateDir) };
-  const result = await solveShownCheck(page, { ...deps, trace: line => { const step = log.stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } }, memo);
-  await log.recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family: log.familyOf(result.widget, steps), outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps, ...(memo.kinds.length ? { kinds: memo.kinds } : {}) });
+  const meter = newMeter();
+  const order = await log.voterOrder(deps.stateDir);
+  const result = await solveShownCheck(page, { ...deps, trace: line => { const step = log.stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } }, memo, { meter, order });
+  const family = log.familyOf(result.widget, steps);
+  await log.recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family, outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps, ...(memo.kinds.length ? { kinds: memo.kinds } : {}), ...(meter.asks ? { asks: meter.asks, models: meter.models } : {}) });
+  // What the site accepted is the nearest thing to a marked answer sheet: the voters are scored on it.
+  if (result.outcome === 'cleared') await log.recordVotes(deps.stateDir, meter.votes);
+  await log.saveSamples(deps.stateDir, result.outcome, family, meter.samples);
   return result;
 }
 
@@ -218,10 +225,10 @@ async function inPageStep(hands: Hands, memo: { tries: number; held: boolean; ho
   return undefined;
 }
 
-async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMemo): Promise<HumanCheckResult> {
+async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMemo, asking: Pick<AskOptions, 'meter' | 'order'> = {}): Promise<HumanCheckResult> {
   const sleep = deps.sleep ?? realSleep;
   const random = deps.random ?? Math.random;
-  const hands: Hands = { page, random, sleep, asks: { ...gatewayAsks(deps.signal), ...deps.asks }, ...(deps.trace ? { trace: deps.trace } : {}) };
+  const hands: Hands = { page, random, sleep, asks: { ...gatewayAsks(deps.signal, asking), ...deps.asks }, ...(deps.trace ? { trace: deps.trace } : {}) };
   const budgetMs = deps.waitMs ?? 240_000;
   const began = Date.now();
   let widget: HumanCheckWidget | undefined;
