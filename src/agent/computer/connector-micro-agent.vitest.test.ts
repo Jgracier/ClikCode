@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { connectorTaskTool, agentMcpHandler } from './connector-micro-agent-mcp.js';
+import { connectorTaskTool, agentMcpHandler, opensCloudConsole } from './connector-micro-agent-mcp.js';
 import { microAccount, microPrompt, microTab, parseMicroResult, runMicroTask, type MicroPorts } from './connector-micro-agent.js';
 import { runConnectors, type BrowserDriver, type DeployClient, type DriveOutcome, type OnboardResult, type StopInfo } from './connector-runner.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
@@ -62,6 +62,23 @@ describe('agent micro-task', () => {
 
 describe('agent MCP server', () => {
   const tool = (seen: Array<Record<string, unknown>>) => ({ name: 'browser_use', description: 'd', parameters: { type: 'object' }, run: async (args: Record<string, unknown>) => { seen.push(args); return { output: 'ok' }; } }) as never;
+
+  it('never lets an agent into a cloud console: an address there is refused, and a page that lands there is left unseen', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const landing = { name: 'browser_use', description: 'd', parameters: { type: 'object' }, run: async (args: Record<string, unknown>) => { seen.push(args); return { output: args.url === 'about:blank' ? 'Page: about:blank' : 'Page: https://us-east-1.console.aws.amazon.com/iam/home#/security_credentials\n- button "Create access key"' }; } } as never;
+    const handle = agentMcpHandler({ tab: 'agent-acme', maxCalls: 10, tools: [landing], stateDir: '/tmp/none' });
+    const call = (n: number, args: Record<string, unknown>) => handle({ jsonrpc: '2.0', id: n, method: 'tools/call', params: { name: 'browser_use', arguments: args } }) as Promise<{ result: { isError: boolean; content: Array<{ text: string }> } }>;
+    const direct = await call(1, { action: 'open', url: 'https://console.aws.amazon.com/iam/' });
+    expect(direct.result.isError).toBe(true);
+    expect(direct.result.content[0]!.text).toMatch(/never work in a cloud console/);
+    expect(seen).toHaveLength(0);
+    const landed = await call(2, { action: 'open', url: 'https://acme.example/login' });
+    expect(landed.result.isError).toBe(true);
+    expect(landed.result.content[0]!.text).not.toMatch(/Create access key/);
+    expect(seen.map(a => a.url)).toEqual(['https://acme.example/login', 'about:blank']);
+    for (const ok of ['https://acme.example/', 'https://aws.amazon.com/pricing', 'https://docs.aws.amazon.com/iam/']) expect(opensCloudConsole({ url: ok })).toBe(false);
+    for (const no of ['https://console.cloud.google.com/apis', 'https://portal.azure.com/#home', 'https://signin.aws.amazon.com/signin']) expect(opensCloudConsole({ url: no })).toBe(true);
+  });
 
   it('lists only the tools it was given, forces its own tab, and refuses calls past the budget', async () => {
     const seen: Array<Record<string, unknown>> = [];

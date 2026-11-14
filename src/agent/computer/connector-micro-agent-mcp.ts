@@ -49,6 +49,19 @@ export function connectorTaskTool(id: string, ports?: { describe(tool: string): 
   };
 }
 
+/**
+ * Cloud consoles an onboarding agent never works in. A signed-in console (an owner's root session) lets an agent create
+ * account-wide keys and users; on 2026-11-14 agents following a "create an unrestricted key" task made AWS root access keys
+ * there. Connector work needs none of it: a cloud connector uses the shared read-only key that a person set up.
+ */
+const CLOUD_CONSOLE = /^https?:\/\/(?:[a-z0-9-]+\.)*(?:console\.aws\.amazon\.com|signin\.aws\.amazon\.com|console\.amazonaws\.cn|console\.cloud\.google\.com|portal\.azure\.com|entra\.microsoft\.com|aad\.portal\.azure\.com)(?:[/:?#]|$)/i;
+export function opensCloudConsole(args: Record<string, unknown>, output = ''): boolean {
+  const url = typeof args.url === 'string' ? args.url.trim() : '';
+  const shown = /^(?:[^\n]*\n){0,8}?Page: (\S+)/.exec(output)?.[1] ?? '';
+  return CLOUD_CONSOLE.test(url) || CLOUD_CONSOLE.test(shown);
+}
+const CLOUD_REFUSAL = 'Refused: onboarding agents never work in a cloud console (AWS, Google Cloud, Azure). A cloud connector uses the shared read-only key a person set up. Stop and end with RESULT: wall no-api <what the task asked for>.';
+
 export function agentMcpHandler(options: AgentMcpOptions): (message: Rpc) => Promise<Record<string, unknown> | undefined> {
   let calls = 0;
   const load = async (): Promise<readonly ToolDefinition[]> => {
@@ -77,7 +90,13 @@ export function agentMcpHandler(options: AgentMcpOptions): (message: Rpc) => Pro
           const args = { ...(message.params?.arguments ?? {}), tab: options.tab } as Record<string, unknown>;
           const stateDir = options.stateDir ?? stateDirectory();
           const context = { cwd: process.cwd(), stateDir, homeDir: homedir(), emitOutput: () => undefined } as unknown as ToolContext;
+          if ((tool.name === 'browser_use' || tool.name === 'account_use') && opensCloudConsole(args)) return reply({ content: [{ type: 'text', text: CLOUD_REFUSAL }], isError: true });
           const result = await tool.run(args as never, context);
+          // A page that redirected into a console (a sign-in carried over from another chat) is left at once and not shown.
+          if ((tool.name === 'browser_use' || tool.name === 'account_use') && opensCloudConsole({}, result.output)) {
+            await tool.run({ action: 'open', url: 'about:blank', tab: options.tab } as never, context).catch(quiet('agent/computer/connector-micro-agent-mcp'));
+            return reply({ content: [{ type: 'text', text: CLOUD_REFUSAL }], isError: true });
+          }
           return reply({ content: [{ type: 'text', text: scrubSecrets(result.output) }], isError: !!result.isError });
         } catch (error) {
           return reply({ content: [{ type: 'text', text: scrubSecrets(error instanceof Error ? error.message : String(error)) }], isError: true });
