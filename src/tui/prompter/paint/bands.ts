@@ -1,4 +1,5 @@
 /** The fixed bands of a frame (palette, approval, thought, sign-in, plan, panel) and the rows left for the composer. */
+import { uncoveredRows } from '../../probe.js';
 import chalk from 'chalk';
 import { thoughtLine } from '../../../harness/protocol/tool-category-style.js';
 import { noticeLines } from '../../render/wrap.js';
@@ -45,7 +46,8 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   const turn = conversation ? p.turn : undefined;
   // the complete terminal height is safe and important: leaving one row
   // unpainted allowed an obsolete status line to remain visibly duplicated.
-  const targetHeight = p.viewportRows();
+  // Less the rows the terminal covers at the top: only the conversation is drawn under those, never a card, a list or the composer.
+  const targetHeight = uncoveredRows(p.viewportRows());
   const requestedPaletteCapacity = (typeof palette?.capacity === 'function' ? palette.capacity() : palette?.capacity)
     ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
   // Keep generation at the response's live edge, directly above the

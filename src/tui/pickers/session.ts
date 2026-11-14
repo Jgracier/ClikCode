@@ -1,6 +1,7 @@
 /** Choosing a session to resume, including sessions a vendor CLI started
  * outside ClikCode and that can be adopted. */
 
+import { uncoveredRows } from '../probe.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { slowWaitGate } from '../../harness/protocol/slow-wait-gate.js';
 import { newConversation } from '../../commands/ai/conversations.js';
@@ -483,7 +484,7 @@ export async function interactiveSessionPicker(
         { refreshedOptions: buildOptions, refresh: refreshes,
           // Taller than a settings list -- it is the place to look over
           // everything running -- but never more than a small terminal can hold.
-          rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)) });
+          rows: Math.max(8, Math.min(14, uncoveredRows(process.stdout.rows ?? 24) - 16)) });
     }
   } finally {
     listWatch.stop();

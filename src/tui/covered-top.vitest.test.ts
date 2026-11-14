@@ -2,8 +2,9 @@
  * way up, and scrolling back brings its first line to rest below them. */
 import { stdin } from 'node:process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { boardCapacity } from './conversation-board.js';
 import { KEEP_STDIN_FLOWING, TerminalInputDecoder } from './input-decoder.js';
-import { asksCoveredTop, noteProbeReply, terminalFacts } from './probe.js';
+import { asksCoveredTop, noteProbeReply, terminalFacts, uncoveredRows } from './probe.js';
 import { TerminalHarnessPrompter } from './prompter.js';
 
 const realTty = process.stdout.isTTY;
@@ -99,5 +100,13 @@ describe('a terminal that covers its top rows', () => {
       rl.flushPaint();
       expect(first(rl)).toBe(4);
     } finally { rl.close(); }
+  });
+
+  it('everything but the conversation is laid out in the rows left: the chat history, a list, the composer\'s block', () => {
+    terminalFacts.coveredTopRows = 4;
+    expect(uncoveredRows(30)).toBe(26);
+    expect(boardCapacity(uncoveredRows(30))).toBe(boardCapacity(30) - 4);
+    terminalFacts.coveredTopRows = 0;
+    expect(uncoveredRows(30)).toBe(30);
   });
 });

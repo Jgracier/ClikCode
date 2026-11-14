@@ -35,6 +35,10 @@ const PROBE_QUERY = '\u001b[?2026$p\u001b[>0q\u001b[c';
  * the text, so it is asked again whenever the screen changes size. Any other terminal is not asked. */
 const COVERED_TOP_QUERY = '\u001b]7701;?\u001b\\';
 const COVERED_TOP_REPLY = /^\u001b\]7701;(\d{1,3})(?:\u0007|\u001b\\)$/;
+/** The rows of a screen `rows` tall that nothing of the terminal's own is drawn over: where everything but the conversation is
+ * laid out (the chat history, a list, a card, the composer's block). Only the conversation itself runs under the covered rows. */
+export const uncoveredRows = (rows: number): number => Math.max(5, rows - terminalFacts.coveredTopRows);
+
 export const asksCoveredTop = (env: NodeJS.ProcessEnv = process.env): boolean => env.CLIKDEPLOY_CLIENT === 'mobile';
 export function askCoveredTop(): void {
   if (!output.isTTY || !terminalModes.rawMode || !asksCoveredTop()) return;
