@@ -74,9 +74,10 @@ export async function aiSessionCommand(id: string, input: string, options: { inf
     return id;
   }
   const harness = sessionHarness(session);
-  const route = routeSlashInput(text.startsWith('/') ? text : `/${text}`, slashRouteContextFor(session, harness));
+  const routeContext = slashRouteContextFor(session, harness);
+  const route = routeSlashInput(text.startsWith('/') ? text : `/${text}`, routeContext);
   if (route.kind === 'command') {
-    const availability = route.entry.availability(session, harness, route.args);
+    const availability = route.entry.availability(session, harness, route.args, routeContext.nativeCommands);
     // Same as the interactive session: a command that names its provider --
     // `/model claude-opus-5` when only one account publishes that model --
     // selects it and runs, instead of refusing. Once only: a selection that

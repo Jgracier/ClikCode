@@ -17,6 +17,22 @@ const SLASH_GROUP_ORDER: readonly SlashGroup[] = [
   'Common', 'Conversation', 'Workspace', 'Provider', 'Settings', 'Sessions', 'Info', 'Tools', 'Custom', 'Switch harness',
 ];
 
+/** A palette section: ClikCode's own groups, or the commands of the harness
+ * the chat is on, under that harness's name ("Claude Code commands"). */
+type PaletteGroup = SlashGroup | `${string} commands`;
+
+/** The section the harness's own commands are listed under. */
+export function harnessCommandGroup(harness: Pick<AiLocalHarnessDefinition, 'displayName'> | undefined): `${string} commands` {
+  return `${harness?.displayName ?? 'Harness'} commands`;
+}
+
+/** Where a section sits: ClikCode's groups in their order, the harness's own
+ * commands after the user's custom ones and before the harness switches. */
+function groupRank(group: PaletteGroup): number {
+  const index = SLASH_GROUP_ORDER.indexOf(group as SlashGroup);
+  return index >= 0 ? index : SLASH_GROUP_ORDER.indexOf('Custom') + 0.5;
+}
+
 /** The commands worth reaching without scrolling, always in this order:
  * resume a conversation; choose a provider, an account on it, its model;
  * hosted models and the machine the chat runs on; then the ones used
@@ -112,10 +128,15 @@ const vendorCompaction = (
 };
 /** A command ClikCode's own agent implements and a vendor runs itself: relayed
  * to a vendor that takes slash commands, not available for one that does not. */
-const ownOrNative = (name: string) => (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
+const ownOrNative = (name: string) => (
+  session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, _args?: string, native: readonly string[] = [],
+): SlashAvailability => {
   if (isClikCodeAgent(session)) return { available: true };
   if (!harness) return { available: false, reason: `Choose a provider before /${name}.`, needs: 'provider' };
-  return harness.nativeSlashPassthrough ? { available: true } : { available: false, reason: `/${name} is not available for ${harness.displayName}.` };
+  // Its own command of that name, where it takes slash commands or says it has one
+  // (Grok's, Copilot's and Kilo's /review were refused here as not available).
+  const has = harness.nativeSlashPassthrough || native.some((command) => command.replace(/^\//, '').toLowerCase() === name);
+  return has ? { available: true } : { available: false, reason: `/${name} is not available for ${harness.displayName}.` };
 };
 /** ClikCode's own agent's settings: a vendor harness runs its own commands. */
 const agentOnly = (session: HarnessSession | undefined): SlashAvailability => (isClikCodeAgent(session)
@@ -285,7 +306,7 @@ export function parseSlashInput(line: string): ParsedSlashInput | undefined {
   return { head: match[1]!.toLowerCase(), args, words: args ? args.split(/\s+/) : [] };
 }
 
-interface SlashPaletteEntry { label: string; value: string; detail: string; argHint?: string; group: SlashGroup }
+interface SlashPaletteEntry { label: string; value: string; detail: string; argHint?: string; group: PaletteGroup }
 export interface SlashExtras {
   /** Vendor managers the harness declares (mcp, skills, …). */
   managers?: ReadonlyArray<{ name: string; label: string }>;
@@ -323,9 +344,10 @@ function slashRows(
     rows.push(row);
   };
   if (vendor) {
-    for (const manager of extras.managers ?? []) push({ label: `/${manager.name}`, value: `/${manager.name}`, detail: manager.label, group: 'Tools' });
+    const group = harnessCommandGroup(harness);
+    for (const manager of extras.managers ?? []) push({ label: `/${manager.name}`, value: `/${manager.name}`, detail: manager.label, group });
     for (const item of extras.native ?? []) {
-      push({ label: `/${item.name}`, value: `/${item.name}`, detail: item.description ?? 'harness command', group: 'Tools', ...(item.hint ? { argHint: item.hint } : {}) });
+      push({ label: `/${item.name}`, value: `/${item.name}`, detail: item.description ?? 'harness command', group, ...(item.hint ? { argHint: item.hint } : {}) });
     }
   }
   for (const item of extras.custom ?? []) {
@@ -334,7 +356,7 @@ function slashRows(
   for (const item of extras.harnesses ?? []) {
     push({ label: `/${item.command}`, value: `/${item.command}`, detail: `switch to ${item.displayName}`, argHint: '[request]', group: 'Switch harness' });
   }
-  const rank = (row: SlashPaletteEntry): number => SLASH_GROUP_ORDER.indexOf(row.group);
+  const rank = (row: SlashPaletteEntry): number => groupRank(row.group);
   return rows.map((row, index) => ({ row, index })).sort((a, b) => rank(a.row) - rank(b.row) || a.index - b.index).map(({ row }) => row);
 }
 
@@ -354,7 +376,9 @@ export function slashPalette(
   // terminal CLI, so the palette read as the terminal's own command list
   // pasted underneath ClikCode's. They still run when typed, and /help still
   // documents them as `/<harness> [request]`.
-  const rows = slashRows(session, harness, extras, false).filter((row) => row.group !== 'Switch harness');
+  // The harness's own commands come too, in a section under its name, after
+  // ClikCode's: in a Claude Code chat, Claude Code's commands are there.
+  const rows = slashRows(session, harness, extras, true).filter((row) => row.group !== 'Switch harness');
   // A pinned command this session cannot run stays in its own group, marked
   // unavailable; pinning never puts a row at the top that errors when chosen.
   const pinned = SLASH_PALETTE_PINNED
@@ -368,14 +392,15 @@ export function slashPalette(
 /** `[usage, description]` rows per group, for the human /help panel. */
 function slashHelpSections(
   session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, extras: SlashExtras = {},
-): Array<{ group: SlashGroup; rows: Array<[string, string]> }> {
-  const sections = new Map<SlashGroup, Array<[string, string]>>();
+): Array<{ group: PaletteGroup; rows: Array<[string, string]> }> {
+  const sections = new Map<PaletteGroup, Array<[string, string]>>();
   for (const row of slashRows(session, harness, extras, true)) {
     if (row.group === 'Switch harness') continue;
     const aliases = resolveSlashCommand(row.value.slice(1))?.aliases ?? [];
     sections.set(row.group, [...(sections.get(row.group) ?? []), [row.label, `${row.detail}${aliases.length ? ` (also /${aliases.join(', /')})` : ''}`]]);
   }
-  const result = SLASH_GROUP_ORDER.filter((group) => sections.has(group)).map((group) => ({ group, rows: sections.get(group)! }));
+  const result: Array<{ group: PaletteGroup; rows: Array<[string, string]> }> = [...sections.keys()].sort((left, right) => groupRank(left) - groupRank(right))
+    .map((group) => ({ group, rows: sections.get(group)! }));
   result.push({ group: 'Switch harness', rows: [
     ['/<harness>', 'hand off to another provider and optionally send a first request'],
     ['//<text>', 'send a slash command to the harness itself, verbatim'],

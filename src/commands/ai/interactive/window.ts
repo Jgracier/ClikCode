@@ -27,6 +27,7 @@ import { activateSession, claimConversation, releaseConversationClaim, resolveSe
 import { sessionOrProviderHarness } from '../../../tui/slash/context.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../../tui/pickers/engine.js';
 import { closeAllWorkerClients } from '../../../worker/turn-bridge.js';
+import { probeVendorCommands } from '../../../turn/vendor-commands-probe.js';
 import { retireStaleWorkers } from '../../../worker/client.js';
 import { replaceCliWithNewBuild } from '../build-replace.js';
 import { conversationCommands } from './board.js';
@@ -153,7 +154,10 @@ function createCatalogWarmer(): ChatWindow['warmCatalogFor'] {
     if (key === warmedCatalogKey) return;
     warmedCatalogKey = key;
     const harness = sessionOrProviderHarness(target);
-    warmNativeModelCatalog(harness, target.accountId ? targetState.accounts.find((item) => item.id === target.accountId) : undefined);
+    const account = target.accountId ? targetState.accounts.find((item) => item.id === target.accountId) : undefined;
+    warmNativeModelCatalog(harness, account);
+    // The harness's own commands for the / menu, before this chat's first turn.
+    void probeVendorCommands(harness, account);
   };
 }
 

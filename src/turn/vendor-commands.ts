@@ -30,6 +30,12 @@ function load(): Kept {
   } catch { return { v: 1, harnesses: {} }; } // fail-open-ok: no file yet, or a damaged one, is no list
 }
 
+/** When `harness` was last asked or heard, whatever it said; undefined when never. */
+export function vendorCommandsCheckedAt(harness: string): number | undefined {
+  const at = load().harnesses[harness]?.at;
+  return at ? Date.parse(at) : undefined;
+}
+
 /** The commands `harness` last said it has; empty when it never said. */
 export function knownVendorCommands(harness: string | undefined): readonly HarnessAvailableCommand[] {
   return harness ? load().harnesses[harness]?.commands ?? [] : [];
@@ -41,11 +47,17 @@ const same = (left: readonly HarnessAvailableCommand[], right: readonly HarnessA
 let writing: Promise<void> = Promise.resolve();
 
 /** Keeps what `harness` just said it has, for every window. Written only when it changed. */
-export function rememberVendorCommands(harness: string | undefined, commands: readonly HarnessAvailableCommand[]): Promise<void> {
-  if (!harness || !commands.length) return writing;
+export function rememberVendorCommands(
+  harness: string | undefined, commands: readonly HarnessAvailableCommand[], options: { probed?: boolean } = {},
+): Promise<void> {
+  // An empty answer keeps what was heard before; a probe that heard nothing
+  // still records that it asked, so it is not asked again at every window.
+  if (!harness || (!commands.length && !options.probed)) return writing;
   writing = writing.then(async () => {
     const data = load();
-    if (same(data.harnesses[harness]?.commands ?? [], commands)) return;
+    const kept = data.harnesses[harness];
+    if (!commands.length && kept) return;
+    if (kept && same(kept.commands, commands) && !options.probed) return;
     const next: Kept = { v: 1, harnesses: { ...data.harnesses, [harness]: { at: new Date().toISOString(), commands: commands.map((command) => ({ ...command })) } } };
     await atomicWriteFile(file(), `${JSON.stringify(next)}\n`);
     read = undefined;

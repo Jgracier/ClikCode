@@ -312,7 +312,7 @@ function acpPlanEntries(update: Json): HarnessPlanEntry[] | undefined {
     : []);
 }
 
-function acpAvailableCommands(update: Json): HarnessAvailableCommand[] | undefined {
+export function acpAvailableCommands(update: Json): HarnessAvailableCommand[] | undefined {
   if (update.sessionUpdate !== 'available_commands_update' || !Array.isArray(update.availableCommands)) return undefined;
   return update.availableCommands.flatMap((entry: Json) => typeof entry?.name === 'string'
     ? [{
