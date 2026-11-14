@@ -149,12 +149,19 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
         return { html: /html/i.test(type), status: res.status, url: res.url || url };
       } catch { return undefined; }
     },
-    humanCheck: async () => (await (await import('./human-check.js')).pressHumanCheck(await page())).outcome,
+    humanCheck: async () => {
+      const at = await page();
+      const pressed = await (await import('./human-check.js')).pressHumanCheck(at);
+      // A check the one press cleared is counted too: it is by far the commonest ending.
+      if (pressed.outcome === 'cleared') { const { recordCaptcha } = await import('./captcha-log.js'); let host = ''; try { host = new URL(at.url()).host; } catch { host = ''; } void recordCaptcha(options.stateDir, { at: new Date().toISOString(), host, family: pressed.widget ?? 'unknown', outcome: 'cleared', seconds: 0, steps: ['press'] }); }
+      return pressed.outcome;
+    },
     solveCaptcha: async () => {
       const { captchaSolvingAllowed } = await import('./settings.js');
       if (!await captchaSolvingAllowed(options.stateDir)) return false;
       const { solveHumanCheck } = await import('./human-check.js');
-      return (await solveHumanCheck(await page(), { ...(options.signal ? { signal: options.signal } : {}) })).outcome === 'cleared';
+      const { recordCaptcha } = await import('./captcha-log.js');
+      return (await solveHumanCheck(await page(), { ...(options.signal ? { signal: options.signal } : {}), record: entry => { void recordCaptcha(options.stateDir, entry); } })).outcome === 'cleared';
     },
     escalate: async () => { const moved = await run({ action: 'cloud' }); return !moved.isError && /now in the managed cloud browser/.test(moved.output); },
     screenshot: async () => {

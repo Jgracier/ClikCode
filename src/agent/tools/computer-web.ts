@@ -554,13 +554,15 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       if (args.action === 'human_check') {
         const page = await computerPage(ctx.stateDir, args.tab);
         const checked = await pressHumanCheck(page);
+        if (checked.outcome === 'cleared') { const { recordCaptcha } = await import('../computer/captcha-log.js'); let host = ''; try { host = new URL(page.url()).host; } catch { host = ''; } void recordCaptcha(ctx.stateDir, { at: new Date().toISOString(), host, family: checked.widget ?? 'unknown', outcome: 'cleared', seconds: 0, steps: ['press'] }); }
         const inCloud = tabIsInCloud(ctx.stateDir, args.tab);
         const next = inCloud ? 'Use handoff so the user can finish it.' : 'Try cloud (the managed browser, when the user has it on), then handoff.';
         if (checked.outcome !== 'cleared' && !inCloud && await captchaSolvingAllowed(ctx.stateDir)) {
           // The check wants more than a press: solve it here, in this signed-in tab. A picture of the puzzle goes to
           // the account's own Gateway vision model and its answer is played back at a visitor's pace -- built-in
           // captcha solving, no external service.
-          const solved = await solveHumanCheck(page, { ...(ctx.signal ? { signal: ctx.signal } : {}) });
+          const { recordCaptcha } = await import('../computer/captcha-log.js');
+          const solved = await solveHumanCheck(page, { ...(ctx.signal ? { signal: ctx.signal } : {}), record: entry => { void recordCaptcha(ctx.stateDir, entry); } });
           return { output: solved.outcome === 'cleared' && solved.widget === 'text' ? 'The characters in the captcha picture were read and typed into its field. Send the form; if the site says the code was wrong, run human_check again on the new picture.'
             : solved.outcome === 'cleared' ? 'The puzzle was solved: the challenge accepted the answer. Observe the page and carry on.'
             : solved.outcome === 'none' ? 'No puzzle is showing to answer. Observe the page: the block may be something else.'

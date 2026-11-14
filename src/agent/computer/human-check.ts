@@ -9,7 +9,7 @@
 import type { Frame, Page } from 'playwright-core';
 import { sleep as realSleep } from '../../runtime/sleep.js';
 
-export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose';
+export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose' | 'pow';
 export interface HumanCheckResult {
   /** cleared: the check accepted the press. puzzle: it asked for more than a press. still-there: pressed, nothing changed. none: no checkbox on the page. */
   outcome: 'cleared' | 'puzzle' | 'still-there' | 'none';
@@ -163,6 +163,8 @@ export interface SolveDeps {
   ask?: (image: { mimeType: string; data: string }) => Promise<{ ok: true; answer: CaptchaAskAnswer } | { ok: false; error: string }>;
   /** The where-to-click ask for free-form challenges; defaults to the Gateway model (captcha-model.ts askClickPoints). */
   askPoints?: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>;
+  /** Told what the run turned out to be once it ends (captcha-log.ts), for the tally of families met. */
+  record?: (entry: import('./captcha-log.js').CaptchaRecord) => void;
   /** Go to reCAPTCHA's audio challenge straight away instead of after two picture rounds. */
   audioFirst?: boolean;
   /** Speech-to-text for an audio challenge clip; defaults to the Gateway (captcha-model.ts askTranscript). */
@@ -499,6 +501,40 @@ async function refreshGeetest(page: Page, random: () => number, sleep: (ms: numb
   return true;
 }
 
+/** Proof-of-work checks (Friendly Captcha, ALTCHA): nothing to answer, the browser does a sum. Their box is
+ * pressed if it wants a press, then the work is waited out (up to 45 seconds). */
+async function waitProofOfWork(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
+  const READ = `(() => {
+    const r = e => { if (!e) return null; const b = e.getBoundingClientRect(); return b.width > 4 && b.height > 4 && b.bottom > 0 && b.top < innerHeight ? { x: b.x, y: b.y, width: b.width, height: b.height } : null; };
+    const frc = document.querySelector('.frc-captcha, frc-captcha');
+    const altcha = document.querySelector('altcha-widget');
+    if (!frc && !altcha) return null;
+    const value = sel => { const f = document.querySelector(sel); return f ? String(f.value || '') : ''; };
+    const frcValue = value('[name="frc-captcha-solution"], [name="frc-captcha-response"]');
+    const altchaRoot = altcha ? (altcha.shadowRoot || altcha) : null;
+    const done = (frc && frcValue.length > 20 && !frcValue.startsWith('.')) || (altcha && (value('[name="altcha"]').length > 20 || !!(altchaRoot && altchaRoot.querySelector('[data-state="verified"], .altcha[data-state="verified"]'))));
+    const box = frc || altcha;
+    const where = box.getBoundingClientRect();
+    if (where.top > innerHeight - 40 || where.bottom < 40) box.scrollIntoView({ block: 'center' });
+    // Friendly Captcha v2 draws its box in a frame; v1 has a start button; ALTCHA has a checkbox.
+    const press = frc ? (frc.querySelector('iframe.frc-i-widget') || (frc.shadowRoot || frc).querySelector('button.frc-button, button')) : altchaRoot ? altchaRoot.querySelector('input[type="checkbox"]') : null;
+    return { done: !!done, press: r(press), kind: frc ? 'Friendly Captcha' : 'ALTCHA' };
+  })()`;
+  type Read = { done: boolean; press: Box | null; kind: string } | null;
+  let state = await page.evaluate(READ).catch(() => null) as Read;
+  if (!state) return false;
+  if (state.done) return true;
+  trace?.(`proof of work (${state.kind}): ${state.press ? 'pressing its box and ' : ''}waiting for the browser to finish`);
+  // Its box is pressed near the left edge, where the tick is.
+  if (state.press) await visitorClick(page.mouse, toTarget({ ...state.press, width: Math.min(state.press.width, 60) }), random, sleep);
+  for (let waited = 0; waited < 45_000; waited += 1_000) {
+    await sleep(1_000);
+    state = await page.evaluate(READ).catch(() => null) as Read;
+    if (!state || state.done) return true;
+  }
+  return false;
+}
+
 /** A slider check drawn in the page itself (GeeTest, Alibaba's "slide to verify", similar): a handle on a track,
  * usually under a picture with a gap. The model says where the handle is and where the piece fits; the handle is
  * dragged that far along its track. A plain "slide to the end" track is dragged to its end. */
@@ -758,6 +794,18 @@ async function playArkose(page: Page, frame: Frame, box: Box, askPoints: (images
  * challenge is pressed again, and when the layout cannot be read the whole picture is asked about instead.
  * Resolves `cleared` when the page holds an accepted answer, else `still-there` when the budget runs out. Never throws. */
 export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise<HumanCheckResult> {
+  if (!deps.record) return solveShownCheck(page, deps);
+  const began = Date.now();
+  const { stepOf, familyOf } = await import('./captcha-log.js');
+  const steps: string[] = [];
+  const result = await solveShownCheck(page, { ...deps, trace: line => { const step = stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } });
+  let host = '';
+  try { host = new URL(page.url()).host; } catch { host = ''; }
+  try { deps.record({ at: new Date().toISOString(), host, family: familyOf(result.widget, steps), outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps }); } catch { /* the log never fails a solve */ }
+  return result;
+}
+
+async function solveShownCheck(page: Page, deps: SolveDeps = {}): Promise<HumanCheckResult> {
   const sleep = deps.sleep ?? realSleep;
   const random = deps.random ?? Math.random;
   const signal = deps.signal ? { signal: deps.signal } : {};
@@ -791,6 +839,7 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
       // No widget challenge: the page may carry its own check -- a slider to drag, or a picture of characters to type.
       if (!firstWidget && inPageTries < 4) {
         inPageTries++;
+        if (inPageTries === 1 && await waitProofOfWork(page, random, sleep, deps.trace)) return { outcome: 'cleared', widget: 'pow' };
         if (heldOnce && !await page.evaluate(HOLD_BUTTON).catch(() => null)) return { outcome: 'cleared', widget: 'hold' };
         if (await solvePressHold(page, random, sleep, deps.trace)) { heldOnce = true; await sleep(2_000); continue; }
         const slid = await solveSlider(page, askDrag, random, sleep, deps.trace, false, askPoints);
