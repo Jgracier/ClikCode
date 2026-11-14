@@ -569,7 +569,7 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
         }
         const { page: cloudPage, moved } = await moveTabToCloud(ctx.stateDir, args.tab);
         return { output: moved
-          ? `This tab is now in the managed cloud browser at ${displayUrl(cloudPage.url())}. It is signed out there (local sign-ins are not copied), and the service works on a CAPTCHA by itself: wait a few seconds, then observe. If the page still blocks you, use handoff. When done, close the tab or call cloud with clear: true, which stops the billed session.`
+          ? `This tab is now in the managed cloud browser at ${displayUrl(cloudPage.url())}. It is signed out there (local sign-ins are not copied) and does not answer captchas. Observe the page; if it still blocks you, use handoff. When done, close the tab or call cloud with clear: true, which stops the billed session.`
           : 'This tab is already in the managed cloud browser.' };
       }
       if (args.action === 'add_login') {
@@ -1389,7 +1389,8 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       let ended: Page = page;
       const mine = (await profileEmail(ctx.stateDir));
       const filled = { ...recipe, steps: recipe.steps.map(step => ({ ...step, ...(step.target ? { target: fillPlaceholders(step.target, { sso_email: mine }) } : {}), ...(step.text ? { text: fillPlaceholders(step.text, { sso_email: mine }) } : {}) })) };
-      const replay = await replayRecipe(filled, (steps, guard) => runSteps(page, steps as Step[], ctx, args.tab, args.label, async current => { ended = current; return guard(); }), async () => scrubSecrets(await ended.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never) as string));
+      const replay = await replayRecipe(filled, (steps, guard) => runSteps(page, steps as Step[], ctx, args.tab, args.label, async current => { ended = current; return guard(); }), async () => scrubSecrets(await ended.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never) as string),
+        async () => (await passHumanCheck(ended, { stateDir: ctx.stateDir, solve: !tabIsInCloud(ctx.stateDir, args.tab) && await captchaSolvingAllowed(ctx.stateDir), ...(ctx.signal ? { signal: ctx.signal } : {}) })).outcome === 'cleared');
       if (replay.completed) await saveRecipe(ctx.stateDir, { host: recipe.host, loginRoute: recipe.loginRoute, steps: recipe.steps, ...(recipe.keyPage ? { keyPage: recipe.keyPage } : {}), ...(recipe.captureHint ? { captureHint: recipe.captureHint } : {}) }).catch(quiet('agent/tools/computer-web'));
       return { output: replay.output, ...(replay.isError ? { isError: true } : {}) };
     }

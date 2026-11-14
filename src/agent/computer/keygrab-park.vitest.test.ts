@@ -22,13 +22,13 @@ describe('parked keygrab records', () => {
   });
 });
 
-describe('6 hour back-off', () => {
-  it('holds for six hours from the captcha and then ends', async () => {
+describe('the back-off after a captcha', () => {
+  it('holds for an hour from the captcha and then ends', async () => {
     const t0 = new Date('2026-10-25T12:00:00Z');
     const until = await recordBackoff(dir, 'musixmatch', t0);
-    expect(until.toISOString()).toBe('2026-10-25T18:00:00.000Z');
-    expect((await backoffUntil(dir, 'musixmatch', new Date('2026-10-25T17:59:00Z')))?.toISOString()).toBe(until.toISOString());
-    expect(await backoffUntil(dir, 'musixmatch', new Date('2026-10-25T18:00:01Z'))).toBeUndefined();
+    expect(until.toISOString()).toBe('2026-10-25T13:00:00.000Z');
+    expect((await backoffUntil(dir, 'musixmatch', new Date('2026-10-25T12:59:00Z')))?.toISOString()).toBe(until.toISOString());
+    expect(await backoffUntil(dir, 'musixmatch', new Date('2026-10-25T13:00:01Z'))).toBeUndefined();
     expect(await backoffUntil(dir, 'probely', t0)).toBeUndefined();
   });
 });

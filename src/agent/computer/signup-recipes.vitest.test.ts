@@ -104,4 +104,13 @@ describe('replayRecipe', () => {
     expect(out.output).toContain('not bypassed');
     expect(out.output).toContain(page);
   });
+
+  it('answers a captcha on the way and carries on, and stops when it cannot', async () => {
+    const passed = fake(['Welcome', 'Verify you are human: I\'m not a robot', 'API keys']);
+    let asked = 0;
+    expect(await replayRecipe(recipe, passed.run, passed.read, async () => { asked++; return true; })).toMatchObject({ completed: true });
+    expect(asked).toBe(1);
+    const stuck = fake(['Welcome', 'Verify you are human: I\'m not a robot', 'API keys']);
+    expect(await replayRecipe(recipe, stuck.run, stuck.read, async () => false)).toMatchObject({ completed: false, blocker: 'a captcha' });
+  });
 });

@@ -101,7 +101,8 @@ async function stopRecord(stateDir: string, key: string, record: SessionRecord):
 async function startSession(stateDir: string, key: string): Promise<SessionRecord> {
   const created = await request<{ id?: unknown; cdpUrl?: unknown }>(key, '/browsers', 'POST', {
     timeout: 60,
-    solveCaptchas: true,
+    // Captchas are answered by ClikCode's own solver or the user, never by an outside solving service.
+    solveCaptchas: false,
     metadata: { client: 'clikcode' },
   });
   if (typeof created.id !== 'string' || !safeCdpUrl(created.cdpUrl)) {

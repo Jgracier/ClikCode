@@ -1,13 +1,14 @@
 /** Two small pieces of per-vendor state a keygrab run leaves for the next command:
  *  - the parked record: the hidden tab is kept open on the last page when keygrab could not finish, and this file says where it is, what
- *  - the back-off: after a captcha shows on a vendor the runner does not try that vendor again for six hours.
+ *  - the back-off: after a captcha shows on a vendor the runner does not try that vendor again for an hour (the solver answers most checks;
+ *    one it could not answer is worth another try once the site has cooled, not a quarter of a day later).
  * Nothing here holds a secret: addresses without queries, control names, short trails. */
 import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { JournalData } from './recipe-recorder.js';
 
-export const BACKOFF_HOURS = 6;
+export const BACKOFF_HOURS = 1;
 export const MAX_PARKED = 6;
 
 export interface ParkedRecord {

@@ -38,10 +38,10 @@ describe('Browser Use Cloud session', () => {
     expect(calls).toEqual([]);
   });
 
-  it('creates one session with captcha solving on, records it privately, and reuses it', async () => {
+  it('creates one session with no outside captcha solving, records it privately, and reuses it', async () => {
     expect(await browserUseConnection(dir, true)).toBeDefined();
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ method: 'POST', key: 'test-key', body: { solveCaptchas: true } });
+    expect(calls[0]).toMatchObject({ method: 'POST', key: 'test-key', body: { solveCaptchas: false } });
     expect(await record()).toEqual({ id: 's1', cdpUrl: 'wss://cdp.browser-use.com/s1' });
     expect((await fs.stat(path.join(dir, 'computer', 'browser-use.json'))).mode & 0o777).toBe(0o600);
     await browserUseConnection(dir, true);

@@ -5,6 +5,7 @@
  * does not know ends it with what the page showed. It solves a captcha itself (the vision model answers
  * the puzzle, at a visitor's pace), never pays, and never reads or prints a key: it only drives
  * a `KeygrabPort`, so the policy is tested with a fake site. The ClikCode recorder saves the recipe as the real browser actions succeed. */
+import { CAPTCHA_FIELD_WORDS, CAPTCHA_WORDS } from './human-check-words.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { nextPress, pageExcerpt, type Control } from './oauth-consent.js';
 import { keyShaped } from './secret-finder.js';
@@ -83,9 +84,9 @@ const RETIRED = /[^.\n]{0,60}\b(?:was|has been|is being|were) (?:retired|discont
 const NOT_FOUND = /\b404\b|page (?:not found|does(?:n't| not) exist)|not found|no such page|couldn'?t find|can'?t find|\boops\b|doesn'?t exist|does not exist/i;
 
 /** Strong evidence only. A pricing page, a tier table, "No credit card required" or an FAQ about billing is marketing, not a wall. */
-const CAPTCHA_TEXT = /(?:let's|let us) confirm you are (?:a )?human|complete the security check before continuing|verify (?:that )?you(?:'re| are) (?:a )?human|i'?m not a robot|are you a robot|complete the (?:captcha|security check)|solve (?:the|this) captcha|select all (?:images|squares)|press (?:and|&) hold|performing security verification|verifies? (?:that )?you are not a bot|checking if the site connection is secure|checking your browser|just a moment\.\.\./i;
-/** A box that asks to retype distorted characters or answer a human check is a captcha, whatever frame it is in: never filled. */
-const CAPTCHA_FIELD = /type the (?:characters|letters|text|code|word)s? (?:you see|shown|in the image|below)|enter the (?:characters|letters|text|code) (?:you see|shown|in the image|below)|captcha|security (?:code|check|question)|are you (?:a )?human|not a robot/i;
+const CAPTCHA_TEXT = CAPTCHA_WORDS;
+/** A box that asks to retype distorted characters or answer a human check is a captcha, whatever frame it is in. */
+const CAPTCHA_FIELD = CAPTCHA_FIELD_WORDS;
 const PAYMENT_TEXT = /enter your (?:credit |debit )?card|(?:credit |debit )?card (?:number|details) (?:is )?required|\bcard number\b|\bcvc\b|\bcvv\b|expir(?:y|ation) date|payment method (?:is )?required|(?:add|enter) (?:a )?(?:valid )?payment method to (?:continue|proceed|get)|(?<!\bno )(?<!\bwithout a )credit card (?:is )?required(?! for)|enter (?:a )?valid card/i;
 const PAYMENT_FIELD = /card number|\bcvc\b|\bcvv\b|expir(?:y|ation)|name on card/i;
 const IDENTITY_STRONG = /verify your (?:identity|id\b|business)|confirm your identity|(?:upload|scan|take|submit)[^.\n]{0,40}(?:passport|driver'?s licen[cs]e|government[- ]issued|id (?:card|document))|please (?:provide|submit)[^.\n]{0,30}(?:business|company) (?:verification|registration)/i;
