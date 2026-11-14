@@ -3,6 +3,7 @@
  * another vendor-shaped JSON parser. The existing CLI adapter remains the
  * compatibility fallback for products without ACP. */
 import { readFile } from 'node:fs/promises';
+import { silentRefusalReason } from './silent-refusal.js';
 import { extname } from 'node:path';
 import type { AiHarnessAcpDefinition, AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
@@ -1109,6 +1110,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       // gave up the prompt by itself (Junie does, signed out and in a sandbox
       // that cannot read its keyring), which must not read as a quiet stop.
       if (!live.cancelled && !turn.sawActivity && !turn.text.trim()) {
+        // Its own reason, where it writes one (Junie: an account with no AI plan).
+        const reason = await silentRefusalReason(input.command, input.environment);
+        if (reason) throw new Error(`${input.command}: ${reason}`);
         throw new Error(`${input.command} ended the turn as cancelled before saying anything, which it does when its sign-in is not usable; check \`clikcode accounts status\``);
       }
       throw turnCancelledError();

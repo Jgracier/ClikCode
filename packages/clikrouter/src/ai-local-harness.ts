@@ -39,6 +39,12 @@ export type AiHarnessMemoryFile = 'CLAUDE.md' | 'AGENTS.md' | 'GEMINI.md' | 'QWE
 /** Agent Client Protocol launch contract. Everything the shared ACP client
  * needs to spawn a vendor comes from here; it holds no vendor table itself. */
 export interface AiHarnessAcpDefinition {
+  /** Where the agent writes why it gave up a prompt it then ends as
+   * `cancelled` with nothing said: the newest `log-*.log` in `dir` (`~` is
+   * the profile's home), and the last match of `pattern`'s first group in
+   * it. Junie answers a JetBrains account with no AI plan this way; only its
+   * log says "No active JetBrains AI subscription found". */
+  silentRefusalLog?: { dir: string; pattern: string };
   /** Argv that puts the vendor binary into ACP-over-stdio mode. */
   argv: readonly string[];
   /** Dedicated ACP executable when it is not `binary` (Mistral `vibe-acp`). */
@@ -1199,7 +1205,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // junie 26.9.22 initialize (vendor-sandbox, 2026-10-11): `_meta.steering.supported: true`. Checked 2026-10-12: it does NOT answer `_session/steering`
   // as claude-agent-acp does (idle, with `promptRequired`, it answers `startedNewTurn`), so `acp.steering: false` keeps ClikCode from steering it. session/new (signed in): modes default|plan, config
   // options mode, model, effort (low|medium|high), brave_mode (brave-auto|on|off) -- brave_mode is a config option, not a mode id, so no permission mapping.
-  { command: 'junie', quotaProbe: { none: '`junie --help` has no usage or quota command' }, profileExtraEnv: { JAVA_TOOL_OPTIONS: '-Duser.home={profile}' }, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'junie', displayName: 'Junie CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'], effortConfigId: 'effort', planModeId: 'plan', steering: false }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', authFiles: [{ path: '~/.junie/secure_credentials.json', contains: 'jb-account-stored' }], installer: HARNESS_INSTALLERS.junie, loginArgv: [], authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortValues: ['low', 'medium', 'high'] },
+  { command: 'junie', quotaProbe: { none: '`junie --help` has no usage or quota command' }, profileExtraEnv: { JAVA_TOOL_OPTIONS: '-Duser.home={profile}' }, loginSteps: [{ when: 'Share anonymous statistics', send: '{down}{enter}' }, { when: 'Use custom models and endpoints', send: '{enter}' }], subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'junie', displayName: 'Junie CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'], effortConfigId: 'effort', planModeId: 'plan', steering: false, silentRefusalLog: { dir: '~/.junie/logs', pattern: '\\{"type":"[A-Z_]+","message":"((?:[^"\\\\]|\\\\.)*)"' } }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', authFiles: [{ path: '~/.junie/secure_credentials.json', contains: 'jb-account-stored' }], installer: HARNESS_INSTALLERS.junie, loginArgv: [], authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortValues: ['low', 'medium', 'high'] },
   // Sign-in evidence: the OAuth record `mcode login` writes under
   // ~/.minimax/auth/prod/<region>/<client>/auth.json (vendor-identity.ts
   // reads the same record for the account's email).
