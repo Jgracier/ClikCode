@@ -200,7 +200,7 @@ export async function passHumanCheck(page: Page, deps: SolveDeps & { solve?: boo
 
 /** One go at the checks a page draws itself. A result ends the run; `acted` means something was done and the
  * page should be looked at again; undefined means nothing here could be answered. */
-async function inPageStep(hands: Hands, memo: { tries: number; held: boolean; textTyped: boolean }): Promise<HumanCheckResult | 'acted' | undefined> {
+async function inPageStep(hands: Hands, memo: { tries: number; held: boolean; holds: number; textTyped: boolean }): Promise<HumanCheckResult | 'acted' | undefined> {
   const { page, random, sleep, trace, asks } = hands;
   const settled = async (done: () => Promise<boolean>): Promise<boolean> => {
     // An in-page check shows its verdict after its own animation: watch for it before judging.
@@ -209,7 +209,8 @@ async function inPageStep(hands: Hands, memo: { tries: number; held: boolean; te
   };
   if (memo.tries++ === 0 && await waitProofOfWork(page, random, sleep, trace)) return { outcome: 'cleared', widget: 'pow' };
   if (memo.held && !await page.evaluate(HOLD_BUTTON).catch(() => null)) return { outcome: 'cleared', widget: 'hold' };
-  if (await solvePressHold(page, random, sleep, trace)) { memo.held = true; await sleep(2_000); return 'acted'; }
+  // Three holds at most: a button that is still there after that is refusing this browser, and more holds only make it surer.
+  if (memo.holds < 3 && await solvePressHold(page, random, sleep, trace)) { memo.holds++; memo.held = true; await sleep(2_000); return 'acted'; }
   if (await geetestStep(hands)) return await settled(() => humanCheckAnswered(page)) ? { outcome: 'cleared', widget: 'geetest' } : 'acted';
   if (await solveSlider(hands)) return await settled(async () => await humanCheckAnswered(page) || await markGone(page, 'slider') || !await page.evaluate(SLIDER).catch(() => null)) ? { outcome: 'cleared', widget: 'slider' } : 'acted';
   if (!memo.textTyped && await solveTextCaptcha(page, asks.text, random, sleep, trace)) { memo.textTyped = true; return { outcome: 'cleared', widget: 'text' }; }
@@ -226,7 +227,7 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
   let widget: HumanCheckWidget | undefined;
   const ended = (outcome: HumanCheckResult['outcome']): HumanCheckResult => ({ outcome, ...(widget ? { widget } : {}) });
   let repressed = 0, arkoseStuck = 0, unread = 0;
-  const inPage = { tries: 0, held: false, textTyped: false };
+  const inPage = { tries: 0, held: false, holds: 0, textTyped: false };
   let pictureRounds = 0, audio: 'untried' | 'on' | 'refused' = 'untried';
   while (Date.now() - began < budgetMs) {
     if (deps.signal?.aborted) break;
@@ -248,7 +249,8 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
         if (step === 'acted') continue;
         if (step) return step;
       }
-      return ended(inPage.tries > 1 || inPage.held ? 'still-there' : 'none');
+      // Nothing more to try. A check still in the way was tried and not passed; none at all is none.
+      return ended(inPage.held || await detectHumanCheck(page) ? 'still-there' : 'none');
     }
     widget ??= found.widget;
     if (await humanCheckAnswered(page)) return ended('cleared');
@@ -297,6 +299,7 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
       continue;
     }
     await visitorClick(page.mouse, confirm, random, sleep);
+    deps.trace?.('answer given, confirm pressed');
     for (let waited = 0; waited < 20_000; waited += 600) {
       await sleep(600);
       if (await humanCheckAnswered(page)) return ended('cleared');

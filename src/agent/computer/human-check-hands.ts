@@ -11,7 +11,7 @@ export type Point = { x: number; y: number };
  * tests supply their own. */
 export interface Asks {
   tile(question: TileQuestion): Promise<boolean | undefined>;
-  sameAsExample(example: ImageInput, tile: ImageInput): Promise<number | undefined>;
+  likeExample(example: ImageInput, grid: ImageInput, want: number): Promise<number[] | undefined>;
   points(images: ImageInput[], instruction: string): Promise<Point[] | undefined>;
   ordered(image: ImageInput): Promise<Point[] | undefined>;
   drags(image: ImageInput, instruction: string): Promise<NumberedDrag[] | undefined>;
@@ -25,7 +25,7 @@ export function gatewayAsks(signal?: AbortSignal): Asks {
   const model = () => import('./captcha-model.js');
   return {
     tile: question => model().then(m => m.askTileMatch(question, options)),
-    sameAsExample: (example, tile) => model().then(m => m.askSameAsExample(example, tile, options)),
+    likeExample: (example, grid, want) => model().then(m => m.askSquaresLikeExample(example, grid, want, 9, options)),
     points: (images, instruction) => model().then(m => m.askClickPoints(images, instruction, options)),
     ordered: image => model().then(m => m.askOrderedPoints(image, options)),
     drags: (image, instruction) => model().then(m => m.askDrags(image, instruction, options)),
