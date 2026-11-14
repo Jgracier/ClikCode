@@ -146,3 +146,17 @@ describe('voting on spots, reading text, reading a drag', () => {
     expect(parseDrag('{"from": {"x": 0.1, "y": 0.8}, "to": {"x": 1.4, "y": 0.8}}')).toBeUndefined();
   });
 });
+
+describe('listening to an audio challenge', () => {
+  it('sends the clip to the Gateway and falls to the next model when one fails', async () => {
+    const { askTranscript, cleanTranscript } = await import('./captcha-model.js');
+    const asked: string[] = [];
+    const fetchImpl = (async (_url: unknown, init: { body: FormData }) => {
+      const model = String(init.body.get('model')); asked.push(model);
+      return asked.length === 1 ? new Response('{"error":{}}', { status: 500 }) : new Response(JSON.stringify({ text: ' Their, plan was: simple.' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const heard = await askTranscript(Buffer.from('mp3-bytes'), 'audio/mpeg', { fetchImpl, connection: { baseUrl: 'http://gateway.test', apiKey: 'k' } });
+    expect(asked).toEqual(['whisper-large-v3', 'whisper-1']);
+    expect(cleanTranscript(heard!)).toBe('their plan was simple');
+  });
+});

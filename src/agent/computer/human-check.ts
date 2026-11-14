@@ -150,6 +150,10 @@ export interface SolveDeps {
   ask?: (image: { mimeType: string; data: string }) => Promise<{ ok: true; answer: CaptchaAskAnswer } | { ok: false; error: string }>;
   /** The where-to-click ask for free-form challenges; defaults to the Gateway model (captcha-model.ts askClickPoints). */
   askPoints?: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>;
+  /** Go to reCAPTCHA's audio challenge straight away instead of after two picture rounds. */
+  audioFirst?: boolean;
+  /** Speech-to-text for an audio challenge clip; defaults to the Gateway (captcha-model.ts askTranscript). */
+  transcribe?: (audio: Buffer, mimeType: string) => Promise<string | undefined>;
   /** Reads a "type what you see" captcha picture; defaults to the Gateway model (captcha-model.ts askCaptchaText). */
   askText?: (image: { mimeType: string; data: string }) => Promise<string | undefined>;
   /** Where to drag on a drag puzzle; defaults to the Gateway model (captcha-model.ts askDrag). */
@@ -411,6 +415,48 @@ async function solveTextCaptcha(page: Page, askText: (image: { mimeType: string;
   return true;
 }
 
+/** reCAPTCHA's audio challenge: switch to it, fetch the clip, have it transcribed, type the words, verify.
+ * `refused` means Google would not serve audio here (or it could not be heard) and the pictures are back. */
+async function solveRecaptchaAudio(page: Page, frame: Frame, box: Box, transcribe: (audio: Buffer, mimeType: string) => Promise<string | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<'typed' | 'refused'> {
+  const READ = `(() => {
+    const r = el => { if (!el) return null; const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 ? { x: b.x, y: b.y, width: b.width, height: b.height } : null; };
+    const source = document.querySelector('#audio-source');
+    const link = document.querySelector('.rc-audiochallenge-tdownload-link');
+    const refused = document.querySelector('.rc-doscaptcha-header, .rc-doscaptcha-body');
+    return { toAudio: r(document.querySelector('#recaptcha-audio-button')), toImage: r(document.querySelector('#recaptcha-image-button')), field: r(document.querySelector('#audio-response')), verify: r(document.querySelector('#recaptcha-verify-button')),
+      src: (source && source.src) || (link && link.href) || '', refused: !!(refused && refused.getBoundingClientRect().height > 0), said: (document.querySelector('.rc-audiochallenge-error-message') || {}).innerText || '' };
+  })()`;
+  type Read = { toAudio: Box | null; toImage: Box | null; field: Box | null; verify: Box | null; src: string; refused: boolean; said: string };
+  const read = async (): Promise<Read | undefined> => { try { return await frame.evaluate(READ) as Read; } catch { return undefined; } };
+  const inPage = (b: Box) => toTarget({ ...b, x: b.x + box.x, y: b.y + box.y });
+  const backToPictures = async (state: Read | undefined): Promise<'refused'> => { if (state?.toImage) await visitorClick(page.mouse, inPage(state.toImage), random, sleep); return 'refused'; };
+  let state = await read();
+  if (!state) return 'refused';
+  if (!state.field) {
+    if (!state.toAudio) return 'refused';
+    trace?.('audio: switching to the spoken challenge');
+    await visitorClick(page.mouse, inPage(state.toAudio), random, sleep);
+    // The spoken challenge takes a moment to load; a refusal shows at once.
+    for (let waited = 0; waited < 7_000; waited += 700) { await sleep(700); state = await read(); if (!state || state.refused || (state.field && state.src)) break; }
+  }
+  if (!state || state.refused || !state.field || !state.src) { trace?.(`audio: not offered here${state?.refused ? ' (Google refused it)' : ''}`); return backToPictures(state); }
+  let clip: Buffer | undefined;
+  try { const res = await page.context().request.get(state.src, { timeout: 15_000 }); if (res.ok()) clip = await res.body(); } catch { clip = undefined; }
+  if (!clip || clip.length < 1_000) { trace?.('audio: the clip could not be fetched'); return backToPictures(state); }
+  const heard = await transcribe(clip, 'audio/mpeg');
+  const { cleanTranscript } = await import('./captcha-model.js');
+  const words = heard ? cleanTranscript(heard) : '';
+  if (words.length < 3) { trace?.('audio: nothing could be made out'); return backToPictures(state); }
+  trace?.(`audio: typing ${words.split(' ').length} words`);
+  await visitorClick(page.mouse, inPage(state.field), random, sleep);
+  for (const char of words) { await page.keyboard.type(char); await sleep(40 + random() * 110); }
+  await sleep(300 + random() * 400);
+  const after = await read();
+  if (after?.verify) await visitorClick(page.mouse, inPage(after.verify), random, sleep);
+  else await page.keyboard.press('Enter');
+  return 'typed';
+}
+
 /** Answer a shown puzzle the way a person does. The challenge's own layout is read from the page (instruction,
  * target, every square's position, the Verify button), each square is asked about on its own -- far more reliable
  * than asking for a list of indices over the whole grid -- and the matches are clicked at a visitor's pace. A
@@ -424,6 +470,7 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   const signal = deps.signal ? { signal: deps.signal } : {};
   const ask = deps.ask ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaModel(image, signal)));
   const askTile = deps.askTile ?? ((question) => import('./captcha-model.js').then(m => m.askTileMatch(question, signal)));
+  const transcribe = deps.transcribe ?? ((audio, mimeType) => import('./captcha-model.js').then(m => m.askTranscript(audio, mimeType, signal)));
   const askText = deps.askText ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaText(image, signal)));
   const askDrag = deps.askDrag ?? ((image, instruction) => import('./captcha-model.js').then(m => m.askDrag(image, instruction, signal)));
   const askPoints = deps.askPoints ?? ((images, instruction) => import('./captcha-model.js').then(m => m.askClickPoints(images, instruction, signal)));
@@ -433,6 +480,7 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   let repressed = 0;
   let refreshed = 0;
   let inPageTries = 0, textTried = false;
+  let pictureRounds = deps.audioFirst ? 2 : 0, audio: 'untried' | 'on' | 'refused' = 'untried';
   while (Date.now() - began < budgetMs) {
     if (deps.signal?.aborted) break;
     const found = await findPuzzle(page);
@@ -469,6 +517,17 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
     catch { return { outcome: 'still-there', widget: firstWidget }; }
     const grid = { mimeType: 'image/jpeg', data: bytes.toString('base64') };
     let confirm: { x: number; x2: number; y: number; y2: number };
+    // reCAPTCHA offers the same check as a spoken clip. After two picture rounds that did not clear, the clip is
+    // listened to instead: it is transcribed by the Gateway's speech-to-text and typed in. Google sometimes refuses
+    // audio ("automated queries"); then it is back to the pictures for the rest of the budget.
+    if (found.widget === 'recaptcha' && audio !== 'refused' && (audio === 'on' || pictureRounds >= 2)) {
+      const heard = await solveRecaptchaAudio(page, found.frame, found.box, transcribe, random, sleep, deps.trace);
+      if (heard === 'refused') { audio = 'refused'; await sleep(1_000); continue; }
+      audio = 'on';
+      for (let waited = 0; waited < 8_000; waited += 500) { await sleep(500); if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget }; if (!await findPuzzle(page)) break; }
+      continue;
+    }
+    pictureRounds++;
     const layout = await readLayout(found.frame, found.box);
     if (layout) {
       // Squares already selected (a half-finished round) are left as they are; only the others are asked about.
