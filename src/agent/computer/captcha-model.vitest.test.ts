@@ -197,3 +197,22 @@ describe('picking one of several pictures', () => {
     expect(await askPick(images, 'pick the circle', { modelClientsOf: async () => [fake('{"pick": 9}'), fake('no idea')] })).toBeUndefined();
   });
 });
+
+describe('answering only on a shared whole answer, without waiting for the slowest voter', () => {
+  it('needs two voters with the same full set of spots', async () => {
+    const { sameAnswer } = await import('./captcha-model.js');
+    const two = [{ x: 0.5, y: 0.34 }, { x: 0.28, y: 0.72 }];
+    expect(sameAnswer([two, [{ x: 0.29, y: 0.71 }, { x: 0.51, y: 0.35 }], [{ x: 0.9, y: 0.9 }]])).toHaveLength(2);
+    // One voter adds a spot: that is not the same answer, even though two spots overlap.
+    expect(sameAnswer([two, [...two, { x: 0.72, y: 0.72 }]])).toEqual([]);
+    expect(sameAnswer([two, undefined, []])).toEqual([]);
+  });
+
+  it('stops waiting once the answers in hand agree', async () => {
+    const { untilAgreed } = await import('./captcha-model.js');
+    const slow = new Promise<number | undefined>(() => undefined); // never answers
+    const got = await untilAgreed([Promise.resolve(3), slow, Promise.resolve(3)], answers => answers.filter(a => a === 3).length >= 2);
+    expect(got).toEqual([3, undefined, 3]);
+    expect(await untilAgreed([Promise.resolve(1), Promise.reject(new Error('down'))], () => false)).toEqual([1, undefined]);
+  });
+});

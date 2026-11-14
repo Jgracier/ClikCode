@@ -165,6 +165,8 @@ export interface SolveDeps {
   askPoints?: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>;
   /** Told what the run turned out to be once it ends (captcha-log.ts), for the tally of families met. */
   record?: (entry: import('./captcha-log.js').CaptchaRecord) => void;
+  /** Answer only hCaptcha challenges whose instruction matches; others are swapped for another (for measuring one type). */
+  hcaptchaOnly?: RegExp;
   /** Go to reCAPTCHA's audio challenge straight away instead of after two picture rounds. */
   audioFirst?: boolean;
   /** Speech-to-text for an audio challenge clip; defaults to the Gateway (captcha-model.ts askTranscript). */
@@ -815,7 +817,7 @@ async function solveShownCheck(page: Page, deps: SolveDeps = {}): Promise<HumanC
   const askText = deps.askText ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaText(image, signal)));
   const askDrag = deps.askDrag ?? ((image, instruction) => import('./captcha-model.js').then(m => m.askDrag(image, instruction, signal)));
   const askPoints = deps.askPoints ?? ((images, instruction) => import('./captcha-model.js').then(m => m.askClickPoints(images, instruction, signal)));
-  const budgetMs = deps.waitMs ?? 180_000;
+  const budgetMs = deps.waitMs ?? 240_000;
   const began = Date.now();
   let firstWidget: HumanCheckWidget | undefined;
   let repressed = 0;
@@ -905,14 +907,27 @@ async function solveShownCheck(page: Page, deps: SolveDeps = {}): Promise<HumanC
       if (!await findPuzzle(page)) return { outcome: 'cleared', widget: firstWidget };
       continue;
     } else if (found.widget === 'hcaptcha') {
+      // hCaptcha fades its pictures in: wait until two looks half a second apart match (a moving puzzle never
+      // will, so this gives up after three seconds and carries on).
+      for (let settle = 0, last = grid.data; settle < 6; settle++) {
+        await sleep(500);
+        let now: string;
+        try { now = (await (await found.frame.frameElement()).screenshot({ type: 'jpeg', quality: 85, timeout: 8_000 }) as Buffer).toString('base64'); } catch { break; }
+        const same = now === last;
+        last = now; grid.data = now;
+        if (same) break;
+      }
       // hCaptcha draws most challenges on a canvas: a grid of pictures, or one picture to click a spot on. A visitor
       // clicks where the answer is, so the model is asked where; a drag puzzle (or one it cannot place) is swapped
-      // for another challenge, up to five times, before this check is left to a person.
+      // for another challenge, up to twelve times, before this check is left to a person.
       const instruction = String(await found.frame.evaluate(`((document.querySelector('.prompt-text') || {}).innerText || '').replace(/\\s+/g, ' ').trim()`).catch(() => ''));
-      const wantsDrag = !!instruction && /\b(?:drag|slide|move)\b/i.test(instruction);
+      // No instruction yet: the challenge is still loading (or changing over). Look again shortly.
+      if (!instruction) { await sleep(1_200); continue; }
+      const skipType = !!deps.hcaptchaOnly && !deps.hcaptchaOnly.test(instruction);
+      const wantsDrag = !skipType && !!instruction && /\b(?:drag|slide|move)\b/i.test(instruction);
       const drags = wantsDrag ? await import('./captcha-model.js').then(m => m.askDrags(grid, instruction, signal)).catch(() => undefined) : undefined;
       let points: Array<{ x: number; y: number }> | undefined;
-      if (instruction && !wantsDrag) {
+      if (instruction && !wantsDrag && !skipType) {
         // A puzzle about motion is answered from a few frames, half a second apart, not one still.
         const frames = [grid];
         if (/\b(?:mov(?:e|es|ing)|visit(?:ed|s)?|path|went|travel(?:s|led)?|jump(?:s|ed)?)\b/i.test(instruction)) {
@@ -941,8 +956,8 @@ async function solveShownCheck(page: Page, deps: SolveDeps = {}): Promise<HumanC
         const submit = await found.frame.evaluate(`(() => { const b = document.querySelector('.button-submit'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
         confirm = submit ? toTarget({ ...submit, x: submit.x + found.box.x, y: submit.y + found.box.y }) : { x: found.box.x + found.box.width * 0.8, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 20 };
       } else {
-        if (refreshed >= 5) return { outcome: 'still-there', widget: firstWidget };
-        refreshed++;
+        if (refreshed >= 12) return { outcome: 'still-there', widget: firstWidget };
+        if (!skipType) refreshed++;
         deps.trace?.(`"${instruction}": no spot to click, asking for another challenge`);
         const refresh = await found.frame.evaluate(`(() => { const b = document.querySelector('.refresh.button, .refresh'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
         if (!refresh) return { outcome: 'still-there', widget: firstWidget };

@@ -139,8 +139,40 @@ export function agreedPoints(answers: Array<Array<{ x: number; y: number }> | un
   return groups.filter(g => g.voters.size >= 2).map(g => ({ x: g.points.reduce((t, p) => t + p.x, 0) / g.points.length, y: g.points.reduce((t, p) => t + p.y, 0) / g.points.length }));
 }
 
+/** The whole answer two voters share: the same number of spots, each within `radius` of one of the other's.
+ * Stricter than `agreedPoints` -- a voter who adds or misses one spot does not count as agreeing -- for checks
+ * where one wrong click loses the round and asking for another challenge is free. Empty when no two match. */
+export function sameAnswer(answers: Array<Array<{ x: number; y: number }> | undefined>, radius = 0.08): Array<{ x: number; y: number }> {
+  const given = answers.filter((a): a is Array<{ x: number; y: number }> => !!a && a.length > 0);
+  for (let i = 0; i < given.length; i++) for (let j = i + 1; j < given.length; j++) {
+    const a = given[i]!, b = given[j]!;
+    if (a.length !== b.length) continue;
+    const used = new Set<number>();
+    const pairs = a.map(p => { const k = b.findIndex((q, index) => !used.has(index) && Math.hypot(q.x - p.x, q.y - p.y) <= radius); if (k >= 0) used.add(k); return k; });
+    if (pairs.every(k => k >= 0)) return a.map((p, index) => ({ x: (p.x + b[pairs[index]!]!.x) / 2, y: (p.y + b[pairs[index]!]!.y) / 2 }));
+  }
+  return [];
+}
+
+/** Run every voter, but stop waiting as soon as the answers in hand satisfy `agreed` (two voters matching is
+ * enough: the third, slowest one is not waited for). Resolves with all answers once every voter is done otherwise. */
+export async function untilAgreed<T>(asks: Array<Promise<T | undefined>>, agreed: (answers: Array<T | undefined>) => boolean): Promise<Array<T | undefined>> {
+  const answers: Array<T | undefined> = asks.map(() => undefined);
+  return new Promise(resolve => {
+    let pending = asks.length, settled = false;
+    if (!pending) resolve(answers);
+    asks.forEach((ask, index) => {
+      void ask.then(value => { answers[index] = value; }, () => undefined).then(() => {
+        pending--;
+        if (settled) return;
+        if (pending === 0 || agreed(answers)) { settled = true; resolve([...answers]); }
+      });
+    });
+  });
+}
+
 /** Where to click on a free-form challenge ("click the icon that is different", "find all foods eaten hot"): the
- * spots, as fractions of the picture, that at least two voting models agree on. A challenge about motion ("the
+ * spots, as fractions of the picture, when at least two voting models give the same whole answer. A challenge about motion ("the
  * island the moving animal never visited") is sent as a short series of frames in order. An empty list means the
  * voters saw nothing to click or did not agree -- the caller asks for another challenge. `undefined` is no usable
  * answer at all. `modelClientsOf` is the test seam. Never throws. */
@@ -167,7 +199,7 @@ export async function askClickPoints(images: ImageInput | ImageInput[], instruct
   const text = `${series}This is a visual puzzle. The instruction is: "${instruction}". Where should one click to answer it? `
     + 'If it asks for several things, give a point for each one. Give each point as fractions of the picture\'s width and height'
     + (frames.length > 1 ? ' (on the last frame)' : '') + '. Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}.';
-  const answers = await Promise.all(clients.map(async client => {
+  const answers = await untilAgreed(clients.map(async client => {
     try {
       const result = await client.step({
         system: 'You locate answers to visual puzzles and reply with JSON only.',
@@ -181,10 +213,10 @@ export async function askClickPoints(images: ImageInput | ImageInput[], instruct
       quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
       return undefined;
     }
-  }));
+  }), got => clients.length > 1 && sameAnswer(got).length > 0);
   if (answers.every(a => a === undefined)) return undefined;
   // One voter (an account with a single vision model): its answer stands.
-  return clients.length === 1 ? (answers[0] ?? []) : agreedPoints(answers);
+  return clients.length === 1 ? (answers[0] ?? []) : sameAnswer(answers);
 }
 
 /** Does this square show the same thing as the example picture (GeeTest's "select the images with" + a sample)?
