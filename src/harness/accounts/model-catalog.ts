@@ -665,7 +665,7 @@ const PRINTED_MODEL_LIST: Readonly<Record<NonNullable<AiLocalHarnessDefinition['
     for (const model of [...d.models]) if (model.startsWith('/')) d.models.delete(model);
     const piListed = piModels(printed);
     piListed.forEach((model) => d.models.add(model));
-    const settings = profileRoot ? await readFile(join(profileRoot, 'settings.json'), 'utf8').catch(() => undefined) : undefined;
+    const settings = profileRoot ? await readFile(join(profileRoot, 'settings.json'), 'utf8').catch(quiet('harness/accounts/model-catalog')) : undefined;
     d.configured ??= piConfiguredModel(settings, piListed);
     d.connect = piConnect(await discoverPiProviders(harness), piListed);
   },
