@@ -391,8 +391,9 @@ function listenForTerminalKeys(onKey: (key: string) => void, retake?: () => void
         for (const listener of [...focusListeners]) listener(key === '\u001b[I');
         continue;
       }
-      if (key.startsWith('\u001b]')) continue;
+      // An answer to the probe can be an OSC too (the rows a phone covers at the top): taken before OSC replies are dropped.
       if (noteProbeReply(key) || PRIVATE_REPORT.test(key)) continue;
+      if (key.startsWith('\u001b]')) continue;
       // Answers to the questions the opening handshake asks: Primary DA comes
       // back as `CSI ? ... c`, XTVERSION as a DCS string. Neither is a key,
       // and a terminal that answers must not be able to type into the draft.

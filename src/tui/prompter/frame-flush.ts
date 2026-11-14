@@ -13,7 +13,7 @@ import { syncBegin, syncEnd } from '../probe.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { INLINE_TRANSCRIPT_ROWS } from './state.js';
-import { scrollBody, settleWindow } from './history-window.js';
+import { coveredTop, heldFromStart, scrollBody, settleWindow } from './history-window.js';
 import { anchoredScrollback } from './group-actions.js';
 
 /** More rows than this in one frame and the caret is hidden for it. */
@@ -163,7 +163,8 @@ export function flushAlternateFrame(
   const anchored = target ? anchoredScrollback(target, { length: bodyLength, trimmed: this.alternateTrimmed, above }) : undefined;
   if (anchored !== undefined) this.alternateScrollback = anchored;
   this.jumpToMention(above);
-  const furthest = Math.max(0, bodyLength - above);
+  // As far as the first line resting below the rows the terminal covers at the top (history-window.ts coveredTop).
+  const furthest = Math.max(0, bodyLength - above + (heldFromStart(this) ? coveredTop(above) : 0));
   // Past what is held yet: drawn at the window's edge while the next batch is rendered (another frame is owed), kept as asked.
   const scrolled = Math.max(Math.min(this.alternateScrollback, furthest), this.scrollWindow.rowsBelow);
   if (this.scrollWindow.first === 0 || !this.scrollWindow.more) this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
