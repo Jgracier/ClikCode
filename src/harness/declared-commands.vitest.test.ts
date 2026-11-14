@@ -14,4 +14,9 @@ describe('commands ClikCode knows a harness runs', () => {
   it('has none for a harness that lists its own or takes none', () => {
     for (const command of ['claude', 'codex', 'amp', 'openclaw', undefined]) expect(declaredHarnessCommands(command)).toEqual([]);
   });
+  it('leaves out a listed command the harness does not run', async () => {
+    const { runnableHarnessCommands } = await import('./declared-commands.js');
+    expect(runnableHarnessCommands('hermes', [{ name: 'status' }, { name: 'usage' }]).map((item) => item.name)).toEqual(['status']);
+    expect(runnableHarnessCommands('claude', [{ name: 'usage' }]).map((item) => item.name)).toEqual(['usage']);
+  });
 });
