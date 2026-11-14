@@ -11,16 +11,17 @@ import type { ImageInput, ModelClient } from '../model-client.js';
 // ── who is asked ────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The kinds of question, each with the models that answered it best when measured on live challenges
- * (2026-11-14, hand-checked answers), best first. Up to three that the account's Gateway lists are asked. */
+ * (2026-11-14, hand-checked answers), best first. The first three the account's Gateway lists are asked; the
+ * rest stand in when one of them cannot answer (a provider out of credit or overloaded). */
 export const ROSTERS = {
   /** Is the outlined square part of the target? (reCAPTCHA grids, GeeTest example matching) */
-  tile: ['gpt-4.1-mini', 'gemini-3-flash', 'claude-sonnet-5-5', 'gemini-2.5-pro', 'qwen3-vl-235b-a22b'],
+  tile: ['gpt-4.1-mini', 'gemini-3-flash', 'claude-sonnet-5-5', 'gemini-2.5-pro', 'claude-haiku-5-5', 'gpt-5.2', 'qwen3-vl-235b-a22b'],
   /** Where should one click? (hCaptcha riddles, unknown challenge boxes) */
   click: ['gemini-3-flash', 'claude-sonnet-5-5', 'gpt-5.2', 'claude-opus-5-5'],
   /** Matching, ordering and choosing among options (GeeTest icons, hCaptcha drags, Arkose picks). */
-  order: ['claude-sonnet-5-5', 'claude-opus-5-5', 'gemini-3-flash'],
+  order: ['claude-sonnet-5-5', 'claude-opus-5-5', 'gemini-3-flash', 'gpt-5.2', 'gemini-2.5-pro'],
   /** Reading distorted characters. */
-  text: ['gemini-3-flash', 'gpt-4.1-mini', 'claude-sonnet-5-5', 'qwen3-vl-235b-a22b'],
+  text: ['gemini-3-flash', 'claude-sonnet-5-5', 'gpt-4.1-mini', 'claude-opus-5-5', 'gpt-5.2', 'qwen3-vl-235b-a22b'],
 } as const;
 export type Roster = keyof typeof ROSTERS;
 const VOTERS = 3;
@@ -40,17 +41,27 @@ async function gatewayClient(model: string): Promise<ModelClient> {
   return gatewayModelClient({ baseUrl, apiKey, vision: true, model });
 }
 
-/** The voters for a kind of question: the roster's models the account has, else its first vision model alone. */
-async function votersFor(roster: Roster, options: AskOptions): Promise<ModelClient[]> {
-  if (options.modelClientsOf) return options.modelClientsOf();
+interface Voter { name: string; client: ModelClient }
+
+/** Models that just failed (out of credit, overloaded) sit out for five minutes, so a vote is not held up -- or
+ * left one voter short -- by a model that cannot answer right now. */
+const benched = new Map<string, number>();
+const BENCH_MS = 5 * 60_000;
+
+/** The voters for a kind of question, best first: the roster's models the account has (those not sitting out
+ * first), else its first vision model alone. The first three vote; the rest stand in for one that fails. */
+async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> {
+  if (options.modelClientsOf) return (await options.modelClientsOf()).map(client => ({ name: '', client }));
   const now = options.now ?? Date.now;
   if (!cachedVision || now() - cachedVision.at > VISION_TTL_MS) {
     const { gatewayModels } = await import('../../gateway/models.js');
     cachedVision = { ids: (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id), at: now() };
   }
   const vision = cachedVision.ids;
-  const preferred = ROSTERS[roster].filter(name => vision.includes(name)).slice(0, VOTERS);
-  return Promise.all((preferred.length ? preferred : vision.slice(0, 1)).map(gatewayClient));
+  const preferred = ROSTERS[roster].filter(name => vision.includes(name));
+  const fit = preferred.filter(name => (benched.get(name) ?? 0) <= now());
+  const names = preferred.length ? [...fit, ...preferred.filter(name => !fit.includes(name))] : vision.slice(0, 1);
+  return Promise.all(names.map(async name => ({ name, client: await gatewayClient(name) })));
 }
 
 // ── asking and agreeing ─────────────────────────────────────────────────────────────────────────────────────────
@@ -78,27 +89,37 @@ interface Question<T> { roster: Roster; system: string; text: string; images: Im
 /** Put one question to the roster's voters. Returns each voter's parsed answer (undefined for one that failed or
  * said nothing usable) and how many voters there were; `undefined` when no voter could be reached. Never throws. */
 async function poll<T>(question: Question<T>, options: AskOptions): Promise<{ answers: Array<T | undefined>; voters: number } | undefined> {
-  let clients: ModelClient[];
-  try { clients = await votersFor(question.roster, options); }
+  let all: Voter[];
+  try { all = await votersFor(question.roster, options); }
   catch (error) { quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error)); return undefined; }
-  if (!clients.length) return undefined;
-  const asks = clients.map(async client => {
+  if (!all.length) return undefined;
+  // Fakes handed in by a test all vote; the Gateway's are three voters and the rest spares.
+  const voting = options.modelClientsOf ? all : all.slice(0, VOTERS);
+  const spares = options.modelClientsOf ? [] : all.slice(VOTERS);
+  const ask = async (voter: Voter): Promise<T | undefined> => {
     try {
-      const result = await client.step({
+      const result = await voter.client.step({
         system: question.system,
         items: [{ type: 'text', role: 'user', text: question.text, images: question.images }],
         tools: [], toolChoice: 'none', maxOutputTokens: question.maxOutputTokens ?? 800,
         ...(options.signal ? { signal: options.signal } : {}),
         onTextDelta: () => undefined,
       });
+      if (process.env.CLIKCODE_CAPTCHA_VOTES) console.error(`vote ${question.roster} ${voter.name}: ${JSON.stringify(result.text.slice(0, 160))}`);
       return question.parse(result.text);
     } catch (error) {
-      quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
-      return undefined;
+      const message = error instanceof Error ? error.message : String(error);
+      if (process.env.CLIKCODE_CAPTCHA_VOTES) console.error(`vote ${question.roster} ${voter.name} failed: ${message.slice(0, 160)}`);
+      quiet('agent/computer/captcha-model')(message);
+      if (options.signal?.aborted) return undefined;
+      // A voter that cannot answer sits out for a while and the next model in the roster votes in its place.
+      if (voter.name) benched.set(voter.name, (options.now ?? Date.now)() + BENCH_MS);
+      const spare = spares.shift();
+      return spare ? ask(spare) : undefined;
     }
-  });
+  };
   const enough = question.enough;
-  return { answers: await untilAgreed(asks, got => clients.length > 1 && !!enough && enough(got)), voters: clients.length };
+  return { answers: await untilAgreed(voting.map(ask), got => voting.length > 1 && !!enough && enough(got)), voters: voting.length };
 }
 
 /** The value most voters gave, or undefined on a tie for first place (unless there was only one voter). */
@@ -190,13 +211,25 @@ export async function askTileMatch(question: TileQuestion, options: AskOptions =
   return votes.length ? votes.filter(Boolean).length * 2 > votes.length : undefined;
 }
 
-/** Does this square show the same thing as the example picture (GeeTest's "select the images with" + a sample)?
- * The share of yes votes (0..1), so the caller can take the best N; undefined is no answer at all. */
-export async function askSameAsExample(example: ImageInput, tile: ImageInput, options: AskOptions = {}): Promise<number | undefined> {
-  const polled = await poll({ roster: 'tile', system: 'You compare two pictures and answer with one word: yes or no.', maxOutputTokens: 300, images: [example, tile], parse: yesNo,
-    text: 'The first picture is an example symbol. Does the second picture show the same symbol (same shape, ignoring size, rotation, colour and background)? Answer one word: yes or no.' }, options);
-  const votes = polled?.answers.filter((v): v is boolean => v !== undefined) ?? [];
-  return votes.length ? votes.filter(Boolean).length / votes.length : undefined;
+/** Which squares of a grid show the same thing as an example picture (GeeTest's "select N images with" + a
+ * sample)? The squares, numbered from 1 left to right then top to bottom, that at least two voters name -- the
+ * `want` most-named of them. The whole grid is asked about at once: the squares are told apart by comparing them
+ * with each other, which a square on its own does not allow. Undefined is no usable answer. */
+export async function askSquaresLikeExample(example: ImageInput, grid: ImageInput, want: number, squares = 9, options: AskOptions = {}): Promise<number[] | undefined> {
+  const parse = (answer: string): number[] | undefined => {
+    const list = /"squares"\s*:\s*\[([^\]]*)\]/.exec(answer)?.[1];
+    if (list === undefined) return undefined;
+    return [...new Set(list.split(',').map(n => Number(n.trim())).filter(n => Number.isInteger(n) && n >= 1 && n <= squares))];
+  };
+  const text = `The first picture is an example. The second picture is a grid of ${squares} drawings, numbered 1 to ${squares} from left to right, then top to bottom. `
+    + `Exactly ${want} of the drawings show${want === 1 ? 's' : ''} the same object as the example; it may be rotated, resized, recoloured or on another background. `
+    + 'Compare the shapes and their parts carefully. Answer with JSON only: {"squares": [<number>, ...]}.';
+  const polled = await poll({ roster: 'order', system: 'You match drawings to an example and reply with JSON only.', text, images: [example, grid], parse }, options);
+  if (!polled) return undefined;
+  const votes = new Map<number, number>();
+  for (const answer of polled.answers) for (const square of answer ?? []) votes.set(square, (votes.get(square) ?? 0) + 1);
+  const need = polled.voters > 1 ? 2 : 1;
+  return [...votes].filter(([, count]) => count >= need).sort((a, b) => b[1] - a[1]).slice(0, want).map(([square]) => square);
 }
 
 /** Where to click on a free-form challenge ("click the icon that is different", "find all foods eaten hot"): the
@@ -208,7 +241,7 @@ export async function askClickPoints(images: ImageInput | ImageInput[], instruct
   const frames = Array.isArray(images) ? images : [images];
   const series = frames.length > 1 ? `These ${frames.length} pictures are frames of the same puzzle taken half a second apart, in order; watch what moves. ` : '';
   const text = `${series}This is a visual puzzle. The instruction is: "${instruction}". Where should one click to answer it? `
-    + 'If it asks for several things, give a point for each one. Give each point as fractions of the picture\'s width and height'
+    + 'If it asks for several things, give a point for each one. Give only the spots that are the answer: never a confirm, verify, skip or refresh button. Give each point as fractions of the picture\'s width and height'
     + (frames.length > 1 ? ' (on the last frame)' : '') + '. Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}.';
   const polled = await poll({ roster: 'click', system: 'You locate answers to visual puzzles and reply with JSON only.', text, images: frames, parse: parsePoints, maxOutputTokens: 1500, enough: got => sameAnswer(got).length > 0 }, options);
   if (!polled || polled.answers.every(a => a === undefined)) return undefined;
@@ -261,7 +294,7 @@ export function agreedDrags(answers: Array<NumberedDrag[] | undefined>, radius =
  * pattern", a slider that fits a piece into its gap): piece by piece, where two voters agree. An empty list means
  * no agreement; undefined no usable answer. */
 export async function askDrags(image: ImageInput, instruction: string, options: AskOptions = {}): Promise<NumberedDrag[] | undefined> {
-  const text = `This is a drag puzzle: "${instruction}". If numbered pieces form one continuous line (or complete picture) in number order, the pieces labelled "Move" are out of place and the others are already placed. `
+  const text = `This puzzle's instruction is: "${instruction}". If it is answered by clicking or selecting rather than by dragging something, answer {"drags": []} and nothing else. Otherwise it is a drag puzzle. If numbered pieces form one continuous line (or complete picture) in number order, the pieces labelled "Move" are out of place and the others are already placed. `
     + 'For a slider, the one piece is the slider handle (number it 1) and it is dropped where the puzzle piece fits its gap. '
     + 'For each piece to move, give where to grab it (the centre of its numbered circle, or of the piece) and where that point should end up. Fractions of the whole image. '
     + 'Answer with JSON only: {"drags": [{"n": 2, "from": {"x": 0.0, "y": 0.0}, "to": {"x": 0.0, "y": 0.0}}]}.';
@@ -289,12 +322,29 @@ export function parseCaptchaText(text: string): string | undefined {
 /** The characters in a classic "type what you see" captcha picture, exactly as drawn (case kept, no spaces), or
  * undefined when it could not be read. The reading most voters agree on wins (a tie goes to the best-ranked
  * model): one model alone misreads a 7 as a 1 now and then. */
+/** When no whole reading wins, the readings of the commonest length are voted on one character at a time: three
+ * voters that each misread a different character still spell the right code between them. Undefined when fewer
+ * than three readings share a length or some position has no majority. */
+export function characterVote(readings: Array<string | undefined>): string | undefined {
+  const byLength = new Map<number, string[]>();
+  for (const reading of readings) if (reading) byLength.set(reading.length, [...(byLength.get(reading.length) ?? []), reading]);
+  const same = [...byLength.values()].sort((a, b) => b.length - a.length)[0];
+  if (!same || same.length < 3) return undefined;
+  let out = '';
+  for (let i = 0; i < same[0]!.length; i++) {
+    const char = majority(same.map(reading => reading[i]!), same.length);
+    if (char === undefined) return undefined;
+    out += char;
+  }
+  return out;
+}
+
 export async function askCaptchaText(image: ImageInput, options: AskOptions = {}): Promise<string | undefined> {
   const polled = await poll({ roster: 'text', system: 'You read distorted text in pictures and reply with JSON only.', images: [image], parse: parseCaptchaText, enough: got => sharedBy(got, 2),
     text: 'This picture is a text captcha: distorted letters and digits on a noisy background. Read the characters exactly as drawn, keeping upper and lower case, ignoring lines and noise. '
       + 'If it shows a simple sum (like 3 + 4), give the result instead. Answer with JSON only: {"text": "..."}.' }, options);
   if (!polled) return undefined;
-  return majority(polled.answers, polled.voters) ?? polled.answers.find(reading => reading !== undefined);
+  return majority(polled.answers, polled.voters) ?? characterVote(polled.answers) ?? polled.answers.find(reading => reading !== undefined);
 }
 
 // ── listening ───────────────────────────────────────────────────────────────────────────────────────────────────

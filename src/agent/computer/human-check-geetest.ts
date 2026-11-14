@@ -178,9 +178,42 @@ async function refreshGeetest(page: Page, random: () => number, sleep: (ms: numb
   return true;
 }
 
+/** GeeTest hands out its example picture tiny (48px) and speckled with noise, which the models read badly. The
+ * speckle is taken out (each pixel becomes the median of its neighbourhood) and the picture enlarged, in a blank
+ * tab so no site rule gets in the way. The picture as given comes back when that cannot be done. */
+export async function cleanPicture(page: Page, picture: Buffer, mimeType: string): Promise<{ mimeType: string; data: string }> {
+  const given = { mimeType, data: picture.toString('base64') };
+  const blank = await page.context().newPage().catch(() => undefined);
+  if (!blank) return given;
+  try {
+    const cleaned = await blank.evaluate(`(async () => {
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('image')); i.src = ${JSON.stringify(`data:${mimeType};base64,${given.data}`)}; });
+      const W = img.naturalWidth, H = img.naturalHeight;
+      if (!W || !H || W > 200 || H > 200) return null;
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      const x = c.getContext('2d'); x.drawImage(img, 0, 0);
+      const from = x.getImageData(0, 0, W, H), to = x.createImageData(W, H);
+      const window = [];
+      for (let y = 0; y < H; y++) for (let px = 0; px < W; px++) for (let ch = 0; ch < 4; ch++) {
+        if (ch === 3) { to.data[(y * W + px) * 4 + 3] = 255; continue; }
+        window.length = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const yy = Math.min(H - 1, Math.max(0, y + dy)), xx = Math.min(W - 1, Math.max(0, px + dx)); window.push(from.data[(yy * W + xx) * 4 + ch]); }
+        window.sort((a, b) => a - b);
+        to.data[(y * W + px) * 4 + ch] = window[window.length >> 1];
+      }
+      x.putImageData(to, 0, 0);
+      const scale = Math.max(1, Math.round(288 / Math.max(W, H)));
+      const big = document.createElement('canvas'); big.width = W * scale; big.height = H * scale;
+      const bx = big.getContext('2d'); bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = 'high'; bx.drawImage(c, 0, 0, big.width, big.height);
+      return big.toDataURL('image/png').split(',')[1];
+    })()`).catch(() => null) as string | null;
+    return cleaned ? { mimeType: 'image/png', data: cleaned } : given;
+  } finally { await blank.close().catch(() => undefined); }
+}
+
 /** GeeTest's "select N images with <example>": a 3x3 drawing and a small example picture. The example is taken at
- * its full size, each square is cut out and compared with it by the voting models, and the N best are clicked. */
-async function solveGeetestMatch(page: Page, sameAsExample: Asks['sameAsExample'], random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
+ * its full size and shown to the voting models beside the grid; the squares two of them name are clicked. */
+async function solveGeetestMatch(page: Page, likeExample: Asks['likeExample'], random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
   const info = await page.evaluate(`(() => {
     const ex = document.querySelector('[class*="geetest_ques_tips"] img');
     const grid = Array.from(document.querySelectorAll('[class*="geetest_svg_item"], [class*="geetest_subitem"][class*="geetest_svg"], [class*="geetest_subitem"][class*="geetest_nine"]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 150 && r.height > 150; });
@@ -197,15 +230,18 @@ async function solveGeetestMatch(page: Page, sameAsExample: Asks['sameAsExample'
   } catch { example = undefined; }
   if (!example) return false;
   const mime = /\.png(?:$|\?)/i.test(info.src) || example[0] === 0x89 ? 'image/png' : 'image/jpeg';
-  const want = Math.max(1, Number(/select\s+(\d+)/i.exec(info.text)?.[1] ?? 1));
+  const want = Math.max(1, Number(/(\d+)/.exec(info.text)?.[1] ?? 1));
   const w = info.grid.width / 3, h = info.grid.height / 3;
   const cells = Array.from({ length: 9 }, (_, i) => ({ x: info.grid.x + (i % 3) * w, y: info.grid.y + Math.floor(i / 3) * h, width: w, height: h }));
-  const shots = await Promise.all(cells.map(cell => page.screenshot({ type: 'png', clip: { x: cell.x + 3, y: cell.y + 3, width: cell.width - 6, height: cell.height - 6 }, timeout: 8_000 }).catch(() => undefined)));
-  const scores = await Promise.all(shots.map(shot => shot ? sameAsExample({ mimeType: mime, data: example!.toString('base64') }, { mimeType: 'image/png', data: shot.toString('base64') }) : Promise.resolve(undefined)));
-  const ranked = scores.map((score, index) => ({ index, score: score ?? 0 })).filter(c => c.score > 0).sort((a, b) => b.score - a.score).slice(0, want);
-  if (!ranked.length) { trace?.(`GeeTest match ("${info.text}"): nothing matched the example`); return false; }
-  trace?.(`GeeTest match ("${info.text}"): clicking ${ranked.map(c => `${c.index}(${c.score.toFixed(2)})`).join(' ')}`);
-  for (const { index } of ranked) await visitorClick(page.mouse, toTarget(cells[index]!), random, sleep);
+  let grid: Buffer;
+  try { grid = await page.screenshot({ type: 'png', clip: info.grid, timeout: 8_000 }); } catch { return false; }
+  const picked = await likeExample(await cleanPicture(page, example, mime), { mimeType: 'image/png', data: grid.toString('base64') }, want);
+  if (picked?.length !== want) { trace?.(`GeeTest match ("${info.text}"): the voters did not agree on ${want}, asking for another`); return refreshGeetest(page, random, sleep); }
+  trace?.(`GeeTest match ("${info.text}"): clicking square ${picked.join(', ')}`);
+  for (const square of picked) await visitorClick(page.mouse, toTarget(cells[square - 1]!), random, sleep);
+  await sleep(400);
+  const submit = await page.evaluate(`(() => { const b = Array.from(document.querySelectorAll('[class*="geetest_submit"]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 10 && r.height > 10 && r.bottom > 0 && r.top < innerHeight; }); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
+  if (submit) await visitorClick(page.mouse, toTarget(submit), random, sleep);
   return true;
 }
 
@@ -236,7 +272,7 @@ export async function geetestStep(hands: Hands): Promise<boolean> {
     if (!state || state.state !== 'challenge') return true;
   }
   if (await solveGeetestSlide(page, random, sleep, trace) || await solveGeetestBoard(page, random, sleep, trace)) return true;
-  if (await solveGeetestIcons(page, asks.ordered, random, sleep, trace) || await solveGeetestMatch(page, asks.sameAsExample, random, sleep, trace)) return true;
+  if (await solveGeetestIcons(page, asks.ordered, random, sleep, trace) || await solveGeetestMatch(page, asks.likeExample, random, sleep, trace)) return true;
   // A type this solver does not know: ask GeeTest for another.
   return refreshGeetest(page, random, sleep);
 }

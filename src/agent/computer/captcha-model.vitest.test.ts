@@ -120,6 +120,15 @@ describe('reading text and spoken digits', () => {
     expect(await askCaptchaText({ mimeType: 'image/png', data: 'eA==' }, { modelClientsOf: async () => [fake('{"text":"ab12"}'), fake('{"text":"ab1z"}')] })).toBe('ab12');
   });
 
+  it('spells the code one character at a time when three voters each misread a different character', async () => {
+    const { characterVote } = await import('./captcha-model.js');
+    expect(characterVote(['K7mP4x', 'K7np4x', 'k7mP4x'])).toBe('K7mP4x');
+    // Two readings, or three that split three ways on a character, settle nothing.
+    expect(characterVote(['K7mP4x', 'K7np4x'])).toBeUndefined();
+    expect(characterVote(['abc', 'abd', 'abe'])).toBeUndefined();
+    expect(characterVote(['abc', 'abcd', undefined])).toBeUndefined();
+  });
+
   it('turns spoken numbers into digits', async () => {
     const { spokenDigits } = await import('./captcha-model.js');
     expect(spokenDigits('Seven, two. oh four 9')).toBe('72049');
