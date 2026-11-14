@@ -18,6 +18,22 @@ export async function piRpcPrompt(text: string, imagePaths: readonly string[]): 
   return `${JSON.stringify({ type: 'prompt', message: text, ...(images.length ? { images } : {}) })}\n`;
 }
 
+/** Asks what slash commands this pi has beyond its built-in TUI ones: its
+ * extensions' commands, prompt templates and skills (rpc-mode `get_commands`).
+ * Sent before the prompt; the answer is a `response` to `get_commands`. */
+export const PI_RPC_GET_COMMANDS = `${JSON.stringify({ id: 'clikcode-commands', type: 'get_commands' })}\n`;
+
+/** The commands in a `get_commands` response, as the slash menu lists them. */
+export function piRpcCommands(record: Record<string, unknown>): { name: string; description?: string }[] | undefined {
+  if (record.type !== 'response' || record.command !== 'get_commands' || record.success !== true) return undefined;
+  const listed = (record.data as { commands?: unknown } | undefined)?.commands;
+  if (!Array.isArray(listed)) return undefined;
+  return listed.flatMap((entry) => {
+    const { name, description } = (entry ?? {}) as { name?: unknown; description?: unknown };
+    return typeof name === 'string' && name ? [{ name, ...(typeof description === 'string' && description ? { description } : {}) }] : [];
+  });
+}
+
 /** The `steer` command; `id` correlates the `response` that says whether it was taken. */
 export function piRpcSteer(id: string, text: string): string {
   return `${JSON.stringify({ id, type: 'steer', message: text })}\n`;
