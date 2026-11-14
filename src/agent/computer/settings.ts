@@ -76,3 +76,16 @@ export async function unattendedEnabled(stateDir: string): Promise<boolean> {
 export async function setUnattended(stateDir: string, on: boolean): Promise<void> {
   await writeSettings(stateDir, { unattended: on });
 }
+
+/** On unless the user turned it off (`clikcode computer captcha off`): when a human check asks a puzzle, ClikCode
+ * solves it itself -- a picture of the challenge goes to the account's own Gateway vision model and its answer is
+ * played back into the page at a visitor's pace. This is built-in captcha solving, the same capability other
+ * agents get from an external solving service; nothing leaves this machine but the puzzle's pixels. */
+export async function captchaSolvingAllowed(stateDir: string): Promise<boolean> {
+  try { return (JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { solveCaptchas?: unknown }).solveCaptchas !== false; }
+  catch { return true; }
+}
+
+export async function setCaptchaSolving(stateDir: string, allowed: boolean): Promise<void> {
+  await writeSettings(stateDir, { solveCaptchas: allowed });
+}

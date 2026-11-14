@@ -1,5 +1,5 @@
 import { quiet } from '../runtime/lifecycle-log.js';
-import { browserProvider, computerEnabled, generatedPasswordsAllowed, setBrowserProvider, setComputerEnabled, setGeneratedPasswords } from '../agent/computer/settings.js';
+import { browserProvider, captchaSolvingAllowed, computerEnabled, generatedPasswordsAllowed, setBrowserProvider, setCaptchaSolving, setComputerEnabled, setGeneratedPasswords } from '../agent/computer/settings.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
@@ -41,6 +41,18 @@ export async function computerUnattended(setting: string | undefined): Promise<v
   process.stdout.write(on
     ? 'Unattended is on: a password, code or account choice the browser tool would ask you for is parked in the queue (needs-human, with the reason) and the agent goes on to the next vendor. See them with `clikcode computer queue --status needs-human`.\n'
     : 'Unattended is off: the browser tool asks you privately. Turn on with `clikcode computer unattended on`.\n');
+}
+
+/** `clikcode computer captcha on|off`: whether ClikCode solves a human-check puzzle itself (the default) with the
+ * account's own Gateway vision model, playing its answer back at a visitor's pace. */
+export async function computerCaptcha(setting: string | undefined): Promise<void> {
+  const dir = stateDirectory();
+  if (setting === 'on' || setting === 'off') await setCaptchaSolving(dir, setting === 'on');
+  else if (setting) throw new Error('Say on or off: clikcode computer captcha on');
+  const on = await captchaSolvingAllowed(dir);
+  if (isJsonDefaultMode()) return emitResult({ computer: { captchaSolving: on } });
+  process.stdout.write(on
+    ? 'Captcha solving is on (the default): when a human check asks a puzzle, a picture of it goes to your own Gateway vision model and the answer is clicked like a visitor would -- no external solving service, nothing leaves this machine but the puzzle. Turn off with `clikcode computer captcha off`.\n'    : 'Captcha solving is off: a puzzle falls through to the managed cloud browser (when on) or you. Turn on with `clikcode computer captcha on`.\n');
 }
 
 /** `clikcode computer headless on|off`: run ClikCode's browser with no window. A Linux computer with no display does this by itself. */
