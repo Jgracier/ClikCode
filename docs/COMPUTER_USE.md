@@ -33,17 +33,25 @@ between accounts, a payment, a CAPTCHA).
 ### Human checks, and the optional managed browser
 
 ClikCode's browser is your own Chrome on your own connection, so most "are you human"
-checks never appear. When one does, three things happen in order:
+checks never appear. When one does, four things happen in order:
 
 1. **One press.** A checkbox-style check ("I'm not a robot", "Verify you are human") gets
    the single press any visitor makes (`browser_use` action `human_check`; the connector
-   runner does it by itself). ClikCode never answers an image, audio or text puzzle.
-2. **The managed browser, if you turned it on.** `clikcode computer browser-use auto`
+   runner does it by itself).
+2. **Captcha solving (the default).** When the check asks a puzzle, ClikCode solves it
+   itself: a picture of the challenge goes to your own Gateway vision model, and its answer
+   is clicked back into the page at a visitor's pace — jittered cursor paths, uneven pauses,
+   no two trails alike — so the interaction reads as a person and nothing is flagged.
+   This is built-in captcha solving, the same capability other agents get from an external
+   solving service, except no third party is involved: nothing leaves this machine but the
+   puzzle's pixels, and the tab keeps its cookies and signed-in profile. `clikcode computer
+   captcha off` turns it off; what it cannot read or answer falls through to 3.
+3. **The managed browser, if you turned it on.** `clikcode computer browser-use auto`
    keeps the local browser for everything and lets a tab move to Browser Use Cloud only
    when a page blocks it (`browser_use` action `cloud`; the connector runner does it once
    per vendor). That service works on the challenge by itself. `on` runs every tab there;
    `off` (the default) is local only and stops the cloud session.
-3. **You.** `handoff` gives you a live view of the same tab on your phone.
+4. **You.** `handoff` gives you a live view of the same tab on your phone.
 
 Save the key first as the secret `browser-use/api-key`. A cloud session costs
 $0.02/hour, billed by the minute, and ClikCode stops it when its last tab closes, when the
@@ -514,8 +522,9 @@ What the browser tool does so a run does not depend on luck or on the user:
   looks like a key, token or password, or typed into a password/code field, is refused, and a `fill` with no
   text is filled from the profile autofill at replay. `run` replays through the same steps runner and stops at
   the first failure, returning the page change so the agent takes over from there. It also stops, and says so,
-  at a captcha, an SMS/authenticator code, a payment page or a review page: those are for the person
-  (`handoff`, `ask_user`, `queue`); nothing tries to solve or get around them. Opening a page on a host with a
+  at a captcha, an SMS/authenticator code, a payment page or a review page: the captcha is solved by
+  `human_check` itself (the vision model answers it); the rest are for the person
+  (`handoff`, `ask_user`, `queue`) and nothing tries to get around them. Opening a page on a host with a
   recipe mentions it. Recipes live in `computer/recipes/<host>.json` in the state dir.
 
 - **Generated site passwords (on by default).** Like a phone's "Strong Password": when `browser_use` fills a sign-up or

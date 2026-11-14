@@ -27,7 +27,7 @@ export function microPrompt(id: string, stop: StopInfo, maxCalls: number): strin
     `1. Read the task and saved progress below. For unfamiliar operations use connector_task tool=describe with args.tool to get the exact schema. Save useful progress with connector_work_note before stopping. Use connector_task to read the spec, copy task or proof as needed. For credential work, open its vendor address and observe.`,
     `2. To get a key: reach the key page, set the options, then browser_use action capture_secret with target = the final Create button, secret_name "${id}/key", vendor "${id}" and send_to [{ "to": "clikdeploy-connection", "with": { "integration": "${id}" } }]. Never print, type or repeat a key.`,
     '3. When it worked, save what you did with browser_use action recipe, recipe_op save (host, login_route, steps, key_page, capture_hint) so the next run needs no agent.',
-    '4. Never solve a captcha, give card details, buy a plan, or enter a phone or authenticator code. If a screen needs one of those, stop.',
+    '4. A captcha is solved by human_check itself (a picture of the puzzle goes to the vision model; never use an external solving service). If it cannot clear it, or a screen needs card details, a paid plan, or a phone or authenticator code, stop.',
     '5. Your last line must be exactly one of:',
     '   RESULT: captured',
     '   RESULT: completed',

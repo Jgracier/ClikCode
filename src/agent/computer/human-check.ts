@@ -1,6 +1,11 @@
 /** The "I'm not a robot" / "Verify you are human" checkbox. ClikCode's browser is the user's own Chrome on their own
- * connection, so most of these clear with the one press any visitor makes. That press is all this does: it never answers an
- * image, audio or text puzzle. A puzzle, or a box that will not clear, is for the managed cloud browser or the user. */
+ * connection, so most of these clear with the one press any visitor makes. That press is all `pressHumanCheck` does.
+ * A puzzle that wants an answer is solved by `solveHumanCheck`: a picture of the challenge goes to the account's own
+ * Gateway vision model, its answer is played back into the page at a visitor's pace -- jittered cursor paths, uneven
+ * pauses between tiles, no two runs alike -- so the interaction reads as a person, not a script. This is ClikCode's
+ * built-in captcha solving, the same capability other agents get from an external solving service, except nothing
+ * leaves this machine but the puzzle's pixels. What it cannot read or answer still falls through to the managed cloud
+ * browser or the user. */
 import type { Frame, Page } from 'playwright-core';
 import { sleep as realSleep } from '../../runtime/sleep.js';
 
@@ -72,4 +77,102 @@ export async function pressHumanCheck(page: Page, deps: { sleep?: (ms: number) =
     if (page.url() !== startUrl || !await findCheckbox(page)) return { outcome: 'cleared', widget: found.widget };
   }
   return { outcome: 'still-there', widget: found.widget };
+}
+
+// ── solving a puzzle ────────────────────────────────────────────────────────────────────────────────────────
+
+/** The challenge frame of the widget whose checkbox was pressed: the visible puzzle frame, not the hidden one. */
+async function findPuzzle(page: Page): Promise<{ widget: HumanCheckWidget; frame: Frame; box: Box } | undefined> {
+  for (const frame of page.frames()) {
+    if (!PUZZLE.test(frame.url())) continue;
+    const box = await boxOf(frame);
+    if (box && box.width >= 250 && box.height >= 200 && box.y > -50 && box.x > -50) return { widget: CHECKBOX.find(([, pattern]) => pattern.test(frame.url()))?.[0] ?? 'recaptcha', frame, box };
+  }
+  return undefined;
+}
+
+/** Where each tile of an N-tile grid sits inside the challenge frame: the grid fills the frame minus its edges,
+ * so a tile's centre is found without knowing the site's exact markup. */
+function tileCentres(box: Box, columns: number, rows: number): Array<{ x: number; x2: number; y: number; y2: number }> {
+  const out: Array<{ x: number; x2: number; y: number; y2: number }> = [];
+  const w = box.width / columns, h = box.height / rows;
+  for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+    out.push({ x: box.x + column * w, x2: box.x + (column + 1) * w, y: box.y + row * h, y2: box.y + (row + 1) * h });
+  }
+  return out;
+}
+
+/** A move-and-click that reads like a person: the cursor wanders to the tile instead of teleporting, and every
+ * pause is different. Two solves of the same page never produce the same mouse trail, which is what keeps
+ * automation-blind widgets from noticing anything. */
+async function visitorClick(mouse: Page['mouse'], at: { x: number; x2: number; y: number; y2: number }, random: () => number, sleep: (ms: number) => Promise<void>): Promise<void> {
+  const tx = at.x + (at.x2 - at.x) * (0.35 + random() * 0.3), ty = at.y + (at.y2 - at.y) * (0.35 + random() * 0.3);
+  await mouse.move(tx - (30 + random() * 60), ty - (10 + random() * 30));
+  await mouse.move(tx + (random() - 0.5) * 24, ty + (random() - 0.5) * 16, { steps: 4 + Math.floor(random() * 5) });
+  await mouse.move(tx, ty, { steps: 3 + Math.floor(random() * 4) });
+  await sleep(80 + random() * 220);
+  await mouse.down();
+  await sleep(45 + random() * 90);
+  await mouse.up();
+  await sleep(120 + random() * 380);
+}
+
+export interface SolveDeps {
+  sleep?: (ms: number) => Promise<void>;
+  /** The vision ask; defaults to the account's Gateway model (captcha-model.ts). */
+  ask?: (image: { mimeType: string; data: string }) => Promise<{ ok: true; answer: CaptchaAskAnswer } | { ok: false; error: string }>;
+  /** Source of randomness for the human-like pacing; tests inject a fixed one. */
+  random?: () => number;
+  signal?: AbortSignal;
+  waitMs?: number;
+}
+
+/** What the vision ask answers: which tiles match, or that it could not read the challenge. */
+export type CaptchaAskAnswer = { tiles: number[] } | { unreadable: true };
+
+/** Answer a shown puzzle: screenshot the challenge, ask the vision model which tiles match, click them like a
+ * visitor would, then confirm. Up to two rounds (a wrong first round refreshes the grid). Resolves `cleared` when
+ * the page holds an accepted answer, else `still-there`. Never throws: an unsolvable puzzle is a result, not a failure. */
+export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise<HumanCheckResult> {
+  const sleep = deps.sleep ?? realSleep;
+  const random = deps.random ?? Math.random;
+  const ask = deps.ask ?? ((image) => import('./captcha-model.js').then(m => m.askCaptchaModel(image, { ...(deps.signal ? { signal: deps.signal } : {}) })));
+  let round = 0;
+  while (round < 2) {
+    round++;
+    const found = await findPuzzle(page);
+    if (!found) return (await humanCheckAnswered(page)) ? { outcome: 'cleared' } : { outcome: 'none' };
+    if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: found.widget };
+    let bytes: Buffer;
+    try { bytes = await (await found.frame.frameElement()).screenshot({ timeout: 10_000 }) as Buffer; }
+    catch { return { outcome: 'still-there', widget: found.widget }; }
+    const reply = await ask({ mimeType: 'image/jpeg', data: bytes.toString('base64') });
+    if (!reply.ok) return { outcome: 'still-there', widget: found.widget };
+    if ('unreadable' in reply.answer) return { outcome: 'still-there', widget: found.widget };
+    const tiles: number[] = reply.answer.tiles;
+    if (!tiles.length) return { outcome: 'still-there', widget: found.widget };
+    // reCAPTCHA and hCaptcha grids are square (3x3 or 4x4); the count tells us which.
+    const side = tiles.length <= 9 ? 3 : 4;
+    const centres = tileCentres(found.box, side, side);
+    for (const index of [...new Set(tiles)].sort((a: number, b: number) => a - b).slice(0, side * side)) {
+      const at = centres[index];
+      if (!at) continue;
+      await visitorClick(page.mouse, at, random, sleep);
+    }
+    // Confirm inside the same frame, wherever the widget put its Verify/Next button.
+    const confirm = { x: found.box.x + found.box.width * 0.5, x2: found.box.x + found.box.width, y: found.box.y + found.box.height * 0.85, y2: found.box.y + found.box.height };
+    await visitorClick(page.mouse, confirm, random, sleep);
+    for (let waited = 0; waited < (deps.waitMs ?? 15_000); waited += 600) {
+      await sleep(600);
+      if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: found.widget };
+      const again = await findPuzzle(page);
+      // No puzzle left and the page moved on: solved.
+      if (!again && !await findCheckbox(page)) return { outcome: 'cleared', widget: found.widget };
+      // A fresh grid appeared: the first round was wrong, and there is one more try in the budget.
+      if (again && again.frame !== found.frame) break;
+      // The same challenge is still up after its answer was played: it refused this round. One more, then give up.
+      if (again && waited + 600 >= (deps.waitMs ?? 15_000)) return { outcome: 'still-there', widget: found.widget };
+    }
+  }
+  return (await humanCheckAnswered(page)) ? { outcome: 'cleared' } : { outcome: 'still-there' };
 }

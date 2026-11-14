@@ -150,6 +150,12 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
       } catch { return undefined; }
     },
     humanCheck: async () => (await (await import('./human-check.js')).pressHumanCheck(await page())).outcome,
+    solveCaptcha: async () => {
+      const { captchaSolvingAllowed } = await import('./settings.js');
+      if (!await captchaSolvingAllowed(options.stateDir)) return false;
+      const { solveHumanCheck } = await import('./human-check.js');
+      return (await solveHumanCheck(await page(), { ...(options.signal ? { signal: options.signal } : {}) })).outcome === 'cleared';
+    },
     escalate: async () => { const moved = await run({ action: 'cloud' }); return !moved.isError && /now in the managed cloud browser/.test(moved.output); },
     screenshot: async () => {
       try { const p = await page(); if (p.isClosed()) return undefined; const path = join(await shots(), `${options.id}.png`); await p.screenshot({ path, timeout: 10_000 }); return path; } catch { return undefined; }

@@ -2,7 +2,7 @@
  * returned `next` task without a model when the task is a known kind (connect a test account through the consent driver, capture a key by a
  * saved recipe, call a pipeline tool, call onboard again). A screen or task it does not know is handed to an agent as a structured request
  * in the work item's note; a wall only a person clears (captcha, SMS or authenticator code, payment, identity, review) is reported blocked
- * with a full humanStep. It never solves a captcha, spends money, or prints a key, and every vendor has a step and time budget. */
+ * with a full humanStep. It solves a captcha itself (the vision model answers the puzzle), never spends money, and never prints a key, and every vendor has a step and time budget. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import { IDENTITY_WALL, paymentWall } from './keygrab.js';

@@ -2,7 +2,8 @@
  * prefers (Google, then GitHub, then the profile email with a made-up password and any emailed code), finds the API key page (menu links,
  * then common paths), presses Create/Generate (naming the key ClikDeploy), and captures the key unseen with the browser's own capture and
  * delivery. Walls only a person clears (captcha, SMS, payment, identity, approval, a refused email) end it with a human step; a screen it
- * does not know ends it with what the page showed. It never solves a captcha, never pays, and never reads or prints a key: it only drives
+ * does not know ends it with what the page showed. It solves a captcha itself (the vision model answers
+ * the puzzle, at a visitor's pace), never pays, and never reads or prints a key: it only drives
  * a `KeygrabPort`, so the policy is tested with a fake site. The ClikCode recorder saves the recipe as the real browser actions succeed. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import type { HumanKind, HumanStep, StopInfo } from './connector-runner.js';
@@ -38,8 +39,11 @@ export interface KeygrabPort {
   probe?(url: string): Promise<{ html: boolean; status: number; url: string } | undefined>;
   /** Presses a key on the page (Escape closes a menu, Enter submits a search). */
   press?(key: string): Promise<string | undefined>;
-  /** Presses a checkbox-style human check ("I'm not a robot") once, as a visitor would. Never answers a puzzle. */
+  /** Presses a checkbox-style human check ("I'm not a robot") once, as a visitor would. */
   humanCheck?(): Promise<'cleared' | 'puzzle' | 'still-there' | 'none'>;
+  /** Solves the puzzle behind the check, when solving is on: a picture of the challenge goes to the account's own
+   * vision model and its answer is clicked at a visitor's pace. False when it is off, unavailable, or failed. */
+  solveCaptcha?(): Promise<boolean>;
   /** Moves this tab to the managed cloud browser at the same address, when the user turned that on. False when it is off, already there, or failed. */
   escalate?(): Promise<boolean>;
   screenshot(): Promise<string | undefined>;
@@ -241,9 +245,12 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const captchaOn = (view: KeyView): boolean => keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields })?.kind === 'captcha';
   let escalated = false;
   const pressedAt = new Set<string>();
-  /** A captcha in the way, in order: the one press a visitor makes on a checkbox-style check (once per page); then, once per run,
-   * the tab moves to the managed cloud browser if the user turned it on, whose service works on the challenge by itself. The
-   * runner never answers a puzzle: a page still blocked after that ends as a human step. */
+  let solved = false;
+  /** A captcha in the way, in order: the one press a visitor makes on a checkbox-style check (once per page); then,
+   * once per run, the puzzle itself is solved -- a picture of the challenge goes to the account's own vision model
+   * and its answer is clicked at a visitor's pace, so the tab keeps its cookies and sign-in; then, once per run,
+   * the tab moves to the managed cloud browser if the user turned it on, whose service works on the challenge
+   * by itself. A page still blocked after all that ends as a human step. */
   const pastCaptcha = async (view: KeyView): Promise<KeyView> => {
     if (!captchaOn(view)) return view;
     let v = view;
@@ -253,6 +260,14 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       const pressed = await act('press the human-check box once', () => port.humanCheck!());
       say(`human check: ${pressed}`);
       if (pressed === 'cleared') { await sleep(800); v = await dismissBanner(await port.look()); if (!captchaOn(v)) return v; }
+    }
+    if (!solved && port.solveCaptcha) {
+      solved = true;
+      if (await act('solve the captcha puzzle (the vision model answers it)', () => port.solveCaptcha!())) {
+        await sleep(800);
+        v = await dismissBanner(await port.look());
+        if (!captchaOn(v)) return v;
+      }
     }
     if (escalated || !port.escalate) return v;
     escalated = true;

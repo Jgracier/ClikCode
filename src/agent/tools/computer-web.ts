@@ -5,10 +5,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
-import { pressHumanCheck } from '../computer/human-check.js';
+import { pressHumanCheck, solveHumanCheck } from '../computer/human-check.js';
 import { adoptPage, allTabs, closeComputerPage, computerPage, moveTabToCloud, moveTabToLocal, tabIsInCloud, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
 import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, listTabs, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
-import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
+import { COMPUTER_OFF, captchaSolvingAllowed, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { findLabelledSecret, keyFieldValues, maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { storeSecretTool } from './store-secret.js';
@@ -552,9 +552,19 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
         return { output: `Typed the current authenticator code for ${args.mfa_account.trim()} into ${args.target} (${res.secondsRemaining}s left on it). It was not shown to you, and ClikDeploy keeps the seed, not this machine. Call auth_code again for the next code if the site asks for two in a row.` };
       }
       if (args.action === 'human_check') {
-        const checked = await pressHumanCheck(await computerPage(ctx.stateDir, args.tab));
+        const page = await computerPage(ctx.stateDir, args.tab);
+        const checked = await pressHumanCheck(page);
         const inCloud = tabIsInCloud(ctx.stateDir, args.tab);
         const next = inCloud ? 'Use handoff so the user can finish it.' : 'Try cloud (the managed browser, when the user has it on), then handoff.';
+        if (checked.outcome !== 'cleared' && !inCloud && await captchaSolvingAllowed(ctx.stateDir)) {
+          // The check wants more than a press: solve it here, in this signed-in tab. A picture of the puzzle goes to
+          // the account's own Gateway vision model and its answer is played back at a visitor's pace -- built-in
+          // captcha solving, no external service.
+          const solved = await solveHumanCheck(page, { ...(ctx.signal ? { signal: ctx.signal } : {}) });
+          return { output: solved.outcome === 'cleared' ? 'The puzzle was solved: the challenge accepted the answer. Observe the page and carry on.'
+            : solved.outcome === 'none' ? 'No puzzle is showing to answer. Observe the page: the block may be something else.'
+            : `The puzzle could not be solved (${solved.widget ?? 'unknown widget'}). ${next}` };
+        }
         return { output: checked.outcome === 'cleared' ? 'The human check accepted the press. Observe the page and carry on.'
           : checked.outcome === 'puzzle' ? `The check asks for a puzzle, which this browser does not answer. ${next}`
           : checked.outcome === 'still-there' ? `The box was pressed and did not clear. ${next}`
