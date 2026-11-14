@@ -109,4 +109,18 @@ describe('a terminal that covers its top rows', () => {
     terminalFacts.coveredTopRows = 0;
     expect(uncoveredRows(30)).toBe(30);
   });
+
+  it('the chat history is a screen of its own: the rows it leaves at the top are empty, not the end of the last conversation', () => {
+    terminalFacts.coveredTopRows = 4;
+    const rl = conversation(120);
+    try {
+      rl.scrollTranscript(10);
+      rl.flushPaint();
+      expect(rl.alternatePrevious.some((row) => /^row \d+/.test(row))).toBe(true);
+      rl.surface = 'history';
+      rl.paintCurrent();
+      expect(rl.alternatePrevious.some((row) => /^row \d+/.test(row))).toBe(false);
+      expect(rl.alternatePrevious.slice(0, 4).every((row) => row.trim() === '')).toBe(true);
+    } finally { rl.close(); }
+  });
 });

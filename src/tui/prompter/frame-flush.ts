@@ -178,7 +178,9 @@ export function flushAlternateFrame(
     ...(scrolled > 0 ? body.rows.slice(Math.max(0, first - transcriptLength), Math.max(0, bodyLength - scrolled - transcriptLength)) : []),
   ];
   const shownLive = scrolled > 0 ? live.slice(0, Math.max(0, height - above)) : live;
-  let rows = [...shownTranscript, ...shownLive];
+  // The chat history is a screen of its own, not a block under a conversation: whatever rows it leaves (those a phone covers at the
+  // top) are empty, never the end of the conversation it was opened from. They held the last answer's lines, above the list.
+  let rows = this.surface === 'conversation' ? [...shownTranscript, ...shownLive] : [...live];
   while (rows.length < height) rows.unshift('');
   // Never taller than the screen, by construction: the live rows are at most `height` and the history
   // gets exactly the rows they leave (`above`), so there is nothing to cut.
