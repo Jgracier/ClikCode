@@ -136,6 +136,8 @@ export async function gridRound(hands: Hands, frame: Frame, box: Box): Promise<{
     if (!hits.length) break;
     // A "click until none are left" grid does not keep a clicked square selected: it fades a new picture into it.
     // That, not the wording of the instruction (which comes in the visitor's language), is how one is told apart.
+    // Only a grid of nine separate photos is ever one of those; a single photo cut into sixteen never is.
+    if (!current.dynamic && current.tiles.length !== 9) break;
     const clicked = current.dynamic ? undefined : await readLayout(frame, box);
     if (!current.dynamic && !hits.some(index => clicked?.tiles[index] && !clicked.tiles[index]!.selected)) break;
     // Ask only about the squares that changed.
