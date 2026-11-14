@@ -121,44 +121,205 @@ export async function askTileMatch(question: TileQuestion, options: { signal?: A
 export const POINT_MODELS = ['gemini-3-flash', 'qwen3-vl-235b-a22b', 'gemini-2.5-pro'];
 let cachedPointModel: { id?: string; at: number } | undefined;
 
-/** Where to click on a free-form challenge picture ("click the icon that is different", "find all foods eaten hot"):
- * every spot as fractions of the picture's width and height. An empty list means the model saw nothing to click.
- * `undefined` is no usable answer. Never throws. */
-export async function askClickPoints(image: ImageInput, instruction: string, options: { signal?: AbortSignal; modelClientOf?: ModelClientOf; now?: () => number } = {}): Promise<Array<{ x: number; y: number }> | undefined> {
+/** Models that vote on where to click a free-form challenge. Measured 2026-11-14 on live hCaptcha riddles ("find
+ * all foods normally eaten hot"): these named every right square; others missed or added some. */
+export const CLICK_VOTERS = ['gemini-3-flash', 'claude-sonnet-5-5', 'gpt-5.2', 'claude-opus-5-5'];
+let cachedClickModels: { ids: string[]; at: number } | undefined;
+
+/** Points two or more voters agree on (within `radius` of each other, as fractions of the picture), averaged.
+ * A single model's stray click is dropped. */
+export function agreedPoints(answers: Array<Array<{ x: number; y: number }> | undefined>, radius = 0.08): Array<{ x: number; y: number }> {
+  const groups: Array<{ voters: Set<number>; points: Array<{ x: number; y: number }> }> = [];
+  answers.forEach((points, voter) => {
+    for (const p of points ?? []) {
+      const near = groups.find(g => g.points.some(q => Math.hypot(q.x - p.x, q.y - p.y) <= radius));
+      if (near) { near.voters.add(voter); near.points.push(p); } else groups.push({ voters: new Set([voter]), points: [p] });
+    }
+  });
+  return groups.filter(g => g.voters.size >= 2).map(g => ({ x: g.points.reduce((t, p) => t + p.x, 0) / g.points.length, y: g.points.reduce((t, p) => t + p.y, 0) / g.points.length }));
+}
+
+/** Where to click on a free-form challenge ("click the icon that is different", "find all foods eaten hot"): the
+ * spots, as fractions of the picture, that at least two voting models agree on. A challenge about motion ("the
+ * island the moving animal never visited") is sent as a short series of frames in order. An empty list means the
+ * voters saw nothing to click or did not agree -- the caller asks for another challenge. `undefined` is no usable
+ * answer at all. `modelClientsOf` is the test seam. Never throws. */
+export async function askClickPoints(images: ImageInput | ImageInput[], instruction: string, options: { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; now?: () => number } = {}): Promise<Array<{ x: number; y: number }> | undefined> {
   const now = options.now ?? Date.now;
-  let client: ModelClient;
+  const frames = Array.isArray(images) ? images : [images];
+  let clients: ModelClient[];
   try {
-    if (options.modelClientOf) client = await options.modelClientOf();
+    if (options.modelClientsOf) clients = await options.modelClientsOf();
     else {
-      if (!cachedPointModel || now() - cachedPointModel.at > VISION_TTL_MS) {
+      if (!cachedClickModels || now() - cachedClickModels.at > VISION_TTL_MS) {
         const { gatewayModels } = await import('../../gateway/models.js');
         const vision = (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id);
-        const id = POINT_MODELS.find(name => vision.includes(name)) ?? vision[0];
-        cachedPointModel = { ...(id ? { id } : {}), at: now() };
+        const ids = CLICK_VOTERS.filter(name => vision.includes(name)).slice(0, 3);
+        cachedClickModels = { ids: ids.length ? ids : vision.slice(0, 1), at: now() };
       }
-      if (!cachedPointModel.id) return undefined;
-      client = await gatewayModelClientOnce(cachedPointModel.id);
+      clients = await Promise.all(cachedClickModels.ids.map(id => gatewayModelClientOnce(id)));
     }
   } catch (error) {
     quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
     return undefined;
   }
-  const text = `This is a picture of a visual puzzle. The instruction is: "${instruction}". Where should one click to answer it? `
-    + 'If it asks for several things, give a point for each one. Give each point as fractions of the picture\'s width and height. '
-    + 'Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}.';
+  const series = frames.length > 1 ? `These ${frames.length} pictures are frames of the same puzzle taken half a second apart, in order; watch what moves. ` : '';
+  const text = `${series}This is a visual puzzle. The instruction is: "${instruction}". Where should one click to answer it? `
+    + 'If it asks for several things, give a point for each one. Give each point as fractions of the picture\'s width and height'
+    + (frames.length > 1 ? ' (on the last frame)' : '') + '. Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}.';
+  const answers = await Promise.all(clients.map(async client => {
+    try {
+      const result = await client.step({
+        system: 'You locate answers to visual puzzles and reply with JSON only.',
+        items: [{ type: 'text', role: 'user', text, images: frames }],
+        tools: [], toolChoice: 'none', maxOutputTokens: 1500,
+        ...(options.signal ? { signal: options.signal } : {}),
+        onTextDelta: () => undefined,
+      });
+      return parsePoints(result.text);
+    } catch (error) {
+      quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+      return undefined;
+    }
+  }));
+  if (answers.every(a => a === undefined)) return undefined;
+  // One voter (an account with a single vision model): its answer stands.
+  return clients.length === 1 ? (answers[0] ?? []) : agreedPoints(answers);
+}
+
+/** Does this square show the same thing as the example picture (GeeTest's "select the images with" + a sample)?
+ * The tile-reading models vote; the share of yes votes (0..1) is returned so the caller can take the best N.
+ * `modelClientsOf` is the test seam. Never throws; undefined is no answer at all. */
+export async function askSameAsExample(example: ImageInput, tile: ImageInput, options: { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; now?: () => number } = {}): Promise<number | undefined> {
+  let clients: ModelClient[];
   try {
-    const result = await client.step({
-      system: 'You locate answers to visual puzzles and reply with JSON only.',
-      items: [{ type: 'text', role: 'user', text, images: [image] }],
-      tools: [], toolChoice: 'none', maxOutputTokens: 800,
-      ...(options.signal ? { signal: options.signal } : {}),
-      onTextDelta: () => undefined,
-    });
-    return parsePoints(result.text);
+    clients = options.modelClientsOf ? await options.modelClientsOf() : await Promise.all((await tileModelIds(options.now ?? Date.now)).map(id => gatewayModelClientOnce(id)));
   } catch (error) {
     quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
     return undefined;
   }
+  const votes = (await Promise.all(clients.map(async client => {
+    try {
+      const result = await client.step({
+        system: 'You compare two pictures and answer with one word: yes or no.',
+        items: [{ type: 'text', role: 'user', text: 'The first picture is an example symbol. Does the second picture show the same symbol (same shape, ignoring size, rotation, colour and background)? Answer one word: yes or no.', images: [example, tile] }],
+        tools: [], toolChoice: 'none', maxOutputTokens: 300,
+        ...(options.signal ? { signal: options.signal } : {}),
+        onTextDelta: () => undefined,
+      });
+      return /\byes\b/i.test(result.text) ? true : /\bno\b/i.test(result.text) ? false : undefined;
+    } catch { return undefined; }
+  }))).filter((v): v is boolean => v !== undefined);
+  return votes.length ? votes.filter(Boolean).length / votes.length : undefined;
+}
+
+/** The client for the pointing model, cached like the list: the model that answers "where" and "what does it say". */
+async function pointClient(now: () => number, modelClientOf?: ModelClientOf): Promise<ModelClient | undefined> {
+  if (modelClientOf) return modelClientOf();
+  if (!cachedPointModel || now() - cachedPointModel.at > VISION_TTL_MS) {
+    const { gatewayModels } = await import('../../gateway/models.js');
+    const vision = (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id);
+    const id = POINT_MODELS.find(name => vision.includes(name)) ?? vision[0];
+    cachedPointModel = { ...(id ? { id } : {}), at: now() };
+  }
+  return cachedPointModel.id ? gatewayModelClientOnce(cachedPointModel.id) : undefined;
+}
+
+async function askText(image: ImageInput, system: string, text: string, options: { signal?: AbortSignal; modelClientOf?: ModelClientOf; now?: () => number }): Promise<string | undefined> {
+  try {
+    const client = await pointClient(options.now ?? Date.now, options.modelClientOf);
+    if (!client) return undefined;
+    const result = await client.step({
+      system, items: [{ type: 'text', role: 'user', text, images: [image] }],
+      tools: [], toolChoice: 'none', maxOutputTokens: 800,
+      ...(options.signal ? { signal: options.signal } : {}),
+      onTextDelta: () => undefined,
+    });
+    return result.text;
+  } catch (error) {
+    quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+}
+
+/** Models that read distorted captcha text well; up to three the account lists read the picture in parallel. */
+export const TEXT_MODELS = ['gemini-3-flash', 'gpt-4.1-mini', 'claude-sonnet-5-5', 'qwen3-vl-235b-a22b'];
+let cachedTextModels: { ids: string[]; at: number } | undefined;
+
+const TEXT_PROMPT = 'This picture is a text captcha: distorted letters and digits on a noisy background. Read the characters exactly as drawn, keeping upper and lower case, ignoring lines and noise. '
+  + 'If it shows a simple sum (like 3 + 4), give the result instead. Answer with JSON only: {"text": "..."}.';
+
+export function parseCaptchaText(text: string): string | undefined {
+  const found = /\{[^{}]*"text"\s*:\s*"([^"]*)"[^{}]*\}/.exec(text);
+  const value = found?.[1]?.replace(/\s+/g, '');
+  return value && value.length <= 12 ? value : undefined;
+}
+
+/** The characters in a classic "type what you see" captcha picture, exactly as drawn (case kept, no spaces), or
+ * undefined when it could not be read. Several models read it at once and the reading most of them agree on wins
+ * (a tie goes to the best-ranked model): one model alone misreads a 7 as a 1 now and then. `modelClientsOf` is the
+ * test seam. Never throws. */
+export async function askCaptchaText(image: ImageInput, options: { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; now?: () => number } = {}): Promise<string | undefined> {
+  const now = options.now ?? Date.now;
+  let clients: ModelClient[];
+  try {
+    if (options.modelClientsOf) clients = await options.modelClientsOf();
+    else {
+      if (!cachedTextModels || now() - cachedTextModels.at > VISION_TTL_MS) {
+        const { gatewayModels } = await import('../../gateway/models.js');
+        const vision = (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id);
+        const ids = TEXT_MODELS.filter(name => vision.includes(name)).slice(0, 3);
+        cachedTextModels = { ids: ids.length ? ids : vision.slice(0, 1), at: now() };
+      }
+      clients = await Promise.all(cachedTextModels.ids.map(id => gatewayModelClientOnce(id)));
+    }
+  } catch (error) {
+    quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+  const readings = await Promise.all(clients.map(async client => {
+    try {
+      const result = await client.step({
+        system: 'You read distorted text in pictures and reply with JSON only.',
+        items: [{ type: 'text', role: 'user', text: TEXT_PROMPT, images: [image] }],
+        tools: [], toolChoice: 'none', maxOutputTokens: 800,
+        ...(options.signal ? { signal: options.signal } : {}),
+        onTextDelta: () => undefined,
+      });
+      return parseCaptchaText(result.text);
+    } catch (error) {
+      quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+      return undefined;
+    }
+  }));
+  const counts = new Map<string, number>();
+  for (const reading of readings) if (reading) counts.set(reading, (counts.get(reading) ?? 0) + 1);
+  let best: string | undefined, most = 0;
+  for (const reading of readings) if (reading && (counts.get(reading) ?? 0) > most) { best = reading; most = counts.get(reading) ?? 0; }
+  return best;
+}
+
+/** A drag answer: where to grab and where to let go, as fractions of the picture. */
+export type DragAnswer = { from: { x: number; y: number }; to: { x: number; y: number } };
+
+/** Where to drag on a drag puzzle ("drag the segment to complete the line", a slider that fits a piece into its gap).
+ * Never throws; undefined is no usable answer. */
+export async function askDrag(image: ImageInput, instruction: string, options: { signal?: AbortSignal; modelClientOf?: ModelClientOf; now?: () => number } = {}): Promise<DragAnswer | undefined> {
+  const text = await askText(image, 'You solve drag puzzles and reply with JSON only.',
+    `This picture is a drag puzzle. The instruction is: "${instruction}". Where should the piece be grabbed, and where should it be dropped to solve it? `
+    + 'For a slider, grab the slider handle and drop it where the piece fits its gap. Give both points as fractions of the picture\'s width and height. '
+    + 'Answer with JSON only: {"from": {"x": 0.0-1.0, "y": 0.0-1.0}, "to": {"x": 0.0-1.0, "y": 0.0-1.0}}.', options);
+  return text ? parseDrag(text) : undefined;
+}
+
+export function parseDrag(text: string): DragAnswer | undefined {
+  const found = /\{[\s\S]*"from"[\s\S]*"to"[\s\S]*\}/.exec(text);
+  if (!found) return undefined;
+  try {
+    const value = JSON.parse(found[0].slice(0, found[0].lastIndexOf('}') + 1)) as { from?: { x?: unknown; y?: unknown }; to?: { x?: unknown; y?: unknown } };
+    const ok = (p?: { x?: unknown; y?: unknown }): p is { x: number; y: number } => !!p && typeof p.x === 'number' && typeof p.y === 'number' && p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
+    return ok(value.from) && ok(value.to) ? { from: { x: value.from.x, y: value.from.y }, to: { x: value.to.x, y: value.to.y } } : undefined;
+  } catch { return undefined; }
 }
 
 /** The points in a model's answer: {"points": [...]} or a single {"x","y"}; values outside 0..1 are dropped. */
