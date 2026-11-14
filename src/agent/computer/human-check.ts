@@ -108,7 +108,20 @@ async function findPuzzle(page: Page): Promise<{ widget: HumanCheckWidget; frame
   for (const frame of page.frames()) {
     if (!PUZZLE.test(frame.url())) continue;
     const box = await boxOf(frame);
-    if (shownPuzzleBox(box)) return { widget: /hcaptcha/i.test(frame.url()) ? 'hcaptcha' : 'recaptcha', frame, box };
+    if (!shownPuzzleBox(box)) continue;
+    const widget: HumanCheckWidget = /hcaptcha/i.test(frame.url()) ? 'hcaptcha' : /arkoselabs|funcaptcha/i.test(frame.url()) ? 'arkose' : 'recaptcha';
+    // Arkose nests its game in a frame inside its own frame: the innermost one holds the puzzle.
+    if (widget === 'arkose') {
+      let inner = frame, innerBox = box;
+      for (const child of page.frames()) {
+        let up = child.parentFrame(), within = false;
+        while (up) { if (up === frame) { within = true; break; } up = up.parentFrame(); }
+        const childBox = within ? await boxOf(child) : undefined;
+        if (childBox && childBox.width >= 200 && childBox.height >= 150) { inner = child; innerBox = childBox; }
+      }
+      return { widget, frame: inner, box: innerBox };
+    }
+    return { widget, frame, box };
   }
   return undefined;
 }
@@ -673,6 +686,70 @@ async function solveRecaptchaAudio(page: Page, frame: Frame, box: Box, transcrib
   return 'typed';
 }
 
+/** One step of an Arkose (FunCaptcha) game. Its puzzles share one shape: an instruction, sometimes a start
+ * button, then either arrows that step through candidate pictures with a Submit button, or a set of pictures to
+ * click one of. With arrows, every candidate is looked at once, the voting models pick the one that answers the
+ * instruction, and the arrows are pressed back to it before Submit. Without arrows the models say where to click.
+ * `stuck` means nothing could be done this round. */
+async function playArkose(page: Page, frame: Frame, box: Box, askPoints: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<'played' | 'stuck'> {
+  const READ = `(() => {
+    const seen = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 6 && r.height > 6 && s.visibility !== 'hidden' && s.display !== 'none'; };
+    const r = e => { if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; };
+    const clickable = Array.from(document.querySelectorAll('button, a, [role="button"]')).filter(seen);
+    const label = e => ((e.getAttribute('aria-label') || '') + ' ' + (e.textContent || '')).replace(/\\s+/g, ' ').trim();
+    const find = re => clickable.find(e => re.test(label(e)));
+    const heading = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"], [role="text"], legend, p')).filter(seen).map(e => (e.textContent || '').replace(/\\s+/g, ' ').trim()).filter(t => t.length > 12).sort((a, b) => b.length - a.length)[0] || '';
+    const of = /(\\d+)\\s*(?:of|\\/)\\s*(\\d+)/.exec(document.body.innerText || '');
+    return { instruction: heading.slice(0, 240), start: r(find(/^(verify|start|begin|start puzzle|solve|continue|try again)\\b/i)), next: r(find(/next|right arrow/i) || document.querySelector('.right-arrow')), submit: r(find(/^submit\\b/i)), total: of ? Number(of[2]) : 0 };
+  })()`;
+  type Read = { instruction: string; start: Box | null; next: Box | null; submit: Box | null; total: number };
+  const read = async (): Promise<Read | undefined> => { try { return await frame.evaluate(READ) as Read; } catch { return undefined; } };
+  const inPage = (b: Box) => toTarget({ ...b, x: b.x + box.x, y: b.y + box.y });
+  const shot = async (): Promise<{ mimeType: string; data: string } | undefined> => { try { return { mimeType: 'image/jpeg', data: (await (await frame.frameElement()).screenshot({ type: 'jpeg', quality: 85, timeout: 8_000 }) as Buffer).toString('base64') }; } catch { return undefined; } };
+  let state = await read();
+  if (!state) return 'stuck';
+  if (state.start && !state.next && !state.submit) {
+    trace?.('Arkose: starting the puzzle');
+    await visitorClick(page.mouse, inPage(state.start), random, sleep);
+    await sleep(2_500);
+    state = await read();
+    if (!state) return 'stuck';
+  }
+  if (state.next && state.submit) {
+    // Step through every candidate once. Arkose's carousel wraps, so after the last one it is back at the first.
+    const options: Array<{ mimeType: string; data: string }> = [];
+    const count = Math.min(state.total >= 2 ? state.total : 6, 10);
+    for (let i = 0; i < count; i++) {
+      const picture = await shot();
+      if (!picture) return 'stuck';
+      // A carousel of unknown length: stop when the first picture comes round again.
+      if (!state.total && i > 1 && picture.data === options[0]!.data) break;
+      options.push(picture);
+      await visitorClick(page.mouse, inPage(state.next), random, sleep);
+      await sleep(500 + random() * 300);
+    }
+    const { askPick } = await import('./captcha-model.js');
+    const pick = await askPick(options, state.instruction);
+    if (!pick) { trace?.(`Arkose ("${state.instruction}"): the voters did not agree on one of ${options.length}`); return 'stuck'; }
+    trace?.(`Arkose ("${state.instruction}"): picture ${pick} of ${options.length}`);
+    // Every candidate was stepped past once, so the carousel is back at the first picture.
+    for (let i = 0; i < pick - 1; i++) { await visitorClick(page.mouse, inPage(state.next), random, sleep); await sleep(350 + random() * 250); }
+    const again = await read();
+    if (again?.submit) await visitorClick(page.mouse, inPage(again.submit), random, sleep);
+    return 'played';
+  }
+  const picture = await shot();
+  if (!picture || !state.instruction) return 'stuck';
+  const points = await askPoints([picture], state.instruction);
+  if (!points?.length) { trace?.(`Arkose ("${state.instruction}"): no agreed spot`); return 'stuck'; }
+  trace?.(`Arkose ("${state.instruction}"): clicking (${points[0]!.x.toFixed(2)},${points[0]!.y.toFixed(2)})`);
+  const x = box.x + points[0]!.x * box.width, y = box.y + points[0]!.y * box.height;
+  await visitorClick(page.mouse, { x: x - 4, x2: x + 4, y: y - 4, y2: y + 4 }, random, sleep);
+  const after = await read();
+  if (after?.submit) await visitorClick(page.mouse, inPage(after.submit), random, sleep);
+  return 'played';
+}
+
 /** Answer a shown puzzle the way a person does. The challenge's own layout is read from the page (instruction,
  * target, every square's position, the Verify button), each square is asked about on its own -- far more reliable
  * than asking for a list of indices over the whole grid -- and the matches are clicked at a visitor's pace. A
@@ -695,7 +772,7 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   let firstWidget: HumanCheckWidget | undefined;
   let repressed = 0;
   let refreshed = 0;
-  let inPageTries = 0, textTried = false, heldOnce = false;
+  let inPageTries = 0, textTried = false, heldOnce = false, arkoseStuck = 0;
   let pictureRounds = deps.audioFirst ? 2 : 0, audio: 'untried' | 'on' | 'refused' = 'untried';
   while (Date.now() - began < budgetMs) {
     if (deps.signal?.aborted) break;
@@ -770,6 +847,14 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
       }
       const verify = (await readLayout(found.frame, found.box))?.verify ?? layout.verify;
       confirm = verify ? toTarget(verify) : { x: found.box.x + found.box.width * 0.7, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 15 };
+    } else if (found.widget === 'arkose') {
+      const played = await playArkose(page, found.frame, found.box, askPoints, random, sleep, deps.trace);
+      if (played === 'stuck') { if (++arkoseStuck >= 3) return { outcome: 'still-there', widget: firstWidget }; await sleep(2_000); }
+      else await sleep(2_500);
+      // The game shows its next round or goes away by itself: there is no separate confirm to press here.
+      if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: firstWidget };
+      if (!await findPuzzle(page)) return { outcome: 'cleared', widget: firstWidget };
+      continue;
     } else if (found.widget === 'hcaptcha') {
       // hCaptcha draws most challenges on a canvas: a grid of pictures, or one picture to click a spot on. A visitor
       // clicks where the answer is, so the model is asked where; a drag puzzle (or one it cannot place) is swapped
