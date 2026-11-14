@@ -775,9 +775,10 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
       // clicks where the answer is, so the model is asked where; a drag puzzle (or one it cannot place) is swapped
       // for another challenge, up to five times, before this check is left to a person.
       const instruction = String(await found.frame.evaluate(`((document.querySelector('.prompt-text') || {}).innerText || '').replace(/\\s+/g, ' ').trim()`).catch(() => ''));
-      const drag = instruction && /\b(?:drag|slide|move)\b/i.test(instruction) ? await askDrag(grid, instruction) : undefined;
+      const wantsDrag = !!instruction && /\b(?:drag|slide|move)\b/i.test(instruction);
+      const drags = wantsDrag ? await import('./captcha-model.js').then(m => m.askDrags(grid, instruction, signal)).catch(() => undefined) : undefined;
       let points: Array<{ x: number; y: number }> | undefined;
-      if (instruction && !drag && !/\b(?:drag|slide)\b/i.test(instruction)) {
+      if (instruction && !wantsDrag) {
         // A puzzle about motion is answered from a few frames, half a second apart, not one still.
         const frames = [grid];
         if (/\b(?:mov(?:e|es|ing)|visit(?:ed|s)?|path|went|travel(?:s|led)?|jump(?:s|ed)?)\b/i.test(instruction)) {
@@ -788,12 +789,15 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
         }
         points = await askPoints(frames, instruction);
       }
-      if (drag) {
-        deps.trace?.(`"${instruction}": dragging (${drag.from.x.toFixed(2)},${drag.from.y.toFixed(2)}) to (${drag.to.x.toFixed(2)},${drag.to.y.toFixed(2)})`);
-        const at = (p: { x: number; y: number }) => ({ x: found.box.x + p.x * found.box.width, y: found.box.y + p.y * found.box.height });
-        await visitorDrag(page.mouse, at(drag.from), at(drag.to), random, sleep);
+      const submitBox = async (): Promise<{ x: number; x2: number; y: number; y2: number }> => {
         const submit = await found.frame.evaluate(`(() => { const b = document.querySelector('.button-submit'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
-        confirm = submit ? toTarget({ ...submit, x: submit.x + found.box.x, y: submit.y + found.box.y }) : { x: found.box.x + found.box.width * 0.8, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 20 };
+        return submit ? toTarget({ ...submit, x: submit.x + found.box.x, y: submit.y + found.box.y }) : { x: found.box.x + found.box.width * 0.8, x2: found.box.x + found.box.width * 0.95, y: found.box.y + found.box.height - 50, y2: found.box.y + found.box.height - 20 };
+      };
+      if (drags?.length) {
+        deps.trace?.(`"${instruction}": dragging ${drags.map(d => `piece ${d.n} to (${d.to.x.toFixed(2)},${d.to.y.toFixed(2)})`).join(', ')}`);
+        const at = (p: { x: number; y: number }) => ({ x: found.box.x + p.x * found.box.width, y: found.box.y + p.y * found.box.height });
+        for (const d of drags) { await visitorDrag(page.mouse, at(d.from), at(d.to), random, sleep, 1); await sleep(400 + random() * 400); }
+        confirm = await submitBox();
       } else if (points?.length) {
         deps.trace?.(`"${instruction}": clicking ${points.map(p => `(${p.x.toFixed(2)},${p.y.toFixed(2)})`).join(' ')}`);
         for (const p of points.slice(0, 9)) {
