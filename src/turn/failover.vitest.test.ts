@@ -154,6 +154,10 @@ describe('an ineligible account is named as such, not as a generic failure', () 
   it('still recognizes a separate real quota or auth signal', () => {
     expect(classifyAccountFailure(new Error('usage balance exhausted'), { isResultError: true })).toBe('quota-exhausted');
     expect(classifyAccountFailure(new Error('oauth token has expired'), { isResultError: true })).toBe('authentication-required');
+    // Claude Code on an account whose payment is past due: a billing hold, not a sign-in or a spent quota.
+    // Read as "other", every turn went back to it; and "out of usage credits" never moved the chat on.
+    expect(classifyAccountFailure(new Error("Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or renew at https://claude.ai/settings/billing"))).toBe('account-ineligible');
+    expect(classifyAccountFailure(new Error("Request failed: Claude CLI error: You're out of usage credits. Switch to another model"))).toBe('quota-exhausted');
     // Cline's words for a sign-in it can no longer refresh; read as "other", the account stayed ready.
     expect(classifyAccountFailure(new Error('Internal error: cline requires re-authentication.'))).toBe('authentication-required');
   });
