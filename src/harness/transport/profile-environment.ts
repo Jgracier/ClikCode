@@ -34,12 +34,15 @@ function copilotGhShimDirectory(): string | undefined {
 }
 
 /** What a new account profile adds to its environment beyond the profile
- * root (the catalog's profileExtraEnv), with `{profile}/...` resolved under
- * that profile's path. Undefined when the harness declares nothing. */
+ * root (the catalog's profileExtraEnv), with `{profile}` resolved to that
+ * profile's path wherever it appears (`{profile}/adc.json`, and Junie's
+ * `-Duser.home={profile}`). Undefined when the harness declares nothing. */
 export function profileExtraEnvironment(harness: AiLocalHarnessDefinition, profilePath: string): Record<string, string> | undefined {
   const declared = Object.entries(harness.profileExtraEnv ?? {});
   if (!declared.length) return undefined;
-  return Object.fromEntries(declared.map(([name, value]) => [name, value.startsWith('{profile}/') ? join(profilePath, value.slice('{profile}/'.length)) : value]));
+  return Object.fromEntries(declared.map(([name, value]) => [name, value.startsWith('{profile}/')
+    ? join(profilePath, value.slice('{profile}/'.length))
+    : value.split('{profile}').join(profilePath)]));
 }
 
 /** The one place that turns an account's nativeProfile into an actual
