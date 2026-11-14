@@ -9,7 +9,7 @@
 import type { Frame, Page } from 'playwright-core';
 import { sleep as realSleep } from '../../runtime/sleep.js';
 
-export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider';
+export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose';
 export interface HumanCheckResult {
   /** cleared: the check accepted the press. puzzle: it asked for more than a press. still-there: pressed, nothing changed. none: no checkbox on the page. */
   outcome: 'cleared' | 'puzzle' | 'still-there' | 'none';
@@ -280,6 +280,36 @@ async function visitorDrag(mouse: Page['mouse'], from: { x: number; y: number },
   await mouse.up();
 }
 
+/** Finds a press-and-hold button on the page (runs in the page). */
+const HOLD_BUTTON = `(() => {
+    const el = Array.from(document.querySelectorAll('#px-captcha, [id^="px-captcha"], [class*="px-captcha"], [aria-label*="Press & Hold" i], [aria-label*="Press and Hold" i]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 60 && r.height > 20 && r.bottom > 0 && r.top < innerHeight; })
+      || Array.from(document.querySelectorAll('button, [role="button"], div, p')).find(e => { const r = e.getBoundingClientRect(); return r.width > 60 && r.width < 500 && r.height > 20 && r.height < 140 && /^press (and|&) hold$/i.test((e.textContent || '').trim()) && r.bottom > 0 && r.top < innerHeight; });
+    if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height };
+  })()`;
+
+/** "Press and hold" (PerimeterX / HUMAN): a button that wants the pointer held down for several seconds. It is
+ * held like a finger -- small tremors, no fixed duration -- until the button goes away or says it is done. */
+async function solvePressHold(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
+  const button = await page.evaluate(HOLD_BUTTON).catch(() => null) as Box | null;
+  if (!button) return false;
+  trace?.('press and hold: holding the button');
+  const x = button.x + button.width * (0.4 + random() * 0.2), y = button.y + button.height * (0.4 + random() * 0.2);
+  await page.mouse.move(x - 40 - random() * 40, y - 20 + random() * 10);
+  await page.mouse.move(x, y, { steps: 6 + Math.floor(random() * 5) });
+  await sleep(150 + random() * 250);
+  await page.mouse.down();
+  const startUrl = page.url();
+  // Held until the button is gone, the page moves on, or 15 seconds pass; then a moment longer, as people do.
+  for (let held = 0; held < 15_000; held += 400) {
+    await sleep(400);
+    await page.mouse.move(x + (random() - 0.5) * 1.6, y + (random() - 0.5) * 1.6);
+    if (page.url() !== startUrl || !await page.evaluate(HOLD_BUTTON).catch(() => null)) break;
+  }
+  await sleep(200 + random() * 300);
+  await page.mouse.up();
+  return true;
+}
+
 /** A slider check drawn in the page itself (GeeTest, Alibaba's "slide to verify", similar): a handle on a track,
  * usually under a picture with a gap. The model says where the handle is and where the piece fits; the handle is
  * dragged that far along its track. A plain "slide to the end" track is dragged to its end. */
@@ -360,11 +390,14 @@ async function solveGeetestMatch(page: Page, random: () => number, sleep: (ms: n
  * then the box's own confirm button if it has one. */
 async function solveInPageBox(page: Page, askPoints: (images: Array<{ mimeType: string; data: string }>, instruction: string) => Promise<Array<{ x: number; y: number }> | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
   const box = await page.evaluate(`(() => {
-    const el = Array.from(document.querySelectorAll('[class*="geetest_box"], [class*="geetest_panel_box"]')).find(e => { const r = e.getBoundingClientRect(); return r.width > 200 && r.height > 200 && r.bottom > 0 && r.top < innerHeight && getComputedStyle(e).visibility !== 'hidden'; });
+    const shown = e => { const r = e.getBoundingClientRect(); return r.width > 200 && r.height > 150 && r.bottom > 0 && r.top < innerHeight && getComputedStyle(e).visibility !== 'hidden'; };
+    const el = Array.from(document.querySelectorAll('[class*="geetest_box"], [class*="geetest_panel_box"], awswaf-captcha, #captcha-container awswaf-captcha, [id*="aws-waf-captcha"], [class*="amzn-captcha"]')).find(shown);
     if (!el) return null;
+    document.querySelectorAll('[data-clikcode-box]').forEach(e => e.removeAttribute('data-clikcode-box'));
     el.setAttribute('data-clikcode-box', '1');
     const r = el.getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height, text: (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160) };
+    const text = (el.shadowRoot ? el.shadowRoot.textContent : el.innerText) || '';
+    return { x: r.x, y: r.y, width: r.width, height: r.height, text: text.replace(/\\s+/g, ' ').trim().slice(0, 160) };
   })()`).catch(() => null) as (Box & { text: string }) | null;
   if (!box) return false;
   if (await solveGeetestMatch(page, random, sleep, trace)) return true;
@@ -378,7 +411,13 @@ async function solveInPageBox(page: Page, askPoints: (images: Array<{ mimeType: 
     const x = box.x + p.x * box.width, y = box.y + p.y * box.height;
     await visitorClick(page.mouse, { x: x - 4, x2: x + 4, y: y - 4, y2: y + 4 }, random, sleep);
   }
-  const submit = await page.evaluate(`(() => { const b = Array.from(document.querySelectorAll('[data-clikcode-box="1"] [class*="geetest_submit"], [data-clikcode-box="1"] [class*="geetest_commit"]')).find(e => e.getBoundingClientRect().width > 0); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`).catch(() => null) as Box | null;
+  await sleep(500);
+  const submit = await page.evaluate(`(() => {
+    const box = document.querySelector('[data-clikcode-box="1"]'); if (!box) return null;
+    const root = box.shadowRoot || box;
+    const b = Array.from(root.querySelectorAll('[class*="geetest_submit"], [class*="geetest_commit"], button, [role="button"]')).find(e => { const r = e.getBoundingClientRect(); const c = typeof e.className === 'string' ? e.className : ''; return r.width > 0 && (/geetest_(submit|commit)/.test(c) || /^(confirm|verify|submit|done|next|check)$/i.test((e.textContent || '').trim())); });
+    if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height };
+  })()`).catch(() => null) as Box | null;
   if (submit) await visitorClick(page.mouse, toTarget(submit), random, sleep);
   return true;
 }
@@ -479,7 +518,7 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   let firstWidget: HumanCheckWidget | undefined;
   let repressed = 0;
   let refreshed = 0;
-  let inPageTries = 0, textTried = false;
+  let inPageTries = 0, textTried = false, heldOnce = false;
   let pictureRounds = deps.audioFirst ? 2 : 0, audio: 'untried' | 'on' | 'refused' = 'untried';
   while (Date.now() - began < budgetMs) {
     if (deps.signal?.aborted) break;
@@ -498,6 +537,8 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
       // No widget challenge: the page may carry its own check -- a slider to drag, or a picture of characters to type.
       if (!firstWidget && inPageTries < 4) {
         inPageTries++;
+        if (heldOnce && !await page.evaluate(HOLD_BUTTON).catch(() => null)) return { outcome: 'cleared', widget: 'hold' };
+        if (await solvePressHold(page, random, sleep, deps.trace)) { heldOnce = true; await sleep(2_000); continue; }
         const slid = await solveSlider(page, askDrag, random, sleep, deps.trace, false, askPoints);
         if (slid) { await sleep(2_000); continue; }
       }
