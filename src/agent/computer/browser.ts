@@ -546,7 +546,7 @@ async function notDeskHeld(stateDir: string, pages: readonly Page[]): Promise<Pa
   const free: Page[] = [];
   for (const page of pages) {
     if (page.isClosed()) continue;
-    const id = await targetIdOf(page).catch(() => undefined);
+    const id = await targetIdOf(page).catch(quiet('agent/computer/browser'));
     if (!id || !heldIds.has(id)) free.push(page);
   }
   return free;
@@ -559,7 +559,7 @@ export async function putTabOnDesk(stateDir: string, tab: string | undefined, in
   const info = await readDeskInfo(stateDir);
   const page = mine(stateDir, tab);
   if (!info || !page || page.isClosed() || cloudPages.has(page)) return undefined;
-  const targetId = await targetIdOf(page).catch(() => undefined);
+  const targetId = await targetIdOf(page).catch(quiet('agent/computer/browser'));
   if (!targetId) return undefined;
   const item = await addDeskItem(stateDir, { targetId, url: page.url(), ...input });
   return { item, address: deskItemAddress(info, item.id) };
