@@ -51,7 +51,17 @@ function findResults(value: unknown): { results: OnboardResult[]; skipped: Array
 
 export function liveClient(signal?: AbortSignal): DeployClient {
   const call = async (name: string, args: Record<string, unknown>, timeoutMs = 90_000): Promise<unknown> => {
-    const run = await runCli('clikdeploy', ['tools', 'run', name, '--args-json', JSON.stringify(args), '--confirm'], { ...(signal ? { signal } : {}), timeoutMs });
+    const json = JSON.stringify(args);
+    // A whole API description does not fit in a process argument: it goes through a private file instead.
+    let file: string | undefined;
+    if (json.length > 90_000) {
+      const [{ mkdtemp, writeFile }, { tmpdir }, { join }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path')]);
+      file = join(await mkdtemp(join(tmpdir(), 'clikcode-args-')), 'args.json');
+      await writeFile(file, json, { mode: 0o600 });
+    }
+    let run: Awaited<ReturnType<typeof runCli>>;
+    try { run = await runCli('clikdeploy', ['tools', 'run', name, ...(file ? ['--args-file', file] : ['--args-json', json]), '--confirm'], { ...(signal ? { signal } : {}), timeoutMs }); }
+    finally { if (file) { const { rm } = await import('node:fs/promises'); const { dirname } = await import('node:path'); await rm(dirname(file), { recursive: true, force: true }).catch(quiet('agent/computer/connector-runner-live')); } }
     if (run.missing) throw new Error('The clikdeploy command is not installed on this computer.');
     return unwrapTool(run.text);
   };
@@ -145,6 +155,19 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
       },
     }),
     // The vendor's rendered pages, read with no model: which wall, if any, a key stands behind.
+    async findReference(id: string, homepage: string) {
+      const { findReferenceRendered } = await import('./connector-reference-live.js');
+      const found = await findReferenceRendered(options.stateDir, id, homepage);
+      const reference = found.reference;
+      if (!reference) return { applied: false, note: `no description file on ${found.visited.length} pages${found.docsUrls.length ? `; ${found.docsUrls.length} read like API documentation` : ''}`, docsUrls: found.docsUrls };
+      try {
+        // The document read in the browser is sent itself: the server often cannot fetch what a docs site serves a visitor.
+        await liveClient(options.signal).tool('connector_build_apply', reference.document ? { id, document: reference.document, sourceUrl: reference.url } : { id, url: reference.url, kind: reference.kind });
+        return { applied: true, note: `${reference.kind} reference found (${reference.via}) and stored as the draft`, docsUrls: found.docsUrls };
+      } catch (error) {
+        return { applied: false, note: `a ${reference.kind} reference was found at ${reference.url} but could not be stored: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`, docsUrls: [...new Set([reference.url, ...found.docsUrls])] };
+      }
+    },
     async qualify(id: string) {
       const [{ qualifyVendor, humanStepForQualify }, { qualifyPorts }] = await Promise.all([import('./connector-qualify.js'), import('./connector-qualify-live.js')]);
       const result = await qualifyVendor(id, qualifyPorts(options.stateDir, liveClient(options.signal)));

@@ -66,6 +66,9 @@ export interface BrowserDriver {
   recordBackoff?(id: string): Promise<Date>;
   /** A screen no rule knows: one bounded agent micro-task (the account_use and browser_use tools only) that gets the key or finishes consent and saves a recipe. Absent: the screen is handed on in a note. */
   agentTask?(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }): Promise<DriveOutcome>;
+  /** Looks for the vendor's API reference with the browser (no model): the description file its documentation pages load. When one is found it is
+   * stored as the connector's draft. `docsUrls` are pages that read like API documentation, for an agent to write from when no file exists. */
+  findReference?(id: string, homepage: string): Promise<{ applied: boolean; note: string; docsUrls: string[] }>;
   /** Reads the vendor's rendered sign-up, pricing and developer pages (no model) and says whether a key needs a person, with the wall as a human step when it does. */
   qualify?(id: string): Promise<{ lane: 'auto' | 'human' | 'dead' | 'research'; summary: string; human?: HumanStep }>;
   keygrab(id: string, url: string, budget: { maxMs: number; /** The task's other addresses (homepage, sign-up, docs): where to start if `url` is no web page. */ alternates?: string[] }): Promise<DriveOutcome>;
@@ -148,6 +151,22 @@ function blockedCall(next: Next): AgentCall | undefined {
 function waitMs(task: string, fallback = 5_000): number {
   const m = /(\d+)\s*(?:s\b|sec)/i.exec(task);
   return Math.min(Math.max(m ? Number(m[1]) * 1000 : fallback, 1_000), 60_000);
+}
+
+/** A task that says the vendor has no machine-readable reference yet: its homepage and the documentation pages it names. */
+export function referenceTask(task: string): { homepage: string; docs: string[] } | undefined {
+  const m = /^(?:docs-to-spec|find-reference):[^(\n]{0,160}\((https:\/\/[^)\s]+)\)/i.exec(task.trim());
+  if (!m) return undefined;
+  const after = /inspected:\s*([^\n]*?)(?:\.\s+Read the docs|$)/i.exec(task)?.[1] ?? '';
+  return { homepage: m[1]!, docs: (after.match(/https:\/\/[^\s,]+/g) ?? []).map(url => url.replace(/[.,]+$/, '')).slice(0, 4) };
+}
+
+/** The agent's task when the browser found no description file: write one from the documentation, or say plainly that there is no API. */
+export function docsToSpecPrompt(id: string, homepage: string, docs: readonly string[]): string {
+  return `docs-to-spec: ${id} (${homepage}) has no machine-readable API reference: a browser search of its site found none. `
+    + (docs.length ? `These pages read like its API documentation: ${docs.join(' , ')}. ` : 'No page that reads like API documentation was found either: look for its developer or API pages yourself (the site footer, a help centre, a separate docs or developers address). ')
+    + `Read the documentation and write an OpenAPI 3 document of the REST endpoints it documents (do not invent any), then store it with connector_task tool=connector_build_apply {id: "${id}", document, sourceUrl}. `
+    + 'If the vendor documents no API at all, or only one given out by its sales team, end with RESULT: wall no-api (or sales) and one sentence of evidence.';
 }
 
 /** What to do about the task ClikDeploy returned. `recipe` says whether a saved recipe exists for it. */
@@ -265,6 +284,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   // advance to another task within the vendor budget; an unchanged task never retries.
   const agentTasksTried = new Set<string>();
   let qualified = false;
+  let referenceTried = false;
   const viaAgent = async (stop: StopInfo, wholeTask = false): Promise<DriveOutcome | undefined> => {
     const taskKey = JSON.stringify([result.stage, result.next.kind, result.next.task]);
     if (agentTasksTried.has(taskKey) || !driver.agentTask || !wholeTask && (stop.human || humanStepFor(id, stop))) return undefined;
@@ -344,7 +364,18 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
         case 'done': return out(plan.status, result.reason || result.next.task);
         case 'human': return await wall(plan.humanStep, true);
         case 'handoff': {
-          const task = result.next.task;
+          let task = result.next.task;
+          // "No reference found" is first answered with a browser, not an agent: most documentation sites load a description file a plain fetch never sees.
+          const wanted = referenceTask(task);
+          if (wanted && driver.findReference && !referenceTried) {
+            referenceTried = true;
+            const found = await gate(() => driver.findReference!(id, wanted.homepage)).catch(() => ({ applied: false, note: 'the browser search could not run', docsUrls: [] as string[] }));
+            actions.push(`reference search: ${cap(say(found.note), 200)}`);
+            if (found.applied) { result = fix(await client.onboard(id)); break; }
+            // Nothing machine-readable: the agent writes the spec, from the documentation pages the browser saw.
+            const docs = [...new Set([...found.docsUrls, ...wanted.docs])].slice(0, 4);
+            task = docsToSpecPrompt(id, wanted.homepage, docs);
+          }
           const agent = await viaAgent({ kind: 'unknown', message: plan.why, url: siteUrl(task) ?? '', pageText: task, controls: [] }, true);
           if (agent?.ok) {
             actions.push(agent.note ?? 'the agent micro-task finished');
