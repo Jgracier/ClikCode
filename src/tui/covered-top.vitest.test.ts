@@ -66,6 +66,29 @@ describe('a terminal that covers its top rows', () => {
     } finally { rl.close(); }
   });
 
+  it('a phone keyboard covering more rows (its page reports the rows above its view) moves nothing in a chat at its live edge', () => {
+    // ClikDeploy's page keeps ClikCode's whole height while the keyboard is up and reports the rows hidden above the view as covered,
+    // instead of resizing: the repaint that answer causes must leave the conversation and the composer exactly where they were.
+    terminalFacts.coveredTopRows = 4;
+    for (const rows of [120, 6]) {
+      const rl = conversation(rows);
+      try {
+        rl.paintCurrent();
+        rl.flushPaint();
+        const before = [...rl.alternatePrevious];
+        expect(before.some((row) => /^row \d+/.test(row))).toBe(true);
+        terminalFacts.coveredTopRows = 23;
+        rl.paintCurrent();
+        rl.flushPaint();
+        expect(rl.alternatePrevious).toEqual(before);
+        terminalFacts.coveredTopRows = 4;
+        rl.paintCurrent();
+        rl.flushPaint();
+        expect(rl.alternatePrevious).toEqual(before);
+      } finally { rl.close(); }
+    }
+  });
+
   it('scrolled all the way back, the first line rests just below the covered rows', () => {
     terminalFacts.coveredTopRows = 4;
     const rl = conversation(120);
