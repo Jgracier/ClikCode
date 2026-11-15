@@ -184,7 +184,12 @@ export function docsToSpecPrompt(id: string, homepage: string, docs: readonly st
 export function planFor(result: OnboardResult, recipe: boolean): Plan {
   const next = result.next;
   if (result.state === 'published' || result.state === 'complete') return { do: 'done', status: 'published' };
-  if (result.state === 'attention') return { do: 'done', status: 'blocked' };
+  if (result.state === 'attention') {
+    // One parked step is an agent's to try before it is a person's: registering the platform's OAuth app at the vendor.
+    const parked = result.attention as { kind?: string; url?: string; instruction?: string; reasonCode?: string } | null | undefined;
+    if (parked?.kind === 'app-registration') return { do: 'human', humanStep: { kind: 'app-registration', reasonCode: parked.reasonCode || 'oauth-app', ...(parked.url ? { url: parked.url } : {}), ...(parked.instruction ? { instructions: parked.instruction } : {}) } };
+    return { do: 'done', status: 'blocked' };
+  }
   if (!next || next.kind === 'none') return result.state === 'blocked' ? { do: 'done', status: 'blocked' } : { do: 'handoff', why: 'onboarding supplied no next step without confirming completion' };
   if (next.kind === 'agent' && (isSpecFix(next.task) || isSpecFix(result.reason))) return { do: 'specfix', why: 'the auth probe ended path-wrong or in the wrong place: a spec fix', ...(blockedCall(next) ? { call: blockedCall(next)! } : {}) };
   if (next.kind === 'call') return { do: 'wait', ms: waitMs(next.task) };

@@ -239,6 +239,14 @@ describe('connectors run', () => {
     f.driver.agentTask = async (_id, stop) => { tries++; return { ok: false, stop: { ...stop, message: 'the vendor reviews every app' } }; };
     expect((await runConnectors(failed.client, f.driver, quick)).outcomes[0]).toMatchObject({ status: 'human', humanStep: { kind: 'app-registration' } });
     expect(tries).toBe(1);
+    // The same step as ClikDeploy parks it (an attention record, no next step) is tried the same way.
+    const parked: OnboardResult = { id: 'acme', state: 'attention', stage: 'finish', reason: 'the platform has no OAuth app at this vendor', next: { kind: 'none', task: 'terminal' }, attention: { kind: 'app-registration', url: step.url, instruction: step.instructions, reasonCode: 'oauth-app' } };
+    const fromPark = fakeClient([parked], { acme: [published('acme')] });
+    const p = fakeDriver([]);
+    let parkTries = 0;
+    p.driver.agentTask = async () => { parkTries++; return { ok: true }; };
+    expect((await runConnectors(fromPark.client, p.driver, quick)).outcomes[0]!.status).toBe('published');
+    expect(parkTries).toBe(1);
     // A cloud vendor's developer settings are a cloud console: never an agent's.
     const cloud = fakeClient([register('googleapis-drive')]);
     const g = fakeDriver([]);
