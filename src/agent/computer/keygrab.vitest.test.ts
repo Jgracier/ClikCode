@@ -727,6 +727,22 @@ describe('a phone check', () => {
   });
 });
 
+describe('a vendor that refuses free email', () => {
+  it('sends the sign-up again once with a connected business address', async () => {
+    const pages = {
+      'https://vendor.example/': { text: 'Create your account. Please use a work email to sign up.', controls: ['Sign up'], fields: ['Work email'], on: { 'Sign up': 'https://vendor.example/keys' } },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    };
+    const site = fakeSite(pages);
+    await runKeygrab({ ...site.port, businessEmail: async () => 'me@company.example' }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
+    expect(site.log.slice(1, 3)).toEqual(['fill Work email', 'click Sign up']);
+    expect(site.filled).toContainEqual(['Work email', 'me@company.example']);
+    const none = fakeSite(pages);
+    expect(await runKeygrab({ ...none.port, businessEmail: async () => undefined }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined })).toMatchObject({ ok: false });
+    expect(none.filled).toEqual([]);
+  });
+});
+
 describe('keygrab and a checkbox-style human check', () => {
   const open: Record<string, Page> = {
     'https://vendor.example/': { text: 'Dashboard for your account and settings', controls: ['API Keys'], on: { 'API Keys': 'https://vendor.example/keys' } },
@@ -750,6 +766,18 @@ describe('keygrab and a checkbox-style human check', () => {
     site.port.humanCheck = async () => { if (++tries === 2) Object.assign(pages, open); return 'cleared'; };
     expect((await run(site)).ok).toBe(true);
     expect(tries).toBe(2);
+  });
+
+  it('carries on when the solver finds no check behind the captcha words', async () => {
+    const site = fakeSite({ 'https://vendor.example/': { text: 'Complete the security check before continuing. Dashboard for your account', controls: ['API Keys'], on: { 'API Keys': 'https://vendor.example/keys' } }, 'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey });
+    let tries = 0;
+    site.port.humanCheck = async () => { tries++; return 'none'; };
+    expect((await run(site)).ok).toBe(true);
+    expect(tries).toBe(1);
+    // A real challenge frame is never waved through that way.
+    const framed = fakeSite({ 'https://vendor.example/': { text: 'Verify to continue to your account', captchaFrame: true } });
+    framed.port.humanCheck = async () => 'none';
+    expect(await run(framed)).toMatchObject({ ok: false, stop: { kind: 'captcha' } });
   });
 
   it('ends as a captcha for a person when the check does not clear, without hammering it', async () => {

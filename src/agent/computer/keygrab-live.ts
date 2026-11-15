@@ -125,6 +125,11 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
       }
       return undefined;
     },
+    businessEmail: async () => {
+      const { emailStatus } = await import('./email-api.js');
+      const free = /@(?:gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|icloud|me|mac|aol|proton(?:mail)?|gmx|mail|yandex|zoho)\./i;
+      return (await emailStatus(options.stateDir)).mailboxes.map(m => m.email).find(address => !free.test(address));
+    },
     smsCode: async (since: number) => {
       const { smsSource, waitForTextedCode } = await import('./sms-code.js');
       if (!await smsSource(options.stateDir)) return undefined;
