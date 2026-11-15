@@ -187,6 +187,7 @@ export function planFor(result: OnboardResult, recipe: boolean): Plan {
   if (result.state === 'attention') {
     // One parked step is an agent's to try before it is a person's: registering the platform's OAuth app at the vendor.
     const parked = result.attention as { kind?: string; url?: string; instruction?: string; reasonCode?: string } | null | undefined;
+    if (parked?.kind === 'vendor-contact' && !/access requested|no access form/i.test(parked.instruction ?? '')) return { do: 'human', humanStep: { kind: 'vendor-contact', reasonCode: parked.reasonCode || 'sales', ...(parked.url ? { url: parked.url } : {}), ...(parked.instruction ? { instructions: parked.instruction } : {}) } };
     if (parked?.kind === 'app-registration') return { do: 'human', humanStep: { kind: 'app-registration', reasonCode: parked.reasonCode || 'oauth-app', ...(parked.url ? { url: parked.url } : {}), ...(parked.instruction ? { instructions: parked.instruction } : {}) } };
     return { do: 'done', status: 'blocked' };
   }
@@ -302,6 +303,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   let qualified = false;
   let referenceTried = false;
   let appRegistrationTried = false;
+  let accessRequested = false;
   const viaAgent = async (stop: StopInfo, wholeTask = false): Promise<DriveOutcome | undefined> => {
     const taskKey = JSON.stringify([result.stage, result.next.kind, result.next.task]);
     if (agentTasksTried.has(taskKey) || !driver.agentTask || !wholeTask && (stop.human || humanStepFor(id, stop))) return undefined;
@@ -394,6 +396,12 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
             if (done && !done.ok) actions.push(`the agent could not register the OAuth app: ${cap(say(done.stop.message), 160)}`);
             // What the agent met (a paid plan, an app review) is the real step now: it replaces "register an app" on the person's list.
             if (done && !done.ok && done.stop.human && done.stop.human.kind !== 'app-registration') return await stopped(done.stop);
+          }
+          // A sales-only vendor is asked once, through its own form, for developer access; its answer comes by email.
+          if (step.kind === 'vendor-contact' && driver.agentTask && !accessRequested && !CLOUD_VENDOR.test(id) && !/access requested|no access form/i.test(`${step.instructions ?? ''} ${result.reason}`)) {
+            accessRequested = true;
+            const asked = await viaAgent({ kind: 'unknown', message: `access-request: ${cap(say(step.instructions ?? result.reason), 260)}`, url: step.url ?? siteUrl(result.next.task) ?? '', pageText: `Ask the vendor for developer API access for connector "${id}". What ClikDeploy says: ${cap(say(step.instructions ?? result.reason), 600)}`, controls: [] }, true);
+            if (asked && !asked.ok && asked.stop.human) return await stopped(asked.stop);
           }
           return await wall(plan.humanStep, true);
         }

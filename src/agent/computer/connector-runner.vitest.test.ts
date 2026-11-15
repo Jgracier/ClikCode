@@ -256,6 +256,22 @@ describe('connectors run', () => {
     expect(cloudTries).toBe(0);
   });
 
+  it('asks a sales-only vendor for access once through an agent, and not again once it was asked', async () => {
+    const sales = (instructions: string): OnboardResult => ({ id: 'acme', state: 'attention', stage: 'finish', reason: 'sales only', next: { kind: 'none', task: 'terminal' }, attention: { kind: 'vendor-contact', url: 'https://acme.example/contact', instruction: instructions, reasonCode: 'sales' } });
+    const d = fakeDriver([]);
+    const asked: string[] = [];
+    d.driver.agentTask = async (_id, stop) => { asked.push(stop.message); return { ok: false, stop: { ...stop, message: 'sales: access requested through the contact form', human: { kind: 'vendor-contact', reasonCode: 'sales', instructions: 'access requested through the contact form' } } }; };
+    const out = (await runConnectors(fakeClient([sales('contact the vendor for access')]).client, d.driver, quick)).outcomes[0]!;
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatch(/^access-request: /);
+    expect(out.status).toBe('human');
+    const again = fakeDriver([]);
+    let tries = 0;
+    again.driver.agentTask = async () => { tries++; return { ok: true }; };
+    await runConnectors(fakeClient([sales('sales: access requested through the contact form on 2026-11-15')]).client, again.driver, quick);
+    expect(tries).toBe(0);
+  });
+
   it('captures a key by a saved recipe, and hands on when there is no recipe', async () => {
     const keyTask = (id: string): OnboardResult => ({ id, state: 'needs-agent', stage: 'connect', reason: 'no credential', next: { kind: 'agent', task: `Connector "${id}": no credential is connected. Connect an account with the API key stored in the vault.` } });
     const withRecipe = fakeClient([keyTask('salad')], { salad: [published('salad')] });
