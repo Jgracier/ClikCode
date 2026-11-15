@@ -392,6 +392,8 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
               break;
             }
             if (done && !done.ok) actions.push(`the agent could not register the OAuth app: ${cap(say(done.stop.message), 160)}`);
+            // What the agent met (a paid plan, an app review) is the real step now: it replaces "register an app" on the person's list.
+            if (done && !done.ok && done.stop.human && done.stop.human.kind !== 'app-registration') return await stopped(done.stop);
           }
           return await wall(plan.humanStep, true);
         }
