@@ -31,6 +31,8 @@ export interface KeygrabPort {
   emailCode(): Promise<string | undefined>;
   /** The current authenticator-app code for the open site, when its seed is kept in ClikDeploy (undefined when none is). */
   authenticatorCode?(): Promise<string | undefined>;
+  /** The code in a text sent to the profile phone after `since` (unix ms), when a Mac reads the user's texts (undefined when none does or none came). */
+  smsCode?(since: number): Promise<string | undefined>;
   /** Opens the link in the newest verification email in this tab. */
   emailLink(): Promise<boolean>;
   /** Captures the key unseen and sends it to ClikDeploy. `target` is a control that reveals it; none: the page already shows it. */
@@ -234,9 +236,39 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     await sleep(800);
     return true;
   };
+  let phoneTried = false;
+  /** A phone check is not a wall when the user's texts can be read: the profile phone is typed (when the page asks for the number), the
+   * code it texts is read and typed. Once per run; a page that still asks after that is the person's. */
+  const pastPhone = async (view: KeyView): Promise<boolean> => {
+    if (phoneTried || !port.smsCode) return false;
+    phoneTried = true;
+    let v = view;
+    let since = Date.now() - 180_000;
+    const phoneField = v.fields.find(f => /phone|mobile|\btel\b|cell/i.test(f));
+    const codeField = (fields: string[]): string | undefined => fields.find(f => /code|otp|pin|digit|verif/i.test(f));
+    if (phoneField && !codeField(v.fields)) {
+      await act('type the profile phone', () => port.fill(phoneField));
+      since = Date.now();
+      const send = [...v.controls].reverse().find(c => pressable(c) && /^(send|text me|send (?:the )?code|get (?:a )?code|verify|continue|next|submit)\b/i.test(c.name));
+      if (!send) return false;
+      await click(send.name);
+      await sleep(2_000);
+      v = await port.look();
+    }
+    const field = codeField(v.fields) ?? (v.fields.length === 1 ? v.fields[0] : undefined);
+    if (!field) return false;
+    const code = await act('read the texted code', () => port.smsCode!(since));
+    if (!code) return false;
+    await act('type the texted code', () => port.fill(field, code));
+    const go = [...v.controls].reverse().find(c => pressable(c) && /^(verify|confirm|continue|submit|next|done)\b/i.test(c.name));
+    if (go) await click(go.name);
+    await sleep(1_500);
+    return true;
+  };
   const guard = async (view: KeyView): Promise<void> => {
     const wall = keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields });
     if (wall?.kind === 'mfa' && await pastAuthenticator(view)) return;
+    if ((wall?.kind === 'sms' || (wall?.kind === 'mfa' && /text|sms|phone|mobile/i.test(view.text))) && await pastPhone(view)) return;
     if (wall) throw await wallStop(view, wall);
   };
   const captchaOn = (view: KeyView): boolean => keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields })?.kind === 'captcha';

@@ -699,6 +699,34 @@ it('says which wall it read in the reason code: a card or a plan, a work address
   expect(keygrabWall('Gmail addresses are not allowed.')?.reasonCode).toBe('free-mail');
 });
 
+describe('a phone check', () => {
+  const pages = {
+    'https://vendor.example/': { text: 'Verify your phone number to continue. We will text you a code.', controls: ['Send code'], fields: ['Phone number'], on: { 'Send code': 'https://vendor.example/code' } },
+    'https://vendor.example/code': { text: 'Enter the code we texted to your phone', controls: ['Verify'], fields: ['Verification code'], on: { Verify: 'https://vendor.example/keys' } },
+    'https://vendor.example/keys': { text: 'API keys', controls: ['Create API key'], on: { 'Create API key': 'https://vendor.example/keys/made' } },
+    'https://vendor.example/keys/made': { text: 'Your new key', controls: ['Copy'], key: true },
+  };
+  it('types the profile phone, reads the texted code and types it, once', async () => {
+    const site = fakeSite(pages);
+    const asked: number[] = [];
+    const began = Date.now();
+    const done = await runKeygrab({ ...site.port, smsCode: async since => { asked.push(since); return '482913'; } }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
+    expect(site.filled).toEqual([['Phone number', undefined], ['Verification code', '482913']]);
+    expect(site.log).toContain('click Send code');
+    expect(asked).toHaveLength(1);
+    // Only texts sent after the number was typed count.
+    expect(asked[0]).toBeGreaterThanOrEqual(began);
+    expect(done).toMatchObject({ ok: true });
+  });
+  it('is the person\'s step when no Mac reads the texts, or no code came', async () => {
+    const none = fakeSite(pages);
+    expect(await runKeygrab(none.port, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined })).toMatchObject({ ok: false });
+    expect(none.filled).toEqual([]);
+    const silent = fakeSite(pages);
+    expect(await runKeygrab({ ...silent.port, smsCode: async () => undefined }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined })).toMatchObject({ ok: false });
+  });
+});
+
 describe('keygrab and a checkbox-style human check', () => {
   const open: Record<string, Page> = {
     'https://vendor.example/': { text: 'Dashboard for your account and settings', controls: ['API Keys'], on: { 'API Keys': 'https://vendor.example/keys' } },

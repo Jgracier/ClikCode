@@ -125,6 +125,12 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
       }
       return undefined;
     },
+    smsCode: async (since: number) => {
+      const { smsSource, waitForTextedCode } = await import('./sms-code.js');
+      if (!await smsSource(options.stateDir)) return undefined;
+      const found = await waitForTextedCode(options.stateDir, { since, seconds: 90, ...(options.signal ? { signal: options.signal } : {}) });
+      return 'error' in found ? undefined : found.code;
+    },
     emailLink: async () => {
       for (const subject of ['verify', 'confirm', 'welcome']) if (!(await run({ action: 'open_email_link', subject, seconds: 45 })).isError) return true;
       return false;
