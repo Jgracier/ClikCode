@@ -376,6 +376,29 @@ export async function computerDestinationRemove(name: string): Promise<void> {
   process.stdout.write(removed ? `Removed "${name}".\n` : `"${name}" is not one you added.\n`);
 }
 
+/** The person's saved payment cards: list them (as a wallet shows them), --add one typed hidden at this terminal, --delete one. */
+export async function computerCard(options: { add?: boolean; delete?: string; label?: string }): Promise<void> {
+  const { describeSavedCard, listCards, removeCard, saveCard } = await import('../agent/computer/payment-cards.js');
+  const stateDir = stateDirectory();
+  const emit = (text: string, data: unknown): void => { if (isJsonDefaultMode()) emitResult({ computer: { cards: data } }); else process.stdout.write(`${text}\n`); };
+  if (options.delete) {
+    const gone = await removeCard(stateDir, options.delete);
+    return emit(gone ? `Removed ${gone.brand} ending ${gone.last4}.` : `No single saved card matches "${options.delete}" (give its last four digits or its label).`, { removed: Boolean(gone) });
+  }
+  if (options.add) {
+    // Typed hidden at a terminal, never passed as an argument: an argument lands in the shell history and the process list.
+    if (!process.stdin.isTTY) throw new Error('A card is typed hidden: run this in a terminal.');
+    const number = await readHidden('Card number (typed hidden): ');
+    const expiry = await readHidden('Expiry MM/YY (typed hidden): ');
+    const code = await readHidden('Security code (typed hidden; leave empty to be asked each time): ');
+    const name = await readHidden('Name on card (typed hidden; may be empty): ');
+    const saved = await saveCard(stateDir, { number, expiry, code, ...(name.trim() ? { name } : {}), ...(options.label ? { label: options.label } : {}) });
+    return emit(`Saved ${describeSavedCard(saved)}.`, { saved: { brand: saved.brand, last4: saved.last4, expMonth: saved.expMonth, expYear: saved.expYear, hasCode: saved.hasCode } });
+  }
+  const cards = await listCards(stateDir);
+  emit(cards.length ? cards.map(card => describeSavedCard(card)).join('\n') : 'No payment card is saved. Add one with: clikcode computer card --add', cards.map(({ brand, last4, expMonth, expYear, label, hasCode }) => ({ brand, last4, expMonth, expYear, label, hasCode })));
+}
+
 /** One line typed without being echoed. */
 async function readHidden(question: string): Promise<string> {
   const { createInterface } = await import('node:readline/promises');

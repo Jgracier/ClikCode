@@ -5,15 +5,25 @@ import type { Page } from 'playwright-core';
 import { allComputerPages, computerBrowserPids } from './browser.js';
 import { secretRef } from './secret-scrubber.js';
 
-export const SENSITIVE = 'input[type="password"], input[autocomplete="one-time-code"], input[autocomplete="current-password"], input[autocomplete="new-password"], input[autocomplete^="cc-"]';
+/** A card box that does not carry the standard cc-* autocomplete: named for the number or the security code. */
+const CARD_BOX = ['cardnumber', 'card-number', 'card_number', 'ccnumber', 'cc-number', 'cc_number'].flatMap(word => [`input[name*="${word}" i]`, `input[id*="${word}" i]`]).join(', ')
+  + ', ' + ['cvc', 'cvv', 'csc', 'cvc2', 'cvv2', 'securitycode', 'security-code', 'security_code'].flatMap(word => [`input[name="${word}" i]`, `input[id="${word}" i]`]).join(', ');
+export const SENSITIVE = `input[type="password"], input[autocomplete="one-time-code"], input[autocomplete="current-password"], input[autocomplete="new-password"], input[autocomplete^="cc-"], input[autocomplete*=" cc-"], ${CARD_BOX}`;
 const MIN_LENGTH = 3;
 
 /** What the sensitive fields on the page hold right now (including a password shown by a "show" toggle). */
 export async function sensitiveValues(page: Page): Promise<string[]> {
-  try {
-    const values = await page.locator(SENSITIVE).evaluateAll(nodes => nodes.map(node => (node as unknown as { value?: string }).value ?? ''));
-    return [...new Set(values.filter(value => value.length >= MIN_LENGTH))];
-  } catch { return []; } // The page is navigating, or has no such field.
+  // Every frame: a payment provider's hosted card fields are one frame per box, and a card number typed there is shown back
+  // regrouped ("4242 4242 4242 4242"), which no exact match of the value that was typed would catch.
+  const values: string[] = [];
+  let frames: ReturnType<Page['frames']> = [];
+  try { frames = page.frames(); } catch { return []; } // The page is closing.
+  for (const frame of frames) {
+    if (frame.isDetached()) continue;
+    try { values.push(...await frame.locator(SENSITIVE).evaluateAll(nodes => nodes.map(node => (node as unknown as { value?: string }).value ?? ''))); }
+    catch { /* fail-open-ok: the frame is navigating, or has no such field */ }
+  }
+  return [...new Set(values.filter(value => value.length >= MIN_LENGTH))];
 }
 
 /** Runs in the page: values of plain text inputs, read-only inputs and textareas that are key-shaped, or that

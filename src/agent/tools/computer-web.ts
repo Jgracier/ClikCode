@@ -13,6 +13,7 @@ import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { findLabelledSecret, keyFieldValues, maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
+import { CARD_APPROVAL_MS, cardFieldFor, cardValueFor, describeCard, describeSavedCard, listCards, readCardSecret, saveCard, cardExpired, type SavedCard } from '../computer/payment-cards.js';
 import { forgetSavedLogins, savedLoginFields, savedLoginsForSite, saveLoginFields } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
 import { FILL_DEADLINE_MS, FillTimeout, withFillDeadline, type FillClock } from '../computer/fill-deadline.js';
@@ -62,7 +63,7 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'u
 type WebArgs = {
   /** help: an action name, or "guide". */
   topic?: string;
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'cloud' | 'human_check' | 'auth_code' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'card' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'cloud' | 'human_check' | 'auth_code' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; mfa_account?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; address?: string; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
@@ -527,6 +528,28 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
         }
         return { output: all.map(describeProfile).join('\n') };
       }
+      if (args.action === 'card') {
+        // The person's saved payment cards. Adding one is a private prompt: the number and security code go from their keyboard
+        // to Secrets Manager and are never in this chat. What comes back is what a wallet shows: brand, last four, expiry.
+        // Removing a card is the person's own act (clikcode computer card --delete): an agent adds and lists, never deletes.
+        if (args.ask) {
+          if (!ctx.requestPrivateLogin) throw new Error('This chat cannot ask the user privately. The user can add a card themselves: clikcode computer card --add');
+          if (await unattendedEnabled(hostCtx.stateDir)) throw new Error('A card is added by the user in person, not in an unattended run.');
+          const answers = await ctx.requestPrivateLogin('https://card.clikcode', [
+            { index: 0, key: 'number', label: 'Card number', kind: 'password', required: true },
+            { index: 1, key: 'expiry', label: 'Expiry (MM/YY)', kind: 'text', required: true, format: '##/##' },
+            { index: 2, key: 'code', label: 'Security code (leave empty to be asked each time)', kind: 'password', required: false },
+            { index: 3, key: 'name', label: 'Name on card', kind: 'text', required: false },
+          ], ctx.signal);
+          if (!answers) throw new Error('The user did not enter a card.');
+          registerSecret(answers.number ?? '');
+          if (answers.code) registerSecret(answers.code);
+          const saved = await saveCard(ctx.stateDir, { number: answers.number ?? '', expiry: answers.expiry ?? '', ...(answers.code ? { code: answers.code } : { code: '' }), ...(answers.name ? { name: answers.name } : {}), ...(args.label ? { label: args.label } : {}) });
+          return { output: `Saved ${describeSavedCard(saved)}. Fill a payment form's boxes with no text to use it: the user approves each site, and you are never shown the number or the security code.` };
+        }
+        const cards = await listCards(ctx.stateDir);
+        return { output: cards.length ? cards.map(card => describeSavedCard(card)).join('\n') : 'No payment card is saved. ask: true asks the user for one privately.' };
+      }
       // Lists every worker's tabs, so it needs no tab of this chat's own.
       if (args.action === 'tabs') return { output: await listTabs({ stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}), displayUrl }) };
       if (args.action === 'close' && args.tab && args.index === undefined) {
@@ -906,6 +929,41 @@ const PROFILE_PROMPT: readonly [string, string, boolean][] = [['given_name', 'Fi
 
 const profileChoice = sharedState('profile-choice', () => new Map<string, string>());
 
+/** Cards the person approved for a site in this process: `<stateDir>|<site host>` to the card and when the approval lapses. */
+const cardApprovals = sharedState('card-approvals', () => new Map<string, { cardId: string; until: number }>());
+const NO_CARD = 'Do not use a card';
+/** Whether the page shows a card-number box, in any frame (a payment provider's hosted fields are one frame per box). */
+async function showsCardNumberBox(page: Page): Promise<boolean> {
+  for (const frame of page.frames()) {
+    // fail-open-ok: a frame that went away or cannot be read has no card box to speak of.
+    if (await frame.locator('input[autocomplete~="cc-number" i], input[name*="cardnumber" i], input[name*="card-number" i], input[name*="card_number" i], input[id*="cardnumber" i], input[id*="card-number" i]').count().catch(() => 0) > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * The card a payment form on `host` may be filled from, or the reason it gets none. A card is typed into a page only when the
+ * person says so: one private prompt names the site and the card (the picker a wallet shows), and the answer covers the same
+ * form's other boxes for CARD_APPROVAL_MS. Never in an unattended run, and never in a chat that cannot ask privately: both
+ * leave the boxes empty and say why. Nothing here shows the agent a number or a code.
+ */
+async function approvedCard(ctx: ToolContext, host: string, prompt: <T>(wait: () => Promise<T>) => Promise<T>): Promise<{ card: SavedCard } | { refused: string }> {
+  const cards = (await listCards(ctx.stateDir)).filter(card => !cardExpired(card));
+  if (!cards.length) return { refused: 'no payment card is saved (or the saved ones have expired). The user adds one with: account_use action card, ask: true' };
+  if (await unattendedEnabled(ctx.stateDir)) return { refused: 'a payment card is never used in an unattended run: the user approves each use' };
+  if (!ctx.requestPrivateLogin) return { refused: 'a payment card is used only with the user\'s approval, and this chat cannot ask them privately' };
+  const key = `${ctx.stateDir}|${host}`;
+  const standing = cardApprovals.get(key);
+  const still = standing && standing.until > Date.now() ? cards.find(card => card.id === standing.cardId) : undefined;
+  if (still) return { card: still };
+  const labels = cards.map(card => `Use ${describeCard(card)}`);
+  const answer = await prompt(() => ctx.requestPrivateLogin!(`https://${host}`, [{ index: -1, key: 'card', label: `Type a saved card into ${host}?`, kind: 'choice', required: true, options: [...labels, NO_CARD] }], ctx.signal));
+  const card = cards[labels.indexOf(answer?.card ?? '')];
+  if (!card) return { refused: 'the user did not approve using a card on this site' };
+  cardApprovals.set(key, { cardId: card.id, until: Date.now() + CARD_APPROVAL_MS });
+  return { card };
+}
+
 const CODE_BOX = /one-time-code|\b(?:otp|verification|security|passcode|confirmation|pin|digit|code|character)\b/i;
 /** The boxes of a code typed one character per box: 4 to 8 adjacent text boxes, each with maxlength 1, that call themselves a code. */
 export function splitCodeFields<T extends { password: boolean; maxlength: number; label: string; placeholder: string; hint: { autocomplete: string; text: string } }>(fields: readonly T[]): T[] {
@@ -1005,11 +1063,39 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     const code = await codeFromMailbox(ctx.stateDir, page.url(), Date.now() - 120_000, ctx.signal);
     if (code && code.length === split.length) { registerSecret(code); split.forEach((field, index) => values.set(field.step, code[index]!)); }
   }
+  let card: Awaited<ReturnType<typeof approvedCard>> | undefined;
+  let usedCard = false;
+  let onCardForm: boolean | undefined;
   for (const field of fields) {
     if (values.has(field.step)) continue;
     if (clock) clock.field = field.label || String(field.step.target);
     // A box the page already filled and locked (the account's email on a post-signup page) is left alone: nothing to type, nothing to ask.
     if (field.readOnly) { skipped.set(field.step, `${field.label || field.step.target} is already filled and read-only; left as it is.`); continue; }
+    // A payment card box (number, expiry, security code, name on card): filled only from a saved card the person approves for
+    // this site, before any password or profile rule sees it (a security-code box is often type=password). Top-level host: a
+    // hosted payment field lives in its provider's frame, and the person is asked about the site they are paying.
+    onCardForm ??= fields.some(other => cardFieldFor(other.hint) === 'number') || await showsCardNumberBox(page);
+    const cardKind = cardFieldFor(field.hint, onCardForm);
+    if (cardKind) {
+      const name = field.label || String(field.step.target);
+      card ??= await approvedCard(ctx, new URL(page.url()).hostname.replace(/^www\./, ''), prompt);
+      if ('refused' in card) { skipped.set(field.step, `${name} left empty: ${card.refused}.`); continue; }
+      const chosen = card.card;
+      let code = cardKind === 'code' ? await readCardSecret(ctx.stateDir, chosen, 'code') : undefined;
+      if (cardKind === 'code' && !code) {
+        // Not kept with the card: asked for now, typed, and forgotten.
+        const typed = await prompt(() => ctx.requestPrivateLogin!(`https://${new URL(page.url()).hostname}`, [{ index: -1, key: 'code', label: `Security code for ${describeCard(chosen)}`, kind: 'password', required: true }], ctx.signal));
+        code = typed?.code?.replace(/\D+/g, '') || undefined;
+      }
+      const number = cardKind === 'number' ? await readCardSecret(ctx.stateDir, chosen, 'number') : undefined;
+      const value = cardValueFor(cardKind, chosen, { ...(number ? { number } : {}), ...(code ? { code } : {}) }, { placeholder: field.placeholder, maxlength: field.maxlength })
+        ?? (cardKind === 'name' ? [profile?.fields.given_name, profile?.fields.family_name].filter(Boolean).join(' ') || undefined : undefined);
+      if (!value) { skipped.set(field.step, `${name} left empty: the saved card has no value for it.`); continue; }
+      if (cardKind === 'number' || cardKind === 'code') registerSecret(value);
+      values.set(field.step, value);
+      if (!usedCard) { usedCard = true; report.push(`Filled from the saved card ${describeCard(chosen)}, which the user approved for this site. The number and security code were not shown to you.`); }
+      continue;
+    }
     if (field.password && generated) { values.set(field.step, generated); continue; }
     const fromLogin = login ? loginValueFor(login, field) : undefined;
     if (fromLogin && !(confirmSignIn && !signingUp)) { values.set(field.step, fromLogin); continue; }
