@@ -10,6 +10,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { kittyKeyboardSafe } from './keys.js';
 import { CLEAR_SCREEN, CLEAR_SCREEN_AND_SCROLLBACK, inlineBlock, inlineHistoryMode, LEAVE_PAGE_SCREEN, restoreMainBlock, swallowsAlternateScreen } from './inline.js';
 import { FOCUS_REPORTING_OFF, POP_TITLE, PUSH_TITLE, progressSequence } from './terminal-signals.js';
+import { voicePresence } from './voice-reply.js';
 
 /** An in-place build reload inherits the current terminal screen and title. */
 export const REEXEC_TERMINAL_ENV = 'CLIKCODE_KEEP_TERMINAL_ON_REEXEC';
@@ -251,6 +252,7 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     // the next ClikCode. Measured three times.
     const leavingAlternate = terminalModes.alternateScreen;
     sequence += terminalTeardown(leavingAlternate);
+    if (terminalModes.uiStarted) sequence += voicePresence(false);
     sequence += signalsTeardown();
     const dump = leavingAlternate ? historyDumpSequence() : '';
     const wasRaw = terminalModes.rawMode;

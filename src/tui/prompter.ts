@@ -12,7 +12,7 @@ import { historyDump, installTerminalRestoreSignals, parseReexecHandover, REEXEC
 import type { FocusState } from './terminal-signals.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript } from '../turn/transcript.js';
-import { VoiceReply } from './voice-reply.js';
+import { VoiceReply, voicePresence } from './voice-reply.js';
 import type { HarnessPrompter, JournalState, PickerOption, PickerSettings } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, commonPrefixLength, rebaseActivityOffsets } from './render/activity-log.js';
@@ -365,7 +365,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Undo whatever the last program left set, before asking for anything.
     // The session before this one may have been closed from the client, in
     // which case its teardown was written into a pty that no longer existed.
-    output.write(terminalPrepare());
+    output.write(terminalPrepare() + voicePresence(true));
     {
       // Every mode in one breath, with the screen, in this order -- copied
       // from the bare script that receives the gesture on this user's phone

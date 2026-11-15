@@ -4,6 +4,7 @@
  *   OSC 7702 ; s ST              a turn's answer begins
  *   OSC 7702 ; d ; <base64> ST   more of it (UTF-8 text, as it streams)
  *   OSC 7702 ; e ST              it ended   (x: it was stopped)
+ *   OSC 7702 ; h ST              ClikCode is running in this terminal (written when it starts); q: it has left (on exit)
  * Only text that grows the answer is sent: a replacement that rewrites what was already sent (a retry on another account) is not said
  * twice; its new end is. */
 import { stdout } from 'node:process';
@@ -11,6 +12,9 @@ import { stdout } from 'node:process';
 export const writesVoiceReply = (env: NodeJS.ProcessEnv = process.env): boolean => env.CLIKDEPLOY_CLIENT === 'mobile';
 
 const osc = (body: string) => `\u001b]7702;${body}\u001b\\`;
+
+/** ClikCode is here (h) or has gone (q): the phone answers by voice at once only where ClikCode is running. Empty off the phone. */
+export const voicePresence = (here: boolean, env: NodeJS.ProcessEnv = process.env): string => (writesVoiceReply(env) ? osc(here ? 'h' : 'q') : '');
 
 export class VoiceReply {
   private open = false;

@@ -3844,14 +3844,16 @@ def run(name, spec, entry, keep):
     if 'voice_reply' in spec:
         # The answer as words for ClikDeploy's phone (OSC 7702, src/tui/voice-reply.ts): begun, its text, ended or stopped.
         import base64, re as regex
-        events = []
+        events, presence = [], []
         for body in regex.findall(rb'\x1b\]7702;([^\x1b\x07]*)(?:\x1b\\|\x07)', bytes(raw)):
             body = body.decode('ascii', 'replace')
             if body.startswith('d;'):
                 text = base64.b64decode(body[2:]).decode('utf-8', 'replace')
                 if events and events[-1][0] == 'd': events[-1] = ('d', events[-1][1] + text)
                 else: events.append(('d', text))
+            elif body in ('h', 'q'): presence.append(body)
             else: events.append((body, ''))
+        if 'h' not in presence: problems.append('ClikCode never said it was here (OSC 7702 h) when it started')
         want = spec['voice_reply']
         kinds = [kind for kind, _ in events]
         said = ''.join(text for _, text in events)
