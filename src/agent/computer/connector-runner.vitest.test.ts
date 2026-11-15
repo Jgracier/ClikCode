@@ -221,6 +221,33 @@ describe('connectors run', () => {
     expect(c.reports).toHaveLength(0);
   });
 
+  it('gives an OAuth app registration to one agent try, carries on when it worked, and leaves it for a person when it did not', async () => {
+    const step = { kind: 'app-registration' as const, url: 'https://developer.acme.example/apps', reasonCode: 'oauth-app', instructions: 'Register a web OAuth app named ClikDeploy with the redirect URI https://clikdeploy.com/api/connectors/oauth/callback' };
+    const register = (id: string): OnboardResult => ({ id, state: 'needs-human', stage: 'connect', reason: 'the platform has no OAuth app at this vendor', next: { kind: 'human', task: 'register the app', humanStep: step } });
+    const worked = fakeClient([register('acme')], { acme: [published('acme')] });
+    const d = fakeDriver([]);
+    const seen: Array<{ message: string; task: string }> = [];
+    d.driver.agentTask = async (_id, stop) => { seen.push({ message: stop.message, task: stop.pageText }); return { ok: true }; };
+    expect((await runConnectors(worked.client, d.driver, quick)).outcomes[0]!.status).toBe('published');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.message).toMatch(/^oauth-app: /);
+    expect(seen[0]!.task).toContain('https://clikdeploy.com/api/connectors/oauth/callback');
+    // The agent could not: the step is the person's again, and the same step coming back is not tried twice.
+    const failed = fakeClient([register('acme')], { acme: [register('acme')] });
+    const f = fakeDriver([]);
+    let tries = 0;
+    f.driver.agentTask = async (_id, stop) => { tries++; return { ok: false, stop: { ...stop, message: 'the vendor reviews every app' } }; };
+    expect((await runConnectors(failed.client, f.driver, quick)).outcomes[0]).toMatchObject({ status: 'human', humanStep: { kind: 'app-registration' } });
+    expect(tries).toBe(1);
+    // A cloud vendor's developer settings are a cloud console: never an agent's.
+    const cloud = fakeClient([register('googleapis-drive')]);
+    const g = fakeDriver([]);
+    let cloudTries = 0;
+    g.driver.agentTask = async () => { cloudTries++; return { ok: true }; };
+    expect((await runConnectors(cloud.client, g.driver, quick)).outcomes[0]!.status).toBe('human');
+    expect(cloudTries).toBe(0);
+  });
+
   it('captures a key by a saved recipe, and hands on when there is no recipe', async () => {
     const keyTask = (id: string): OnboardResult => ({ id, state: 'needs-agent', stage: 'connect', reason: 'no credential', next: { kind: 'agent', task: `Connector "${id}": no credential is connected. Connect an account with the API key stored in the vault.` } });
     const withRecipe = fakeClient([keyTask('salad')], { salad: [published('salad')] });

@@ -153,6 +153,14 @@ function waitMs(task: string, fallback = 5_000): number {
   return Math.min(Math.max(m ? Number(m[1]) * 1000 : fallback, 1_000), 60_000);
 }
 
+/** Vendors whose developer settings are a cloud console: no agent registers anything there (the 2026-11-14 root-key incident). */
+const CLOUD_VENDOR = /^(?:aws|amazon|amazonaws|google|googleapis|gcp|azure|microsoft-azure|oracle-cloud|oci|ibm-cloud|digitalocean|linode|vultr|hetzner|ovh|scaleway|akamai)(?:-|$)/i;
+
+/** What the agent is told when the step is "register an OAuth app": the server's own instruction (it names the redirect address and fields) and the task. */
+export function oauthAppTask(id: string, step: HumanStep, task: string): string {
+  return [`Register the platform's OAuth app at the vendor for connector "${id}".`, step.instructions ? `What ClikDeploy asks for: ${step.instructions}` : '', step.prefill?.length ? `Values to use: ${step.prefill.join(' | ')}` : '', step.url ? `Where: ${step.url}` : '', task && task !== step.instructions ? `Task as given: ${task}` : ''].filter(Boolean).join('\n').slice(0, 1800);
+}
+
 /** A task that says the vendor has no machine-readable reference yet: its homepage and the documentation pages it names. */
 export function referenceTask(task: string): { homepage: string; docs: string[] } | undefined {
   const named = /(?:^|\n)\s*(?:docs-to-spec|find-reference):[^(\n]{0,160}\((https:\/\/[^)\s]+)\)/i.exec(task);
@@ -288,6 +296,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   const agentTasksTried = new Set<string>();
   let qualified = false;
   let referenceTried = false;
+  let appRegistrationTried = false;
   const viaAgent = async (stop: StopInfo, wholeTask = false): Promise<DriveOutcome | undefined> => {
     const taskKey = JSON.stringify([result.stage, result.next.kind, result.next.task]);
     if (agentTasksTried.has(taskKey) || !driver.agentTask || !wholeTask && (stop.human || humanStepFor(id, stop))) return undefined;
@@ -365,7 +374,22 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
       }
       switch (plan.do) {
         case 'done': return out(plan.status, result.reason || result.next.task);
-        case 'human': return await wall(plan.humanStep, true);
+        case 'human': {
+          // Registering the platform's own OAuth app at a vendor is form-filling an agent can do: one bounded try, under its own rule
+          // (connector-micro-agent.ts oauthAppRule). A vendor that reviews apps, or a second visit, stays a person's step.
+          const step = plan.humanStep;
+          if (step.kind === 'app-registration' && driver.agentTask && !appRegistrationTried && !CLOUD_VENDOR.test(id)) {
+            appRegistrationTried = true;
+            const done = await viaAgent({ kind: 'unknown', message: `oauth-app: ${cap(say(step.instructions ?? result.reason), 260)}`, url: step.url ?? siteUrl(result.next.task) ?? '', pageText: oauthAppTask(id, step, result.next.task), controls: [] }, true);
+            if (done?.ok) {
+              actions.push(done.note ?? 'an agent registered the OAuth app and filed its client secret');
+              result = fix(await client.onboard(id));
+              break;
+            }
+            if (done && !done.ok) actions.push(`the agent could not register the OAuth app: ${cap(say(done.stop.message), 160)}`);
+          }
+          return await wall(plan.humanStep, true);
+        }
         case 'handoff': {
           let task = result.next.task;
           // "No reference found" is first answered with a browser, not an agent: most documentation sites load a description file a plain fetch never sees.

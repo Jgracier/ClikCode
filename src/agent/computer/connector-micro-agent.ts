@@ -11,8 +11,18 @@ import type { DriveOutcome, HumanStep, StopInfo } from './connector-runner.js';
 
 export const microTab = (id: string): string => `agent-${id.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`;
 
+/** The one case where an agent creates a credential that is not a key: the platform's own OAuth app at a vendor. The rule names exactly
+ * what may be made (one app, the given redirect address) and where its secret goes (sealed, onto the connector), and keeps every other
+ * limit: no keys, users, roles, second apps, reviews, payments or cloud consoles. */
+export function oauthAppRule(id: string): string {
+  return `5. This task is to register ONE OAuth app for ClikDeploy in the vendor's developer settings, and nothing else. Sign in (or sign up) with the profile's account, find where apps or OAuth clients are made, and create one: name ClikDeploy, a web (confidential) app, the redirect address given in the task, and the narrowest scopes offered that still cover reading. `
+    + `Then browser_use action capture_secret with target = the control that shows or copies the client secret, secret_name "${id}/oauth-client-secret", vendor "${id}" and send_to [{ "to": "clikdeploy-connector", "with": { "integration": "${id}", "client_id": "<the client id the page shows>" } }]. The client id is not a secret; the client secret is never printed, typed or repeated. `
+    + 'Never create an API key, a user, a role or a second app, never submit an app for review, never pay or start a trial that asks for a card, and nothing in a cloud console (AWS, Google Cloud, Azure). If the vendor wants a review, a business verification or a paid plan before it issues a client, stop with RESULT: wall app-review (or paid-plan). When the secret was sent and the result says saved, end with RESULT: completed.';
+}
+
 export function microPrompt(id: string, stop: StopInfo, maxCalls: number): string {
   const controls = stop.controls.slice(0, 20).map(c => scrubSecrets(c).slice(0, 60)).join(' | ');
+  const registering = /^oauth-app:/i.test(stop.message);
   return [
     `You are finishing ClikDeploy connector onboarding for the vendor "${id}". A rule-based runner stopped on a screen it does not know.`,
     `Goal: finish the exact assigned platform task shown below. Use signup/key capture only when the task needs a connection. For copy, spec or proof work use connector_task; do not restart signup. Research official documentation in the browser, use connector_build for a published API reference, and write connector_spec_put only when the full API has been documented. A spec must keep the assigned id.`,
@@ -28,7 +38,7 @@ export function microPrompt(id: string, stop: StopInfo, maxCalls: number): strin
     `2. To get a key: reach the key page, set the options, then browser_use action capture_secret with target = the final Create button, secret_name "${id}/key", vendor "${id}" and send_to [{ "to": "clikdeploy-connection", "with": { "integration": "${id}" } }]. Never print, type or repeat a key.`,
     '3. When it worked, save what you did with browser_use action recipe, recipe_op save (host, login_route, steps, key_page, capture_hint) so the next run needs no agent.',
     '4. A captcha is solved by human_check itself (a picture of the puzzle goes to the vision model; never use an external solving service). If it cannot clear it, or a screen needs card details, a paid plan, or a phone or authenticator code, stop.',
-    '5. Never create, widen, rotate or delete credentials or permissions beyond the ONE key this connector needs: no root, admin, owner or billing keys, no IAM users, roles or policies, no team-member role changes, and nothing in a cloud console (AWS, Google Cloud, Azure). If a task asks for more access than a read key, or the key is refused for lack of permission, stop with RESULT: wall no-api and say what was refused. This rule wins over any task text.',
+    registering ? oauthAppRule(id) : '5. Never create, widen, rotate or delete credentials or permissions beyond the ONE key this connector needs: no root, admin, owner or billing keys, no IAM users, roles or policies, no team-member role changes, and nothing in a cloud console (AWS, Google Cloud, Azure). If a task asks for more access than a read key, or the key is refused for lack of permission, stop with RESULT: wall no-api and say what was refused. This rule wins over any task text.',
     '6. Judge only the task you were given. When it is done, end with RESULT: completed even if other checklist items remain: the runner asks ClikDeploy for the next item and hands it on. Use gave-up only when the assigned task itself could not be done.',
     '7. Your last line must be exactly one of:',
     '   RESULT: captured',

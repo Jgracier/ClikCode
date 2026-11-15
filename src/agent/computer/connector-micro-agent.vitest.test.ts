@@ -215,3 +215,19 @@ it('retains calls consumed before a native agent exits with an error', async () 
   const failed: MicroPorts = { recipeStamp: async () => '', run: async () => ({ text: '', timedOut: false, calls: 7, error: 'native account unavailable' }) };
   expect(await runMicroTask('acme', stop, { maxCalls: 25, maxMs: 1000 }, failed)).toMatchObject({ ok: false, agentCalls: 7 });
 });
+
+describe('the OAuth app registration rule', () => {
+  it('replaces the no-credentials rule only for that task, and keeps every other limit', async () => {
+    const { microPrompt } = await import('./connector-micro-agent.js');
+    const stop = { kind: 'unknown' as const, url: 'https://developer.acme.example/apps', pageText: 'Register the app', controls: [] };
+    const registering = microPrompt('acme', { ...stop, message: 'oauth-app: Register a web OAuth app named ClikDeploy' }, 40);
+    expect(registering).toMatch(/register ONE OAuth app for ClikDeploy/);
+    expect(registering).toMatch(/"to": "clikdeploy-connector", "with": \{ "integration": "acme"/);
+    expect(registering).toMatch(/Never create an API key, a user, a role or a second app/);
+    expect(registering).toMatch(/nothing in a cloud console/);
+    const other = microPrompt('acme', { ...stop, message: 'an unrecognized screen' }, 40);
+    expect(other).not.toMatch(/register ONE OAuth app/);
+    expect(other).toMatch(/Never create, widen, rotate or delete credentials/);
+  });
+});
+
