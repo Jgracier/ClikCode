@@ -63,7 +63,7 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'u
 type WebArgs = {
   /** help: an action name, or "guide". */
   topic?: string;
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'card' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'cloud' | 'human_check' | 'auth_code' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'card' | 'open_email_link' | 'read_email_code' | 'read_sms_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'cloud' | 'human_check' | 'auth_code' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; mfa_account?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; address?: string; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
@@ -365,7 +365,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     with: { type: ['object', 'string'], description: 'send_secret: values for the destination slots, e.g. {key:"SALAD_API_KEY"}.' },
     values: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'send_secret with to clikdeploy-connection: the plain connection values, e.g. {org_api_key:"..."} or {app_id:"secret:<saved name>"}.' },
     ask: { type: 'boolean', description: 'profile: ask the user now for name, email, phone and address and save them as a profile (also happens when none exists).' },
-    from: { type: 'string', description: 'open_email_link, read_email_code: sender (name or address) of the email in the signed-in Gmail.' },
+    from: { type: 'string', description: 'open_email_link, read_email_code, read_sms_code: sender (name or address) of the email in the signed-in Gmail.' },
     subject: { type: 'string', description: 'open_email_link, read_email_code: words from the subject.' },
     link: { type: 'string', description: 'open_email_link: words or domain of the link to open (default: the first real link in the message).' },
     account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },
@@ -1565,6 +1565,13 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       const email = (await profileEmail(ctx.stateDir));
       const done = await oauthConnect(args.target?.trim() ?? '', page, { email, stateDir: ctx.stateDir, signal: ctx.signal, progress: line => line && ctx.emitOutput?.(line) });
       return { output: `Connected ${done.connector}: ClikDeploy shows an active connection. ${done.steps.filter(Boolean).join(' ')}` };
+    }
+    case 'read_sms_code': {
+      // Texts arrive a few seconds after the page sends them; only codes sent in the last three minutes count.
+      const { waitForTextedCode } = await import('../computer/sms-code.js');
+      const found = await waitForTextedCode(ctx.stateDir, { since: Date.now() - 180_000, ...(args.seconds ? { seconds: args.seconds } : {}), ...(args.from ? { from: args.from } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+      if ('error' in found) throw new Error(found.error);
+      return { output: `Code: ${found.code} (texted by ${found.from}). Type it into the page that asked for it.` };
     }
     case 'read_email_code': {
       if (await emailConnected(ctx.stateDir)) {

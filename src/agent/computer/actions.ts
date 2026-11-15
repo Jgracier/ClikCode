@@ -72,6 +72,7 @@ export const ACTIONS: readonly ActionSpec[] = [
   a('oauth_connect', 'account', 'Sign in', 'Connect a ClikDeploy connector\'s OAuth app by pressing through the provider\'s consent screens (target = the connector id: slack, github). It stops with a plain reason at a password, a payment or a CAPTCHA.', ['target'], { target: 'slack' }),
   // ── account_use: email ──
   a('email_connect', 'account', 'Email', 'One consent in this browser connects the signed-in Gmail (read-only). After that read_email_code and open_email_link read mail through Gmail and wait for it to arrive. address: connect another Google account (it must be signed in here); it adds a mailbox and replaces none.', ['address']),
+  a('read_sms_code', 'account', 'Email', 'Wait for a code texted to the profile phone and return it (from: sender, seconds: default 90).', ['from', 'seconds'], {}),
   a('read_email_code', 'account', 'Email', 'Wait for an emailed verification code and return it (from: sender, subject: words from the subject, seconds: how long, default 90; address: which connected mailbox, default the one the page or site login used).', ['from', 'subject', 'account', 'address', 'seconds'], { from: 'github.com' }),
   a('open_email_link', 'account', 'Email', 'Find the newest email from a sender and open a link in it (link: words or domain of the link), in one call. For verification and sign-in emails.', ['from', 'subject', 'link', 'account', 'address', 'seconds'], { from: 'github.com' }),
   // ── account_use: keys ──

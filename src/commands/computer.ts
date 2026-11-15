@@ -485,3 +485,20 @@ export async function computerOauthConnect(connector: string): Promise<void> {
   const done = await oauthConnect(connector, await openNewComputerPage(dir, 'oauth'), { email, stateDir: dir, reopen, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'oauth').catch(quiet('commands/computer')); await releaseComputerBrowser(dir); });
   return isJsonDefaultMode() ? emitResult({ computer: { oauthConnect: { connector: done.connector, connected: true } } }) : void process.stdout.write(`Connected ${done.connector}: ClikDeploy shows an active connection.\n`);
 }
+
+/** `clikcode computer sms <user@host>|off|test`: where texted one-time codes are read from (agent/computer/sms-code.ts). */
+export async function computerSms(setting: string | undefined): Promise<void> {
+  const dir = stateDirectory();
+  const { askMessages, setSmsSource, smsSource } = await import('../agent/computer/sms-code.js');
+  if (setting === 'off') await setSmsSource(dir, undefined);
+  else if (setting && setting !== 'test') await setSmsSource(dir, setting);
+  const target = await smsSource(dir);
+  let check: string | undefined;
+  if (target && setting) {
+    // A read of the last day's incoming texts: proves SSH and Full Disk Access, and says how many arrived, never what they say.
+    const answer = await askMessages(target, Math.floor(Date.now() / 1000) - 86_400);
+    check = 'error' in answer ? answer.error : `The Mac answers: ${answer.rows.split('\n').filter(Boolean).length} incoming texts in the last day are readable.`;
+  }
+  if (isJsonDefaultMode()) return emitResult({ computer: { sms: target ?? null, ...(check ? { check } : {}) } });
+  process.stdout.write(target ? `Texted codes are read from ${target}.${check ? ` ${check}` : ''}\n` : 'No Mac is set up to read texted codes. Run: clikcode computer sms <user@host>\n');
+}
