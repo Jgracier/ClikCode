@@ -74,7 +74,8 @@ export async function askMessages(target: string, sinceUnixSeconds: number, sign
     child.stderr.on('data', chunk => { err = (err + String(chunk)).slice(-4_000); });
     const timer = setTimeout(() => child.kill('SIGKILL'), 25_000);
     child.on('error', error => { clearTimeout(timer); resolve({ error: smsProblem(String(error), target) }); });
-    child.on('close', code => { clearTimeout(timer); resolve(code === 0 ? { rows: out } : { error: smsProblem(err || `exit ${code}`, target) }); });
+    // sqlite3 can print its refusal and still exit 0: an error line counts whatever the exit code says.
+    child.on('close', code => { clearTimeout(timer); resolve(code === 0 && !/^Error:|unable to open database|authorization denied/im.test(err) ? { rows: out } : { error: smsProblem(err || `exit ${code}`, target) }); });
   });
 }
 
