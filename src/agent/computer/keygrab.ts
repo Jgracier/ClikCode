@@ -34,6 +34,8 @@ export interface KeygrabPort {
   authenticatorCode?(): Promise<string | undefined>;
   /** The code in a text sent to the profile phone after `since` (unix ms), when a Mac reads the user's texts (undefined when none does or none came). */
   smsCode?(since: number): Promise<string | undefined>;
+  /** An address on a business domain whose mailbox is connected, for a vendor that refuses free email (undefined when there is none). */
+  businessEmail?(): Promise<string | undefined>;
   /** Opens the link in the newest verification email in this tab. */
   emailLink(): Promise<boolean>;
   /** Captures the key unseen and sends it to ClikDeploy. `target` is a control that reveals it; none: the page already shows it. */
@@ -237,6 +239,22 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     await sleep(800);
     return true;
   };
+  let businessTried = false;
+  /** "Use a work email": the sign-up is sent again once with a connected business mailbox's address in the email box. */
+  const pastFreeMail = async (view: KeyView): Promise<boolean> => {
+    if (businessTried || !port.businessEmail) return false;
+    businessTried = true;
+    const field = view.fields.find(f => /e-?mail/i.test(f));
+    if (!field) return false;
+    const address = await act('pick a business email address', () => port.businessEmail!());
+    if (!address) return false;
+    await act('type the business email', () => port.fill(field, address));
+    const go = [...view.controls].reverse().find(c => pressable(c) && /^(sign ?up|create (?:my |an )?account|get started|continue|next|submit|start(?: free)?(?: trial)?|register|join)\b/i.test(c.name));
+    if (!go) return false;
+    await click(go.name);
+    await sleep(1_500);
+    return true;
+  };
   let phoneTried = false;
   /** A phone check is not a wall when the user's texts can be read: the profile phone is typed (when the page asks for the number), the
    * code it texts is read and typed. Once per run; a page that still asks after that is the person's. */
@@ -268,12 +286,16 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   };
   const guard = async (view: KeyView): Promise<void> => {
     const wall = keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields });
+    if (wall?.kind === 'captcha' && !view.captchaFrame && wordsOnly.has(pathOf(view.url) || view.url)) return;
     if (wall?.kind === 'mfa' && await pastAuthenticator(view)) return;
+    if (wall?.kind === 'decision' && /work-email|free-mail/.test(wall.reasonCode) && await pastFreeMail(view)) return;
     if ((wall?.kind === 'sms' || (wall?.kind === 'mfa' && /text|sms|phone|mobile/i.test(view.text))) && await pastPhone(view)) return;
     if (wall) throw await wallStop(view, wall);
   };
   const captchaOn = (view: KeyView): boolean => keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields })?.kind === 'captcha';
   const checkedAt = new Map<string, number>();
+  /** Pages whose "captcha" was words alone: the solver found no check there. */
+  const wordsOnly = new Set<string>();
   let checks = 0;
   /** A captcha in the way is answered in this tab, which keeps its cookies and sign-in: up to twice per page (a
    * site that says "wrong code" shows a new one) and six times per run (one on the sign-up form, another after it
@@ -287,6 +309,9 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       checkedAt.set(here, tries + 1); checks++;
       const outcome = await act('get past the human check', () => port.humanCheck!());
       say(`human check: ${outcome}`);
+      // The solver, which knows every widget it can answer, found none on the page: what looked like a check was only its words
+      // (a "security question" box, a page that mentions captchas). Those words no longer stop this page.
+      if (outcome === 'none' && !v.captchaFrame) { wordsOnly.add(here); return v; }
       if (outcome !== 'cleared') break;
       await sleep(800);
       v = await dismissBanner(await port.look());
