@@ -169,6 +169,15 @@ export async function searchReference(homepage: string, ports: ReferencePorts, b
       const pages = [...new Set(page.links.map(l => l.href.split('#')[0]!).filter(href => /\/reference\/[a-z0-9_-]+$/i.test(href)))];
       const endpointLike = (href: string): boolean => /\/reference\/[a-z0-9_-]*(?:get|list|create|add|send|update|delete|post|put|search|retrieve)[a-z0-9_-]*$/i.test(href);
       readmePages = [...pages.filter(endpointLike), ...pages.filter(href => !endpointLike(href)).reverse()].slice(0, 3);
+      // ReadMe serves each page's data from one address pattern; an endpoint's data, asked for unreduced, is the
+      // whole API. That is asked for straight away: no page has to be drawn for it.
+      const data = page.loaded.map(file => /^(.*\/api-next\/v\d+\/branches\/[^/]+\/reference\/)[^/?]+\?/.exec(file.url)?.[1]).find(Boolean);
+      for (const endpoint of data ? readmePages : []) {
+        if (!left()) break;
+        const all = await ports.fetch(`${data}${endpoint.split('/').pop()}?reduce=false`).catch(() => undefined);
+        const document = all ? embeddedReference(all) : undefined;
+        if (document && referenceKindOf(document)) { out.reference = { url: endpoint, kind: referenceKindOf(document)!, document, via: `${via}: the page data of a ReadMe docs site (${page.url})` }; return { found: true, links: page.links, at: page.url }; }
+      }
     }
     if (readsLikeApiDocs(page.text) && out.docsUrls.length < 4) out.docsUrls.push(page.url);
     return { found: false, links: page.links, at: page.url };
