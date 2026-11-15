@@ -202,7 +202,10 @@ export async function passHumanCheck(page: Page, deps: SolveDeps & { solve?: boo
   }
   if (deps.solve === false) return pressed;
   const solved = await solveHumanCheck(page, deps);
-  return solved.outcome === 'none' && pressed.outcome !== 'none' ? pressed : { ...solved, ...(solved.widget ?? pressed.widget ? { widget: solved.widget ?? pressed.widget } : {}) } as HumanCheckResult;
+  // The press met a check but the solver then found none to answer (the challenge closed or changed in between): that is a
+  // check that was tried and not passed, never "a puzzle nobody tried".
+  if (solved.outcome === 'none' && pressed.outcome !== 'none') return { outcome: 'still-there', ...(pressed.widget ? { widget: pressed.widget } : {}) };
+  return { ...solved, ...(solved.widget ?? pressed.widget ? { widget: solved.widget ?? pressed.widget } : {}) } as HumanCheckResult;
 }
 
 /** One go at the checks a page draws itself. A result ends the run; `acted` means something was done and the
