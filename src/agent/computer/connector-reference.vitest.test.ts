@@ -110,6 +110,8 @@ describe('the no-reference task', () => {
   it('reads the homepage and the documentation pages out of the task', () => {
     expect(referenceTask('docs-to-spec: SAMWAD (https://samwad.tech/) has no machine-readable API reference we could find, and needs its official documentation inspected: https://samwad.tech/api/ , https://samwad.tech/guide/. Read the docs and write an OpenAPI 3 document')).toEqual({ homepage: 'https://samwad.tech/', docs: ['https://samwad.tech/api/', 'https://samwad.tech/guide/'] });
     expect(referenceTask('find-reference: acme (https://acme.com/) has no API reference on record.')).toEqual({ homepage: 'https://acme.com/', docs: [] });
+    expect(referenceTask('write the spec from https://www.pennylane.com. Discovered auth hints: registration endpoint published; route dcr. Save it with connector_spec_put (a draft); do not connect or publish')).toEqual({ homepage: 'https://www.pennylane.com', docs: [] });
+    expect(referenceTask('Connector "acme": no reference.\ndocs-to-spec: acme (https://acme.com/) has none')?.homepage).toBe('https://acme.com/');
     expect(referenceTask('open https://acme.com and get a test key')).toBeUndefined();
   });
 

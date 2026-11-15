@@ -155,10 +155,13 @@ function waitMs(task: string, fallback = 5_000): number {
 
 /** A task that says the vendor has no machine-readable reference yet: its homepage and the documentation pages it names. */
 export function referenceTask(task: string): { homepage: string; docs: string[] } | undefined {
-  const m = /^(?:docs-to-spec|find-reference):[^(\n]{0,160}\((https:\/\/[^)\s]+)\)/i.exec(task.trim());
-  if (!m) return undefined;
+  const named = /(?:^|\n)\s*(?:docs-to-spec|find-reference):[^(\n]{0,160}\((https:\/\/[^)\s]+)\)/i.exec(task);
+  // The driver's own wording for the same thing: "write the spec from <the vendor's site>".
+  const written = named ? undefined : /(?:^|\n)\s*write the spec from (https:\/\/[^\s,]+?)[.,]?(?:\s|$)/i.exec(task);
+  const homepage = named?.[1] ?? written?.[1];
+  if (!homepage) return undefined;
   const after = /inspected:\s*([^\n]*?)(?:\.\s+Read the docs|$)/i.exec(task)?.[1] ?? '';
-  return { homepage: m[1]!, docs: (after.match(/https:\/\/[^\s,]+/g) ?? []).map(url => url.replace(/[.,]+$/, '')).slice(0, 4) };
+  return { homepage, docs: (after.match(/https:\/\/[^\s,]+/g) ?? []).map(url => url.replace(/[.,]+$/, '')).slice(0, 4) };
 }
 
 /** The agent's task when the browser found no description file: write one from the documentation, or say plainly that there is no API. */
