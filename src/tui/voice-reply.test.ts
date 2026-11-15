@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { VoiceReply, writesVoiceReply } from './voice-reply.js';
+import { VoiceReply, voicePresence, writesVoiceReply } from './voice-reply.js';
 
 const decode = (seqs: string[]) => seqs.map((s) => {
   const body = /^\u001b\]7702;(.*)\u001b\\$/.exec(s)![1]!;
@@ -40,5 +40,11 @@ describe('the answer as words for the phone (OSC 7702)', () => {
     off.answer('x');
     off.end(false);
     expect(out).toEqual([]);
+  });
+
+  it('says ClikCode is here when it starts and gone when it leaves, only to the phone', () => {
+    expect(voicePresence(true, { CLIKDEPLOY_CLIENT: 'mobile' })).toBe('\u001b]7702;h\u001b\\');
+    expect(voicePresence(false, { CLIKDEPLOY_CLIENT: 'mobile' })).toBe('\u001b]7702;q\u001b\\');
+    expect(voicePresence(true, {})).toBe('');
   });
 });
