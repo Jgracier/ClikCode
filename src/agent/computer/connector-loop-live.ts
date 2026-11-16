@@ -53,7 +53,8 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       queueCursor = data.nextCursor ?? undefined;
       for (const id of claimable(data.rows ?? [], exclude, Date.now(), n)) {
         if (got.length >= n) break;
-        const claim = await client.tool('connector_work_claim', { id, stage: 'needs-agent', worker: WORKER }).catch(() => null) as { id?: string; lane?: string; task?: string; reason?: string; scratchpad?: { text: string } } | null;
+        // A claim held for approval stops the round: every other claim would be held too, and the loop must say why it is idle.
+        const claim = await client.tool('connector_work_claim', { id, stage: 'needs-agent', worker: WORKER }).catch((error: unknown) => { if ((error as { code?: string }).code === 'approval-required') throw error; return null; }) as { id?: string; lane?: string; task?: string; reason?: string; scratchpad?: { text: string } } | null;
         if (claim && claim.id === id) {
           const task = claimedTask(claim);
           if (task) tasks.set(id, task);

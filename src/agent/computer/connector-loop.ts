@@ -231,6 +231,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     active.set(id, { job, since: began, lastRenew: began, budget, tab });
   };
 
+  let lastQueueError = '', lastQueueErrorAt = 0;
   for (;;) {
     const t = now();
     const draining = t >= endAt || ports.stopRequested?.() === true;
@@ -257,7 +258,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
           const slots = limits.parallel - active.size;
           if (slots > 0) {
             const exclude = new Set([...cooldown.ids(), ...active.keys()]);
-            const items = await ports.next(slots, exclude).catch(error => { ports.log(`${new Date(t).toISOString()} could not read the queue: ${scrubSecrets(error instanceof Error ? error.message : String(error)).slice(0, 100)}`); return []; });
+            const items = await ports.next(slots, exclude).catch(error => { const said = scrubSecrets(error instanceof Error ? error.message : String(error)).slice(0, 100); if (said !== lastQueueError || t - lastQueueErrorAt >= 600_000) { lastQueueError = said; lastQueueErrorAt = t; ports.log(`${new Date(t).toISOString()} could not read the queue (said once per 10 minutes while it lasts): ${said}`); } return []; });
             for (const item of items) if (!exclude.has(item.id) && active.size < limits.parallel) start(item.id);
             if (!items.length && !active.size) waitMs = limits.idleMs;
           }

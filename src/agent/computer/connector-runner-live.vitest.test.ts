@@ -37,3 +37,11 @@ it('a refusal for the lease is known by its code, not by the word in its message
   expect(needsLease(refusal({ status: 'error', error: { message: 'the lease of the domain ran out', code: 'VENDOR_DOMAIN' } }))).toBe(false);
   expect(needsLease(new Error('lease'))).toBe(false);
 });
+
+it('a write held for a person\'s approval is a refusal, never an answer', () => {
+  const text = JSON.stringify({ status: 'success', data: { ok: false, approvalRequired: true, reason: 'ask_mode', risk: 'write', input: { id: 'nrel' }, message: "This agent is in 'ask' mode, so the write action `connector_work_claim` needs a human to approve it before it runs." } });
+  let error: (Error & { code?: string }) | undefined;
+  try { unwrapTool(text); } catch (caught) { error = caught as Error & { code?: string }; }
+  expect(error?.code).toBe('approval-required');
+  expect(error?.message).toContain("held this write for a person's approval");
+});

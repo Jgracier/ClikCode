@@ -28,6 +28,9 @@ export function unwrapTool(text: string): unknown {
   if (start < 0) throw new Error(fullMessage(text) || 'ClikDeploy gave no answer');
   let envelope: { status?: string; message?: string; error?: { message?: string; code?: string; hint?: string }; data?: { success?: boolean; error?: unknown; data?: unknown } };
   try { envelope = JSON.parse(text.slice(start)); } catch { throw new Error('ClikDeploy gave an answer that is not JSON'); }
+  // A write ClikDeploy held for a person's approval (the account's assistant mode is "ask") did not happen: it is a refusal, not an answer.
+  const held = envelope.data as { approvalRequired?: unknown; message?: unknown } | undefined;
+  if (held?.approvalRequired === true) throw new ClikDeployToolError(`ClikDeploy held this write for a person's approval and nothing was changed: ${fullMessage(String(held.message ?? 'the account is in ask mode'))}`, 'approval-required');
   if (envelope.status === 'error' || envelope.data?.success === false) {
     const said = envelope.error?.message ?? envelope.message ?? (typeof envelope.data?.error === 'string' ? envelope.data.error : (envelope.data?.error as { message?: string } | undefined)?.message);
     const code = envelope.error?.code ? ` [${envelope.error.code}]` : '';

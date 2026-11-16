@@ -255,9 +255,12 @@ describe('the loop itself', () => {
 
   it('a queue that cannot be read is logged and retried, not fatal', async () => {
     let n = 0;
-    const f = fakes([], async id => outcome(id), { next: async () => { if (++n < 3) throw new Error('offline'); return []; } });
+    const f = fakes([], async id => outcome(id), { next: async () => { n++; if (n < 3) throw new Error('offline'); if (n < 5) throw new Error('held for approval'); return []; } });
     await runLoop(f.ports, limits({ maxHoursMs: 60 }));
+    // The same reason is said once while it lasts; a different one is said again.
     expect(f.log.filter(l => l.includes('could not read the queue')).length).toBe(2);
+    expect(f.log.some(l => l.includes('held for approval'))).toBe(true);
+    expect(n).toBeGreaterThanOrEqual(5);
   });
 
   it('claims only needs-agent rows that no other worker holds', () => {
