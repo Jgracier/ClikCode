@@ -13,7 +13,7 @@ describe('micro-task agent on the Gateway', () => {
     const ran = await runGatewayMicro('go', {
       tab: 'agent-x', maxCalls: 5, maxMs: 10_000, connection: { baseUrl: 'https://gw.test/v1', apiKey: 'k' },
       tools: [{ name: 'echo', class: 'read', description: 'echo', parameters: { type: 'object', properties: {} }, label: () => 'echo', async run(input: { word?: string }) { seen.push(String(input.word)); return { output: `said ${input.word}` }; } } as never],
-      fetchImpl: (async (_url: unknown, init?: RequestInit) => { seen.push(`model:${JSON.parse(String(init?.body)).model}`); return replies.shift()!; }) as typeof fetch,
+      fetchImpl: (async (url: unknown, init?: RequestInit) => { if (!String(url).endsWith('/v1/chat/completions')) throw new Error(`bad url ${String(url)}`); seen.push(`model:${JSON.parse(String(init?.body)).model}`); return replies.shift()!; }) as typeof fetch,
     });
     expect(ran).toEqual({ text: 'RESULT: done', timedOut: false, calls: 1 });
     expect(seen).toEqual(['model:claude-sonnet-5-5', 'hi', 'model:claude-sonnet-5-5']);

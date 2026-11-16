@@ -29,7 +29,8 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const left = deadline - Date.now();
       if (left <= 0) { timedOut = true; break; }
-      const response = await doFetch(`${connection.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+      const root = connection.baseUrl.replace(/\/+$/, '');
+      const response = await doFetch(`${root.endsWith('/v1') ? root : `${root}/v1`}/chat/completions`, {
         method: 'POST', signal: AbortSignal.timeout(Math.min(left, 120_000)),
         headers: { 'content-type': 'application/json', authorization: `Bearer ${connection.apiKey}`, 'x-client': 'clikcode-micro-agent' },
         body: JSON.stringify({ model: GATEWAY_MICRO_MODEL, messages, tools, stream: false }),
