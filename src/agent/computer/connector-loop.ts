@@ -87,7 +87,7 @@ export const DEFAULT_LIMITS: LoopLimits = {
   renewMs: 10 * 60_000, tickMs: 15_000, idleMs: 60_000, pauseBaseMs: 30_000, pauseMaxMs: 5 * 60_000, pressureLimit: 10, graceMs: 90_000,
 };
 
-export interface WorkContext { tab: string; budget: CallBudget; limits: LoopLimits; deadline: number; signal?: AbortSignal }
+export interface WorkContext { tab: string; budget: CallBudget; limits: LoopLimits; deadline: number; signal?: AbortSignal; /** The last action the vendor started, set by the work. */ last?: string }
 /** A browser that did not open is a fault of ours, not a verdict on the vendor: try the vendor again in minutes, not hours. */
 const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)/i;
 const BROWSER_RETRY_MS = 5 * 60_000;
@@ -199,7 +199,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
         if (raced === 'timeout') {
           abort.abort(new Error('Connector task deadline expired'));
           await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
-          outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round((limits.maxMs + limits.graceMs) / 1000)}s: the browser did not answer; the task was cancelled and its own tabs were closed`, actions: [] };
+          outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round((limits.maxMs + limits.graceMs) / 1000)}s ${ctx.last ? `during "${ctx.last.slice(0, 120)}"` : 'before the first step'}; the task was cancelled and its own tabs were closed`, actions: [] };
         } else if ('failed' in raced) {
           const message = scrubSecrets(raced.failed instanceof Error ? raced.failed.message : String(raced.failed));
           if (browserTrouble(raced.failed)) await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));

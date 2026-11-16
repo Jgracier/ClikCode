@@ -73,13 +73,14 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       // An agent hand-off has its own call and time budget (limits.agentCalls, limits.agentMs): the vendor's call budget guards
       // the deterministic steps, and spending it on the agent left judgement work a few calls and the last seconds of the vendor.
       if (micro) driver.agentTask = (id, stop, budget) => micro(id, stop, budget);
+      ctx.last = 'the first connector_onboard call';
       const first = tasks.get(id) ?? await counted.onboard(id);
       tasks.delete(id);
       const saved = notes.get(id);
       notes.delete(id);
       if (saved && first.next.kind === 'agent') first.next.task += `\nSaved progress from the previous worker (verify before continuing):\n${saved}`;
       const { limits } = ctx;
-      return runVendor(first, counted, driver, { maxSteps: limits.maxSteps, maxMs: limits.maxMs, agentMs: limits.agentMs, agentCalls: limits.agentCalls, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
+      return runVendor(first, counted, driver, { onAction: line => { ctx.last = line; }, maxSteps: limits.maxSteps, maxMs: limits.maxMs, agentMs: limits.agentMs, agentCalls: limits.agentCalls, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
     },
     async report(id, report) {
       await client.report({ id, outcome: report.outcome, reason: report.reason, ...(report.retryAfterMs ? { retryAfterMs: report.retryAfterMs } : {}), ...(report.humanStep ? { humanStep: report.humanStep as HumanStep } : {}) });

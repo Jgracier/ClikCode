@@ -87,6 +87,8 @@ interface RunnerOptions {
   /** Where hand-off requests are written (default: a fresh temp directory). */ handoffDir?: () => Promise<string>;
   writeFile?: (path: string, text: string) => Promise<void>;
   log?: (line: string) => void;
+  /** Told each action as it starts (the loop keeps the last one, to say where a vendor that ran out of time was). */
+  onAction?: (line: string) => void;
 }
 
 type VendorStatus = 'published' | 'blocked' | 'human' | 'handoff' | 'budget' | 'waiting' | 'error';
@@ -252,7 +254,11 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   const startedAt = now();
   const elapsed = (): number => now() - startedAt - agentSpent;
   const id = first.id;
+  // Every action is logged as it starts, so a vendor that hangs shows where (the loop's hard time limit names the last one).
   const actions: string[] = [];
+  const push = actions.push.bind(actions);
+  actions.push = (...lines: string[]): number => { for (const line of lines) { options.log?.(`step: ${cap(say(line), 200)}`); options.onAction?.(line); } return push(...lines); };
+  options.onAction?.(`started at stage ${first.stage || 'unknown'}: ${cap(say(first.next.task), 120)}`);
   let result = fix(first), steps = 0, browserActions = 0, recipeSaved = false;
   const seen = new Map<string, number>();
   const out = (status: VendorStatus, summary: string, extra: Partial<VendorOutcome> = {}): VendorOutcome => ({ id, status, steps, browserActions, stage: result.stage, summary: say(summary), actions, ...(recipeSaved ? { recipe: true } : {}), ...extra });
