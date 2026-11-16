@@ -5,9 +5,8 @@
  * with a full humanStep. It solves a captcha itself (the vision model answers the puzzle), never spends money, and never prints a key, and every vendor has a step and time budget. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
-import { IDENTITY_WALL, paymentWall } from './keygrab.js';
+import { paymentWall } from './keygrab.js';
 import { BACKOFF_HOURS } from './keygrab-park.js';
-import { detectBlocker } from './signup-recipes.js';
 import { sleep as sleepFor } from '../../runtime/sleep.js';
 
 export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'vendor-contact' | 'decision' | 'retire' | 'worker-setup';
@@ -225,14 +224,12 @@ export function planFor(result: OnboardResult, recipe: boolean): Plan {
 /** A wall only a person clears, from where the browser stopped; undefined when it is just a screen the runner does not know. */
 export function humanStepFor(id: string, stop: StopInfo): HumanStep | undefined {
   const url = cleanUrl(stop.url);
-  // A keygrab stop already judged its page with the strict wall test; marketing words in the excerpt are not a wall.
-  const blocker = stop.trail ? undefined : detectBlocker(stop.pageText);
+  // A wall is what a driver or an agent saw and named (`stop.kind`), never words found in the text of the stop. That text can be the task's own
+  // prompt or a marketing page: a vendor whose home page said "captcha" was parked for an hour on one, with nothing tried.
   const at = url ? { url } : {};
-  if (stop.kind === 'captcha' || blocker === 'a captcha') return { kind: 'captcha', ...at, reasonCode: 'captcha', instructions: `Solve the captcha at ${hostOf(url)} for ${id}, then the runner can carry on.` };
-  if (stop.kind === 'mfa' || blocker === 'an SMS or authenticator code') return { kind: 'mfa', ...at, reasonCode: 'verification-code', instructions: `Enter the verification code (SMS or authenticator) at ${hostOf(url)} for ${id}.` };
-  if (stop.kind === 'payment' || blocker === 'a payment page') return { kind: 'payment', ...at, reasonCode: paymentWall(`${stop.message} ${stop.pageText}`), instructions: `${hostOf(url)} wants a card, credits or a paid plan before ${id} can continue; nothing was paid.` };
-  if (IDENTITY_WALL.test(stop.pageText)) return { kind: 'identity', ...at, reasonCode: 'identity-check', instructions: `${hostOf(url)} asks for identity or business verification for ${id}.` };
-  if (blocker === 'a review page') return { kind: 'app-review', ...at, reasonCode: 'app-review', instructions: `${hostOf(url)} holds the ${id} app for review; check its status.` };
+  if (stop.kind === 'captcha') return { kind: 'captcha', ...at, reasonCode: 'captcha', instructions: `Solve the captcha at ${hostOf(url)} for ${id}, then the runner can carry on.` };
+  if (stop.kind === 'mfa') return { kind: 'mfa', ...at, reasonCode: 'verification-code', instructions: `Enter the verification code (SMS or authenticator) at ${hostOf(url)} for ${id}.` };
+  if (stop.kind === 'payment') return { kind: 'payment', ...at, reasonCode: paymentWall(`${stop.message} ${stop.pageText}`), instructions: `${hostOf(url)} wants a card, credits or a paid plan before ${id} can continue; nothing was paid.` };
   if (stop.kind === 'unrecognized-client') return { kind: 'app-registration', ...at, reasonCode: 'oauth-client-unknown', instructions: `${hostOf(url)} does not recognize ClikDeploy's OAuth client for ${id}: register the app there and save its client id and secret.` };
   if (stop.kind === 'password') return { kind: 'worker-setup', ...at, reasonCode: 'sign-in-needed', instructions: `The ClikCode browser is signed out at ${hostOf(url)}: sign in once (Google), then run the connectors again.` };
   return undefined;
@@ -382,7 +379,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
         actions.push(`qualify: lane ${q.lane} - ${cap(say(q.summary), 160)}`);
         if (q.lane === 'research') {
           const task = result.next.task;
-          const agent = await viaAgent({ kind: 'unknown', message: `Find the official signup path and determine whether this credential task can proceed: ${q.summary}`, url: siteUrl(task) ?? '', pageText: task, controls: [] }, true);
+          const agent = await viaAgent({ kind: 'unknown', message: `Find the official signup path and get this credential task through, trying it on the live site. ${q.summary}. Treat any of that as a lead to check, not a fact: a wall is only real once you have seen it on the vendor's own page, and then name it with a quote.`, url: siteUrl(task) ?? '', pageText: task, controls: [] }, true);
           if (agent?.ok) {
             actions.push(agent.note ?? 'the agent researched the signup path');
             result = fix(await client.onboard(id));

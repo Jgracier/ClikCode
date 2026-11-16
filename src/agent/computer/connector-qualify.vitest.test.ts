@@ -32,8 +32,8 @@ describe('qualify classification', () => {
     expect(classify('v', [page('signup', 'Create account', { ...form, captchaWidget: true })]).lane).toBe('auto');
     // A texted code and a card are met on the page too (the sign-up reads the code, or the card rule decides): seen, not a wall.
     expect(classify('v', [page('signup', 'Create account. We will text you a code: verify your phone', { ...form, captchaWidget: true })]).lane).toBe('auto');
-    // A real wall beside them still is one.
-    expect(classify('v', [page('signup', 'Create account. Use your work email. We will text you a code: verify your phone', form)]).lane).toBe('human');
+    // A real wall beside them is a lead for the agent to check.
+    expect(classify('v', [page('signup', 'Create account. Use your work email. We will text you a code: verify your phone', form)]).lane).toBe('research');
     expect(classify('v', [page('docs', 'Our captcha policy for the API')]).kinds).toEqual([]);
   });
 
@@ -81,8 +81,8 @@ describe('qualify classification', () => {
     expect(classify('v', [page('docs', 'Installing: Connect your Slack workspace and get up and running in minutes.')]).kinds).toEqual(['slack-only']);
   });
 
-  it('no-api wording makes the lane dead; a page that cannot load, everywhere, is a dead host', () => {
-    expect(classify('v', [page('docs', 'Unfortunately we do not offer an API.')])).toMatchObject({ lane: 'dead', kinds: ['no-api'] });
+  it('no-api wording is a lead for the agent; a page that cannot load, everywhere, is a dead host', () => {
+    expect(classify('v', [page('docs', 'Unfortunately we do not offer an API.')])).toMatchObject({ lane: 'research', kinds: ['no-api'] });
     const dead = classify('v', [page('home', '', { error: 'net::ERR_NAME_NOT_RESOLVED', status: undefined })]);
     expect(dead).toMatchObject({ lane: 'dead', kinds: ['dead-host'] });
   });
@@ -99,7 +99,7 @@ describe('qualify classification', () => {
   it('a card wall with prices and no free plan adds paid-plan', () => {
     const r = classify('v', [page('signup', 'A card is required to start the trial.', form), page('pricing', 'Pro $40 / person / mo\nTeam $425 / mo')]);
     expect(r.kinds).toEqual(['card', 'paid-plan']);
-    expect(r.lane).toBe('human');
+    expect(r.lane).toBe('research');
   });
 
   it('evidence carries the kind, the phrase and the url', () => {
@@ -187,11 +187,11 @@ describe('the phrase lists', () => {
 });
 
 describe('the human step for a qualify result', () => {
-  it('names the wall the loop reports, strongest first, with the rendered phrase', async () => {
+  it('states only a dead host as a wall; every wording finding is left to the agent', async () => {
     const { humanStepForQualify } = await import('./connector-qualify.js');
     const r = classify('v', [page('signup', 'A card is required to start.', form), page('docs', 'To get API access please contact sales.')]);
-    expect(humanStepForQualify(r)).toMatchObject({ kind: 'payment', reasonCode: 'card', url: 'https://vendor.example/signup' });
-    expect(humanStepForQualify(classify('v', [page('docs', 'We do not offer an API.')]))).toMatchObject({ kind: 'retire', reasonCode: 'no-api' });
-    expect(humanStepForQualify(classify('v', [page('docs', 'Create a key in settings.')]))).toBeUndefined();
+    expect(humanStepForQualify(r)).toBeUndefined();
+    expect(humanStepForQualify(classify('v', [page('docs', 'We do not offer an API.')]))).toBeUndefined();
+    expect(humanStepForQualify(classify('v', [page('home', '', { error: 'net::ERR_NAME_NOT_RESOLVED', status: undefined })]))).toMatchObject({ kind: 'retire', reasonCode: 'dead-host' });
   });
 });

@@ -64,7 +64,7 @@ export function liveClient(signal?: AbortSignal): DeployClient {
       await writeFile(file, json, { mode: 0o600 });
     }
     let run: Awaited<ReturnType<typeof runCli>>;
-    try { run = await runCli('clikdeploy', ['tools', 'run', name, ...(file ? ['--args-file', file] : ['--args-json', json]), '--confirm'], { ...(signal ? { signal } : {}), timeoutMs }); }
+    try { run = await runCli('clikdeploy', ['tools', 'run', name, ...(file ? ['--args-file', file] : ['--args-json', json]), '--confirm'], { ...(signal ? { signal } : {}), timeoutMs, maxChars: 8_000_000 }); }
     finally { if (file) { const { rm } = await import('node:fs/promises'); const { dirname } = await import('node:path'); await rm(dirname(file), { recursive: true, force: true }).catch(quiet('agent/computer/connector-runner-live')); } }
     if (run.missing) throw new Error('The clikdeploy command is not installed on this computer.');
     return unwrapTool(run.text);
@@ -175,11 +175,9 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
     async qualify(id: string) {
       const [{ qualifyVendor, humanStepForQualify }, { qualifyPorts }] = await Promise.all([import('./connector-qualify.js'), import('./connector-qualify-live.js')]);
       const result = await qualifyVendor(id, qualifyPorts(options.stateDir, liveClient(options.signal)));
-      // A captcha is not a wall here: key capture presses the human-check box and has the vision model solve a puzzle
-      // (keygrab.ts pastCaptcha), and parks only if that fails. Only the other walls stop before it runs.
-      if (result.lane === 'human' && result.kinds.length > 0 && result.kinds.every((kind) => kind === 'captcha')) result.lane = 'auto';
-      const human = result.lane === 'auto' ? undefined : humanStepForQualify(result);
-      return { lane: result.lane, summary: `${result.kinds.join(', ') || (result.lane === 'research' ? result.hints?.join('; ') || 'no usable signup form was observed' : 'no wall observed on signup')}${result.evidence[0] ? ` (${result.evidence[0].phrase.slice(0, 80)})` : ''}`, ...(human ? { human } : {}) };
+      const human = result.lane === 'dead' ? humanStepForQualify(result) : undefined;
+      const seen = result.evidence.slice(0, 4).map(e => `${e.kind}: "${e.phrase.slice(0, 100)}"`).join('; ');
+      return { lane: result.lane, summary: seen ? `the qualifier read these on rendered pages (wording, not verified): ${seen}` : result.lane === 'research' ? result.hints?.join('; ') || 'no usable signup form was observed' : 'no wall observed on signup', ...(human ? { human } : {}) };
     },
     async backoff(id) { return (await import('./keygrab-park.js')).backoffUntil(options.stateDir, id); },
     async recordBackoff(id) { return (await import('./keygrab-park.js')).recordBackoff(options.stateDir, id); },

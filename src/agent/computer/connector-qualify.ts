@@ -111,11 +111,11 @@ export function classify(id: string, pages: RenderedPage[]): QualifyResult {
   const priced = loaded.find(p => p.role === 'pricing' && /[$€£]\s?\d/.test(p.text) && !/\bfree (?:plan|forever|tier)\b|\bforever free\b|use free plan|[$€£]\s?0\b/i.test(p.text));
   if (priced && evidence.some(e => e.kind === 'card')) add('paid-plan', 'a card is asked for, and the pricing page has prices and no free plan', priced.url);
   const kinds = [...new Set(evidence.map(e => e.kind))];
-  // Seen, but no wall for the qualifier: the sign-up meets them on the page itself and answers what it can -- a captcha (human-check.ts),
-  // a texted code (sms-code.ts), a card under the user's standing rule (card-rule.ts) -- and stops with the real step when it cannot.
-  // Judged from wording here, they stopped vendors that would have gone through. They stay in `kinds` as something seen.
-  const ANSWERED_ON_THE_PAGE: readonly QualifyKind[] = ['captcha', 'sms', 'card'];
-  const lane: Lane = kinds.includes('dead-host') || kinds.includes('no-api') ? 'dead' : kinds.some(k => !ANSWERED_ON_THE_PAGE.includes(k)) ? 'human' : loaded.some(p => (p.role === 'signup' || p.role === 'home') && p.hasForm) ? 'auto' : 'research';
+  // Only a host that does not resolve is a wall from here: that is a fact, not a reading of words. Everything else the qualifier read
+  // (a plan name beside "API", "contact sales", a card or phone field) is wording on a marketing page, and it was wrong often enough
+  // (about 70% of the sales walls) to be a hint for the agent that works the vendor, never a reason to stop before anyone tried.
+  // A captcha, a phone code or a card is met on the sign-up page itself, where it is answered (human-check.ts, sms-code.ts, card-rule.ts).
+  const lane: Lane = kinds.includes('dead-host') ? 'dead' : kinds.some(k => k !== 'captcha' && k !== 'sms' && k !== 'card') ? 'research' : loaded.some(p => (p.role === 'signup' || p.role === 'home') && p.hasForm) ? 'auto' : 'research';
   return { id, lane, kinds, evidence, ...(hints.length ? { hints: [...new Set(hints)] } : {}), pages: pages.map(p => ({ role: p.role, url: p.url, ok: !p.error && (p.status === undefined || p.status < 400) && p.text.trim().length > 0, ...(p.error ? { error: p.error.slice(0, 120) } : {}) })) };
 }
 
@@ -166,25 +166,9 @@ export async function qualifyVendor(id: string, ports: QualifyPorts): Promise<Qu
   } finally { await ports.close(id).catch(quiet('agent/computer/connector-qualify')); }
 }
 
-/** The typed wall (the loop's kinds) for a qualify kind, and the human step a person would take. */
-const QUALIFY_WALL: Partial<Record<QualifyKind, { wall: string; kind: 'captcha' | 'sms' | 'payment' | 'vendor-contact' | 'app-review' | 'decision' | 'retire'; say: string }>> = {
-  captcha: { wall: 'captcha', kind: 'captcha', say: 'the sign-up form has a captcha' },
-  sms: { wall: 'sms', kind: 'sms', say: 'sign-up wants a phone code' },
-  card: { wall: 'card', kind: 'payment', say: 'sign-up asks for a card' },
-  'paid-plan': { wall: 'paid-plan', kind: 'payment', say: 'the API is gated by a paid plan' },
-  sales: { wall: 'sales', kind: 'vendor-contact', say: 'API access is sold through sales' },
-  enterprise: { wall: 'sales', kind: 'vendor-contact', say: 'the API is for enterprise customers' },
-  approval: { wall: 'app-review', kind: 'app-review', say: 'API access needs the vendor\'s approval' },
-  'work-email': { wall: 'work-email', kind: 'decision', say: 'sign-up wants a work email' },
-  'free-mail': { wall: 'free-mail', kind: 'decision', say: 'sign-up rejects free-mail addresses' },
-  'no-api': { wall: 'no-api', kind: 'retire', say: 'the vendor has no public API' },
-  'dead-host': { wall: 'dead-host', kind: 'retire', say: 'the vendor\'s site does not load' },
-};
-export function humanStepForQualify(r: QualifyResult): { kind: 'captcha' | 'sms' | 'payment' | 'vendor-contact' | 'app-review' | 'decision' | 'retire'; url?: string; instructions: string; reasonCode: string } | undefined {
-  const order: QualifyKind[] = ['dead-host', 'no-api', 'sms', 'card', 'paid-plan', 'sales', 'enterprise', 'approval', 'work-email', 'free-mail'];
-  const kind = order.find(k => r.kinds.includes(k));
-  const w = kind ? QUALIFY_WALL[kind] : undefined;
-  if (!kind || !w) return undefined;
-  const e = r.evidence.find(x => x.kind === kind);
-  return { kind: w.kind, ...(e?.url && /^https:/.test(e.url) ? { url: e.url.split('#')[0]!.split('?')[0]! } : {}), instructions: `${w.say} (rendered page says: "${(e?.phrase ?? '').slice(0, 120)}").`, reasonCode: w.wall };
+/** The one wall the qualifier states: a vendor whose site does not exist. Every other finding is a lead for the agent (see `classify`). */
+export function humanStepForQualify(r: QualifyResult): { kind: 'retire'; url?: string; instructions: string; reasonCode: string } | undefined {
+  if (!r.kinds.includes('dead-host')) return undefined;
+  const e = r.evidence.find(x => x.kind === 'dead-host');
+  return { kind: 'retire', ...(e?.url && /^https:/.test(e.url) ? { url: e.url.split('#')[0]!.split('?')[0]! } : {}), instructions: `the vendor's site does not load (${(e?.phrase ?? '').slice(0, 120)}).`, reasonCode: 'dead-host' };
 }

@@ -179,10 +179,10 @@ describe('connectors run', () => {
     expect(humanStepFor('v', stop({ kind, pageText }))?.kind).toBe(human);
   });
 
-  it('maps identity and review pages found in the page text', () => {
-    expect(humanStepFor('v', stop({ pageText: 'Business verification is required before we can continue' }))?.kind).toBe('identity');
-    expect(humanStepFor('v', stop({ pageText: 'Your application is under review' }))?.kind).toBe('app-review');
-    expect(humanStepFor('v', stop({ pageText: 'Pick a region' }))).toBeUndefined();
+  it('never reads a wall out of the words of a stop: a page or task that mentions a captcha, a card or a review is no wall', () => {
+    for (const pageText of ['Business verification is required', 'Your application is under review', 'Solve the captcha, then enter your card number', 'Pick a region']) {
+      expect(humanStepFor('v', stop({ pageText }))).toBeUndefined();
+    }
   });
 
   it('stops at the step budget when the same task keeps coming back, and never loops forever', async () => {
