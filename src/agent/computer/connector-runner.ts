@@ -184,6 +184,9 @@ export function docsToSpecPrompt(id: string, homepage: string, docs: readonly st
     + 'If the vendor documents no API at all, or only one given out by its sales team, end with RESULT: wall no-api (or sales) and one sentence of evidence.';
 }
 
+/** How long ClikDeploy's own running work (a test job, a build) is waited out in one vendor run. */
+const WAIT_LIMIT_MS = 180_000;
+
 /** What to do about the task ClikDeploy returned. `recipe` says whether a saved recipe exists for it. */
 export function planFor(result: OnboardResult, recipe: boolean): Plan {
   const next = result.next;
@@ -341,13 +344,17 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   };
 
   let reusedCredential = false;
+  let waitedMs = 0;
   for (;;) {
     if (steps >= maxSteps) return out('budget', `step budget of ${maxSteps} used; ${result.stage} is where it stands`);
     if (elapsed() > maxMs) return out('budget', `time budget of ${Math.round(maxMs / 1000)}s used; ${result.stage} is where it stands`);
     const key = `${result.stage}|${result.next.kind}|${result.next.task}`;
     const times = (seen.get(key) ?? 0) + 1;
     seen.set(key, times);
-    if (times > 3) return out('budget', `no progress: the same task came back ${times - 1} times (${cap(say(result.next.task), 120)})`);
+    // "Call onboard again" is ClikDeploy saying its own work (a test job, a build) is still running: that is waited out with longer
+    // and longer pauses for up to WAIT_LIMIT_MS, not counted as the runner going round in circles.
+    const stillRunning = result.next.kind === 'call' && waitedMs < WAIT_LIMIT_MS;
+    if (times > 3 && !stillRunning) return out('budget', `no progress: the same task came back ${times - 1} times (${cap(say(result.next.task), 120)})`);
 
     const recipe = result.next && result.next.kind === 'agent' && !result.next.call && !/oauth_connect/i.test(result.next.task) ? await driver.hasRecipe(id, siteUrl(result.next.task)) : false;
     const plan = planFor(result, recipe);
@@ -440,8 +447,10 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           return await handoff(agent && !agent.ok ? `${plan.why}; ${agent.stop.message}` : plan.why);
         }
         case 'wait': {
-          actions.push(`wait ${plan.ms / 1000}s, call onboard again`);
-          await sleep(plan.ms);
+          const ms = Math.min(60_000, plan.ms * 2 ** Math.max(0, (seen.get(key) ?? 1) - 1));
+          actions.push(`wait ${Math.round(ms / 1000)}s, call onboard again`);
+          await sleep(ms);
+          waitedMs += ms;
           result = fix(await client.onboard(id));
           break;
         }

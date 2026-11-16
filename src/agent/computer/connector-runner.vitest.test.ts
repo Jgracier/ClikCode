@@ -195,6 +195,16 @@ describe('connectors run', () => {
     expect(d.driven.length).toBeLessThanOrEqual(3);
   });
 
+  it('waits out ClikDeploy\'s own running work with longer pauses instead of calling it no progress', async () => {
+    const running = (): OnboardResult => ({ id: 'testing', state: 'running', stage: 'tests', reason: '', next: { kind: 'call', task: 'connector_test_job_status: the job is still running' } });
+    const c = fakeClient([running()], { testing: [running(), running(), running(), running(), published('testing')] });
+    const pauses: number[] = [];
+    const { outcomes } = await runConnectors(c.client, fakeDriver([]).driver, { ...quick, sleep: async ms => { pauses.push(ms); } });
+    expect(outcomes[0]!.status).toBe('published');
+    expect(pauses.length).toBeGreaterThanOrEqual(4);
+    expect(pauses[3]!).toBeGreaterThan(pauses[0]!);
+  });
+
   it('stops at the step budget', async () => {
     let n = 0;
     const next = (): OnboardResult => ({ id: 'busy', state: 'running', stage: `proof${n++}`, reason: '', next: { kind: 'call', task: `call again ${n}` } });
