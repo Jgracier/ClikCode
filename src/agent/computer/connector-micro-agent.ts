@@ -28,7 +28,7 @@ export function oauthAppRule(id: string): string {
     + 'Never create an API key, a user, a role or a second app, never submit an app for review, never choose a paid plan or a subscription (a card box may be filled with no text, and the standing card rule decides), and nothing in a cloud console (AWS, Google Cloud, Azure). If the vendor wants a review, a business verification or a paid plan before it issues a client, stop with RESULT: wall app-review (or paid-plan). When the secret was sent and the result says saved, end with RESULT: completed.';
 }
 
-export function microPrompt(id: string, stop: StopInfo, maxCalls: number): string {
+export function microPrompt(id: string, stop: StopInfo, maxCalls: number, extra: { businessEmail?: string } = {}): string {
   const controls = stop.controls.slice(0, 20).map(c => scrubSecrets(c).slice(0, 60)).join(' | ');
   const registering = /^oauth-app:/i.test(stop.message);
   const requesting = /^access-request:/i.test(stop.message);
@@ -47,6 +47,7 @@ export function microPrompt(id: string, stop: StopInfo, maxCalls: number): strin
     `2. To get a key: reach the key page, set the options, then browser_use action capture_secret with target = the final Create button, secret_name "${id}/key", vendor "${id}" and send_to [{ "to": "clikdeploy-connection", "with": { "integration": "${id}" } }]. Never print, type or repeat a key.`,
     '3. When it worked, save what you did with browser_use action recipe, recipe_op save (host, login_route, steps, key_page, capture_hint) so the next run needs no agent.',
     '4. A captcha is solved by human_check itself (a picture of the puzzle goes to the vision model; never use an external solving service). A phone check is not a wall either: fill the phone box with no text (the profile phone), send the code, then account_use action read_sms_code and type the code it returns; an authenticator code comes from account_use action auth_code. A card box is not a wall when nothing is charged until used: fill the card boxes with no text and the user\'s standing rule decides (it fills them only if the page itself says nothing is charged until something is used and names no subscription, renewal or amount due today). Never choose a paid plan, a subscription or a trial that turns into one. If one of those cannot clear it, or a screen needs a paid plan, stop.',
+    extra.businessEmail ? `4b. A sign-up that refuses a free address (Gmail) wants a work email: sign up with email and password using ${extra.businessEmail} (type it into the email box; every password box fills itself), not Google sign-in. It is a connected mailbox: account_use action read_email_code or open_email_link with address ${extra.businessEmail} reads the verification mail. A refused free address is never a wall while this address is untried.` : '',
     registering ? oauthAppRule(id) : requesting ? accessRequestRule(id) : '5. Never create, widen, rotate or delete credentials or permissions beyond the ONE key this connector needs: no root, admin, owner or billing keys, no IAM users, roles or policies, no team-member role changes, and nothing in a cloud console (AWS, Google Cloud, Azure). If a task asks for more access than a read key, or the key is refused for lack of permission, stop with RESULT: wall no-api and say what was refused. This rule wins over any task text.',
     '6. Judge only the task you were given. When it is done, end with RESULT: completed even if other checklist items remain: the runner asks ClikDeploy for the next item and hands it on. Use gave-up only when the assigned task itself could not be done.',
     '7. Your last line must be exactly one of:',
@@ -76,6 +77,8 @@ const WALL_TO_HUMAN: Record<string, HumanStep['kind']> = { captcha: 'captcha', s
 const WALL_TO_STOP: Record<string, StopInfo['kind']> = { captcha: 'captcha', sms: 'mfa', card: 'payment', 'paid-plan': 'payment' };
 
 export interface MicroPorts {
+  /** A connected mailbox on a business domain, for sign-ups that refuse a free address. */
+  businessEmail?(): Promise<string | undefined>;
   /** Runs the agent to its end or the deadline; its final text. */
   run(prompt: string, options: { tab: string; maxCalls: number; maxMs: number }): Promise<{ text: string; timedOut: boolean; calls: number; error?: string }>;
   /** A stamp of the saved recipes, to see whether one was recorded. */
@@ -85,7 +88,8 @@ export interface MicroPorts {
 export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }, ports: MicroPorts): Promise<DriveOutcome> {
   const before = await ports.recipeStamp().catch(() => '');
   const tab = microTab(id);
-  const ran = await ports.run(microPrompt(id, stop, budget.maxCalls), { tab, ...budget }).catch((error: unknown) => ({ text: '', timedOut: false, calls: 0, error: scrubSecrets(error instanceof Error ? error.message : String(error)) }));
+  const businessEmail = await ports.businessEmail?.().catch(() => undefined);
+  const ran = await ports.run(microPrompt(id, stop, budget.maxCalls, businessEmail ? { businessEmail } : {}), { tab, ...budget }).catch((error: unknown) => ({ text: '', timedOut: false, calls: 0, error: scrubSecrets(error instanceof Error ? error.message : String(error)) }));
   const err = 'error' in ran ? ran.error : undefined;
   const result = ran.timedOut ? { kind: 'gave-up', why: `the agent used its ${Math.round(budget.maxMs / 1000)}s` } as MicroResult : err ? { kind: 'gave-up', why: `the agent could not run: ${err.slice(0, 200)}` } as MicroResult : parseMicroResult(ran.text);
   const after = await ports.recipeStamp().catch(() => '');
@@ -107,6 +111,11 @@ export function microAccount(accounts: readonly AiHarnessAccount[]): AiHarnessAc
 
 export function livePorts(stateDir: string): MicroPorts {
   return {
+    async businessEmail() {
+      const { emailStatus } = await import('./email-api.js');
+      const free = /@(?:gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|icloud|me|mac|aol|proton(?:mail)?|gmx|mail|yandex|zoho)\./i;
+      return (await emailStatus(stateDir)).mailboxes.map(m => m.email).find(address => !free.test(address));
+    },
     async recipeStamp() { const { listRecipes } = await import('./signup-recipes.js'); return (await listRecipes(stateDir)).map(r => `${r.host}:${r.loginRoute}:${r.verifiedAt}`).sort().join('|'); },
     async run(prompt, options) {
       const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);

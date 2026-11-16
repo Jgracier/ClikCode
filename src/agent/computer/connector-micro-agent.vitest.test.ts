@@ -231,3 +231,22 @@ describe('the OAuth app registration rule', () => {
   });
 });
 
+
+describe('a sign-up that wants a work email', () => {
+  const stop: StopInfo = { kind: 'unknown', message: 'work-email: the sign-up refuses gmail', url: 'https://vendor.example/signup', pageText: 'Please use a company email address', controls: [] };
+  it('tells the agent to sign up with the connected business mailbox, and how to read its mail', () => {
+    const prompt = microPrompt('acme', stop, 20, { businessEmail: 'me@company.example' });
+    expect(prompt).toContain('using me@company.example');
+    expect(prompt).toContain('read_email_code or open_email_link with address me@company.example');
+    expect(prompt).toContain('not Google sign-in');
+  });
+  it('says nothing of it when no business mailbox is connected', () => {
+    expect(microPrompt('acme', stop, 20)).not.toContain('4b.');
+  });
+  it('hands the address over from its port', async () => {
+    let seen = '';
+    const ports: MicroPorts = { run: async prompt => { seen = prompt; return { text: 'RESULT: captured', timedOut: false, calls: 1 }; }, recipeStamp: async () => '', businessEmail: async () => 'me@company.example' };
+    await runMicroTask('acme', stop, { maxCalls: 5, maxMs: 1_000 }, ports);
+    expect(seen).toContain('me@company.example');
+  });
+});

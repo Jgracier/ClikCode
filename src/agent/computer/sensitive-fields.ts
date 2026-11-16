@@ -52,7 +52,11 @@ function keyFieldValuesInPage(): string[] {
       return text.trim().slice(-60);
     })();
     const hint = [labels, get('aria-label'), get('placeholder'), get('name'), get('id'), get('title'), before].join(' ');
-    if (SHAPED(value) || NAMED.test(hint)) out.add(value);
+    // A box that names a key holds one only if it is not the key's NAME, label or note ("Token name": ClikDeploy) and the value is not a
+    // plain word: masking an ordinary word hid it everywhere for the rest of the process (every "ClikDeploy" in the loop's messages).
+    const nameBox = /\b(?:name|label|title|description|note|nickname|alias)\b/i.test(hint);
+    const plainWord = /^[A-Za-z][A-Za-z._-]*$/.test(value) && value.length <= 14;
+    if (SHAPED(value) || (NAMED.test(hint) && !nameBox && !plainWord)) out.add(value);
   }
   return [...out];
 }
