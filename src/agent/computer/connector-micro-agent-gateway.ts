@@ -59,7 +59,7 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
       }
     }
   } finally {
-    // Closing waits on the browser, which an abandoned hung call may still hold: it gets 15 seconds, not forever.
+    // Closing the tab waits on the browser, which an abandoned hung call may still hold: it gets 15 seconds, not forever.
     if (!options.tools) await Promise.race([closeTab(options.tab), new Promise(resolve => setTimeout(resolve, 15_000).unref())]);
   }
   return { text, timedOut, calls, ...(error ? { error } : {}) };
@@ -67,7 +67,8 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
 
 async function closeTab(tab: string): Promise<void> {
   const stateDir = stateDirectory();
-  const { closeComputerPage, releaseComputerBrowser } = await import('./browser.js');
+  // Only this agent's own tab. The browser connection is shared with the vendors running beside it in this process: releasing it
+  // here cut their pages off mid-task ("the browser has been closed"), which the CLI agents never did because each was its own process.
+  const { closeComputerPage } = await import('./browser.js');
   await closeComputerPage(stateDir, tab).catch(quiet('agent/computer/connector-micro-agent-gateway'));
-  await releaseComputerBrowser(stateDir).catch(quiet('agent/computer/connector-micro-agent-gateway'));
 }
