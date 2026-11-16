@@ -59,7 +59,8 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
       }
     }
   } finally {
-    if (!options.tools) await closeTab(options.tab);
+    // Closing waits on the browser, which an abandoned hung call may still hold: it gets 15 seconds, not forever.
+    if (!options.tools) await Promise.race([closeTab(options.tab), new Promise(resolve => setTimeout(resolve, 15_000).unref())]);
   }
   return { text, timedOut, calls, ...(error ? { error } : {}) };
 }
