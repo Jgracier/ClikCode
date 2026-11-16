@@ -111,6 +111,7 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
     press: async key => failed(await run({ action: 'press', key })),
     fill: async (name, text) => failed(await run({ action: 'fill', target: name, ...(text !== undefined ? { text } : {}) })),
     login: async () => { const r = await run({ action: 'login' }); return { ok: !r.isError, message: clean(r.output.split('\n')[0] ?? '') }; },
+    cardAllowed: async (pageText: string) => (await (await import('./card-rule.js')).ruleAllowsCard(options.stateDir, pageText)).allowed,
     authenticatorCode: async () => {
       const { vendorMfaAccounts, vendorMfaAccountFor, vendorMfaCode } = await import('./secret-destinations.js');
       const account = vendorMfaAccountFor((await page()).url(), await vendorMfaAccounts());

@@ -947,10 +947,20 @@ async function showsCardNumberBox(page: Page): Promise<boolean> {
  * form's other boxes for CARD_APPROVAL_MS. Never in an unattended run, and never in a chat that cannot ask privately: both
  * leave the boxes empty and say why. Nothing here shows the agent a number or a code.
  */
-async function approvedCard(ctx: ToolContext, host: string, prompt: <T>(wait: () => Promise<T>) => Promise<T>): Promise<{ card: SavedCard } | { refused: string }> {
+async function approvedCard(ctx: ToolContext, host: string, prompt: <T>(wait: () => Promise<T>) => Promise<T>, pageText = ''): Promise<{ card: SavedCard } | { refused: string }> {
   const cards = (await listCards(ctx.stateDir)).filter(card => !cardExpired(card));
   if (!cards.length) return { refused: 'no payment card is saved (or the saved ones have expired). The user adds one with: account_use action card, ask: true' };
-  if (await unattendedEnabled(ctx.stateDir)) return { refused: 'a payment card is never used in an unattended run: the user approves each use' };
+  // The user's standing rule (clikcode computer cards usage-only): a page that itself says nothing is charged until something is
+  // used, and names no recurring charge, gets the first saved card with no prompt. Every such use is written down.
+  const { ruleAllowsCard, recordCardUse } = await import('../computer/card-rule.js');
+  const rule = await ruleAllowsCard(ctx.stateDir, pageText);
+  if (rule.allowed) {
+    const card = cards[0]!;
+    await recordCardUse(ctx.stateDir, { at: new Date().toISOString(), host, card: describeCard(card), why: rule.why });
+    cardApprovals.set(`${ctx.stateDir}|${host}`, { cardId: card.id, until: Date.now() + CARD_APPROVAL_MS });
+    return { card };
+  }
+  if (await unattendedEnabled(ctx.stateDir)) return { refused: `a payment card is used in an unattended run only under the standing rule, and here ${rule.why}` };
   if (!ctx.requestPrivateLogin) return { refused: 'a payment card is used only with the user\'s approval, and this chat cannot ask them privately' };
   const key = `${ctx.stateDir}|${host}`;
   const standing = cardApprovals.get(key);
@@ -1078,7 +1088,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     const cardKind = cardFieldFor(field.hint, onCardForm);
     if (cardKind) {
       const name = field.label || String(field.step.target);
-      card ??= await approvedCard(ctx, new URL(page.url()).hostname.replace(/^www\./, ''), prompt);
+      card ??= await approvedCard(ctx, new URL(page.url()).hostname.replace(/^www\./, ''), prompt, await page.locator('body').innerText({ timeout: 5_000 }).catch(() => ''));
       if ('refused' in card) { skipped.set(field.step, `${name} left empty: ${card.refused}.`); continue; }
       const chosen = card.card;
       let code = cardKind === 'code' ? await readCardSecret(ctx.stateDir, chosen, 'code') : undefined;

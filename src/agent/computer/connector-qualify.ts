@@ -111,8 +111,11 @@ export function classify(id: string, pages: RenderedPage[]): QualifyResult {
   const priced = loaded.find(p => p.role === 'pricing' && /[$€£]\s?\d/.test(p.text) && !/\bfree (?:plan|forever|tier)\b|\bforever free\b|use free plan|[$€£]\s?0\b/i.test(p.text));
   if (priced && evidence.some(e => e.kind === 'card')) add('paid-plan', 'a card is asked for, and the pricing page has prices and no free plan', priced.url);
   const kinds = [...new Set(evidence.map(e => e.kind))];
-  // A captcha is no wall: the runner answers it (human-check.ts). It stays in `kinds` as something seen.
-  const lane: Lane = kinds.includes('dead-host') || kinds.includes('no-api') ? 'dead' : kinds.some(k => k !== 'captcha') ? 'human' : loaded.some(p => (p.role === 'signup' || p.role === 'home') && p.hasForm) ? 'auto' : 'research';
+  // Seen, but no wall for the qualifier: the sign-up meets them on the page itself and answers what it can -- a captcha (human-check.ts),
+  // a texted code (sms-code.ts), a card under the user's standing rule (card-rule.ts) -- and stops with the real step when it cannot.
+  // Judged from wording here, they stopped vendors that would have gone through. They stay in `kinds` as something seen.
+  const ANSWERED_ON_THE_PAGE: readonly QualifyKind[] = ['captcha', 'sms', 'card'];
+  const lane: Lane = kinds.includes('dead-host') || kinds.includes('no-api') ? 'dead' : kinds.some(k => !ANSWERED_ON_THE_PAGE.includes(k)) ? 'human' : loaded.some(p => (p.role === 'signup' || p.role === 'home') && p.hasForm) ? 'auto' : 'research';
   return { id, lane, kinds, evidence, ...(hints.length ? { hints: [...new Set(hints)] } : {}), pages: pages.map(p => ({ role: p.role, url: p.url, ok: !p.error && (p.status === undefined || p.status < 400) && p.text.trim().length > 0, ...(p.error ? { error: p.error.slice(0, 120) } : {}) })) };
 }
 

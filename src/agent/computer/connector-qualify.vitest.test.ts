@@ -30,7 +30,10 @@ describe('qualify classification', () => {
     expect(classify('v', [page('signup', 'Create account', { ...form, captchaWidget: true })]).kinds).toEqual(['captcha']);
     // Seen, but no reason to wait for a person: the runner answers it.
     expect(classify('v', [page('signup', 'Create account', { ...form, captchaWidget: true })]).lane).toBe('auto');
-    expect(classify('v', [page('signup', 'Create account. We will text you a code: verify your phone', { ...form, captchaWidget: true })]).lane).toBe('human');
+    // A texted code and a card are met on the page too (the sign-up reads the code, or the card rule decides): seen, not a wall.
+    expect(classify('v', [page('signup', 'Create account. We will text you a code: verify your phone', { ...form, captchaWidget: true })]).lane).toBe('auto');
+    // A real wall beside them still is one.
+    expect(classify('v', [page('signup', 'Create account. Use your work email. We will text you a code: verify your phone', form)]).lane).toBe('human');
     expect(classify('v', [page('docs', 'Our captcha policy for the API')]).kinds).toEqual([]);
   });
 
