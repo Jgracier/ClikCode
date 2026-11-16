@@ -87,7 +87,18 @@ export const DEFAULT_LIMITS: LoopLimits = {
   renewMs: 10 * 60_000, tickMs: 15_000, idleMs: 60_000, pauseBaseMs: 30_000, pauseMaxMs: 5 * 60_000, pressureLimit: 10, graceMs: 90_000,
 };
 
-export interface WorkContext { tab: string; budget: CallBudget; limits: LoopLimits; deadline: number; signal?: AbortSignal; /** The last action the vendor started, set by the work. */ last?: string }
+export interface WorkContext {
+  tab: string; budget: CallBudget; limits: LoopLimits; deadline: number; signal?: AbortSignal;
+  /** The last action the vendor started, set by the work. */ last?: string;
+  /** Time spent in agent hand-offs so far, and when the running one began: that time is the agent's budget (limits.agentMs), not the vendor's. */
+  agentMs?: number; agentSince?: number;
+}
+
+/** How long a vendor may run before it is cut off: its own time, the grace, and the time its agent hand-offs took (at most limits.agentMs). */
+export function allowedMs(ctx: Pick<WorkContext, 'limits' | 'agentMs' | 'agentSince'>, at: number): number {
+  const agent = (ctx.agentMs ?? 0) + (ctx.agentSince !== undefined ? at - ctx.agentSince : 0);
+  return ctx.limits.maxMs + ctx.limits.graceMs + Math.min(agent, ctx.limits.agentMs);
+}
 /** A browser that did not open is a fault of ours, not a verdict on the vendor: try the vendor again in minutes, not hours. */
 const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)/i;
 const BROWSER_RETRY_MS = 5 * 60_000;
@@ -176,7 +187,16 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     const job = (async (): Promise<void> => {
       const abort = new AbortController();
       const ctx: WorkContext = { signal: abort.signal, tab, budget, limits, deadline: began + limits.maxMs + limits.agentMs };
-      const hard = new Promise<'timeout'>(resolve => { void sleep(limits.maxMs + limits.graceMs).then(() => resolve('timeout')); });
+      // The hard limit grows while an agent hand-off runs: cutting one off at the vendor's own limit ended every long
+      // judgement task as "out of time" (49 of 58 time-outs on 2026-11-15) with its own 20 minutes barely begun.
+      let stopped = false;
+      const hard = (async (): Promise<'timeout'> => {
+        for (;;) {
+          const left = began + allowedMs(ctx, now()) - now();
+          if (left <= 0 || stopped) return 'timeout';
+          await sleep(Math.min(left, 5_000));
+        }
+      })();
       const run = async (): Promise<VendorOutcome> => {
         try { return await ports.work(id, ctx); } catch (error) {
           const message = scrubSecrets(error instanceof Error ? error.message : String(error));
@@ -199,13 +219,13 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
         if (raced === 'timeout') {
           abort.abort(new Error('Connector task deadline expired'));
           await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
-          outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round((limits.maxMs + limits.graceMs) / 1000)}s ${ctx.last ? `during "${ctx.last.slice(0, 120)}"` : 'before the first step'}; the task was cancelled and its own tabs were closed`, actions: [] };
+          outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round(allowedMs(ctx, now()) / 1000)}s ${ctx.last ? `during "${ctx.last.slice(0, 120)}"` : 'before the first step'}; the task was cancelled and its own tabs were closed`, actions: [] };
         } else if ('failed' in raced) {
           const message = scrubSecrets(raced.failed instanceof Error ? raced.failed.message : String(raced.failed));
           if (browserTrouble(raced.failed)) await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
           outcome = { id, status: 'error', steps: 0, browserActions: 0, stage: '', summary: message.slice(0, 300), actions: [] };
         } else outcome = raced;
-      } finally { await ports.closeTab(id).catch(quiet('agent/computer/connector-loop')); }
+      } finally { stopped = true; await ports.closeTab(id).catch(quiet('agent/computer/connector-loop')); }
       await finish(id, outcome, began, budget);
     })().catch(quiet('agent/computer/connector-loop')).finally(() => { active.delete(id); });
     active.set(id, { job, since: began, lastRenew: began, budget, tab });

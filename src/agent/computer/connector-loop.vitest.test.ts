@@ -70,6 +70,22 @@ describe('budget', () => {
   });
 });
 
+describe('an agent hand-off and the hard time limit', () => {
+  it('is not cut off at the vendor\'s own limit: its time is the agent\'s budget', async () => {
+    // The vendor's limit is 30 + 20 ms; the agent takes 120 ms of its 400 ms budget and the vendor finishes.
+    const f = fakes(['judged'], async (id, ctx) => { ctx.agentSince = Date.now(); await wait(120); ctx.agentMs = Date.now() - ctx.agentSince; delete ctx.agentSince; return outcome(id); });
+    const sum = await runLoop(f.ports, limits({ maxMs: 30, graceMs: 20, agentMs: 400, maxHoursMs: 400 }));
+    expect(sum.walls.budget ?? 0).toBe(0);
+    expect(sum.done.published).toBe(1);
+  });
+  it('still cuts off an agent that outruns its own budget, and says during which step', async () => {
+    const f = fakes(['stuck'], (_id, ctx) => { ctx.last = 'an unrecognized screen: one bounded agent micro-task'; ctx.agentSince = Date.now(); return new Promise<VendorOutcome>(() => undefined); });
+    const sum = await runLoop(f.ports, limits({ maxMs: 30, graceMs: 20, agentMs: 60, maxHoursMs: 400 }));
+    expect(sum.walls.budget).toBe(1);
+    expect(f.reports[0]![1].reason).toContain('during "an unrecognized screen: one bounded agent micro-task"');
+  });
+});
+
 describe('tabs', () => {
   it('names a separate tab per vendor, never the default tab, and works at most --parallel at once', async () => {
     let live = 0, peak = 0;

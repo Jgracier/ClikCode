@@ -80,7 +80,7 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       notes.delete(id);
       if (saved && first.next.kind === 'agent') first.next.task += `\nSaved progress from the previous worker (verify before continuing):\n${saved}`;
       const { limits } = ctx;
-      return runVendor(first, counted, driver, { onAction: line => { ctx.last = line; }, maxSteps: limits.maxSteps, maxMs: limits.maxMs, agentMs: limits.agentMs, agentCalls: limits.agentCalls, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
+      return runVendor(first, counted, driver, { onAction: line => { ctx.last = line; }, onAgent: running => { const at = Date.now(); if (running) ctx.agentSince = at; else if (ctx.agentSince !== undefined) { ctx.agentMs = (ctx.agentMs ?? 0) + at - ctx.agentSince; delete ctx.agentSince; } }, maxSteps: limits.maxSteps, maxMs: limits.maxMs, agentMs: limits.agentMs, agentCalls: limits.agentCalls, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
     },
     async report(id, report) {
       await client.report({ id, outcome: report.outcome, reason: report.reason, ...(report.retryAfterMs ? { retryAfterMs: report.retryAfterMs } : {}), ...(report.humanStep ? { humanStep: report.humanStep as HumanStep } : {}) });

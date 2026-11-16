@@ -89,6 +89,8 @@ interface RunnerOptions {
   log?: (line: string) => void;
   /** Told each action as it starts (the loop keeps the last one, to say where a vendor that ran out of time was). */
   onAction?: (line: string) => void;
+  /** Told when an agent hand-off starts (true) and ends (false): its time is the agent's own budget, not the vendor's. */
+  onAgent?: (running: boolean) => void;
 }
 
 type VendorStatus = 'published' | 'blocked' | 'human' | 'handoff' | 'budget' | 'waiting' | 'error';
@@ -316,7 +318,10 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     agentTasksTried.add(taskKey);
     actions.push('an unrecognized screen: one bounded agent micro-task');
     const agentBegan = now();
-    const done = await gate(() => driver.agentTask!(id, stop, { maxCalls: options.agentCalls ?? 25, maxMs: options.agentMs ?? Math.max(30_000, maxMs - elapsed()) }));
+    options.onAgent?.(true);
+    let done: DriveOutcome;
+    try { done = await gate(() => driver.agentTask!(id, stop, { maxCalls: options.agentCalls ?? 25, maxMs: options.agentMs ?? Math.max(30_000, maxMs - elapsed()) })); }
+    finally { options.onAgent?.(false); }
     if (options.agentMs) agentSpent += now() - agentBegan;
     if (done.ok && done.recipe) recipeSaved = true;
     return done;
