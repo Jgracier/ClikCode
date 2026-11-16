@@ -109,6 +109,9 @@ export function microAccount(accounts: readonly AiHarnessAccount[]): AiHarnessAc
     ?? usable.find((account) => account.provider === 'openai' && account.nativeProfile?.env === 'CODEX_HOME');
 }
 
+/** Claude exited without doing anything (usually its usage limit): use Codex for a while instead of failing every task. */
+let claudeDownUntil = 0;
+
 export function livePorts(stateDir: string): MicroPorts {
   return {
     async businessEmail() {
@@ -120,7 +123,8 @@ export function livePorts(stateDir: string): MicroPorts {
     async run(prompt, options) {
       const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);
       const { readState } = await import('../../session/state/read.js');
-      const account = microAccount((await readState({ transcripts: [] })).accounts);
+      const all = (await readState({ transcripts: [] })).accounts;
+      const account = (Date.now() < claudeDownUntil || process.env.CLIKCODE_MICRO_AGENT === 'codex' ? microAccount(all.filter(a => a.provider !== 'anthropic')) : undefined) ?? microAccount(all);
       if (!account) throw new Error('No saved Claude or Codex account currently has usage available.');
       const useCodex = account.provider === 'openai';
       const dir = await mkdtemp(join(tmpdir(), 'clikcode-micro-'));
@@ -149,6 +153,7 @@ export function livePorts(stateDir: string): MicroPorts {
         const timer = setTimeout(() => { timedOut = true; kill(); }, options.maxMs);
         const code = await new Promise<number | null>(resolve => { child.once('close', code => resolve(code)); child.once('error', () => resolve(-1)); });
         clearTimeout(timer);
+        if (!useCodex && code !== 0 && !timedOut) claudeDownUntil = Date.now() + 30 * 60_000;
         if (useCodex) text = await readFile(final, 'utf8').catch(() => '');
         const calls = Number(await readFile(counter, 'utf8').catch(() => '0')) || 0;
         return { text, timedOut, calls, ...(code !== 0 && !timedOut ? { error: `${useCodex ? 'Codex' : 'Claude'} micro-task could not complete (exit ${code}); retry after account availability changes.` } : {}) };
