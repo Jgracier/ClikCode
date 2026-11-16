@@ -47,7 +47,14 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
       for (const call of asked) {
         let args: Record<string, unknown> = {};
         try { args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>; } catch { /* a malformed call is answered with the tool's own refusal */ }
-        const out = await handle({ jsonrpc: '2.0', id: ++calls, method: 'tools/call', params: { name: call.function.name, arguments: args } }) as { result?: { content?: { text?: string }[] }; error?: { message?: string } };
+        // A hung page must not hold the vendor past its budget: each call gets at most the time left (and 3 minutes).
+        const wait = Math.max(1_000, Math.min(deadline - Date.now(), 180_000));
+        const timer: { id?: NodeJS.Timeout } = {};
+        const timeout = new Promise<'late'>(resolve => { timer.id = setTimeout(() => resolve('late'), wait); });
+        const raced = await Promise.race([handle({ jsonrpc: '2.0', id: ++calls, method: 'tools/call', params: { name: call.function.name, arguments: args } }), timeout]);
+        clearTimeout(timer.id);
+        if (raced === 'late') { if (Date.now() >= deadline) timedOut = true; messages.push({ role: 'tool', tool_call_id: call.id, content: 'That call did not finish in time and was abandoned. Try something simpler or end with your RESULT line.' }); continue; }
+        const out = raced as { result?: { content?: { text?: string }[] }; error?: { message?: string } };
         messages.push({ role: 'tool', tool_call_id: call.id, content: out.result?.content?.map(c => c.text ?? '').join('\n') ?? out.error?.message ?? 'No result.' });
       }
     }

@@ -23,4 +23,16 @@ describe('micro-task agent on the Gateway', () => {
     const ran = await runGatewayMicro('go', { tab: 'agent-x', maxCalls: 5, maxMs: 10_000, connection: { baseUrl: 'https://gw.test/v1', apiKey: 'k' }, tools: [], fetchImpl: (async () => new Response('{"error":{"message":"no credit"}}', { status: 402 })) as typeof fetch });
     expect(ran.error).toContain('402');
   });
+
+  it('abandons a tool call that hangs past the time left, so a stuck page cannot hold the vendor', async () => {
+    const replies = [reply({ content: null, tool_calls: [{ id: 'c1', function: { name: 'stuck', arguments: '{}' } }] }), reply({ content: 'RESULT: gave-up the page hung' })];
+    const started = Date.now();
+    const ran = await runGatewayMicro('go', {
+      tab: 'agent-x', maxCalls: 5, maxMs: 2_500, connection: { baseUrl: 'https://gw.test', apiKey: 'k' },
+      tools: [{ name: 'stuck', class: 'read', description: 's', parameters: { type: 'object', properties: {} }, label: () => 's', run: () => new Promise(() => undefined) } as never],
+      fetchImpl: (async () => replies.shift()!) as typeof fetch,
+    });
+    expect(Date.now() - started).toBeLessThan(6_000);
+    expect(ran.timedOut).toBe(true);
+  });
 });
