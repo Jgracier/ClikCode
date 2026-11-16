@@ -496,3 +496,18 @@ export async function computerSms(setting: string | undefined): Promise<void> {
   if (isJsonDefaultMode()) return emitResult({ computer: { sms: target ?? null, ...(check ? { check } : {}) } });
   process.stdout.write(target ? `Texted codes are read from ${target}.${check ? ` ${check}` : ''}\n` : 'No Mac is set up to read texted codes. Run: clikcode computer sms <user@host>\n');
 }
+
+/** `clikcode computer cards [usage-only|off|uses]`: the standing rule for cards in unattended sign-ups (agent/computer/card-rule.ts). */
+export async function computerCards(setting: string | undefined): Promise<void> {
+  const dir = stateDirectory();
+  const { cardRule, cardUses, setCardRule, MAX_RULE_USES_PER_DAY } = await import('../agent/computer/card-rule.js');
+  if (setting === 'usage-only' || setting === 'off') await setCardRule(dir, setting);
+  else if (setting && setting !== 'uses') throw new Error('Say usage-only, off or uses: clikcode computer cards usage-only');
+  const rule = await cardRule(dir);
+  const uses = setting === 'uses' ? await cardUses(dir) : [];
+  if (isJsonDefaultMode()) return emitResult({ computer: { cardRule: rule, ...(setting === 'uses' ? { uses } : {}) } });
+  process.stdout.write(rule === 'usage-only'
+    ? `Cards: a saved card may go into a payment page with no prompt when the page itself says nothing is charged until something is used, and names no subscription, renewal or amount due today; at most ${MAX_RULE_USES_PER_DAY} a day, each written down (clikcode computer cards uses). Turn off with: clikcode computer cards off\n`
+    : 'Cards: every use needs your approval in a private prompt, and none in an unattended run. Turn on the standing rule with: clikcode computer cards usage-only\n');
+  for (const use of uses) process.stdout.write(`  ${use.at.slice(0, 16)}  ${use.host}  ${use.card}  ${use.why}\n`);
+}

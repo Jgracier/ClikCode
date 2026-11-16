@@ -699,6 +699,30 @@ it('says which wall it read in the reason code: a card or a plan, a work address
   expect(keygrabWall('Gmail addresses are not allowed.')?.reasonCode).toBe('free-mail');
 });
 
+describe('a payment page', () => {
+  const pages = {
+    'https://vendor.example/': { text: 'Add a payment method. Enter your card. Card number. You won\'t be charged until you go over the free tier.', controls: ['Back', 'Continue'], fields: ['Card number', 'Expiry', 'CVC'], on: { Continue: 'https://vendor.example/keys' } },
+    'https://vendor.example/keys': { text: 'API keys', controls: ['Create API key'], on: { 'Create API key': 'https://vendor.example/keys/made' } },
+    'https://vendor.example/keys/made': { text: 'Your new key', controls: ['Copy'], key: true },
+  };
+  it('is filled from the saved card and passed when the standing rule allows it, once', async () => {
+    const site = fakeSite(pages);
+    let asked = 0;
+    const done = await runKeygrab({ ...site.port, cardAllowed: async () => { asked++; return true; } }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
+    expect(site.filled).toEqual([['Card number', undefined], ['Expiry', undefined], ['CVC', undefined]]);
+    expect(site.log).toContain('click Continue');
+    expect(asked).toBe(1);
+    expect(done).toMatchObject({ ok: true });
+  });
+  it('stays the person\'s step when the rule does not allow it, or there is no rule', async () => {
+    const refused = fakeSite(pages);
+    expect(await runKeygrab({ ...refused.port, cardAllowed: async () => false }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined })).toMatchObject({ ok: false, stop: { kind: 'payment' } });
+    expect(refused.filled).toEqual([]);
+    const none = fakeSite(pages);
+    expect(await runKeygrab(none.port, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined })).toMatchObject({ ok: false, stop: { kind: 'payment' } });
+  });
+});
+
 describe('a phone check', () => {
   const pages = {
     'https://vendor.example/': { text: 'Verify your phone number to continue. We will text you a code.', controls: ['Send code'], fields: ['Phone number'], on: { 'Send code': 'https://vendor.example/code' } },

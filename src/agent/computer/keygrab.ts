@@ -31,6 +31,9 @@ export interface KeygrabPort {
   emailCode(): Promise<string | undefined>;
   /** The current authenticator-app code for the open site, when its seed is kept in ClikDeploy (undefined when none is). */
   authenticatorCode?(): Promise<string | undefined>;
+  /** Whether the user's standing card rule lets a saved card into this payment page (its own words say nothing is charged until used,
+   * and nothing recurs). The fill checks again and records the use; absent: a payment page is the person's. */
+  cardAllowed?(pageText: string): Promise<boolean>;
   /** The code in a text sent to the profile phone after `since` (unix ms), when a Mac reads the user's texts (undefined when none does or none came). */
   smsCode?(since: number): Promise<string | undefined>;
   /** An address on a business domain whose mailbox is connected, for a vendor that refuses free email (undefined when there is none). */
@@ -283,12 +286,25 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     await sleep(1_500);
     return true;
   };
+  let cardTried = false;
+  /** A payment page the standing card rule allows: every box filled from the profile and the saved card, then its own continue button. Once. */
+  const pastPayment = async (view: KeyView): Promise<boolean> => {
+    if (cardTried || !port.cardAllowed || !view.fields.length) return false;
+    cardTried = true;
+    if (!await act('check the standing card rule against the payment page', () => port.cardAllowed!(view.text))) return false;
+    for (const field of view.fields) await act(`fill ${field} from the profile or the saved card`, () => port.fill(field));
+    const go = [...view.controls].reverse().find(c => pressable(c) && /^(?:continue|submit|save|next|add (?:card|payment(?: method)?)|start|create|verify|confirm|finish|complete)\b/i.test(c.name));
+    if (go) await click(go.name);
+    await sleep(1_500);
+    return true;
+  };
   const guard = async (view: KeyView): Promise<void> => {
     const wall = keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields });
     if (wall?.kind === 'captcha' && !view.captchaFrame && wordsOnly.has(pathOf(view.url) || view.url)) return;
     if (wall?.kind === 'mfa' && await pastAuthenticator(view)) return;
     if (wall?.kind === 'decision' && /work-email|free-mail/.test(wall.reasonCode) && await pastFreeMail(view)) return;
     if ((wall?.kind === 'sms' || (wall?.kind === 'mfa' && /text|sms|phone|mobile/i.test(view.text))) && await pastPhone(view)) return;
+    if (wall?.kind === 'payment' && await pastPayment(view)) return;
     if (wall) throw await wallStop(view, wall);
   };
   const captchaOn = (view: KeyView): boolean => keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields })?.kind === 'captcha';
