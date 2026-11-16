@@ -138,6 +138,10 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
       const found = await waitForTextedCode(options.stateDir, { since, seconds: 90, ...(options.signal ? { signal: options.signal } : {}) });
       return 'error' in found ? undefined : found.code;
     },
+    resetLink: async () => {
+      for (const subject of ['password', 'reset']) if (!(await run({ action: 'open_email_link', subject, seconds: 60 })).isError) return true;
+      return false;
+    },
     emailLink: async () => {
       for (const subject of ['verify', 'confirm', 'welcome']) if (!(await run({ action: 'open_email_link', subject, seconds: 45 })).isError) return true;
       return false;

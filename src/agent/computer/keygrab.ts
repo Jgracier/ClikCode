@@ -39,6 +39,8 @@ export interface KeygrabPort {
   smsCode?(since: number): Promise<string | undefined>;
   /** An address on a business domain whose mailbox is connected, for a vendor that refuses free email (undefined when there is none). */
   businessEmail?(): Promise<string | undefined>;
+  /** Opens the link in the newest password-reset email in this tab (a connected mailbox). */
+  resetLink?(): Promise<boolean>;
   /** Opens the link in the newest verification email in this tab. */
   emailLink(): Promise<boolean>;
   /** Captures the key unseen and sends it to ClikDeploy. `target` is a control that reveals it; none: the page already shows it. */
@@ -414,10 +416,43 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     }
   };
 
+  let resetTried = false;
+  /** The site refused the saved password: its own "Forgot password" link, the emailed reset link, and a new password (generated and saved
+   * before it is submitted, like a sign-up's). Once per run; then sign in again. */
+  const resetPassword = async (): Promise<boolean> => {
+    if (resetTried || !port.resetLink) return false;
+    resetTried = true;
+    let v = await look();
+    const forgot = v.controls.find(c => pressable(c) && /forgot|reset (?:your )?password|can.?t (?:sign|log) in|trouble (?:signing|logging) in/i.test(c.name));
+    if (!forgot || !await click(forgot.name)) return false;
+    await sleep(800);
+    v = await look();
+    for (const field of v.fields.filter(f => /e-?mail|user/i.test(f))) await act(`fill ${field}`, () => port.fill(field));
+    const send = [...v.controls].reverse().find(c => pressable(c) && /^(?:send|reset|continue|submit|next|email me|request|get (?:a )?(?:reset )?link)\b/i.test(c.name));
+    if (!send) return false;
+    await click(send.name);
+    await sleep(1_500);
+    if (!await act('open the emailed password-reset link', () => port.resetLink!())) return false;
+    await sleep(1_500);
+    v = await look();
+    const boxes = v.fields.filter(f => /password/i.test(f));
+    if (!boxes.length) return false;
+    for (const field of boxes) await act(`fill ${field} with a new saved password`, () => port.fill(field));
+    const save = [...v.controls].reverse().find(c => pressable(c) && /^(?:reset|save|change|update|set|submit|continue|confirm)\b/i.test(c.name));
+    if (save) await click(save.name);
+    await sleep(1_500);
+    return true;
+  };
+
   const emailRoute = async (v: KeyView): Promise<void> => {
     route = 'email';
     const done = await act('sign in with the profile email', () => port.login());
     if (done.ok) return;
+    // An account that exists but refuses the saved password is not a new sign-up: reset it through its own emailed link.
+    if (/did not accept the saved password|password (?:was )?(?:refused|rejected|incorrect)|incorrect password|wrong password|invalid (?:email or )?password/i.test(done.message) && await resetPassword()) {
+      const again = await act('sign in with the new password', () => port.login());
+      if (again.ok) return;
+    }
     // No account yet (or no saved login). On a log-in page the way forward is its sign-up link; then the form is filled from the profile, with a made-up password.
     let here = await look();
     const onLogin = here.controls.some(c => pressable(c) && /^(log ?in|sign ?in)$/i.test(c.name));

@@ -382,7 +382,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
             continue;
           }
           if (agent && !agent.ok && (agent.stop.human || humanStepFor(id, agent.stop))) return await stopped(agent.stop);
-          return await handoff(`Qualification is inconclusive: ${q.summary}`);
+          return await handoff(`Qualification is inconclusive: ${q.summary}${agent && !agent.ok ? `; the agent found: ${cap(say(agent.stop.message), 200)}` : ''}`);
         }
         if (q.lane !== 'auto') {
           if (q.human) return await wall(q.human, false);

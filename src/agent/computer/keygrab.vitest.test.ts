@@ -699,6 +699,30 @@ it('says which wall it read in the reason code: a card or a plan, a work address
   expect(keygrabWall('Gmail addresses are not allowed.')?.reasonCode).toBe('free-mail');
 });
 
+describe('a saved password the site refuses', () => {
+  const pages = {
+    'https://vendor.example/': { text: 'Log in to your account', fields: ['Email', 'Password'], password: true, controls: ['Forgot password?', 'Log in'], on: { 'Forgot password?': 'https://vendor.example/forgot' } },
+    'https://vendor.example/forgot': { text: 'Reset your password', fields: ['Email'], controls: ['Send reset link'], on: { 'Send reset link': 'https://vendor.example/sent' } },
+    'https://vendor.example/sent': { text: 'Check your email for a reset link' },
+    'https://vendor.example/reset': { text: 'Choose a new password', fields: ['New password'], password: true, controls: ['Save password'], on: { 'Save password': 'https://vendor.example/' } },
+    'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+  };
+  it('is reset through the site\'s own emailed link, then the sign-in is tried again', async () => {
+    const site = fakeSite(pages);
+    let logins = 0, links = 0;
+    const port = { ...site.port,
+      login: async () => { logins++; if (logins === 1) return { ok: false, message: 'The site did not accept the saved password. Run login again.' }; await site.port.open('https://vendor.example/keys'); return { ok: true, message: 'Signed in.' }; },
+      resetLink: async () => { links++; await site.port.open('https://vendor.example/reset'); return true; },
+    };
+    const done = await runKeygrab(port, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
+    expect(links).toBe(1);
+    expect(logins).toBe(2);
+    expect(site.filled).toContainEqual(['New password', undefined]);
+    expect(site.log).toContain('click Save password');
+    expect(done).toMatchObject({ ok: true });
+  });
+});
+
 describe('a payment page', () => {
   const pages = {
     'https://vendor.example/': { text: 'Add a payment method. Enter your card. Card number. You won\'t be charged until you go over the free tier.', controls: ['Back', 'Continue'], fields: ['Card number', 'Expiry', 'CVC'], on: { Continue: 'https://vendor.example/keys' } },
