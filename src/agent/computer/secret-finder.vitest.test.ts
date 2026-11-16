@@ -158,3 +158,12 @@ it('takes long opaque tokens (a signed 1,100-character personal access token), w
   expect(plausibleCopy(`${jwt}\n`)).toBe(jwt);
   expect(plausibleCopy(jwt.slice(0, 600) + '\n' + jwt.slice(600))).toBe(jwt);
 });
+
+it('never takes a key\'s name, or a plain word in a key box, for a key', () => {
+  const page = ['- textbox "Token name" [ref=e5]: ClikDeploy', '- textbox "API key" [ref=e6]: Production', '- textbox "API key" [ref=e7]: sk_live_4f9A2b7C1d8E3f6G'].join('\n');
+  const { text, hidden } = hideKeyLikeText(page);
+  expect(text).toContain('ClikDeploy');
+  expect(text).toContain('Production');
+  expect(text).not.toContain('sk_live_4f9A2b7C1d8E3f6G');
+  expect(hidden).toBe(1);
+});

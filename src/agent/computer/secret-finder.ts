@@ -195,7 +195,10 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
     const value = match[2]!.replace(/^"|"$/g, '');
     const named = /(?:^|[^a-z])(?:key|token|secret|credential)s?(?![a-z])/i.test(match[1]!);
     const shaped = value.length >= 12 && /^[A-Za-z0-9_\-+/=.:~]+$/.test(value) && /[A-Za-z]/.test(value) && /\d/.test(value) && !/^https?:|@/.test(value);
-    if (value === '[secret hidden]' || value === '[hidden]' || isSecretRef(value) || !(named || shaped)) return line;
+    // The key's name box ("Token name": ClikDeploy) is no key box, and a plain word is no key in any box.
+    const nameBox = /\b(?:name|label|title|description|note|nickname|alias)\b/i.test(match[1]!);
+    const plainWord = /^[A-Za-z][A-Za-z._-]*$/.test(value) && value.length <= 14;
+    if (value === '[secret hidden]' || value === '[hidden]' || isSecretRef(value) || !((named && !nameBox && !plainWord) || shaped)) return line;
     hidden++;
     return `${match[1]}: ${secretRef(value)}`;
   });
