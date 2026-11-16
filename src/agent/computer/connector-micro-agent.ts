@@ -121,6 +121,20 @@ export function livePorts(stateDir: string): MicroPorts {
     },
     async recipeStamp() { const { listRecipes } = await import('./signup-recipes.js'); return (await listRecipes(stateDir)).map(r => `${r.host}:${r.loginRoute}:${r.verifiedAt}`).sort().join('|'); },
     async run(prompt, options) {
+      // ClikDeploy Gateway first (Sonnet 5.5): no vendor account or usage limit. CLIKCODE_MICRO_AGENT=claude|codex keeps the vendor CLIs.
+      if (!['claude', 'codex'].includes(process.env.CLIKCODE_MICRO_AGENT ?? '')) {
+        const { runGatewayMicro } = await import('./connector-micro-agent-gateway.js');
+        const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const dir = await mkdtemp(join(tmpdir(), 'clikcode-micro-'));
+        try {
+          const counter = join(dir, 'calls');
+          const ran = await runGatewayMicro(prompt, { tab: options.tab, maxCalls: options.maxCalls, maxMs: options.maxMs, counter, connector: options.tab.replace(/^agent-/, '') });
+          const calls = Number(await readFile(counter, 'utf8').catch(() => '0')) || ran.calls;
+          if (!ran.error) return { text: ran.text, timedOut: ran.timedOut, calls };
+        } finally { await rm(dir, { recursive: true, force: true }).catch(quiet('agent/computer/connector-micro-agent')); }
+      }
       const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);
       const { readState } = await import('../../session/state/read.js');
       const all = (await readState({ transcripts: [] })).accounts;
