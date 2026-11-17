@@ -333,13 +333,17 @@ export function parseDrags(text: string): NumberedDrag[] | undefined {
 /** The drags at least two voters agree on, piece by piece (same number, grab and drop points within `radius`),
  * averaged, in number order. */
 export function agreedDrags(answers: Array<NumberedDrag[] | undefined>, radius = 0.09): NumberedDrag[] {
-  const numbers = [...new Set(answers.flatMap(a => (a ?? []).map(d => d.n)))].sort((a, b) => a - b);
+  // A piece is part of the puzzle when two voters name it (one voter alone may have seen a stray mark). Dragging only some of the
+  // pieces of a puzzle never completes it, so an answer counts only when every one of those pieces has an agreed move.
+  const named = new Map<number, number>();
+  for (const answer of answers) for (const n of new Set((answer ?? []).map(d => d.n))) named.set(n, (named.get(n) ?? 0) + 1);
+  const wanted = [...named].filter(([, count]) => count >= 2).map(([n]) => n).sort((a, b) => a - b);
   const out: NumberedDrag[] = [];
-  for (const n of numbers) {
+  for (const n of wanted) {
     const given = answers.map(a => a?.find(d => d.n === n)).filter((d): d is NumberedDrag => !!d);
     const alike = (d: NumberedDrag, e: NumberedDrag) => near(d.to, e.to, radius) && near(d.from, e.from, radius);
     const anchor = given.find(d => given.filter(e => alike(d, e)).length >= 2);
-    if (!anchor) continue;
+    if (!anchor) return [];
     const close = given.filter(e => alike(anchor, e));
     out.push({ n, from: { x: mean(close.map(d => d.from.x)), y: mean(close.map(d => d.from.y)) }, to: { x: mean(close.map(d => d.to.x)), y: mean(close.map(d => d.to.y)) } });
   }

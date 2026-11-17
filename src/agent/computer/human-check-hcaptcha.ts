@@ -59,10 +59,10 @@ export async function hcaptchaRound(hands: Hands, frame: Frame, box: Box, memo: 
   if (moving) for (let i = 0; i < 4; i++) { await sleep(500); const next = await frameShot(frame, 80); if (!next) break; frames.push(next); }
   // Whether to click or drag is the models' call, not a word list: the instruction comes in the visitor's own
   // language. An English "drag" is asked as a drag first to save a round of asks.
+  // A drag that was asked for and not agreed on is a challenge to swap, never one to click: clicking cannot answer it.
   const dragFirst = /\b(?:drag|slide|move the)\b/i.test(instruction);
-  let points = dragFirst ? undefined : await asks.points(frames, instruction);
+  const points = dragFirst ? undefined : await asks.points(frames, instruction);
   const drags = points?.length ? undefined : await asks.drags(picture, instruction).catch(() => undefined);
-  if (!drags?.length && dragFirst) points = await asks.points(frames, instruction);
   const submit = async (): Promise<Target> => {
     const button = await frame.evaluate(rectOf('.button-submit')).catch(() => null) as Box | null;
     return button ? inPage(button) : { x: box.x + box.width * 0.8, x2: box.x + box.width * 0.95, y: box.y + box.height - 50, y2: box.y + box.height - 20 };

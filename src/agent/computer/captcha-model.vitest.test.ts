@@ -171,7 +171,13 @@ describe('several pieces to drag', () => {
     const agreed = agreedDrags([a, stray, b]);
     expect(agreed.map(d => d.n)).toEqual([2, 5]);
     expect(agreed[0]!.to.x).toBeCloseTo(0.525);
-    expect(agreedDrags([a, stray])).toEqual([{ n: 5, from: a[1]!.from, to: a[1]!.to }].slice(0, 0));
+    expect(agreedDrags([a, stray])).toEqual([]);
+    // Two voters agree on piece 5 but not on piece 2: a half-finished line is no answer, so nothing is dragged.
+    const wrongTwo = parseDrags('{"drags":[{"n":2,"from":{"x":0.87,"y":0.37},"to":{"x":0.2,"y":0.8}},{"n":5,"from":{"x":0.86,"y":0.52},"to":{"x":0.31,"y":0.59}}]}')!;
+    expect(agreedDrags([a, wrongTwo])).toEqual([]);
+    // A piece only one voter names is a stray mark, not part of the puzzle.
+    const extra = parseDrags('{"drags":[{"n":2,"from":{"x":0.87,"y":0.37},"to":{"x":0.52,"y":0.56}},{"n":5,"from":{"x":0.86,"y":0.52},"to":{"x":0.32,"y":0.6}},{"n":9,"from":{"x":0.1,"y":0.1},"to":{"x":0.2,"y":0.2}}]}')!;
+    expect(agreedDrags([a, extra]).map(d => d.n)).toEqual([2, 5]);
     expect(parseDrags('{"drags":[{"n":1,"from":{"x":2,"y":0},"to":{"x":0,"y":0}}]}')).toEqual([]);
   });
 });
