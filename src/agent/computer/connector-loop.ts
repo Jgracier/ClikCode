@@ -80,11 +80,12 @@ export interface LoopLimits {
   /** Stop starting vendors after this long, finish those running. */ maxHoursMs: number;
   renewMs: number; tickMs: number; idleMs: number;
   pauseBaseMs: number; pauseMaxMs: number; pressureLimit: number;
+  /** Pause new claims after a confirmed Gateway-wide model outage; active vendors finish and are retried when service returns. */ agentOutagePauseMs: number;
   /** Extra time past maxMs before a hung vendor is cut off. */ graceMs: number;
 }
 export const DEFAULT_LIMITS: LoopLimits = {
   parallel: 2, maxSteps: 12, maxMs: 5 * 60_000, maxCalls: 60, agentMs: 20 * 60_000, agentCalls: 120, cooldownMs: 6 * 3_600_000, wallCooldownMs: 24 * 3_600_000, maxHoursMs: 8 * 3_600_000,
-  renewMs: 10 * 60_000, tickMs: 15_000, idleMs: 60_000, pauseBaseMs: 30_000, pauseMaxMs: 5 * 60_000, pressureLimit: 10, graceMs: 90_000,
+  renewMs: 10 * 60_000, tickMs: 15_000, idleMs: 60_000, pauseBaseMs: 30_000, pauseMaxMs: 5 * 60_000, pressureLimit: 10, agentOutagePauseMs: 5 * 60_000, graceMs: 90_000,
 };
 
 export interface WorkContext {
@@ -103,7 +104,7 @@ export function allowedMs(ctx: Pick<WorkContext, 'limits' | 'agentMs' | 'agentSi
 /** A vendor that did not get its turn because something it runs on was down -- the browser, or the agent (no model available, no account with usage,
  * a Gateway refusal) -- says nothing about the vendor: it is tried again in minutes, not shelved for hours like a wall. On 2026-11-17 an unavailable
  * model shelved 225 vendors for six hours each. */
-const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)|the agent could not run|Gateway (?:temporarily unavailable|request failed|\d{3}):/i;
+const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)|the agent could not run|Gateway temporarily unavailable|Gateway request failed|Gateway \d{3}:/i;
 const BROWSER_RETRY_MS = 5 * 60_000;
 /** A vendor whose captcha was not cleared is tried again after this (keygrab-park.ts BACKOFF_HOURS holds it as long). */
 const CAPTCHA_RETRY_MS = 3_600_000;
@@ -168,17 +169,25 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     const kind = outcome.status === 'published' ? 'published' : wall ? 'wall' : outcome.status;
     summary.done[kind] = (summary.done[kind] ?? 0) + 1;
     if (wall) summary.walls[wall] = (summary.walls[wall] ?? 0) + 1;
+    const providerDown = !wall && outcome.status !== 'published' && /Gateway temporarily unavailable|every configured Gateway model is unavailable/i.test(outcome.summary);
     const browserDown = !wall && outcome.status !== 'published' && BROWSER_DOWN.test(outcome.summary);
     // A captcha wall is the one wall worth an early second try: the solver may clear it once the site has cooled.
-    cooldown.mark(id, browserDown ? BROWSER_RETRY_MS : wall === 'captcha' ? CAPTCHA_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs);
+    const dependencyRetryMs = providerDown ? limits.agentOutagePauseMs : BROWSER_RETRY_MS;
+    cooldown.mark(id, browserDown ? dependencyRetryMs : wall === 'captcha' ? CAPTCHA_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs);
     const reason = scrubSecrets(outcome.summary).replace(/\s+/g, ' ').slice(0, 400);
     let report: LoopReport | undefined;
     if (outcome.status === 'published') report = { outcome: 'done', reason: reason || 'published' };
     else if (outcome.status === 'human' && wall && !/already holds/.test(outcome.recorded ?? '')) report = { outcome: 'blocked', reason: `wall:${wall}: ${reason}`.padEnd(10, '.').slice(0, 480), ...(outcome.humanStep ? { humanStep: outcome.humanStep } : {}) };
-    else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff') report = { outcome: 'retry', retryAfterMs: browserDown ? BROWSER_RETRY_MS : limits.cooldownMs, reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
+    else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff') report = { outcome: 'retry', retryAfterMs: browserDown ? dependencyRetryMs : limits.cooldownMs, reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
     let reported = report ? report.outcome : 'none';
     if (report) await ports.report(id, report).catch(error => { reported = `${report!.outcome}-failed(${scrubSecrets(error instanceof Error ? error.message : String(error)).slice(0, 80)})`; });
-    ports.log(`${new Date(now()).toISOString()} id=${id} outcome=${outcome.status} wall=${wall ?? '-'} calls=${budget.used} minutes=${minutes.toFixed(1)} steps=${outcome.steps} reported=${reported}${outcome.recipe ? ' recipe=yes' : ''} ${JSON.stringify(reason.slice(0, 160))}`);
+    const finishedAt = now();
+    if (providerDown) {
+      pausedUntil = Math.max(pausedUntil ?? 0, finishedAt + limits.agentOutagePauseMs);
+      summary.pauses++;
+      ports.log(`${new Date(finishedAt).toISOString()} Gateway providers unavailable: no new connector claims for ${Math.round(limits.agentOutagePauseMs / 1000)}s; active work continues`);
+    }
+    ports.log(`${new Date(finishedAt).toISOString()} id=${id} outcome=${outcome.status} wall=${wall ?? '-'} calls=${budget.used} minutes=${minutes.toFixed(1)} steps=${outcome.steps} reported=${reported}${outcome.recipe ? ' recipe=yes' : ''} ${JSON.stringify(reason.slice(0, 160))}`);
   };
 
   const start = (id: string): void => {

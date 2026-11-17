@@ -44,6 +44,16 @@ describe('browser faults', () => {
     expect(f.reports[0]![1]).toMatchObject({ outcome: 'retry', retryAfterMs: 5 * 60_000 });
   });
 
+  it('pauses new vendor claims during a confirmed Gateway-wide outage, while preserving the vendor retry', async () => {
+    const queue = ['a', 'b'];
+    const worked: string[] = [];
+    const f = fakes(queue, async id => { worked.push(id); return outcome(id, { status: 'handoff', summary: 'agent could not run: Gateway temporarily unavailable until later' }); });
+    await runLoop(f.ports, limits({ parallel: 1, maxHoursMs: 180, tickMs: 10, agentOutagePauseMs: 120_000 }));
+    expect(worked).toEqual(['a']);
+    expect(f.reports[0]![1]).toMatchObject({ outcome: 'retry', retryAfterMs: 120_000 });
+    expect(f.log.some(line => line.includes('Gateway providers unavailable: no new connector claims'))).toBe(true);
+  });
+
   it('an ordinary unfinished handoff still takes the long cooldown', async () => {
     const f = fakes(['a'], async id => outcome(id, { status: 'handoff', summary: 'the agent micro-task did not finish (9 calls): no key page found' }));
     await runLoop(f.ports, limits({ cooldownMs: 6 * 3_600_000 }));
