@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -11,18 +11,44 @@ const rec = (id: string, over: Partial<TabRecord> = {}): TabRecord => ({ id, own
 
 describe('recycleVerdict', () => {
   const limits = recycleLimits({});
-  it('defaults to 40 renderers or 6 GB', () => {
-    expect(limits).toEqual({ renderers: 40, bytes: 6 * GIB });
-    expect(recycleLimits({ CLIKCODE_BROWSER_MAX_RENDERERS: '10', CLIKCODE_BROWSER_MAX_GB: '2' })).toEqual({ renderers: 10, bytes: 2 * GIB });
+  it('defaults to 40 renderers, 6 GB or 6 hours', () => {
+    expect(limits).toEqual({ renderers: 40, bytes: 6 * GIB, ageMs: 6 * 3_600_000 });
+    expect(recycleLimits({ CLIKCODE_BROWSER_MAX_RENDERERS: '10', CLIKCODE_BROWSER_MAX_GB: '2', CLIKCODE_BROWSER_MAX_HOURS: '1' })).toEqual({ renderers: 10, bytes: 2 * GIB, ageMs: 3_600_000 });
   });
   it('is quiet under both ceilings', () => { expect(recycleVerdict({ renderers: 39, bytes: 5 * GIB }, limits, 0, now)).toBeUndefined(); });
   it('names what went over', () => {
     expect(recycleVerdict({ renderers: 41, bytes: GIB }, limits, 0, now)).toMatch(/41 renderers over 40/);
     expect(recycleVerdict({ renderers: 3, bytes: 7 * GIB }, limits, 0, now)).toMatch(/7.0 GB over 6.0 GB/);
   });
+  it('is quiet for a browser under its age ceiling, and for one whose age is not known', () => {
+    expect(recycleVerdict({ renderers: 10, bytes: GIB, ageMs: 5 * 3_600_000 }, limits, 0, now)).toBeUndefined();
+    expect(recycleVerdict({ renderers: 10, bytes: GIB }, limits, 0, now)).toBeUndefined();
+  });
+  it('recycles an old browser even though its size is fine, waiting for a quiet moment until it is far older', () => {
+    const old = { renderers: 25, bytes: 5.6 * GIB, ageMs: 10 * 3_600_000 };
+    expect(recycleVerdict(old, limits, 0, now)).toMatch(/10.0 h old, over 6.0 h/);
+    // A tab used a moment ago defers it at seven hours, but not at ten (one and a half times the ceiling is nine).
+    expect(recycleVerdict({ ...old, ageMs: 7 * 3_600_000 }, limits, now - 2_000, now)).toBeUndefined();
+    expect(recycleVerdict(old, limits, now - 2_000, now)).toMatch(/h old/);
+  });
   it('waits while a tab is in use, unless far over', () => {
     expect(recycleVerdict({ renderers: 41, bytes: GIB }, limits, now - 2_000, now)).toBeUndefined();
     expect(recycleVerdict({ renderers: 90, bytes: GIB }, limits, now - 2_000, now)).toMatch(/90 renderers/);
+  });
+});
+
+describe('the janitor and the age of the browser it watches', () => {
+  it('counts a browser\'s age from when its host started, and recycles it past the ceiling', async () => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), 'clikcode-janitor-age-'));
+    await mkdir(path.join(stateDir, 'computer'), { recursive: true });
+    let recycled = 0;
+    const startedAt = Date.parse('2026-11-16T00:00:00Z');
+    const tick = (hours: number) => janitorTick({ stateDir, hostPid: 1, startedAt, now: () => startedAt + hours * 3_600_000, recycle: async () => { recycled++; }, measure: () => ({ renderers: 10, bytes: GIB }), limits: recycleLimits({}) });
+    expect(await tick(5)).toBeUndefined();
+    expect(recycled).toBe(0);
+    expect(await tick(7)).toMatch(/7.0 h old/);
+    expect(recycled).toBe(1);
+    await rm(stateDir, { recursive: true, force: true });
   });
 });
 

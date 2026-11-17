@@ -10,17 +10,18 @@ import path from 'node:path';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { ACTIVE_MS, readTabRecords, sweepTabs, writeTabRecord, type TabRecord } from './tab-registry.js';
 
-interface RecycleLimits { renderers: number; bytes: number }
+interface RecycleLimits { renderers: number; bytes: number; ageMs: number }
 
 const GIB = 2 ** 30;
 
-/** 40 renderers or 6 GB. CLIKCODE_BROWSER_MAX_RENDERERS and CLIKCODE_BROWSER_MAX_GB change them. */
+/** 40 renderers, 6 GB or 6 hours old. CLIKCODE_BROWSER_MAX_RENDERERS, CLIKCODE_BROWSER_MAX_GB and CLIKCODE_BROWSER_MAX_HOURS change them.
+ * MEASURED 2026-11-16: a Chrome 10 hours old with 25 renderers and 5.6 GB, under both other ceilings, took 80 seconds per call and
 export function recycleLimits(env: NodeJS.ProcessEnv = process.env): RecycleLimits {
   const number = (name: string, fallback: number): number => { const value = Number(env[name]); return Number.isFinite(value) && value > 0 ? value : fallback; };
-  return { renderers: Math.floor(number('CLIKCODE_BROWSER_MAX_RENDERERS', 40)), bytes: number('CLIKCODE_BROWSER_MAX_GB', 6) * GIB };
+  return { renderers: Math.floor(number('CLIKCODE_BROWSER_MAX_RENDERERS', 40)), bytes: number('CLIKCODE_BROWSER_MAX_GB', 6) * GIB, ageMs: number('CLIKCODE_BROWSER_MAX_HOURS', 6) * 3_600_000 };
 }
 
-interface BrowserLoad { renderers: number; bytes: number }
+interface BrowserLoad { renderers: number; bytes: number; /** How long this browser has been up, when known. */ ageMs?: number }
 
 /** Only tabs used within this long come back after a recycle. */
 const RESTORE_WITHIN_MS = 10 * 60_000;
@@ -31,8 +32,10 @@ export function recycleVerdict(load: BrowserLoad, limits: RecycleLimits, lastUse
   const reasons: string[] = [];
   if (load.renderers > limits.renderers) reasons.push(`${load.renderers} renderers over ${limits.renderers}`);
   if (load.bytes > limits.bytes) reasons.push(`${(load.bytes / GIB).toFixed(1)} GB over ${(limits.bytes / GIB).toFixed(1)} GB`);
+  if (load.ageMs !== undefined && load.ageMs > limits.ageMs) reasons.push(`${(load.ageMs / 3_600_000).toFixed(1)} h old, over ${(limits.ageMs / 3_600_000).toFixed(1)} h`);
   if (!reasons.length) return undefined;
-  const far = load.renderers > limits.renderers * 2 || load.bytes > limits.bytes * 2;
+  // Size is forced at twice a ceiling; age at one and a half times, since an old browser is slow, not yet runaway.
+  const far = load.renderers > limits.renderers * 2 || load.bytes > limits.bytes * 2 || (load.ageMs !== undefined && load.ageMs > limits.ageMs * 1.5);
   if (!far && now - lastUsedAt < ACTIVE_MS) return undefined;
   return reasons.join(', ');
 }
@@ -150,19 +153,22 @@ interface JanitorDeps {
   measure?: () => BrowserLoad;
   limits?: RecycleLimits;
   now?: () => number;
+  /** When this host's Chrome started (default: when the janitor did, since the host and its Chrome start together). */
+  startedAt?: number;
 }
 
 /** One pass: sweep tabs, then recycle when the browser is over a ceiling. Returns the recycle reason when it recycled. */
 export async function janitorTick(deps: JanitorDeps): Promise<string | undefined> {
   const now = (deps.now ?? Date.now)();
   await sweepTabs(deps.stateDir, { now }).catch(quiet('agent/computer/browser-janitor'));
-  const load = (deps.measure ?? (() => measureBrowser(deps.hostPid)))();
+  const measured = (deps.measure ?? (() => measureBrowser(deps.hostPid)))();
+  const load: BrowserLoad = { ...measured, ...(measured.ageMs === undefined && deps.startedAt !== undefined ? { ageMs: now - deps.startedAt } : {}) };
   const records = await readTabRecords(deps.stateDir);
   const lastUsed = records.reduce((latest, record) => Math.max(latest, record.lastUsedAt), 0);
   const reason = recycleVerdict(load, deps.limits ?? recycleLimits(), lastUsed, now);
   if (!reason) return undefined;
   const tabs = tabsToRestore(records, now);
-  lifecycle('browser.recycle', { reason, renderers: load.renderers, gb: Number((load.bytes / GIB).toFixed(1)), restore: tabs.length });
+  lifecycle('browser.recycle', { reason, renderers: load.renderers, gb: Number((load.bytes / GIB).toFixed(1)), ...(load.ageMs !== undefined ? { hours: Number((load.ageMs / 3_600_000).toFixed(1)) } : {}), restore: tabs.length });
   await saveRecycle(deps.stateDir, tabs, now);
   await deps.recycle();
   return reason;
@@ -172,6 +178,8 @@ const JANITOR_INTERVAL_MS = 30_000;
 
 export function startBrowserJanitor(deps: JanitorDeps): () => void {
   let running = false;
+  const started = { ...deps, startedAt: deps.startedAt ?? (deps.now ?? Date.now)() };
+  deps = started;
   const timer = setInterval(() => {
     if (running) return;
     running = true;
