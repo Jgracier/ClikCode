@@ -84,7 +84,7 @@ export interface RunnerOptions {
 
 export type VendorStatus = 'published' | 'blocked' | 'human' | 'handoff' | 'budget' | 'waiting' | 'error';
 export interface VendorOutcome { id: string; status: VendorStatus; /** Runner steps (one onboard or browser job each). */ steps: number; /** Browser actions taken inside those steps (opens, clicks, fills, captures); the action trail below lists them. */ browserActions: number; stage: string; summary: string; actions: string[]; humanStep?: HumanStep; handoff?: { file?: string; request: HandoffRequest }; recorded?: string; attention?: { kind: string; owner: string };
-  /** The command that reattaches to the parked hidden tab and carries on. */ resume?: string; /** Set when a captcha put this vendor on a back-off. */ backoffUntil?: string; /** A key was captured and a recipe was recorded for the next run. */ recipe?: boolean }
+  /** The command that reattaches to the parked hidden tab and carries on. */ resume?: string; /** Set when a captcha put this vendor on a back-off. */ backoffUntil?: string; /** When to resume polling a persisted vendor job. */ retryAfterMs?: number; /** A key was captured and a recipe was recorded for the next run. */ recipe?: boolean }
 export interface HandoffRequest {
   id: string; why: string; /** The whole task text. */ task: string; url?: string; pageText?: string; controls?: string[]; screenshot?: string;
   call?: AgentCall; orElse?: AgentCall; attention?: unknown; /** The last 3 evidence lines. */ evidence?: string[];

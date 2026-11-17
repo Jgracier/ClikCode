@@ -242,6 +242,10 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
         }
         case 'wait': {
           const ms = Math.min(60_000, plan.ms * 2 ** Math.max(0, (seen.get(key) ?? 1) - 1));
+          // The job is persisted by ClikDeploy; if this wait and a small call margin will not fit, yield until then instead of
+          // spending the vendor budget polling and later handing this deterministic task to an agent.
+          const remaining = Math.max(0, maxMs - elapsed());
+          if (remaining < ms + 2_000) return out('waiting', `persisted job is still running; resume in ${Math.ceil(ms / 1000)}s`, { retryAfterMs: ms });
           actions.push(`wait ${Math.round(ms / 1000)}s, call onboard again`);
           await sleep(ms);
           waitedMs += ms;

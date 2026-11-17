@@ -173,12 +173,13 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     const browserDown = !wall && outcome.status !== 'published' && BROWSER_DOWN.test(outcome.summary);
     // A captcha wall is the one wall worth an early second try: the solver may clear it once the site has cooled.
     const dependencyRetryMs = providerDown ? limits.agentOutagePauseMs : BROWSER_RETRY_MS;
-    cooldown.mark(id, browserDown ? dependencyRetryMs : wall === 'captcha' ? CAPTCHA_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs);
+    const waitingRetryMs = outcome.status === 'waiting' ? Math.max(1_000, Math.min(outcome.retryAfterMs ?? (outcome.backoffUntil ? Date.parse(outcome.backoffUntil) - now() : BROWSER_RETRY_MS), 60 * 60_000)) : undefined;
+    cooldown.mark(id, waitingRetryMs ?? (browserDown ? dependencyRetryMs : wall === 'captcha' ? CAPTCHA_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs));
     const reason = scrubSecrets(outcome.summary).replace(/\s+/g, ' ').slice(0, 400);
     let report: LoopReport | undefined;
     if (outcome.status === 'published') report = { outcome: 'done', reason: reason || 'published' };
     else if (outcome.status === 'human' && wall && !/already holds/.test(outcome.recorded ?? '')) report = { outcome: 'blocked', reason: `wall:${wall}: ${reason}`.padEnd(10, '.').slice(0, 480), ...(outcome.humanStep ? { humanStep: outcome.humanStep } : {}) };
-    else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff') report = { outcome: 'retry', retryAfterMs: browserDown ? dependencyRetryMs : limits.cooldownMs, reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
+    else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff' || outcome.status === 'waiting') report = { outcome: 'retry', retryAfterMs: waitingRetryMs ?? (browserDown ? dependencyRetryMs : limits.cooldownMs), reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
     let reported = report ? report.outcome : 'none';
     if (report) await ports.report(id, report).catch(error => { reported = `${report!.outcome}-failed(${scrubSecrets(error instanceof Error ? error.message : String(error)).slice(0, 80)})`; });
     const finishedAt = now();

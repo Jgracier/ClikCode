@@ -26,6 +26,14 @@ function fakes(queue: string[], work: (id: string, ctx: WorkContext) => Promise<
 }
 
 describe('browser faults', () => {
+  it('reports a persisted-job wait with its own retry interval instead of the normal vendor cooldown', async () => {
+    const f = fakes(['slow-test'], async id => outcome(id, { status: 'waiting', summary: 'persisted test job is still running', retryAfterMs: 60_000 }));
+    await runLoop(f.ports, limits({ cooldownMs: 6 * 3_600_000 }));
+    expect(f.reports[0]![1]).toMatchObject({ outcome: 'retry', retryAfterMs: 60_000 });
+    const until = f.states.at(-1)!.cooldown['slow-test'];
+    if (until) expect(Date.parse(until)).toBeLessThan(Date.now() + 2 * 60_000);
+  });
+
   it('a vendor whose browser would not open is retried in minutes, not shelved with the long cooldown', async () => {
     const f = fakes(['a'], async id => outcome(id, { status: 'handoff', summary: 'the agent micro-task did not finish (5 calls): Browser was blocked ("ClikCode Chrome is open outside ClikCode")' }));
     await runLoop(f.ports, limits({ cooldownMs: 6 * 3_600_000 }));

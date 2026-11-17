@@ -33,6 +33,16 @@ function fakeDriver(outcomes: DriveOutcome[], recipe = false) {
 const quick = { sleep: async () => undefined, writeFile: async () => undefined, handoffDir: async () => '/tmp/handoffs' };
 
 describe('connectors run', () => {
+  it('yields a persisted test job until its next poll fits instead of exhausting the vendor budget', async () => {
+    const running: OnboardResult = { id: 'slow-test', state: 'needs-agent', stage: 'proof', reason: 'The live test job is still running.', next: { kind: 'call', task: 'wait 60s before checking the persisted job again' } };
+    const c = fakeClient([running]);
+    const d = fakeDriver([]);
+    const { outcomes } = await runConnectors(c.client, d.driver, { ...quick, maxMs: 10_000 });
+    expect(outcomes[0]).toMatchObject({ status: 'waiting', retryAfterMs: 60_000 });
+    expect(c.calls).not.toContain('onboard slow-test');
+    expect(d.driven).toEqual([]);
+  });
+
   it('stops only on a dead host before OAuth and key capture, and lets docs work bypass qualification', async () => {
     for (const task of [oauthTask('gone-oauth'), keyAt('gone-key')]) {
       const c = fakeClient([task]);
@@ -226,13 +236,13 @@ describe('connectors run', () => {
     expect(c.calls.length).toBe(4);
   });
 
-  it('stops at the time budget', async () => {
+  it('yields a persisted call instead of spending the remaining time budget polling it', async () => {
     let t = 0;
     const next = (): OnboardResult => ({ id: 'slow', state: 'running', stage: `s${t}`, reason: '', next: { kind: 'call', task: `call again ${t}` } });
     const c = fakeClient([next()], { slow: Array.from({ length: 30 }, next) });
     const { outcomes } = await runConnectors(c.client, fakeDriver([]).driver, { ...quick, maxMs: 1000, now: () => (t += 400) });
-    expect(outcomes[0]!.status).toBe('budget');
-    expect(outcomes[0]!.summary).toContain('time budget');
+    expect(outcomes[0]).toMatchObject({ status: 'waiting', retryAfterMs: 5_000 });
+    expect(outcomes[0]!.summary).toContain('persisted job is still running');
   });
 
   it('records a human step ClikDeploy already holds without reporting it again', async () => {
