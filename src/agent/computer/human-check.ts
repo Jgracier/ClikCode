@@ -292,18 +292,21 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
         if (step) return step;
       }
       // A page still saying it is verifying the visitor has not shown its check yet (or is about to let the visitor through):
-      // it is given up to twelve seconds to do either, once, before anything is concluded.
+      // it is given up to twenty seconds to do either, once, before anything is concluded.
       if (!verifyWaited && await verificationPending(page)) {
         verifyWaited = true;
         deps.trace?.('the page says it is verifying the visitor: waiting for its check or for it to let go');
-        for (let waited = 0; waited < 12_000; waited += 1_000) {
+        for (let waited = 0; waited < 20_000; waited += 1_000) {
           await sleep(1_000);
           if (await findPuzzle(page) || await findCheckbox(page) || await humanCheckAnswered(page) || !await verificationPending(page)) break;
         }
         continue;
       }
       // Nothing more to try. A check still in the way was tried and not passed; none at all is none.
-      return ended(inPage.held || await detectHumanCheck(page) || await verificationPending(page) ? 'still-there' : 'none');
+      const stuck = !inPage.held && !await detectHumanCheck(page) && await verificationPending(page);
+      // A page that never stopped verifying: what it says is written down, since this state could not be reproduced on demand.
+      if (stuck) deps.trace?.(`still on a verifying page "${await page.title().catch(() => '')}": ${String(await page.evaluate(`(document.body && document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 160)`).catch(() => '')).slice(0, 160)}`);
+      return ended(inPage.held || stuck || await detectHumanCheck(page) ? 'still-there' : 'none');
     }
     widget ??= found.widget;
     if (await humanCheckAnswered(page)) return ended('cleared');
