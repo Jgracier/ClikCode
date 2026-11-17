@@ -46,6 +46,21 @@ describe('micro-task agent on the Gateway', () => {
     expect(other.error).toContain('400');
   });
 
+  it('moves to the next model when a provider rate-limits the first one', async () => {
+    const asked: string[] = [];
+    const ran = await runGatewayMicro('go', { tab: 'agent-rate-limit', models: ['limited', 'available'], maxCalls: 2, maxMs: 10_000, connection: { baseUrl: 'https://gw.test/v1', apiKey: 'k' }, tools: [],
+      fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+        const model = JSON.parse(String(init?.body)).model as string;
+        asked.push(model);
+        return model === 'limited'
+          ? new Response(JSON.stringify({ error: { message: 'The model provider is rate limiting requests. Retry shortly.' } }), { status: 429 })
+          : reply({ content: 'RESULT: done' });
+      }) as typeof fetch,
+    });
+    expect(ran.text).toBe('RESULT: done');
+    expect(asked).toEqual(['limited', 'available']);
+  });
+
   it('opens a five minute outage circuit after every configured model is unavailable, avoiding repeated probes', async () => {
     const availability = new ProviderCircuit();
     let now = 1_000;

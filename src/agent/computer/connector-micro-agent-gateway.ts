@@ -10,7 +10,7 @@ import { ProviderCircuit } from '../../gateway/provider-circuit.js';
  * the name `claude-sonnet-5-5` stopped resolving on 2026-11-17 and every hand-off failed at once. CLIKCODE_MICRO_AGENT_MODEL goes first. */
 const MICRO_MODELS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'gpt-5.2', 'gemini-3.1-pro', 'claude-sonnet-4-6'];
 /** A reply that says this model cannot serve the request now (not listed for the account, or its providers are out of credit). */
-const UNAVAILABLE = /not available to you|out of credit|no provider can serve|no model can take/i;
+const UNAVAILABLE = /not available to you|out of credit|no provider can serve|no model can take|rate limit(?:ing)?|too many requests|temporarily overloaded/i;
 const MODEL_BENCH_MS = 5 * 60_000;
 const benchedModels = new Map<string, number>();
 const PROVIDER_OUTAGE_MS = 5 * 60_000;
