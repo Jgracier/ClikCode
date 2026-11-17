@@ -42,7 +42,7 @@ export const newMeter = (): AskMeter => ({ asks: 0, models: {}, votes: [], sampl
 
 /** `order`: the roster's models in the order measured on this machine (captcha-log.ts voterOrder), when known.
  * `meter`: where to count the asks. The rest are seams for tests: fake voters, a fixed clock, a signal. */
-export interface AskOptions { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; now?: () => number; meter?: AskMeter; order?: Partial<Record<Roster, readonly string[]>> }
+export interface AskOptions { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; /** Named voters, best first, in place of the roster (a seam for tests of who sits in and who stands in). */ voters?: () => Promise<Voter[]>; now?: () => number; meter?: AskMeter; order?: Partial<Record<Roster, readonly string[]>> }
 
 /** The questions worth a subscription voter: one or two pictures, an answer that takes thought. */
 const HARD: ReadonlySet<Roster> = new Set<Roster>(['click', 'order']);
@@ -55,16 +55,21 @@ async function gatewayClient(model: string): Promise<ModelClient> {
   return gatewayModelClient({ baseUrl, apiKey, vision: true, model });
 }
 
-interface Voter { name: string; client: ModelClient }
+export interface Voter { name: string; client: ModelClient }
 
 /** Models that just failed (out of credit, overloaded) sit out for five minutes, so a vote is not held up -- or
  * left one voter short -- by a model that cannot answer right now. */
 const benched = new Map<string, number>();
 const BENCH_MS = 5 * 60_000;
+/** A model declining the task in words (some decline anything that names a captcha) rather than answering it. */
+const REFUSAL = /\bI(?:'m| am)? (?:cannot|can't|can not|won't|will not|am unable|am not able|unable|not able)\b|\bprohibited\b|\b(?:against|violates?) (?:my|the|our) (?:guidelines|polic(?:y|ies)|rules)\b/i;
+/** Whether a model is sitting out right now (it failed or declined lately). */
+export const isBenched = (name: string, now = Date.now()): boolean => (benched.get(name) ?? 0) > now;
 
 /** The voters for a kind of question, best first: the roster's models the account has (those not sitting out
  * first), else its first vision model alone. The first three vote; the rest stand in for one that fails. */
 async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> {
+  if (options.voters) return options.voters();
   if (options.modelClientsOf) return (await options.modelClientsOf()).map(client => ({ name: '', client }));
   const now = options.now ?? Date.now;
   if (!cachedVision || now() - cachedVision.at > VISION_TTL_MS) {
@@ -141,7 +146,13 @@ async function poll<T>(question: Question<T>, options: AskOptions): Promise<Poll
       });
       if (process.env.CLIKCODE_CAPTCHA_VOTES) console.error(`vote ${question.roster} ${voter.name}: ${JSON.stringify(result.text.slice(0, 160))}`);
       if (sample) sample.answers[voter.name || `voter-${seat + 1}`] = result.text.slice(0, 600);
-      return question.parse(result.text);
+      const answer = question.parse(result.text);
+      if (answer !== undefined) return answer;
+      // No usable answer: a refusal, or prose with no answer in it. That voter is not counted; the next model in the roster is asked in
+      // its place (a vote of two that must match exactly is a far weaker check than three). A model that refused sits out for a while.
+      if (REFUSAL.test(result.text) && voter.name) benched.set(voter.name, (options.now ?? Date.now)() + BENCH_MS);
+      const spare = spares.shift();
+      return spare ? ask(spare, seat) : undefined;
     } catch (error) {
       if (signal.aborted) return undefined;
       const message = error instanceof Error ? error.message : String(error);

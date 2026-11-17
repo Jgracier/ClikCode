@@ -182,6 +182,52 @@ describe('several pieces to drag', () => {
   });
 });
 
+describe('a voter that declines', () => {
+  const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);
+  const point = (x: number, y: number) => `{"points":[{"x":${x},"y":${y}}]}`;
+  const picture = { mimeType: 'image/jpeg', data: 'eA==' };
+  const refusal = 'I cannot fulfill this request. I am prohibited from assisting with the bypass of security measures.';
+
+  it('is replaced by the next model in the roster, so three answers vote instead of two', async () => {
+    const { askClickPoints, isBenched } = await import('./captcha-model.js');
+    // The two models that answered disagree; only the stand-in agrees with one of them. Without a replacement there is no agreement at all.
+    const voters = async () => [
+      { name: 'declines-1', client: fake(refusal) },
+      { name: 'answers-a', client: fake(point(0.3, 0.4)) },
+      { name: 'answers-b', client: fake(point(0.8, 0.8)) },
+      { name: 'stands-in', client: fake(point(0.31, 0.4)) },
+    ];
+    const spots = await askClickPoints(picture, 'Click the odd one out', { voters });
+    expect(spots).toHaveLength(1);
+    expect(spots![0]!.x).toBeCloseTo(0.305, 2);
+    // It declined in words, so it sits out for a while.
+    expect(isBenched('declines-1')).toBe(true);
+    expect(isBenched('answers-a')).toBe(false);
+  });
+
+  it('is replaced but not benched when it merely wrote prose with no answer in it', async () => {
+    const { askClickPoints, isBenched } = await import('./captcha-model.js');
+    const voters = async () => [
+      { name: 'rambles', client: fake('There are several icons here and it is hard to say which.') },
+      { name: 'ok-1', client: fake(point(0.3, 0.4)) },
+      { name: 'ok-2', client: fake(point(0.3, 0.41)) },
+      { name: 'spare', client: fake(point(0.9, 0.9)) },
+    ];
+    expect(await askClickPoints(picture, 'Click the odd one out', { voters })).toHaveLength(1);
+    expect(isBenched('rambles')).toBe(false);
+  });
+
+  it('leaves the vote with what it has when no stand-in is left', async () => {
+    const { askClickPoints } = await import('./captcha-model.js');
+    const voters = async () => [
+      { name: 'declines-2', client: fake(refusal) },
+      { name: 'answers-a', client: fake(point(0.3, 0.4)) },
+      { name: 'answers-b', client: fake(point(0.3, 0.41)) },
+    ];
+    expect(await askClickPoints(picture, 'Click the odd one out', { voters })).toHaveLength(1);
+  });
+});
+
 describe('picking one of several pictures', () => {
   it('takes the majority pick and refuses a tie or an out-of-range answer', async () => {
     const { askPick } = await import('./captcha-model.js');
