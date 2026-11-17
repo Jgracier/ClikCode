@@ -132,6 +132,13 @@ const IN_PAGE = `(() => {
   return null;
 })()`;
 
+/** A page that says in its title that it is checking the visitor: a challenge still loading, or an interstitial that lets the
+ * visitor through by itself (AWS WAF's "Human Verification", Cloudflare's "Just a moment"). Waited on, never given up on. */
+const VERIFYING_TITLE = /human verification|verifying you are human|confirm you are human|checking your browser|just a moment|one moment|security check/i;
+const verificationPending = async (page: Page): Promise<boolean> => {
+  try { return VERIFYING_TITLE.test(await page.title()); } catch { return false; }
+};
+
 /** The one answer to "is a human check in this visitor's way?", for every caller: the browser tool, the connector
  * runner and the sign-up qualifier. `stage` says how far along it is: a box to press, a puzzle that is up, or a
  * check the page draws itself. Undefined when there is none or it already holds its answer. */
@@ -259,7 +266,7 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
   const began = Date.now();
   let widget: HumanCheckWidget | undefined;
   const ended = (outcome: HumanCheckResult['outcome']): HumanCheckResult => ({ outcome, ...(widget ? { widget } : {}) });
-  let repressed = 0, arkoseStuck = 0, unread = 0;
+  let repressed = 0, arkoseStuck = 0, unread = 0, verifyWaited = false;
   const inPage = { tries: 0, held: false, holds: 0, textTyped: false };
   let pictureRounds = 0, audio: 'untried' | 'on' | 'refused' = 'untried';
   while (Date.now() - began < budgetMs) {
@@ -273,6 +280,8 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
         repressed++;
         const pressed = await pressHumanCheck(page, { waitMs: 8_000, sleep });
         widget ??= pressed.widget;
+        // A press the check took (it let the visitor through, or the page moved on) is the answer: nothing is left to solve.
+        if (pressed.outcome === 'cleared') return ended('cleared');
         await sleep(1_500);
         continue;
       }
@@ -282,8 +291,19 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
         if (step === 'acted') continue;
         if (step) return step;
       }
+      // A page still saying it is verifying the visitor has not shown its check yet (or is about to let the visitor through):
+      // it is given up to twelve seconds to do either, once, before anything is concluded.
+      if (!verifyWaited && await verificationPending(page)) {
+        verifyWaited = true;
+        deps.trace?.('the page says it is verifying the visitor: waiting for its check or for it to let go');
+        for (let waited = 0; waited < 12_000; waited += 1_000) {
+          await sleep(1_000);
+          if (await findPuzzle(page) || await findCheckbox(page) || await humanCheckAnswered(page) || !await verificationPending(page)) break;
+        }
+        continue;
+      }
       // Nothing more to try. A check still in the way was tried and not passed; none at all is none.
-      return ended(inPage.held || await detectHumanCheck(page) ? 'still-there' : 'none');
+      return ended(inPage.held || await detectHumanCheck(page) || await verificationPending(page) ? 'still-there' : 'none');
     }
     widget ??= found.widget;
     if (await humanCheckAnswered(page)) return ended('cleared');
