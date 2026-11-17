@@ -245,6 +245,33 @@ describe('AWS WAF CAPTCHA', () => {
     expect(clicks[0]![1]).toBeLessThanOrEqual(350);
   });
 
+  it('waits out a page that says it is verifying the visitor, then solves the check it shows', async () => {
+    // "Human Verification" for the first looks (AWS WAF's silent interstitial), then the Begin splash, then nothing once pressed.
+    let looks = 0, pressed = false;
+    const page = {
+      url: () => 'https://vendor.example/signup',
+      title: async () => (pressed || looks > 3 ? 'Sign up' : 'Human Verification'),
+      frames: () => [],
+      mainFrame: () => ({ url: () => 'https://vendor.example/signup' }),
+      evaluate: async (script: unknown) => {
+        if (typeof script !== 'string' || !script.includes('amzn-captcha-root')) return false;
+        looks++;
+        return looks > 3 && !pressed ? { stage: 'begin', begin: { x: 583, y: 318, width: 116, height: 32 } } : null;
+      },
+      mouse: { move: async () => undefined, down: async () => undefined, up: async () => undefined, click: async () => { pressed = true; } },
+    } as unknown as Page;
+    const { solveHumanCheck } = await import('./human-check.js');
+    const out = await solveHumanCheck(page, { sleep: async () => undefined, waitMs: 60_000 });
+    expect(out).toEqual({ outcome: 'cleared', widget: 'awswaf' });
+    expect(pressed).toBe(true);
+  });
+
+  it('is still "there", not "none", when the page never stops saying it is verifying', async () => {
+    const page = { url: () => 'https://vendor.example/', title: async () => 'Just a moment...', frames: () => [], mainFrame: () => ({}), evaluate: async () => null } as unknown as Page;
+    const { solveHumanCheck } = await import('./human-check.js');
+    expect((await solveHumanCheck(page, { sleep: async () => undefined, waitMs: 60_000 })).outcome).toBe('still-there');
+  });
+
   it('reads the grid in page coordinates, with no frame offset added, and photographs its own region', async () => {
     const { readLayout } = await import('./human-check-grid.js');
     const read = { instruction: 'Choose all the beds', target: 'the beds', tiles: [{ x: 480, y: 80, width: 104, height: 104, key: '0', selected: false }], verify: { x: 480, y: 420, width: 92, height: 32 }, dynamic: false, tileSelector: 'button.amzn-grid-cell', region: { x: 480, y: 20, width: 320, height: 470 } };
