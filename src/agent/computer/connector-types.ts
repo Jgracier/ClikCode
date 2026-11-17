@@ -59,7 +59,7 @@ export interface BrowserDriver {
    * stored as the connector's draft. `docsUrls` are pages that read like API documentation, for an agent to write from when no file exists. */
   findReference?(id: string, homepage: string): Promise<{ applied: boolean; note: string; docsUrls: string[] }>;
   /** Reads the vendor's rendered sign-up, pricing and developer pages (no model) and says whether a key needs a person, with the wall as a human step when it does. */
-  qualify?(id: string): Promise<{ lane: 'auto' | 'human' | 'dead' | 'research'; summary: string; human?: HumanStep }>;
+  qualify?(id: string): Promise<{ lane: 'auto' | 'dead' | 'research'; summary: string; human?: HumanStep }>;
   keygrab(id: string, url: string, budget: { maxMs: number; /** The task's other addresses (homepage, sign-up, docs): where to start if `url` is no web page. */ alternates?: string[] }): Promise<DriveOutcome>;
 }
 
@@ -103,5 +103,7 @@ export type Plan =
   | { do: 'report'; call: AgentCall }
   | { do: 'specfix'; why: string; call?: AgentCall }
   | { do: 'human'; humanStep: HumanStep }
-  | { do: 'handoff'; why: string };
+  | { do: 'handoff'; why: string }
+  /** ClikDeploy parked the vendor because no API reference was found, and the browser search has not been run for it: run it before the item stays parked. */
+  | { do: 'reference'; homepage: string; why: string };
 

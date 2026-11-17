@@ -155,10 +155,10 @@ describe('a task no rule knows: read the rendered pages first, then one agent mi
   };
   const quick = { sleep: async () => undefined, writeFile: async () => undefined, handoffDir: async () => '/tmp/h' };
 
-  it('a wall the rendered pages show is reported as that wall and no agent runs', async () => {
-    const m = make(async () => ({ lane: 'human', summary: 'card', human: { kind: 'payment', instructions: 'sign-up asks for a card', reasonCode: 'card' } }), { ok: true });
+  it('a site that does not resolve is reported as a dead host and no agent runs', async () => {
+    const m = make(async () => ({ lane: 'dead', summary: 'the site does not resolve', human: { kind: 'retire', instructions: 'the vendor site does not load', reasonCode: 'dead-host' } }), { ok: true });
     const { outcomes } = await runConnectors(m.client, m.driver, quick);
-    expect(outcomes[0]).toMatchObject({ status: 'human', humanStep: { kind: 'payment' } });
+    expect(outcomes[0]).toMatchObject({ status: 'human', humanStep: { kind: 'retire' } });
     expect(m.reports).toHaveLength(1);
     expect(m.asked).toHaveLength(0);
   });

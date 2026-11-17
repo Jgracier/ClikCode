@@ -8,7 +8,7 @@ import { scrubSecrets } from './secret-scrubber.js';
 import { BACKOFF_HOURS } from './keygrab-park.js';
 import { sleep as sleepFor } from '../../runtime/sleep.js';
 import type { AgentCall, DeployClient, Plan, BrowserDriver, DriveOutcome, HandoffRequest, HumanStep, OnboardResult, RunnerOptions, StopInfo, VendorOutcome, VendorStatus } from './connector-types.js';
-import { CLOUD_VENDOR, WAIT_LIMIT_MS, docsToSpecPrompt, isSpecFix, narrowTask, oauthAppTask, planFor, referenceTask, resumeCommand, siteUrl } from './connector-tasks.js';
+import { CLOUD_VENDOR, WAIT_LIMIT_MS, docsToSpecPrompt, isSpecFix, narrowTask, oauthAppTask, planFor, referenceTask, resumeCommand, siteUrl, unsettledDiscovery } from './connector-tasks.js';
 import { hostOf, humanStepFor } from './connector-walls.js';
 
 // The runner's parts moved to connector-types.ts, connector-tasks.ts and connector-walls.ts; what other files import from here stays.
@@ -89,7 +89,10 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   let referenceTried = false;
   let appRegistrationTried = false;
   let accessRequested = false;
-  const viaAgent = async (stop: StopInfo, wholeTask = false): Promise<DriveOutcome | undefined> => {
+  /** What the qualifier read on the vendor's pages, or could not read: leads for an agent to check, never a reason to stop or to start one. */
+  let leads: string | undefined;
+  const viaAgent = async (given: StopInfo, wholeTask = false): Promise<DriveOutcome | undefined> => {
+    const stop = leads ? { ...given, pageText: `${given.pageText}\nWhat the qualifier read on the vendor's pages (unverified leads, not walls: check them on the live site): ${leads}` } : given;
     const taskKey = JSON.stringify([result.stage, result.next.kind, result.next.task]);
     if (agentTasksTried.has(taskKey) || !driver.agentTask || !wholeTask && (stop.human || humanStepFor(id, stop))) return undefined;
     agentTasksTried.add(taskKey);
@@ -152,24 +155,14 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
       // Documentation, copy and proof work do not need a new vendor account.
       const acquisition = plan.do === 'capture' || plan.do === 'oauth' || plan.do === 'handoff' && /^(auth|connect|credential|triage)$/.test(result.stage) && !/docs-to-spec|connector_copy_task|copy[- :]+review|wording|connector_spec|connector_build|proof/i.test(result.next.task);
       if (!qualified && driver.qualify && acquisition) {
-        const q = await gate(() => driver.qualify!(id)).catch(() => ({ lane: 'research' as const, summary: 'rendered qualification could not complete' }));
-        actions.push(`qualify: lane ${q.lane} - ${cap(say(q.summary), 160)}`);
-        if (q.lane === 'research') {
-          const task = result.next.task;
-          const agent = await viaAgent({ kind: 'unknown', message: `Find the official signup path and get this credential task through, trying it on the live site. ${q.summary}. Treat any of that as a lead to check, not a fact: a wall is only real once you have seen it on the vendor's own page, and then name it with a quote.`, url: siteUrl(task) ?? '', pageText: task, controls: [] }, true);
-          if (agent?.ok) {
-            actions.push(agent.note ?? 'the agent researched the signup path');
-            result = fix(await client.onboard(id));
-            continue;
-          }
-          if (agent && !agent.ok && (agent.stop.human || humanStepFor(id, agent.stop))) return await stopped(agent.stop);
-          return await handoff(`Qualification is inconclusive: ${q.summary}${agent && !agent.ok ? `; the agent found: ${cap(say(agent.stop.message), 200)}` : ''}`);
-        }
-        if (q.lane !== 'auto') {
-          if (q.human) return await wall(q.human, false);
-          return await handoff(`Qualification needs evidence: ${q.summary}`);
-        }
         qualified = true;
+        const q = await gate(() => driver.qualify!(id)).catch(() => ({ lane: 'research' as const, summary: 'rendered qualification could not complete', human: undefined }));
+        actions.push(`qualify: lane ${q.lane} - ${cap(say(q.summary), 160)}`);
+        // Only a site that is not there stops here. A qualifier that could not settle the vendor used to hand it straight to an agent,
+        // skipping the deterministic sign-up and key capture (517 agent runs in a day, two thirds with no result): what it read is now
+        // carried as leads to whatever runs next, and the plan runs.
+        if (q.lane === 'dead' && q.human) return await wall(q.human, false);
+        if (q.lane !== 'auto') leads = cap(say(q.summary), 400);
       }
       switch (plan.do) {
         case 'done': return out(plan.status, result.reason || result.next.task);
@@ -200,7 +193,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
         case 'handoff': {
           let task = result.next.task;
           // "No reference found" is first answered with a browser, not an agent: most documentation sites load a description file a plain fetch never sees.
-          const wanted = referenceTask(task);
+          const wanted = referenceTask(task) ?? unsettledDiscovery(result);
           if (wanted && driver.findReference && !referenceTried) {
             referenceTried = true;
             const found = await gate(() => driver.findReference!(id, wanted.homepage)).catch(() => ({ applied: false, note: 'the browser search could not run', docsUrls: [] as string[] }));
@@ -219,6 +212,19 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           }
           if (agent && !agent.ok && (agent.stop.human || humanStepFor(id, agent.stop))) return await stopped(agent.stop);
           return await handoff(agent && !agent.ok ? `${plan.why}; ${agent.stop.message}` : plan.why);
+        }
+        case 'reference': {
+          // A vendor ClikDeploy parked for want of an API reference, the browser search not yet run for it: run it once. A spec it finds is
+          // stored and the item reopened; nothing found leaves the item where ClikDeploy put it, with what the search saw.
+          if (referenceTried || !driver.findReference) return out('blocked', plan.why);
+          referenceTried = true;
+          const found = await gate(() => driver.findReference!(id, plan.homepage)).catch(() => ({ applied: false, note: 'the browser search could not run', docsUrls: [] as string[] }));
+          actions.push(`reference search: ${cap(say(found.note), 200)}`);
+          if (!found.applied) return out('blocked', `${plan.why}; browser reference search: ${found.note}`);
+          await client.tool('connector_work_enqueue', { id, retry: true });
+          actions.push('reopened the item with the reference stored');
+          result = fix(await client.onboard(id));
+          break;
         }
         case 'wait': {
           const ms = Math.min(60_000, plan.ms * 2 ** Math.max(0, (seen.get(key) ?? 1) - 1));
@@ -393,5 +399,6 @@ function describePlan(plan: Plan): string {
     case 'human': return `record the human step (${plan.humanStep.kind})`;
     case 'done': return `nothing to do (${plan.status})`;
     case 'handoff': return `hand to an agent via a work item note: ${plan.why}`;
+    case 'reference': return `search ${hostOf(plan.homepage)} for its API reference with the browser; store it and reopen the item when one is found`;
   }
 }

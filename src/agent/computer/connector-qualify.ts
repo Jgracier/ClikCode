@@ -4,7 +4,7 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import { EXTRA_PHRASES, ENTERPRISE_API, GATED_BY_PLAN, INTEGRATE_UPGRADE, NEGATION_AFTER, NEGATION_BEFORE, PLAN_HEADING, SERVER_PHRASES, SLACK_ONBOARDING } from './connector-qualify-phrases.js';
 
 type QualifyKind = 'captcha' | 'sms' | 'card' | 'paid-plan' | 'sales' | 'enterprise' | 'work-email' | 'free-mail' | 'slack-only' | 'approval' | 'no-api' | 'dead-host';
-type Lane = 'auto' | 'human' | 'dead' | 'research';
+type Lane = 'auto' | 'dead' | 'research';
 export type PageRole = 'home' | 'signup' | 'pricing' | 'docs';
 export interface RenderedPage {
   role: PageRole; url: string; status?: number; text: string;

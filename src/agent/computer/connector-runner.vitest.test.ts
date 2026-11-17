@@ -33,11 +33,11 @@ function fakeDriver(outcomes: DriveOutcome[], recipe = false) {
 const quick = { sleep: async () => undefined, writeFile: async () => undefined, handoffDir: async () => '/tmp/handoffs' };
 
 describe('connectors run', () => {
-  it('checks rendered walls before OAuth and key capture, while letting docs work proceed', async () => {
-    for (const task of [oauthTask('oauth-wall'), keyAt('key-wall')]) {
+  it('stops only on a dead host before OAuth and key capture, and lets docs work bypass qualification', async () => {
+    for (const task of [oauthTask('gone-oauth'), keyAt('gone-key')]) {
       const c = fakeClient([task]);
       const d = fakeDriver([]);
-      d.driver.qualify = async () => ({ lane: 'human', summary: 'captcha on signup', human: { kind: 'captcha', url: 'https://vendor.example/signup', instructions: 'Solve the captcha', reasonCode: 'captcha' } });
+      d.driver.qualify = async () => ({ lane: 'dead', summary: 'the site does not resolve', human: { kind: 'retire', url: 'https://vendor.example/', instructions: 'the vendor site does not load', reasonCode: 'dead-host' } });
       const { outcomes } = await runConnectors(c.client, d.driver, quick);
       expect(outcomes[0]?.status).toBe('human');
       expect(d.driven).toEqual([]);
@@ -71,16 +71,28 @@ describe('connectors run', () => {
     expect(d.driven).toEqual([]);
   });
 
-  it('sends inconclusive rendered qualification to one bounded research task', async () => {
+  it('runs the deterministic plan when qualification is inconclusive, and gives what it read to a later agent as leads', async () => {
+    // OAuth: the consent driver runs, no agent is started for the qualifier's doubt.
     const c = fakeClient([oauthTask('research')], { research: [published('research')] });
     const d = fakeDriver([]);
     d.driver.qualify = async () => ({ lane: 'research', summary: 'the signup form could not be found' });
     let attempts = 0;
     d.driver.agentTask = async () => { attempts++; return { ok: true }; };
-    const { outcomes } = await runConnectors(c.client, d.driver, quick);
-    expect(outcomes[0]?.status).toBe('published');
-    expect(attempts).toBe(1);
-    expect(d.driven).toEqual([]);
+    expect((await runConnectors(c.client, d.driver, quick)).outcomes[0]?.status).toBe('published');
+    expect(attempts).toBe(0);
+    expect(d.driven).toEqual(['oauth research']);
+    // When the deterministic step does stop on a screen it does not know, the agent it hands to is told what the qualifier read.
+    const k = fakeClient([oauthTask('stuck')], { stuck: [published('stuck')] });
+    const s = fakeDriver([]);
+    s.driver.qualify = async () => ({ lane: 'research', summary: 'paid-plan: "API on the Pro plan"' });
+    s.driver.oauthConnect = async () => ({ ok: false, stop: { kind: 'unknown', message: 'a screen the consent driver does not know', url: 'https://vendor.example/x', pageText: 'Choose a workspace', controls: [] } });
+    const told: string[] = [];
+    s.driver.agentTask = async (_id, stop) => { told.push(stop.pageText); return { ok: true }; };
+    expect((await runConnectors(k.client, s.driver, quick)).outcomes[0]?.status).toBe('published');
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain('Choose a workspace');
+    expect(told[0]).toContain('unverified leads');
+    expect(told[0]).toContain('API on the Pro plan');
   });
 
   it('continues from completed spec work into distinct copy work within one vendor run', async () => {
@@ -518,5 +530,64 @@ describe('warm hand-off and rate-limit back-off', () => {
     const d = fakeDriver([{ ok: true, note: 'captured', recipe: true }]);
     const { outcomes } = await runConnectors(c.client, d.driver, quick);
     expect(outcomes[0]).toMatchObject({ status: 'published', recipe: true });
+  });
+});
+
+describe('a vendor ClikDeploy could not settle for want of an API reference', () => {
+  const unsettledCall = (id: string): OnboardResult => ({ id, state: 'needs-agent', stage: 'triage', reason: `discovery could not settle how to connect to ${id}`,
+    next: { kind: 'agent', task: `discovery could not settle how to connect to ${id}`, call: { tool: 'connector_onboard', args: { id, homepage: `https://${id}.example`, baseUrl: '<the API base URL, https>' } }, orElse: { tool: 'connector_work_report', args: { id, outcome: 'blocked', reason: 'no public way to connect' } } } });
+  const parked = (id: string): OnboardResult => ({ id, state: 'blocked', stage: 'attention', reason: `discovery could not settle how to connect to ${id} (No machine-readable reference or OAuth metadata was found at the places checked.)`,
+    next: { kind: 'none', task: 'nothing' }, attention: { kind: 'decision', url: `https://${id}.example/`, reasonCode: 'no-docs' } });
+
+  it('names the site to search, from the call it asks for or the item it parked', async () => {
+    const { unsettledDiscovery } = await import('./connector-tasks.js');
+    expect(unsettledDiscovery(unsettledCall('acme'))).toEqual({ homepage: 'https://acme.example', docs: [] });
+    expect(unsettledDiscovery(parked('acme'))).toEqual({ homepage: 'https://acme.example/', docs: [] });
+    // A connector_onboard call with every value given is no research task, and an ordinary block is not this one.
+    expect(unsettledDiscovery({ ...unsettledCall('acme'), next: { kind: 'agent', task: 'x', call: { tool: 'connector_onboard', args: { id: 'acme', homepage: 'https://acme.example', baseUrl: 'https://api.acme.example' } } } })).toBeUndefined();
+    expect(unsettledDiscovery({ ...parked('acme'), reason: 'needs a card', attention: { kind: 'payment', reasonCode: 'card' } })).toBeUndefined();
+    expect(planFor(parked('acme'), false)).toMatchObject({ do: 'reference', homepage: 'https://acme.example/' });
+  });
+
+  it('searches with the browser before an agent, and builds from the reference it finds with no agent at all', async () => {
+    const c = fakeClient([unsettledCall('acme')], { acme: [published('acme')] });
+    const d = fakeDriver([]);
+    const searched: string[] = [];
+    d.driver.findReference = async (_id, homepage) => { searched.push(homepage); return { applied: true, note: 'openapi reference found and stored', docsUrls: [] }; };
+    let agents = 0;
+    d.driver.agentTask = async () => { agents++; return { ok: true }; };
+    expect((await runConnectors(c.client, d.driver, quick)).outcomes[0]?.status).toBe('published');
+    expect(searched).toEqual(['https://acme.example']);
+    expect(agents).toBe(0);
+  });
+
+  it('gives the agent a docs-to-spec task with the pages the browser saw when no reference file exists', async () => {
+    const c = fakeClient([unsettledCall('acme')], { acme: [published('acme')] });
+    const d = fakeDriver([]);
+    d.driver.findReference = async () => ({ applied: false, note: 'no description file on 3 pages', docsUrls: ['https://acme.example/docs/api'] });
+    const told: string[] = [];
+    d.driver.agentTask = async (_id, stop) => { told.push(stop.pageText); return { ok: true }; };
+    await runConnectors(c.client, d.driver, quick);
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain('docs-to-spec: acme');
+    expect(told[0]).toContain('https://acme.example/docs/api');
+  });
+
+  it('a parked item: the search runs once; a reference found reopens it, nothing found leaves it parked with no agent', async () => {
+    const found = fakeClient([parked('acme')], { acme: [published('acme')] });
+    const d = fakeDriver([]);
+    d.driver.findReference = async () => ({ applied: true, note: 'stored', docsUrls: [] });
+    let agents = 0;
+    d.driver.agentTask = async () => { agents++; return { ok: true }; };
+    expect((await runConnectors(found.client, d.driver, quick)).outcomes[0]?.status).toBe('published');
+    expect(found.calls).toEqual(['tool connector_work_enqueue', 'onboard acme']);
+    const none = fakeClient([parked('beta')]);
+    const e = fakeDriver([]);
+    e.driver.findReference = async () => ({ applied: false, note: 'no description file on 2 pages', docsUrls: [] });
+    e.driver.agentTask = async () => { agents++; return { ok: true }; };
+    const out = (await runConnectors(none.client, e.driver, quick)).outcomes[0];
+    expect(out).toMatchObject({ status: 'blocked' });
+    expect(out?.summary).toContain('no description file on 2 pages');
+    expect(agents).toBe(0);
   });
 });

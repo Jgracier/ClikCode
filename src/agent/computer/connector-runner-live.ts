@@ -160,10 +160,17 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
     }),
     // The vendor's rendered pages, read with no model: which wall, if any, a key stands behind.
     async findReference(id: string, homepage: string) {
-      const { findReferenceRendered } = await import('./connector-reference-live.js');
+      const [{ findReferenceRendered }, memo] = await Promise.all([import('./connector-reference-live.js'), import('./connector-reference-memo.js')]);
+      // A site searched this week with nothing found is not searched again: its result is reused (connector-reference-memo.ts).
+      const missed = await memo.recentMiss(options.stateDir, id, homepage).catch(() => undefined);
+      if (missed) return { applied: false, note: `no description file when searched ${missed.at.slice(0, 10)} (not searched again within the week)`, docsUrls: missed.docsUrls };
       const found = await findReferenceRendered(options.stateDir, id, homepage);
       const reference = found.reference;
-      if (!reference) return { applied: false, note: `no description file on ${found.visited.length} pages${found.docsUrls.length ? `; ${found.docsUrls.length} read like API documentation` : ''}`, docsUrls: found.docsUrls };
+      if (!reference) {
+        await memo.rememberSearch(options.stateDir, id, homepage, { applied: false, docsUrls: found.docsUrls }).catch(quiet('agent/computer/connector-runner-live'));
+        return { applied: false, note: `no description file on ${found.visited.length} pages${found.docsUrls.length ? `; ${found.docsUrls.length} read like API documentation` : ''}`, docsUrls: found.docsUrls };
+      }
+      await memo.rememberSearch(options.stateDir, id, homepage, { applied: true, docsUrls: [] }).catch(quiet('agent/computer/connector-runner-live'));
       try {
         // The document read in the browser is sent itself: the server often cannot fetch what a docs site serves a visitor.
         await liveClient(options.signal).tool('connector_build_apply', reference.document ? { id, document: reference.document, sourceUrl: reference.url } : { id, url: reference.url, kind: reference.kind });

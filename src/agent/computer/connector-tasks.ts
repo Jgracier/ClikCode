@@ -60,6 +60,26 @@ export function referenceTask(task: string): { homepage: string; docs: string[] 
   return { homepage, docs: (after.match(/https:\/\/[^\s,]+/g) ?? []).map(url => url.replace(/[.,]+$/, '')).slice(0, 4) };
 }
 
+/** The site to search for a vendor's API reference when ClikDeploy could not settle how to connect: the `connector_onboard` call it asks
+ * for with a homepage given and a value left as a placeholder ("<the API base URL, https>"), or the item it parked for want of a
+ * reference. Without a spec no connector can be built, so the browser search (connector-reference.ts) comes before any agent. */
+const NO_REFERENCE = /discovery could not settle how to connect|no machine-readable (?:api )?reference/i;
+export function unsettledDiscovery(result: OnboardResult): { homepage: string; docs: string[] } | undefined {
+  const next = result.next;
+  const call = next && next.kind === 'agent' ? next.call : undefined;
+  if (call?.tool === 'connector_onboard') {
+    const homepage = typeof call.args.homepage === 'string' ? call.args.homepage : undefined;
+    const placeholder = Object.values(call.args).some(value => typeof value === 'string' && /^<[^>]+>$/.test(value.trim()));
+    if (homepage && /^https:\/\//.test(homepage) && placeholder) return { homepage, docs: [] };
+  }
+  const parked = result.attention as { reasonCode?: string; url?: string } | null | undefined;
+  if ((result.state === 'blocked' || result.state === 'attention') && (parked?.reasonCode === 'no-docs' || NO_REFERENCE.test(result.reason ?? ''))) {
+    const homepage = parked?.url && /^https:\/\//.test(parked.url) ? parked.url : siteUrl(result.reason ?? '');
+    if (homepage) return { homepage, docs: [] };
+  }
+  return undefined;
+}
+
 /** The agent's task when the browser found no description file: write one from the documentation, or say plainly that there is no API. */
 export function docsToSpecPrompt(id: string, homepage: string, docs: readonly string[]): string {
   return `docs-to-spec: ${id} (${homepage}) has no machine-readable API reference: a browser search of its site found none. `
@@ -75,6 +95,9 @@ export const WAIT_LIMIT_MS = 180_000;
 export function planFor(result: OnboardResult, recipe: boolean): Plan {
   const next = result.next;
   if (result.state === 'published' || result.state === 'complete') return { do: 'done', status: 'published' };
+  // Parked for want of an API reference: the browser search runs before the item is left with a person (connector-runner.ts runs it once).
+  const unsettled = result.state === 'blocked' || result.state === 'attention' ? unsettledDiscovery(result) : undefined;
+  if (unsettled) return { do: 'reference', homepage: unsettled.homepage, why: result.reason || 'no API reference was found' };
   if (result.state === 'attention') {
     // One parked step is an agent's to try before it is a person's: registering the platform's OAuth app at the vendor.
     const parked = result.attention as { kind?: string; url?: string; instruction?: string; reasonCode?: string } | null | undefined;
