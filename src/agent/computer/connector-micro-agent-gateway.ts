@@ -3,14 +3,34 @@
 import { agentMcpHandler } from './connector-micro-agent-mcp.js';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { stateDirectory } from '../../session/store/paths.js';
+import { listedModels } from '../../gateway/model-names.js';
 
-export const GATEWAY_MICRO_MODEL = process.env.CLIKCODE_MICRO_AGENT_MODEL || 'claude-sonnet-5-5';
+/** The models that may run a connector hand-off, best first. Each is matched against what the Gateway lists now (src/gateway/model-names.ts):
+ * the name `claude-sonnet-5-5` stopped resolving on 2026-11-17 and every hand-off failed at once. CLIKCODE_MICRO_AGENT_MODEL goes first. */
+const MICRO_MODELS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'gpt-5.2', 'gemini-3.1-pro', 'claude-sonnet-4-6'];
+/** A reply that says this model cannot serve the request now (not listed for the account, or its providers are out of credit). */
+const UNAVAILABLE = /not available to you|out of credit|no provider can serve|no model can take/i;
+const MODEL_BENCH_MS = 5 * 60_000;
+const benchedModels = new Map<string, number>();
+
+/** The models to try for a hand-off, in order: those the Gateway lists (the names as it lists them), minus any that failed lately. */
+export async function microModels(listed?: readonly string[]): Promise<string[]> {
+  const wanted = [...(process.env.CLIKCODE_MICRO_AGENT_MODEL ? [process.env.CLIKCODE_MICRO_AGENT_MODEL] : []), ...MICRO_MODELS];
+  let known = listed;
+  if (!known) { try { known = (await (await import('../../gateway/models.js')).gatewayModels()).models.map(model => model.id); } catch { known = undefined; } }
+  const resolved = known ? listedModels(wanted, known) : [];
+  // A list that could not be read, or that holds none of them, is asked for by the names as written: the Gateway accepts aliases it does not list.
+  const all = resolved.length ? resolved : wanted;
+  const now = Date.now();
+  const fit = all.filter(id => (benchedModels.get(id) ?? 0) <= now);
+  return fit.length ? fit : all;
+}
 const MAX_TURNS = 80;
 
 interface Message { role: 'system' | 'user' | 'assistant' | 'tool'; content?: string | null; tool_calls?: unknown[]; tool_call_id?: string }
 interface Reply { choices?: { message?: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] } }[]; error?: { message?: string } }
 
-export interface GatewayMicroOptions { tab: string; maxCalls: number; maxMs: number; connector?: string; counter?: string; fetchImpl?: typeof fetch; connection?: { baseUrl: string; apiKey: string }; tools?: Parameters<typeof agentMcpHandler>[0]['tools'] }
+export interface GatewayMicroOptions { /** The models to try, in order (default: the Gateway's current ones, microModels()). */ models?: readonly string[]; tab: string; maxCalls: number; maxMs: number; connector?: string; counter?: string; fetchImpl?: typeof fetch; connection?: { baseUrl: string; apiKey: string }; tools?: Parameters<typeof agentMcpHandler>[0]['tools'] }
 
 export async function runGatewayMicro(prompt: string, options: GatewayMicroOptions): Promise<{ text: string; timedOut: boolean; calls: number; error?: string }> {
   const connection = options.connection ?? await (async () => {
@@ -22,6 +42,8 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
   const listed = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) as { result?: { tools?: { name: string; description: string; inputSchema: unknown }[] } };
   const tools = (listed.result?.tools ?? []).map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
   const doFetch = options.fetchImpl ?? fetch;
+  const candidates = [...(options.models ?? await microModels())];
+  let model = candidates[0] ?? MICRO_MODELS[0]!, nextCandidate = 1;
   const messages: Message[] = [{ role: 'user', content: prompt }];
   const deadline = Date.now() + options.maxMs;
   let calls = 0, text = '', timedOut = false, error: string | undefined;
@@ -34,13 +56,25 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
       const response = await doFetch(`${root.endsWith('/v1') ? root : `${root}/v1`}/chat/completions`, {
         method: 'POST', signal: AbortSignal.timeout(Math.min(left, 120_000)),
         headers: { 'content-type': 'application/json', authorization: `Bearer ${connection.apiKey}`, 'x-client': 'clikcode-micro-agent' },
-        body: JSON.stringify({ model: GATEWAY_MICRO_MODEL, messages, tools, stream: false }),
+        body: JSON.stringify({ model, messages, tools, stream: false }),
       }).catch((cause: unknown) => { if (Date.now() >= deadline) timedOut = true; else error = `Gateway request failed: ${cause instanceof Error ? cause.message : String(cause)}`; return undefined; });
       if (!response) break;
       const body = await response.json().catch(() => ({})) as Reply;
       // How long each turn and each tool call takes is written down, so a vendor that burns its whole budget on a few calls says which.
       lifecycle('micro.turn', { tab: options.tab, turn, ms: Date.now() - turnStarted, status: response.status });
-      if (!response.ok) { error = `Gateway ${response.status}: ${body.error?.message ?? 'request refused'}`.slice(0, 300); break; }
+      if (!response.ok) {
+        const said = body.error?.message ?? 'request refused';
+        // This model cannot serve the request now: it sits out for a while and the next one takes the same turn.
+        if (UNAVAILABLE.test(said) && nextCandidate < candidates.length) {
+          benchedModels.set(model, Date.now() + MODEL_BENCH_MS);
+          lifecycle('micro.model', { tab: options.tab, from: model, to: candidates[nextCandidate], why: said.slice(0, 80) });
+          model = candidates[nextCandidate++]!;
+          turn--;
+          continue;
+        }
+        error = `Gateway ${response.status}: ${said}`.slice(0, 300);
+        break;
+      }
       const message = body.choices?.[0]?.message;
       if (!message) { error = 'Gateway returned no message.'; break; }
       text = message.content ?? '';

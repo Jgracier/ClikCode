@@ -6,6 +6,7 @@
  * answer counts only when voters agree. Waiting stops as soon as enough of them do, so the slowest model never
  * holds a puzzle up. */
 import { quiet } from '../../runtime/lifecycle-log.js';
+import { listedModel } from '../../gateway/model-names.js';
 import type { ImageInput, ModelClient } from '../model-client.js';
 
 // ── who is asked ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -79,11 +80,20 @@ async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> 
   const vision = cachedVision.ids;
   const measured = options.order?.[roster] ?? [];
   const listed: readonly string[] = ROSTERS[roster];
-  // Models measured on this machine go first, in their measured order; the rest keep the roster's order.
-  const preferred = [...measured.filter(name => listed.includes(name)), ...listed.filter(name => !measured.includes(name))].filter(name => vision.includes(name));
-  const fit = preferred.filter(name => (benched.get(name) ?? 0) <= now());
-  const names = preferred.length ? [...fit, ...preferred.filter(name => !fit.includes(name))] : vision.slice(0, 1);
-  const gateway = await Promise.all(names.map(async name => ({ name, client: await gatewayClient(name) })));
+  // Models measured on this machine go first, in their measured order; the rest keep the roster's order. A roster name stands for
+  // whatever the Gateway lists under it now (src/gateway/model-names.ts): its list renames families, and a name matched exactly
+  // silently dropped every Claude voter from the rosters on 2026-11-17. The voter keeps the roster's name (for scores and benching);
+  // the client asks for the listed one.
+  const wanted = [...measured.filter(name => listed.includes(name)), ...listed.filter(name => !measured.includes(name))];
+  const seen = new Set<string>();
+  const preferred: Array<{ name: string; id: string }> = [];
+  for (const name of wanted) {
+    const id = listedModel(name, vision);
+    if (id && !seen.has(id)) { seen.add(id); preferred.push({ name, id }); }
+  }
+  const fit = preferred.filter(model => (benched.get(model.name) ?? 0) <= now());
+  const ordered = preferred.length ? [...fit, ...preferred.filter(model => !fit.includes(model))] : vision.slice(0, 1).map(id => ({ name: id, id }));
+  const gateway = await Promise.all(ordered.map(async model => ({ name: model.name, client: await gatewayClient(model.id) })));
   // The user's own subscription votes third on a hard question (two Gateway voters agreeing still ends the vote
   // before it is waited for) and stands in last on reading text; it never takes the many yes/no asks of a grid.
   if (roster === 'tile') return gateway;

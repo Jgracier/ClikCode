@@ -34,6 +34,16 @@ describe('browser faults', () => {
     if (last) expect(Date.parse(last)).toBeLessThan(Date.now() + 10 * 60_000);
   });
 
+  it.each([
+    'the task is not one of the known kinds; the agent micro-task did not finish (0 calls): the agent could not run: No saved Claude or Codex account currently has usage available.',
+    'an unrecognized screen: the agent micro-task did not finish (0 calls): the agent could not run: Gateway 404: claude-sonnet-5-5 is not available to you right now.',
+    'the agent micro-task did not finish (0 calls): Gateway request failed: fetch failed',
+  ])('a vendor whose agent could not run is retried in minutes, not shelved for hours: %s', async (summary) => {
+    const f = fakes(['a'], async id => outcome(id, { status: 'handoff', summary }));
+    await runLoop(f.ports, limits({ cooldownMs: 6 * 3_600_000 }));
+    expect(f.reports[0]![1]).toMatchObject({ outcome: 'retry', retryAfterMs: 5 * 60_000 });
+  });
+
   it('an ordinary unfinished handoff still takes the long cooldown', async () => {
     const f = fakes(['a'], async id => outcome(id, { status: 'handoff', summary: 'the agent micro-task did not finish (9 calls): no key page found' }));
     await runLoop(f.ports, limits({ cooldownMs: 6 * 3_600_000 }));
