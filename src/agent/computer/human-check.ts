@@ -68,10 +68,14 @@ const shownPuzzleBox = (box: Box | undefined): box is Box => !!box && box.width 
 /** The challenge frame that is up: the visible puzzle frame, not a hidden one. */
 async function findPuzzle(page: Page): Promise<{ widget: HumanCheckWidget; frame: Frame; box: Box } | undefined> {
   for (const frame of page.frames()) {
-    if (!PUZZLE.test(frame.url())) continue;
+    const byUrl = PUZZLE.test(frame.url());
+    // A widget may serve its challenge from a frame its own name does not match (Onfleet got hCaptcha in a frame
+    // under the customer's domain): the markup decides, not the address.
+    const byMarkup = byUrl ? undefined : await puzzleByMarkup(frame);
+    if (!byUrl && !byMarkup) continue;
     const box = await boxOf(frame);
     if (!shownPuzzleBox(box)) continue;
-    const widget: HumanCheckWidget = /hcaptcha/i.test(frame.url()) ? 'hcaptcha' : /arkoselabs|funcaptcha/i.test(frame.url()) ? 'arkose' : 'recaptcha';
+    const widget: HumanCheckWidget = byMarkup ?? (/hcaptcha/i.test(frame.url()) ? 'hcaptcha' : /arkoselabs|funcaptcha/i.test(frame.url()) ? 'arkose' : 'recaptcha');
     // Arkose nests its game in a frame inside its own frame: the innermost one holds the puzzle.
     if (widget === 'arkose') {
       let inner = frame, innerBox = box;
@@ -86,6 +90,16 @@ async function findPuzzle(page: Page): Promise<{ widget: HumanCheckWidget; frame
     return { widget, frame, box };
   }
   return undefined;
+}
+
+/** The widget a frame's own markup names, when its URL does not: hCaptcha's challenge is `.task-image` tiles with
+ * a `.prompt-text` and a `.button-submit`; reCAPTCHA's grid is `td.rc-imageselect-tile`. One cheap look per frame. */
+async function puzzleByMarkup(frame: Frame): Promise<HumanCheckWidget | undefined> {
+  return frame.evaluate(`(() => {
+    if (document.querySelector('.task-image') && (document.querySelector('.prompt-text') || document.querySelector('.button-submit'))) return 'hcaptcha';
+    if (document.querySelector('td.rc-imageselect-tile')) return 'recaptcha';
+    return null;
+  })()`).catch(() => undefined) as Promise<HumanCheckWidget | undefined>;
 }
 
 /** The page holds an accepted answer (the hidden field each widget fills in once it is satisfied). */
@@ -184,6 +198,9 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   const order = await log.voterOrder(deps.stateDir);
   const result = await solveShownCheck(page, { ...deps, trace: line => { const step = log.stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } }, memo, { meter, order });
   const family = log.familyOf(result.widget, steps);
+  // A `none` with nothing asked and nothing done is "no check was on the page", not a run of a family: recording it
+  // as one made the tally count pages the solver never saw a check on (23 of 29 "unknown" runs were these).
+  if (result.outcome === 'none' && !steps.length) return result;
   await log.recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family, outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps, ...(memo.kinds.length ? { kinds: memo.kinds } : {}), ...(meter.asks ? { asks: meter.asks, models: meter.models } : {}) });
   // What the site accepted is the nearest thing to a marked answer sheet: the voters are scored on it.
   if (result.outcome === 'cleared') await log.recordVotes(deps.stateDir, meter.votes);
