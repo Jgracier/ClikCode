@@ -539,6 +539,31 @@ describe('a vendor ClikDeploy could not settle for want of an API reference', ()
   const parked = (id: string): OnboardResult => ({ id, state: 'blocked', stage: 'attention', reason: `discovery could not settle how to connect to ${id} (No machine-readable reference or OAuth metadata was found at the places checked.)`,
     next: { kind: 'none', task: 'nothing' }, attention: { kind: 'decision', url: `https://${id}.example/`, reasonCode: 'no-docs' } });
 
+  it('uses an agent only after the browser finds HTML API docs but no machine-readable file', async () => {
+    const c = fakeClient([parked('acme')], { acme: [published('acme')] });
+    const d = fakeDriver([]);
+    const docs = ['https://docs.acme.example/auth', 'https://docs.acme.example/resources'];
+    let prompt = '';
+    d.driver.findReference = async () => ({ applied: false, note: 'no description file; API docs found', docsUrls: docs });
+    d.driver.agentTask = async (_id, stop) => { prompt = stop.pageText ?? ''; return { ok: true, note: 'spec built' }; };
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(prompt).toContain(docs[0]!);
+    expect(prompt).toContain('do not invent');
+    expect(c.calls).toContain('tool connector_work_enqueue');
+    expect(outcomes[0]?.status).toBe('published');
+  });
+
+  it('does not use an agent when the browser finds no API documentation at all', async () => {
+    const c = fakeClient([parked('acme')]);
+    const d = fakeDriver([]);
+    d.driver.findReference = async () => ({ applied: false, note: 'no docs on one page', docsUrls: [] });
+    let attempts = 0;
+    d.driver.agentTask = async () => { attempts++; return { ok: true }; };
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(attempts).toBe(0);
+    expect(outcomes[0]?.status).toBe('blocked');
+  });
+
   it('names the site to search, from the call it asks for or the item it parked', async () => {
     const { unsettledDiscovery } = await import('./connector-tasks.js');
     expect(unsettledDiscovery(unsettledCall('acme'))).toEqual({ homepage: 'https://acme.example', docs: [] });

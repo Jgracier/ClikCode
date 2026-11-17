@@ -220,6 +220,20 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           referenceTried = true;
           const found = await gate(() => driver.findReference!(id, plan.homepage)).catch(() => ({ applied: false, note: 'the browser search could not run', docsUrls: [] as string[] }));
           actions.push(`reference search: ${cap(say(found.note), 200)}`);
+          if (!found.applied && found.docsUrls.length && driver.agentTask) {
+            // The browser has exhausted its deterministic formats; HTML docs still need interpretation. Only now ask an agent to
+            // turn the pages actually seen into a spec. A total miss stays parked and spends no agent turn.
+            const prompt = docsToSpecPrompt(id, plan.homepage, found.docsUrls.slice(0, 4));
+            const agent = await viaAgent({ kind: 'unknown', message: 'HTML API docs were found, but no machine-readable spec; convert the documented endpoints into a connector spec', url: found.docsUrls[0] ?? plan.homepage, pageText: prompt, controls: [] }, true);
+            if (agent?.ok) {
+              await client.tool('connector_work_enqueue', { id, retry: true });
+              actions.push('reopened the item with the documentation-derived spec');
+              result = fix(await client.onboard(id));
+              break;
+            }
+            if (agent && !agent.ok && (agent.stop.human || humanStepFor(id, agent.stop))) return await stopped(agent.stop);
+            return await handoff(`HTML API documentation was found, but needs a spec: ${agent && !agent.ok ? agent.stop.message : plan.why}`);
+          }
           if (!found.applied) return out('blocked', `${plan.why}; browser reference search: ${found.note}`);
           await client.tool('connector_work_enqueue', { id, retry: true });
           actions.push('reopened the item with the reference stored');
