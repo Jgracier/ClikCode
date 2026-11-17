@@ -209,6 +209,54 @@ describe('GeeTest board games, worked out by rule', () => {
   });
 });
 
+describe('AWS WAF CAPTCHA', () => {
+  /** A page that is AWS WAF's own challenge: it answers the widget's one in-page look with the state given. */
+  const wafPage = (state: unknown) => ({
+    url: () => 'https://vendor.example/signup',
+    frames: () => [],
+    mainFrame: () => ({ url: () => 'https://vendor.example/signup' }),
+    evaluate: async (script: unknown) => typeof script === 'string' && script.includes('amzn-captcha-root') ? state : null,
+  }) as unknown as Page;
+
+  it('is a press-box on its Begin splash and a puzzle once the grid is up', async () => {
+    expect(await detectHumanCheck(wafPage({ stage: 'begin', begin: { x: 583, y: 318, width: 116, height: 32 } }))).toEqual({ widget: 'awswaf', stage: 'checkbox' });
+    expect(await detectHumanCheck(wafPage({ stage: 'grid', region: { x: 480, y: 20, width: 320, height: 470 } }))).toEqual({ widget: 'awswaf', stage: 'puzzle' });
+    expect(await detectHumanCheck(wafPage(null))).toBeUndefined();
+  });
+
+  it('presses Begin where the button is, and reports the grid that follows as a puzzle', async () => {
+    const clicks: Array<[number, number]> = [];
+    let pressed = false;
+    const page = {
+      url: () => 'https://vendor.example/signup',
+      frames: () => [],
+      mainFrame: () => ({ url: () => 'https://vendor.example/signup' }),
+      evaluate: async (script: unknown) => typeof script === 'string' && script.includes('amzn-captcha-root')
+        ? (pressed ? { stage: 'grid', region: { x: 480, y: 20, width: 320, height: 470 } } : { stage: 'begin', begin: { x: 583, y: 318, width: 116, height: 32 } })
+        : false,
+      mouse: { move: async () => undefined, click: async (x: number, y: number) => { clicks.push([x, y]); pressed = true; } },
+    } as unknown as Page;
+    expect(await pressHumanCheck(page, noSleep)).toEqual({ outcome: 'puzzle', widget: 'awswaf' });
+    // Inside the button, near its left edge like a box press, never outside it.
+    expect(clicks).toHaveLength(1);
+    expect(clicks[0]![0]).toBeGreaterThanOrEqual(583);
+    expect(clicks[0]![0]).toBeLessThanOrEqual(699);
+    expect(clicks[0]![1]).toBeGreaterThanOrEqual(318);
+    expect(clicks[0]![1]).toBeLessThanOrEqual(350);
+  });
+
+  it('reads the grid in page coordinates, with no frame offset added, and photographs its own region', async () => {
+    const { readLayout } = await import('./human-check-grid.js');
+    const read = { instruction: 'Choose all the beds', target: 'the beds', tiles: [{ x: 480, y: 80, width: 104, height: 104, key: '0', selected: false }], verify: { x: 480, y: 420, width: 92, height: 32 }, dynamic: false, tileSelector: 'button.amzn-grid-cell', region: { x: 480, y: 20, width: 320, height: 470 } };
+    const frame = { evaluate: async () => read } as never;
+    const layout = await readLayout(frame, { x: 480, y: 20, width: 320, height: 470 });
+    expect(layout?.tiles[0]).toMatchObject({ x: 480, y: 80 });
+    expect(layout?.verify).toMatchObject({ x: 480, y: 420 });
+    expect(layout?.region).toEqual(read.region);
+    expect(layout?.target).toBe('the beds');
+  });
+});
+
 describe('an hCaptcha round', () => {
   /** A challenge frame that says what it asks, takes clicks and drags, and shows the same picture every time (a still puzzle). */
   function round(instruction: string, asks: { points?: Array<{ x: number; y: number }>; drags?: Array<{ n: number; from: { x: number; y: number }; to: { x: number; y: number } }> }) {

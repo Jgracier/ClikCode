@@ -6,7 +6,11 @@ import { toTarget, visitorClick, type Asks, type Box, type Hands } from './human
 
 /** A challenge as the widget itself lays it out: the instruction, the target word, each square's place on the page
  * (frame offset added), a key per square that changes when the widget swaps its picture, and the confirm button. */
-export interface PuzzleLayout { instruction: string; target: string; tiles: Array<Box & { key: string; selected: boolean }>; verify?: Box; dynamic: boolean; tileSelector: string }
+export interface PuzzleLayout {
+  instruction: string; target: string; tiles: Array<Box & { key: string; selected: boolean }>; verify?: Box; dynamic: boolean; tileSelector: string;
+  /** Set when the widget is the page itself (AWS WAF): the places are already page coordinates, and a picture of the challenge is this region of the page, not a frame. */
+  region?: Box;
+}
 
 /** Runs inside the challenge frame (a string: this project has no DOM types). Returns the layout or null. */
 const READ_LAYOUT = `(() => {
@@ -22,6 +26,20 @@ const READ_LAYOUT = `(() => {
       instruction, target: clean(strong && strong.textContent) || instruction,
       tiles: recaptcha.map(td => { const img = td.querySelector('img'); return Object.assign(rect(td), { key: (img ? img.src + '|' + img.style.top + '|' + img.style.left : ''), selected: td.classList.contains('rc-imageselect-tileselected') }); }),
       verify: verify ? rect(verify) : undefined, dynamic: /none left/i.test(instruction), tileSelector: 'td.rc-imageselect-tile',
+    };
+  }
+  const aws = Array.from(document.querySelectorAll('button.amzn-grid-cell')).filter(cell => cell.getBoundingClientRect().width > 4);
+  if (aws.length) {
+    const root = document.querySelector('.amzn-captcha-root') || document.body;
+    const prompt = document.querySelector('#amzn-grid-instructions');
+    const emphasis = prompt && prompt.querySelector('em, strong, b');
+    const instruction = clean(prompt && prompt.innerText);
+    const confirm = Array.from(root.querySelectorAll('button')).find(b => /^confirm$/i.test((b.innerText || '').trim()) && b.getBoundingClientRect().width > 0);
+    return {
+      instruction, target: clean(emphasis && emphasis.textContent) || instruction,
+      // One picture is drawn on a canvas; the squares are transparent buttons over it, and a ticked one says so.
+      tiles: aws.map((cell, index) => Object.assign(rect(cell), { key: String(index), selected: cell.getAttribute('aria-checked') === 'true' })),
+      verify: confirm ? rect(confirm) : undefined, dynamic: false, tileSelector: 'button.amzn-grid-cell', region: rect(root),
     };
   }
   const hcaptcha = Array.from(document.querySelectorAll('.task-image'));
@@ -42,7 +60,8 @@ export async function readLayout(frame: Frame, box: Box): Promise<PuzzleLayout |
   try {
     const read = await frame.evaluate(READ_LAYOUT) as (Omit<PuzzleLayout, 'verify'> & { verify?: Box }) | null;
     if (!read || !read.tiles.length) return undefined;
-    const shift = <T extends Box>(b: T): T => ({ ...b, x: b.x + box.x, y: b.y + box.y });
+    // A frame reports places inside itself and is offset by where it sits on the page; the page itself is already in page coordinates.
+    const shift = <T extends Box>(b: T): T => read.region ? b : ({ ...b, x: b.x + box.x, y: b.y + box.y });
     return { ...read, tiles: read.tiles.map(shift), ...(read.verify ? { verify: shift(read.verify) } : {}) };
   } catch { return undefined; }
 }
@@ -56,6 +75,8 @@ async function outlinedShot(frame: Frame, layout: PuzzleLayout, index: number): 
   const unmark = `(() => { const box = document.getElementById('clikcode-outline'); if (box) box.remove(); })()`;
   try {
     if (!await frame.evaluate(mark)) return undefined;
+    // A widget that is the page itself has no frame to photograph: its own region of the page is the picture.
+    if (layout.region) return await frame.page().screenshot({ type: 'jpeg', quality: 88, timeout: 8_000, clip: layout.region });
     return await (await frame.frameElement()).screenshot({ type: 'jpeg', quality: 88, timeout: 8_000 }) as Buffer;
   } catch { return undefined; }
   finally { await frame.evaluate(unmark).catch(() => undefined); }
