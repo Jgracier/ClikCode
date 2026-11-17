@@ -81,6 +81,20 @@ describe('micro-task agent on the Gateway', () => {
     expect(probes).toBe(4);
   });
 
+  it('notices another task opening the shared outage circuit before it probes its next model', async () => {
+    const availability = new ProviderCircuit();
+    let probes = 0;
+    const ran = await runGatewayMicro('go', { tab: 'agent-shared-circuit', models: ['m1', 'm2', 'm3'], maxCalls: 2, maxMs: 10_000, connection: { baseUrl: 'https://gw.test/v1', apiKey: 'k' }, tools: [], availability,
+      fetchImpl: (async () => {
+        probes++;
+        availability.open(Date.now(), 300_000, 'another connector found all providers unavailable');
+        return new Response(JSON.stringify({ error: { message: 'Every provider that could serve this request is out of credit right now.' } }), { status: 402 });
+      }) as typeof fetch,
+    });
+    expect(ran.error).toContain('Gateway temporarily unavailable');
+    expect(probes).toBe(1);
+  });
+
   it('reports a refused request as an error so the caller can fall back', async () => {
     const ran = await runGatewayMicro('go', { tab: 'agent-x', models: ['claude-sonnet-5'], maxCalls: 5, maxMs: 10_000, connection: { baseUrl: 'https://gw.test/v1', apiKey: 'k' }, tools: [], fetchImpl: (async () => new Response('{"error":{"message":"no credit"}}', { status: 402 })) as typeof fetch });
     expect(ran.error).toContain('402');

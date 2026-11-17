@@ -56,6 +56,13 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
   let calls = 0, text = '', timedOut = false, error: string | undefined, unavailable = 0;
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
+      // Another connector may have established a provider outage while this task was in flight. Share that signal
+      // across parallel vendors before this task tries its next model.
+      const sharedOutage = circuit.state(clock());
+      if (sharedOutage.open) {
+        error = `Gateway temporarily unavailable until ${new Date(sharedOutage.retryAt!).toISOString()}: ${sharedOutage.reason ?? 'all configured providers are unavailable'}`;
+        break;
+      }
       const left = deadline - Date.now();
       if (left <= 0) { timedOut = true; break; }
       const root = connection.baseUrl.replace(/\/+$/, '');
