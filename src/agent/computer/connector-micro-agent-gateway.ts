@@ -1,7 +1,7 @@
 /** The micro-task agent on ClikDeploy Gateway (Sonnet 5.5 by default): the same three tools as the headless CLI agents, served in this process
  * by agentMcpHandler, driven by a plain tool-calling loop over the Gateway's chat-completions API. No vendor CLI or subscription is involved. */
 import { agentMcpHandler } from './connector-micro-agent-mcp.js';
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
 export const GATEWAY_MICRO_MODEL = process.env.CLIKCODE_MICRO_AGENT_MODEL || 'claude-sonnet-5-5';
@@ -30,6 +30,7 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
       const left = deadline - Date.now();
       if (left <= 0) { timedOut = true; break; }
       const root = connection.baseUrl.replace(/\/+$/, '');
+      const turnStarted = Date.now();
       const response = await doFetch(`${root.endsWith('/v1') ? root : `${root}/v1`}/chat/completions`, {
         method: 'POST', signal: AbortSignal.timeout(Math.min(left, 120_000)),
         headers: { 'content-type': 'application/json', authorization: `Bearer ${connection.apiKey}`, 'x-client': 'clikcode-micro-agent' },
@@ -37,6 +38,8 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
       }).catch((cause: unknown) => { if (Date.now() >= deadline) timedOut = true; else error = `Gateway request failed: ${cause instanceof Error ? cause.message : String(cause)}`; return undefined; });
       if (!response) break;
       const body = await response.json().catch(() => ({})) as Reply;
+      // How long each turn and each tool call takes is written down, so a vendor that burns its whole budget on a few calls says which.
+      lifecycle('micro.turn', { tab: options.tab, turn, ms: Date.now() - turnStarted, status: response.status });
       if (!response.ok) { error = `Gateway ${response.status}: ${body.error?.message ?? 'request refused'}`.slice(0, 300); break; }
       const message = body.choices?.[0]?.message;
       if (!message) { error = 'Gateway returned no message.'; break; }
@@ -51,8 +54,10 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
         const wait = Math.max(1_000, Math.min(deadline - Date.now(), 180_000));
         const timer: { id?: NodeJS.Timeout } = {};
         const timeout = new Promise<'late'>(resolve => { timer.id = setTimeout(() => resolve('late'), wait); });
+        const callStarted = Date.now();
         const raced = await Promise.race([handle({ jsonrpc: '2.0', id: ++calls, method: 'tools/call', params: { name: call.function.name, arguments: args } }), timeout]);
         clearTimeout(timer.id);
+        lifecycle('micro.call', { tab: options.tab, tool: call.function.name, ...(typeof args.action === 'string' ? { action: args.action } : {}), ms: Date.now() - callStarted, ...(raced === 'late' ? { late: true } : {}) });
         if (raced === 'late') { if (Date.now() >= deadline) timedOut = true; messages.push({ role: 'tool', tool_call_id: call.id, content: 'That call did not finish in time and was abandoned. Try something simpler or end with your RESULT line.' }); continue; }
         const out = raced as { result?: { content?: { text?: string }[] }; error?: { message?: string } };
         messages.push({ role: 'tool', tool_call_id: call.id, content: out.result?.content?.map(c => c.text ?? '').join('\n') ?? out.error?.message ?? 'No result.' });
