@@ -9,6 +9,7 @@
  * This file is the way in: what is on the page (`detectHumanCheck`), the press, and the loop that hands each
  * family to its own solver (human-check-grid, -hcaptcha, -geetest, -arkose, -inpage). */
 import type { Frame, Page } from 'playwright-core';
+import { awsWafState } from './human-check-awswaf.js';
 import { sleep as realSleep } from '../../runtime/sleep.js';
 import { newMeter, type AskOptions } from './captcha-model.js';
 import { arkoseAudio, playArkose } from './human-check-arkose.js';
@@ -18,7 +19,7 @@ import { boxOf, fitPuzzle, frameShot, gatewayAsks, spot, visitorClick, within, t
 import { hcaptchaRound, type HcaptchaMemo } from './human-check-hcaptcha.js';
 import { HOLD_BUTTON, KNOWN_BOX, POW_STATE, SLIDER, TEXT_CAPTCHA, markGone, solveChallengeBox, solvePressHold, solveSlider, solveTextCaptcha, waitProofOfWork } from './human-check-inpage.js';
 
-export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose' | 'pow' | 'box';
+export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose' | 'pow' | 'box' | 'awswaf';
 export interface HumanCheckResult {
   /** cleared: the check accepted the answer. puzzle: it asked for more than a press. still-there: tried, nothing changed. none: no check on the page. */
   outcome: 'cleared' | 'puzzle' | 'still-there' | 'none';
@@ -58,6 +59,9 @@ async function findCheckbox(page: Page): Promise<{ widget: HumanCheckWidget; box
     if (reachable === 'scrolled') { const moved = await boxOf(frame); if (moved) return { widget: kind[0], box: moved }; }
     return { widget: kind[0], box };
   }
+  // AWS WAF's splash is a page of its own with a Begin button instead of a frame.
+  const waf = await awsWafState(page);
+  if (waf?.stage === 'begin') return { widget: 'awswaf', box: waf.begin };
   return undefined;
 }
 
@@ -67,6 +71,8 @@ const shownPuzzleBox = (box: Box | undefined): box is Box => !!box && box.width 
 
 /** The challenge frame that is up: the visible puzzle frame, not a hidden one. */
 async function findPuzzle(page: Page): Promise<{ widget: HumanCheckWidget; frame: Frame; box: Box } | undefined> {
+  const waf = await awsWafState(page);
+  if (waf?.stage === 'grid') return { widget: 'awswaf', frame: page.mainFrame(), box: waf.region };
   for (const frame of page.frames()) {
     const byUrl = PUZZLE.test(frame.url());
     // A widget may serve its challenge from a frame its own name does not match (Onfleet got hCaptcha in a frame
