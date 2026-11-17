@@ -209,6 +209,58 @@ describe('GeeTest board games, worked out by rule', () => {
   });
 });
 
+describe('an hCaptcha round', () => {
+  /** A challenge frame that says what it asks, takes clicks and drags, and shows the same picture every time (a still puzzle). */
+  function round(instruction: string, asks: { points?: Array<{ x: number; y: number }>; drags?: Array<{ n: number; from: { x: number; y: number }; to: { x: number; y: number } }> }) {
+    const log: string[] = [];
+    const frame = {
+      evaluate: async (script: unknown) => {
+        const text = String(script);
+        if (text.includes('prompt-text')) return instruction;
+        if (text.includes('.refresh')) return { x: 300, y: 10, width: 20, height: 20 };
+        if (text.includes('.button-submit')) return { x: 280, y: 520, width: 90, height: 40 };
+        return null;
+      },
+      frameElement: async () => ({ screenshot: async () => Buffer.from('still-picture') }),
+    };
+    const page = { mouse: { move: async () => undefined, down: async () => { log.push('down'); }, up: async () => { log.push('up'); } } } as unknown as Page;
+    const ask = { points: async () => { log.push('asked-points'); return asks.points; }, drags: async () => { log.push('asked-drags'); return asks.drags; } };
+    const hands = { page, random: () => 0.5, sleep: async () => undefined, asks: ask as never };
+    return { frame: frame as never, hands, log };
+  }
+  const box = { x: 100, y: 100, width: 400, height: 580 };
+
+  it('drags when the models agree on a drag, and never clicks', async () => {
+    const { hcaptchaRound } = await import('./human-check-hcaptcha.js');
+    const r = round('Please drag the segments on the right to complete the line', { drags: [{ n: 1, from: { x: 0.8, y: 0.3 }, to: { x: 0.5, y: 0.4 } }] });
+    const out = await hcaptchaRound(r.hands, r.frame, box, { refreshed: 0, kinds: [] });
+    expect(out).toHaveProperty('confirm');
+    expect(r.log).toEqual(expect.arrayContaining(['asked-drags', 'down', 'up']));
+    expect(r.log).not.toContain('asked-points');
+  });
+
+  it('swaps a drag challenge it cannot agree on, instead of clicking where the models would have pointed', async () => {
+    const { hcaptchaRound } = await import('./human-check-hcaptcha.js');
+    const r = round('Please drag the segments on the right to complete the line', { points: [{ x: 0.83, y: 0.32 }], drags: [] });
+    const memo = { refreshed: 0, kinds: [] as string[] };
+    expect(await hcaptchaRound(r.hands, r.frame, box, memo)).toBe('again');
+    expect(memo.refreshed).toBe(1);
+    // It asked for a drag only, and the one thing pressed was the refresh button.
+    expect(r.log).not.toContain('asked-points');
+    expect(r.log.filter(line => line === 'down')).toHaveLength(1);
+  });
+
+  it('clicks a challenge that is not a drag, and tries a drag only when nothing was agreed to click', async () => {
+    const { hcaptchaRound } = await import('./human-check-hcaptcha.js');
+    const clicks = round('Click on the two rings that are not linked', { points: [{ x: 0.3, y: 0.4 }, { x: 0.6, y: 0.6 }] });
+    expect(await hcaptchaRound(clicks.hands, clicks.frame, box, { refreshed: 0, kinds: [] })).toHaveProperty('confirm');
+    expect(clicks.log).not.toContain('asked-drags');
+    const unsure = round('Pick the odd one out', { points: [], drags: [{ n: 1, from: { x: 0.1, y: 0.1 }, to: { x: 0.2, y: 0.2 } }] });
+    await hcaptchaRound(unsure.hands, unsure.frame, box, { refreshed: 0, kinds: [] });
+    expect(unsure.log).toEqual(expect.arrayContaining(['asked-points', 'asked-drags']));
+  });
+});
+
 describe('hCaptcha challenge kinds', () => {
   it('drops the particulars so two challenges of one kind are counted together', async () => {
     const { promptKind } = await import('./human-check-hcaptcha.js');
