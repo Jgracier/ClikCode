@@ -88,6 +88,12 @@ export function docsToSpecPrompt(id: string, homepage: string, docs: readonly st
     + 'If the vendor documents no API at all, or only one given out by its sales team, end with RESULT: wall no-api (or sales) and one sentence of evidence.';
 }
 
+/** The live tests stopped for time alone, never for the vendor or the spec: a step that had no room to start a call, a chunk released at
+ * the step's end, a worker that went away. Calling onboard again reopens the job (ClikDeploy restarts a blocked one), so no agent is asked
+ * to "find which chunk fails". 35 connectors with a spec and a credential were handed to agents this way. */
+const PROOF_TIME_ONLY = /live tests are blocked[^\n]*\((?:the step ran out of time before a call could start|the chunk was still running when the call ran out of time|the worker disappeared before reporting)/i;
+export const proofBlockedByTime = (result: OnboardResult): boolean => PROOF_TIME_ONLY.test(`${result.reason ?? ''}\n${result.next?.task ?? ''}`);
+
 /** How long ClikDeploy's own running work (a test job, a build) is waited out in one vendor run. */
 export const WAIT_LIMIT_MS = 180_000;
 
@@ -108,6 +114,7 @@ export function planFor(result: OnboardResult, recipe: boolean): Plan {
   if (!next || next.kind === 'none') return result.state === 'blocked' ? { do: 'done', status: 'blocked' } : { do: 'handoff', why: 'onboarding supplied no next step without confirming completion' };
   if (next.kind === 'agent' && (isSpecFix(next.task) || isSpecFix(result.reason))) return { do: 'specfix', why: 'the auth probe ended path-wrong or in the wrong place: a spec fix', ...(blockedCall(next) ? { call: blockedCall(next)! } : {}) };
   if (next.kind === 'call') return { do: 'wait', ms: waitMs(next.task) };
+  if (proofBlockedByTime(result)) return { do: 'wait', ms: 1_000 };
   if (next.kind === 'human') return { do: 'human', humanStep: { ...next.humanStep, reasonCode: next.humanStep.reasonCode || next.humanStep.kind } };
   if (WALL_STATES.has(result.state)) return { do: 'handoff', why: 'ClikDeploy says a person is needed but gave no step' };
   const call = next.call;

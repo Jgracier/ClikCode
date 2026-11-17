@@ -591,3 +591,23 @@ describe('a vendor ClikDeploy could not settle for want of an API reference', ()
     expect(agents).toBe(0);
   });
 });
+
+describe('live tests blocked for time alone', () => {
+  const blocked = (why: string): OnboardResult => ({ id: 'acme', state: 'needs-agent', stage: 'proof', reason: `the live tests are blocked: chunk 18 of 94 failed 3 attempts (${why}); fix it and start with retry`,
+    next: { kind: 'agent', task: `find which chunk fails (connector_test_job_status acme) and why, then fix the spec's tests or the connection: chunk 18 of 94 failed 3 attempts (${why})` } });
+
+  it('calls onboard again instead of asking an agent, which reopens the job', async () => {
+    const c = fakeClient([blocked('the step ran out of time before a call could start; the chunk continues in the next step')], { acme: [published('acme')] });
+    const d = fakeDriver([]);
+    let agents = 0;
+    d.driver.agentTask = async () => { agents++; return { ok: true }; };
+    expect((await runConnectors(c.client, d.driver, quick)).outcomes[0]?.status).toBe('published');
+    expect(agents).toBe(0);
+    expect(c.calls).toEqual(['onboard acme']);
+  });
+
+  it('a chunk that failed on the vendor or the spec is still an agent\'s to look at', () => {
+    expect(planFor(blocked('the step ran out of time before a call could start'), false)).toMatchObject({ do: 'wait' });
+    expect(planFor(blocked('2 x credential-rejected (status 401)'), false)).toMatchObject({ do: 'handoff' });
+  });
+});
