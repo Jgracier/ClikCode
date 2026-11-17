@@ -8,7 +8,7 @@ function fakePage(frames: FakeFrame[], onClick: (state: { frames: FakeFrame[]; a
   const state = { frames, answered: false, url: 'https://vendor.example/signup', clicks: [] as Array<[number, number]> };
   const page = {
     url: () => state.url,
-    frames: () => state.frames.map(frame => ({ url: () => frame.src, frameElement: async () => ({ boundingBox: async () => frame.box }) })),
+    frames: () => state.frames.map(frame => ({ url: () => frame.src, evaluate: async () => null, frameElement: async () => ({ boundingBox: async () => frame.box }) })),
     evaluate: async () => state.answered,
     mouse: { move: async () => undefined, click: async (x: number, y: number) => { state.clicks.push([x, y]); onClick(state); } },
   };
@@ -163,7 +163,7 @@ describe('the puzzle solver', () => {
 describe('what is in the way', () => {
   const pageWith = (frames: FakeFrame[], drawn: string | null, answered = false) => ({
     url: () => 'https://vendor.example/signup',
-    frames: () => frames.map(frame => ({ url: () => frame.src, parentFrame: () => null, frameElement: async () => ({ boundingBox: async () => frame.box }) })),
+    frames: () => frames.map(frame => ({ url: () => frame.src, parentFrame: () => null, evaluate: async () => null, frameElement: async () => ({ boundingBox: async () => frame.box }) })),
     evaluate: async (script: unknown) => typeof script === 'string' ? drawn : answered,
   }) as unknown as Page;
 
@@ -173,6 +173,13 @@ describe('what is in the way', () => {
     expect(await detectHumanCheck(pageWith([{ src: 'https://newassets.hcaptcha.com/captcha/v1/x/static/hcaptcha.html#frame=challenge', box: puzzle().box }], null))).toEqual({ widget: 'hcaptcha', stage: 'puzzle' });
     expect(await detectHumanCheck(pageWith([], 'geetest'))).toEqual({ widget: 'geetest', stage: 'page' });
     expect(await detectHumanCheck(pageWith([], 'hold'))).toEqual({ widget: 'hold', stage: 'page' });
+  });
+
+  it('names a challenge by its markup when the frame is served from another domain', async () => {
+    // Onfleet got hCaptcha's challenge in a frame under the customer's domain: the URL says nothing, the markup does.
+    const frame = { url: () => 'https://onfleet.com/challenge', parentFrame: () => null, evaluate: async (script: unknown) => String(script).includes('task-image') ? 'hcaptcha' : null, frameElement: async () => ({ boundingBox: async () => puzzle().box }) };
+    const page = { url: () => 'https://onfleet.com/signup', frames: () => [frame], evaluate: async () => false } as unknown as Page;
+    expect(await detectHumanCheck(page)).toEqual({ widget: 'hcaptcha', stage: 'puzzle' });
   });
 
   it('sees nothing on a plain page, behind an invisible badge, or once the check holds its answer', async () => {

@@ -293,7 +293,7 @@ export async function askClickPoints(images: ImageInput | ImageInput[], instruct
   const frames = Array.isArray(images) ? images : [images];
   const series = frames.length > 1 ? `These ${frames.length} pictures are frames of the same puzzle taken half a second apart, in order; watch what moves. ` : '';
   const text = `${series}This is a visual puzzle. The instruction is: "${instruction}". Where should one click to answer it? `
-    + 'If it asks for several things, give a point for each one. Give only the spots that are the answer: never a confirm, verify, skip or refresh button. Give each point as fractions of the picture\'s width and height'
+    + 'If it asks for several things, give a point for each one. Give the spots that are the answer; a begin, proceed or continue button counts when the instruction says to start or begin. Never a skip, refresh or close button. Give each point as fractions of the picture\'s width and height'
     + (frames.length > 1 ? ' (on the last frame)' : '') + '. Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}.';
   const polled = await poll({ roster: 'click', system: 'You locate answers to visual puzzles and reply with JSON only.', text, images: frames, parse: parsePoints, maxOutputTokens: 1500, enough: got => sameAnswer(got).length > 0 }, options);
   if (!polled || polled.answers.every(a => a === undefined)) return undefined;
