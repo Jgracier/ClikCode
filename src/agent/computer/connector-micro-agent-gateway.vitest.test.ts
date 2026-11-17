@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { microModels, runGatewayMicro } from './connector-micro-agent-gateway.js';
+import { ProviderCircuit } from '../../gateway/provider-circuit.js';
 
 const reply = (message: unknown): Response => new Response(JSON.stringify({ choices: [{ message }] }), { status: 200 });
 
@@ -43,6 +44,26 @@ describe('micro-task agent on the Gateway', () => {
     // A refusal that is not about the model is not worked around by trying another.
     expect(asked).toEqual(['m1']);
     expect(other.error).toContain('400');
+  });
+
+  it('opens a five minute outage circuit after every configured model is unavailable, avoiding repeated probes', async () => {
+    const availability = new ProviderCircuit();
+    let now = 1_000;
+    let probes = 0;
+    const fetchImpl = (async () => {
+      probes++;
+      return new Response(JSON.stringify({ error: { message: 'Every provider that could serve this request is out of credit right now.' } }), { status: 402 });
+    }) as typeof fetch;
+    const options = { tab: 'agent-circuit', models: ['m1', 'm2'], maxCalls: 2, maxMs: 5_000, connection: { baseUrl: 'https://gw.test/v1', apiKey: 'k' }, tools: [], fetchImpl, availability, now: () => now };
+    const first = await runGatewayMicro('go', options);
+    expect(first.error).toContain('Gateway temporarily unavailable');
+    expect(probes).toBe(2);
+    const second = await runGatewayMicro('another task', options);
+    expect(second.calls).toBe(0);
+    expect(probes).toBe(2);
+    now += 5 * 60_000;
+    await runGatewayMicro('after recovery', options);
+    expect(probes).toBe(4);
   });
 
   it('reports a refused request as an error so the caller can fall back', async () => {

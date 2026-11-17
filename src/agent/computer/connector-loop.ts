@@ -103,7 +103,7 @@ export function allowedMs(ctx: Pick<WorkContext, 'limits' | 'agentMs' | 'agentSi
 /** A vendor that did not get its turn because something it runs on was down -- the browser, or the agent (no model available, no account with usage,
  * a Gateway refusal) -- says nothing about the vendor: it is tried again in minutes, not shelved for hours like a wall. On 2026-11-17 an unavailable
  * model shelved 225 vendors for six hours each. */
-const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)|the agent could not run|Gateway (?:request failed|\d{3}):/i;
+const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)|the agent could not run|Gateway (?:temporarily unavailable|request failed|\d{3}):/i;
 const BROWSER_RETRY_MS = 5 * 60_000;
 /** A vendor whose captcha was not cleared is tried again after this (keygrab-park.ts BACKOFF_HOURS holds it as long). */
 const CAPTCHA_RETRY_MS = 3_600_000;

@@ -4,6 +4,7 @@ import { agentMcpHandler } from './connector-micro-agent-mcp.js';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import { listedModels } from '../../gateway/model-names.js';
+import { ProviderCircuit } from '../../gateway/provider-circuit.js';
 
 /** The models that may run a connector hand-off, best first. Each is matched against what the Gateway lists now (src/gateway/model-names.ts):
  * the name `claude-sonnet-5-5` stopped resolving on 2026-11-17 and every hand-off failed at once. CLIKCODE_MICRO_AGENT_MODEL goes first. */
@@ -12,6 +13,8 @@ const MICRO_MODELS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'gpt-5.2', 'gemini
 const UNAVAILABLE = /not available to you|out of credit|no provider can serve|no model can take/i;
 const MODEL_BENCH_MS = 5 * 60_000;
 const benchedModels = new Map<string, number>();
+const PROVIDER_OUTAGE_MS = 5 * 60_000;
+const providerCircuit = new ProviderCircuit();
 
 /** The models to try for a hand-off, in order: those the Gateway lists (the names as it lists them), minus any that failed lately. */
 export async function microModels(listed?: readonly string[]): Promise<string[]> {
@@ -30,9 +33,13 @@ const MAX_TURNS = 80;
 interface Message { role: 'system' | 'user' | 'assistant' | 'tool'; content?: string | null; tool_calls?: unknown[]; tool_call_id?: string }
 interface Reply { choices?: { message?: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] } }[]; error?: { message?: string } }
 
-export interface GatewayMicroOptions { /** The models to try, in order (default: the Gateway's current ones, microModels()). */ models?: readonly string[]; tab: string; maxCalls: number; maxMs: number; connector?: string; counter?: string; fetchImpl?: typeof fetch; connection?: { baseUrl: string; apiKey: string }; tools?: Parameters<typeof agentMcpHandler>[0]['tools'] }
+export interface GatewayMicroOptions { /** The models to try, in order (default: the Gateway's current ones, microModels()). */ models?: readonly string[]; tab: string; maxCalls: number; maxMs: number; connector?: string; counter?: string; fetchImpl?: typeof fetch; connection?: { baseUrl: string; apiKey: string }; tools?: Parameters<typeof agentMcpHandler>[0]['tools']; availability?: ProviderCircuit; now?: () => number }
 
 export async function runGatewayMicro(prompt: string, options: GatewayMicroOptions): Promise<{ text: string; timedOut: boolean; calls: number; error?: string }> {
+  const clock = options.now ?? Date.now;
+  const circuit = options.availability ?? providerCircuit;
+  const outage = circuit.state(clock());
+  if (outage.open) return { text: '', timedOut: false, calls: 0, error: `Gateway temporarily unavailable until ${new Date(outage.retryAt!).toISOString()}: ${outage.reason ?? 'all configured providers are unavailable'}` };
   const connection = options.connection ?? await (async () => {
     const { gatewayConnection } = await import('../models/for-session.js');
     const Conf = (await import('conf')).default;
@@ -46,7 +53,7 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
   let model = candidates[0] ?? MICRO_MODELS[0]!, nextCandidate = 1;
   const messages: Message[] = [{ role: 'user', content: prompt }];
   const deadline = Date.now() + options.maxMs;
-  let calls = 0, text = '', timedOut = false, error: string | undefined;
+  let calls = 0, text = '', timedOut = false, error: string | undefined, unavailable = 0;
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const left = deadline - Date.now();
@@ -65,12 +72,22 @@ export async function runGatewayMicro(prompt: string, options: GatewayMicroOptio
       if (!response.ok) {
         const said = body.error?.message ?? 'request refused';
         // This model cannot serve the request now: it sits out for a while and the next one takes the same turn.
-        if (UNAVAILABLE.test(said) && nextCandidate < candidates.length) {
-          benchedModels.set(model, Date.now() + MODEL_BENCH_MS);
-          lifecycle('micro.model', { tab: options.tab, from: model, to: candidates[nextCandidate], why: said.slice(0, 80) });
-          model = candidates[nextCandidate++]!;
-          turn--;
-          continue;
+        if (UNAVAILABLE.test(said)) {
+          unavailable++;
+          if (nextCandidate < candidates.length) {
+            benchedModels.set(model, clock() + MODEL_BENCH_MS);
+            lifecycle('micro.model', { tab: options.tab, from: model, to: candidates[nextCandidate], why: said.slice(0, 80) });
+            model = candidates[nextCandidate++]!;
+            turn--;
+            continue;
+          }
+          if (candidates.length > 1 && unavailable === candidates.length) {
+            const why = 'every configured Gateway model is unavailable';
+            circuit.open(clock(), PROVIDER_OUTAGE_MS, why);
+            error = `Gateway temporarily unavailable: ${why}; retry after ${Math.round(PROVIDER_OUTAGE_MS / 1000)} seconds`;
+            lifecycle('micro.providers-unavailable', { tab: options.tab, count: candidates.length, retryMs: PROVIDER_OUTAGE_MS });
+            break;
+          }
         }
         error = `Gateway ${response.status}: ${said}`.slice(0, 300);
         break;

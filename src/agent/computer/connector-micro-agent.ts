@@ -133,6 +133,9 @@ export function livePorts(stateDir: string): MicroPorts {
           const ran = await runGatewayMicro(prompt, { tab: options.tab, maxCalls: options.maxCalls, maxMs: options.maxMs, counter, connector: options.tab.replace(/^agent-/, '') });
           const calls = Number(await readFile(counter, 'utf8').catch(() => '0')) || ran.calls;
           if (!ran.error) return { text: ran.text, timedOut: ran.timedOut, calls };
+          // A process-wide provider outage is already known. Do not fan out to a second exhausted provider family
+          // (Claude/Codex CLI accounts); return it as unavailable so the connector loop retries after its short cooldown.
+          if (/Gateway temporarily unavailable/.test(ran.error)) return { text: '', timedOut: false, calls: 0, error: ran.error };
         } finally { await rm(dir, { recursive: true, force: true }).catch(quiet('agent/computer/connector-micro-agent')); }
       }
       const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);
