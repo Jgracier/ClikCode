@@ -53,3 +53,8 @@ it('headless reading never accepts, and a stale version cannot be accepted', asy
   expect(api.accept).toHaveBeenCalledWith('v2', { config });
   expect(api.output).toHaveBeenLastCalledWith(expect.objectContaining({ accepted: true }));
 });
+
+it('requires an interactive review or explicit headless acceptance without a picker', async () => {
+  await expect(reviewGatewayModelAgreement('uncensored', {} as never)).rejects.toThrow('gateway-agreement');
+  expect(api.accept).not.toHaveBeenCalled();
+});
