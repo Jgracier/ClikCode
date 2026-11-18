@@ -36,19 +36,21 @@ function endpoints(...accepts: string[]) {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('keyRoutedScreen', () => {
-  it('with no key (Enter), a remote session takes the device-code method of a provider\'s own sign-in; a local one is asked', async () => {
+  it('with no key (Enter), the method menu follows the one order: browser where its callback reaches this machine, else device code', async () => {
     const methods = ['ChatGPT Pro/Plus (browser)', 'ChatGPT Pro/Plus (headless)', 'Manually enter API Key'];
-    const remote = screen({}, '');
-    const ui = await keyRoutedScreen(spec, routes, remote, KEY_PROVIDERS, undefined, true);
-    expect(await ui.choose('Login method', methods)).toBe(1);
-    // Anything else stays the person's: another menu, or a method menu with no device code in it.
-    expect(await ui.choose('Select provider', ['OpenAI', 'GitHub Copilot'])).toBe(0);
-    expect(await ui.choose('Login method', ['Login with GitHub', 'Manually enter API Key'])).toBe(0);
-    expect(remote.asked).toEqual(['Qwen Code API key, or Enter to choose a provider', 'Select provider', 'Login method']);
-    const local = screen({}, '');
-    const here = await keyRoutedScreen(spec, routes, local, KEY_PROVIDERS, undefined, false);
-    expect(await here.choose('Login method', methods)).toBe(0);
-    expect(local.asked).toEqual(['Qwen Code API key, or Enter to choose a provider', 'Login method']);
+    // ClikDeploy Mobile forwards the callback (or a browser is here): the browser method.
+    const forwarded = screen({}, '');
+    const viaPhone = await keyRoutedScreen(spec, routes, forwarded, KEY_PROVIDERS, undefined, true);
+    expect(await viaPhone.choose('Login method', methods)).toBe(0);
+    // Plain SSH: no callback can come back, so the device-code method.
+    const ssh = screen({}, '');
+    const viaSsh = await keyRoutedScreen(spec, routes, ssh, KEY_PROVIDERS, undefined, false);
+    expect(await viaSsh.choose('Login method', methods)).toBe(1);
+    // Anything else stays the person's: another menu, or a method menu without the one wanted.
+    expect(await viaSsh.choose('Select provider', ['OpenAI', 'GitHub Copilot'])).toBe(0);
+    expect(await viaSsh.choose('Login method', ['Login with GitHub', 'Manually enter API Key'])).toBe(0);
+    expect(ssh.asked).toEqual(['Qwen Code API key, or Enter to choose a provider', 'Select provider', 'Login method']);
+    expect(forwarded.asked).toEqual(['Qwen Code API key, or Enter to choose a provider']);
   });
 
   it('asks only for the key, then answers the menus from the first route that accepts it', async () => {
