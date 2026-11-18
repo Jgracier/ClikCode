@@ -95,7 +95,7 @@ describe('a Gateway step', () => {
   it('turns the Gateway\'s codes into the ones the loop acts on', async () => {
     const limited = vi.fn(async () => sse({ error: { message: 'slow down', type: 'rate_limit_error', code: 'rate_limit_exceeded', retry_after: 7 } }));
     await expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: limited as never }).step(step))
-      .rejects.toMatchObject({ kind: 'quota', code: 'MODEL_RATE_LIMITED', retryAfter: 7 });
+      .rejects.toMatchObject({ kind: 'other', code: 'MODEL_RATE_LIMITED', retryAfter: 7 });
     const disabled = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'off', type: 'server_error', code: 'gateway_disabled' } }), { status: 503 }));
     await expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: disabled as never }).step(step))
       .rejects.toMatchObject({ statusCode: 503, code: 'CLIKCODE_DISABLED' });

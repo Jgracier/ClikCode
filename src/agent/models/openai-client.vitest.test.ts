@@ -195,8 +195,15 @@ describe('OpenAIModelClient', () => {
     expect(auth.code).toBeUndefined();
 
     const quota = await failure(429, JSON.stringify({ error: { message: 'slow down', code: 'rate_limit_exceeded' } }), { 'retry-after': '7' });
-    expect(quota).toMatchObject({ kind: 'quota', statusCode: 429, retryAfter: 7 });
+    expect(quota).toMatchObject({ kind: 'other', code: 'MODEL_RATE_LIMITED', statusCode: 429, retryAfter: 7 });
     expect(quota.message).toContain('slow down');
+    expect(await failure(429, JSON.stringify({ error: { code: 'insufficient_quota' } }))).toMatchObject({ kind: 'quota', statusCode: 429 });
+    expect(await failure(402, '{}')).toMatchObject({ kind: 'quota' });
+    for (const code of ['uncensored_consent_required', 'model_access_denied', 'gateway_disabled', 'permission_denied']) {
+      expect(await failure(403, JSON.stringify({ error: { code } }))).toMatchObject({ kind: 'other', statusCode: 403 });
+    }
+    expect(await failure(403, JSON.stringify({ error: { code: 'invalid_api_key' } }))).toMatchObject({ kind: 'auth' });
+
 
     const overflow = await failure(400, JSON.stringify({ error: { code: 400, message: 'the request exceeds the available context size, try increasing it', type: 'exceed_context_size_error' } }));
     expect(overflow).toMatchObject({ kind: 'other', statusCode: 400, code: 'CONTEXT_TOO_LARGE' });

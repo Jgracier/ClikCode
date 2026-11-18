@@ -211,7 +211,9 @@ function isContextOverflow(status: number, code: string | undefined, message: st
 }
 
 /** Out of quota or credit, in the words servers use for it. */
-const QUOTA_CODES = new Set(['rate_limit_exceeded', 'insufficient_quota', 'insufficient_credits', 'rate_limit_error']);
+const QUOTA_CODES = new Set(['insufficient_quota', 'insufficient_credits']);
+const AUTH_CODES = new Set(['invalid_api_key', 'authentication_error', 'unauthorized', 'invalid_token']);
+const THROTTLE_CODES = new Set(['rate_limit_exceeded', 'rate_limit_error']);
 
 function numberOf(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
@@ -385,9 +387,9 @@ export class OpenAIModelClient implements ModelClient {
         const error = (typeof frame.error === 'object' ? frame.error : { message: frame.error }) as { message?: unknown; code?: unknown; type?: unknown; retry_after?: unknown };
         const message = typeof error.message === 'string' && error.message ? error.message : `${this.label} reported an error`;
         const code = typeof error.code === 'string' ? error.code : typeof error.type === 'string' ? error.type : undefined;
-        const loopCode = isContextOverflow(400, code, message) ? 'CONTEXT_TOO_LARGE' : code ? options.errorCodes?.[code] : undefined;
+        const loopCode = isContextOverflow(400, code, message) ? 'CONTEXT_TOO_LARGE' : code && THROTTLE_CODES.has(code) ? 'MODEL_RATE_LIMITED' : code ? options.errorCodes?.[code] : undefined;
         const retryAfter = parseRetryAfter(error.retry_after);
-        const kind = code && QUOTA_CODES.has(code) ? 'quota' : 'other';
+        const kind = code && QUOTA_CODES.has(code) ? 'quota' : code && AUTH_CODES.has(code) ? 'auth' : 'other';
         const described = this.describe(`${this.label}: ${message}`, { ...(code ? { code } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
         throw new ModelClientError(withRequestId(described), { kind, ...(loopCode ? { code: loopCode } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
       }
@@ -525,7 +527,7 @@ export class OpenAIModelClient implements ModelClient {
     } catch {
       if (raw.trim()) message = `${message}: ${raw.trim().slice(0, 500)}`;
     }
-    const kind = status === 401 || status === 403 ? 'auth' : status === 402 || status === 429 ? 'quota' : 'other';
+    const kind = status === 401 || (status === 403 && code && AUTH_CODES.has(code)) ? 'auth' : status === 402 || (code && QUOTA_CODES.has(code)) ? 'quota' : 'other';
     // Only a code the loop acts on is passed through: any other code would
     // stop it retrying a 5xx (stepRecovery (turn-recovery.ts) treats an unknown code as final).
     // The server's own code is still in the message.
@@ -534,7 +536,7 @@ export class OpenAIModelClient implements ModelClient {
     message = this.describe(message, { status, ...(code ? { code } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
     const requestId = response.headers.get('x-request-id')?.trim();
     if (requestId) message = `${message} [request ${requestId}]`;
-    const loopCode = isContextOverflow(status, code, message) ? 'CONTEXT_TOO_LARGE' : code ? this.options.errorCodes?.[code] : undefined;
+    const loopCode = isContextOverflow(status, code, message) ? 'CONTEXT_TOO_LARGE' : kind !== 'quota' && (status === 429 || (code && THROTTLE_CODES.has(code))) ? 'MODEL_RATE_LIMITED' : code ? this.options.errorCodes?.[code] : undefined;
     return new ModelClientError(message, { kind, statusCode: status, ...(loopCode ? { code: loopCode } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
   }
 }

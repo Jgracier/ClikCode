@@ -170,6 +170,8 @@ export async function aiGatewayModels(config: Conf): Promise<void> {
     // The model, its price and what it can do: which provider serves it is the Gateway's decision.
     models: models.map((model) => ({
       id: model.id,
+      ...(model.access ? { access: model.access } : {}),
+      ...(model.tags?.length ? { tags: model.tags } : {}),
       ...(model.price ? { price: gatewayPriceLabel(model.price), priceUsdPerMTok: model.price } : {}),
       ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
       ...(model.maxOutput ? { maxOutput: model.maxOutput } : {}),

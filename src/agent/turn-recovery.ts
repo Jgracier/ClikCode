@@ -49,8 +49,8 @@ export function classifyModelError(error: unknown): { kind: HarnessErrorKind; re
   const explicit = record.errorKind ?? record.kind;
   if (explicit === 'quota' || explicit === 'auth') return { kind: explicit, ...(retryAfter !== undefined ? { retryAfter } : {}) };
   const status = Number(record.statusCode ?? record.status ?? record.response?.status);
-  if (status === 401 || status === 403) return { kind: 'auth' };
-  if (status === 402 || status === 429) return { kind: 'quota', ...(retryAfter !== undefined ? { retryAfter } : {}) };
+  if (status === 401) return { kind: 'auth' };
+  if (status === 402) return { kind: 'quota', ...(retryAfter !== undefined ? { retryAfter } : {}) };
   return { kind: 'other', ...(retryAfter !== undefined ? { retryAfter } : {}) };
 }
 
@@ -68,6 +68,7 @@ export const MAX_STOP_HOOK_CONTINUES = 3;
 export function stepRecovery(error: unknown): 'retry' | 'model-starting' | 'capacity' | 'context-pressure' | undefined {
   const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown; message?: unknown };
   const code = typeof record.code === 'string' ? record.code : undefined;
+  if (record.kind !== 'quota' && record.statusCode === 429) return 'retry';
   if (code === 'MODEL_BUSY') return 'capacity';
   if (code === 'CONTEXT_TOO_LARGE') return 'context-pressure';
   if (code === 'MODEL_STARTING') return 'model-starting';

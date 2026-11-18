@@ -264,7 +264,7 @@ describe('direct API (ClikCode\'s own agent on the Gateway)', () => {
   it('reads the response status as the evidence: spent credit, a spent limit, or a throttle', async () => {
     const { agentTurnFailureKind } = await import('./failover.js');
     expect(agentTurnFailureKind({ text: 'Payment required', statusCode: 402 })).toBe('quota-exhausted');
-    expect(agentTurnFailureKind({ text: 'Too many requests', statusCode: 429 })).toBe('quota-exhausted');
+    expect(agentTurnFailureKind({ text: 'Too many requests', statusCode: 429 })).toBe('temporarily-throttled');
     expect(agentTurnFailureKind({ text: 'Too many requests', statusCode: 429, retryAfter: 30 })).toBe('temporarily-throttled');
   });
 });

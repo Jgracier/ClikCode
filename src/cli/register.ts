@@ -276,6 +276,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   plugin.command('disable <plugin>').description('Stop using a plugin in ClikCode (Claude Code\'s setting is not changed)')
     .action(async (name: string) => (await import('../commands/plugin.js')).pluginSetEnabled(name, false));
   const gateway = program.command('gateway').description('Connect ClikDeploy Gateway for models and private agents');
+  gateway.command('agreement').description('Read the current uncensored-model agreement; accept only the exact version you reviewed')
+    .option('--accept-version <version>', 'Record explicit acceptance of this agreement version')
+    .action(async (options: { acceptVersion?: string }) => (await import('../commands/gateway-agreement.js')).gatewayAgreement(config, options));
   gateway.command('status').description('Show the gateway connection state').action(() => later(statusCommands, 'aiGatewayStatus')(config));
   gateway.command('credit').description('Add AI credit to your ClikDeploy Gateway account (opens a Stripe checkout)')
     .option('--amount <usd>', 'Whole dollars, 5-500 (default: your account\'s top-up amount)')
