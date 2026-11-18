@@ -648,10 +648,18 @@ const PRINTED_MODEL_LIST: Readonly<Record<NonNullable<AiLocalHarnessDefinition['
   // OpenCode and Kilo print only connected providers' models, each with its
   // price and (Kilo) whether it is free; the rest of what they know is
   // offered as a sign-in.
-  'opencode-verbose': async ({ harness, state: d }, printed) => {
+  'opencode-verbose': async ({ harness, profileRoot, state: d }, printed) => {
     const verbose = opencodeVerboseModels(printed);
     verbose.models.forEach((model) => d.models.add(model));
     d.free = verbose.free;
+    // The model the vendor itself is set to (`model` in ~/.config/opencode/opencode.json), while it still offers it. Not read, a chat
+    // started on whichever model sorts first (OpenCode's free `big-pickle`, on an account whose Go plan it never used).
+    if (profileRoot) {
+      const raw = await readFile(join(profileRoot, '.config', harness.command, `${harness.command}.json`), 'utf8').catch(() => undefined);
+      let set: unknown;
+      try { set = raw ? (JSON.parse(raw) as { model?: unknown }).model : undefined; } catch { set = undefined; } // fail-open-ok: a damaged config names no model
+      if (typeof set === 'string' && verbose.models.includes(set)) d.configured ??= set;
+    }
     d.connect = await discoverOpencodeConnect(harness, verbose.models);
   },
   // Pi prints a provider/model table; the generic reader cannot see a model
