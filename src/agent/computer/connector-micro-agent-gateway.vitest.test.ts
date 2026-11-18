@@ -127,6 +127,9 @@ describe('models when the Gateway lists none of the named ones', () => {
   it('takes the newest strong models of each family, two each, and no small, batch or codex variant', () => {
     expect(familyModels(listed)).toEqual(['claude-sonnet-4-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.6-luna', 'gpt-5.6-terra']);
   });
+  it('falls back to open models that call tools when Claude, GPT and Gemini are not listed', () => {
+    expect(familyModels(['kimi-k3.1-pro', 'kimi-k3', 'kimi-k2.7-code', 'glm-5.3', 'glm-5.3-flash', 'deepseek-v4-pro-0813', 'deepseek-v4.1-flash'])).toEqual(['kimi-k3.1-pro', 'kimi-k3', 'glm-5.3', 'deepseek-v4-pro-0813']);
+  });
   it('tries those after the named models instead of asking for names the Gateway does not list', async () => {
     expect(await microModels(listed)).toEqual(['claude-sonnet-4-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.6-luna', 'gpt-5.6-terra']);
   });

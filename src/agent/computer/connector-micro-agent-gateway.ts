@@ -25,7 +25,8 @@ const newerFirst = (a: string, b: string): number => {
 };
 /** Families strong enough to run a tool-calling hand-off, best first; each listed id in a family, newest first, two per family. Variants
  * (batch, thinking, small, mini, nano, codex, preview) are left out: they refuse tools, answer late, or are too weak for browser work. */
-const FAMILIES = [/^claude-sonnet-\d/, /^claude-opus-\d/, /^gpt-5(?:\.\d+)?(?:-(?:luna|terra|sol))?$/, /^gemini-\d+(?:\.\d+)?-pro$/];
+// After Claude, GPT and Gemini: open models that call tools reliably (checked live 2026-11-18, when every Claude and GPT provider was out of credit).
+const FAMILIES = [/^claude-sonnet-\d/, /^claude-opus-\d/, /^gpt-5(?:\.\d+)?(?:-(?:luna|terra|sol))?$/, /^gemini-\d+(?:\.\d+)?-pro$/, /^kimi-k\d+(?:\.\d+)?(?:-pro)?$/, /^glm-5(?:\.\d+)?$/, /^deepseek-v\d+(?:\.\d+)?-pro(?:-\d+)?$/];
 const WEAK = /batch|thinking|:|mini|nano|codex|preview|lite|flash|haiku|uncensored|derestricted/i;
 export function familyModels(listed: readonly string[]): string[] {
   return FAMILIES.flatMap(family => listed.filter(id => family.test(id) && !WEAK.test(id)).sort(newerFirst).slice(0, 2));
