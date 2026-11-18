@@ -65,7 +65,7 @@ describe('account sign-in profiles', () => {
   it('a new key for an account that reveals no identity (OpenCode\'s own) signs that account in again: no "OpenCode 2" beside the dead one', async () => {
     const { writeProfileKey } = await import('../harness/accounts/profile-key.js');
     const state = await readState();
-    state.accounts.push({ id: 'old', provider: 'opencode', label: 'OpenCode', authKind: 'vendor-cli', models: [], status: 'needs_login', credentialRef: 'native:opencode' });
+    state.accounts.push({ id: 'old', provider: 'opencode', label: 'OpenCode', authKind: 'vendor-cli', models: ['opencode/beam-free'], status: 'needs_login', credentialRef: 'native:opencode', quotaState: 'exhausted' });
     await writeState(state);
     vendor.signIn = async (environment) => { await writeProfileKey(environment.HOME!, 'OPENCODE_API_KEY', 'fresh-key'); };
     const { aiAccountLogin } = await import('./account.js');
@@ -73,6 +73,9 @@ describe('account sign-in profiles', () => {
     const accounts = (await readState()).accounts.filter((account) => account.provider === 'opencode');
     expect(accounts.map((account) => [account.id, account.label, account.status])).toEqual([['old', 'OpenCode', 'ready']]);
     expect(accounts[0]!.nativeProfile?.path).toContain(join('profiles', 'opencode'));
+    // What the expired key listed is not what the new one does: read again.
+    expect(accounts[0]!.models).toEqual([]);
+    expect(accounts[0]!.quotaState).not.toBe('exhausted');
     // Named, it is that account again even while it still reads as ready.
     expect(await aiAccountLogin('opencode', 'OpenCode')).toBe('OpenCode');
     expect((await readState()).accounts.filter((account) => account.provider === 'opencode')).toHaveLength(1);
