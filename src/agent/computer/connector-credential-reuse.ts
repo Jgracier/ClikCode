@@ -9,12 +9,22 @@ export function credentialNames(id: string, spec: { id?: string; auth?: { signin
   return names;
 }
 
+/** Saved names that hold a basic-auth username, in the order they are looked for. */
+const USERNAME_NAMES = ['login', 'username', 'user', 'email'];
+/** Where a saved key goes for a basic-auth connector: the basic form with the saved username, or 'no-username' when none is saved.
+ * Undefined for any other auth, which keeps the API-key form. */
+export function basicDestination(id: string, kind: string | undefined, names: readonly string[]): { to: string; with: Record<string, string> } | 'no-username' | undefined {
+  if (kind !== 'basic') return undefined;
+  const username = USERNAME_NAMES.map(n => `${id}/${n}`).find(n => names.includes(n));
+  return username ? { to: 'clikdeploy-connection-basic', with: { integration: id, username: `secret:${username}` } } : 'no-username';
+}
+
 export async function reuseConnectorCredential(id: string, stateDir: string, signal?: AbortSignal): Promise<boolean | { problem: string }> {
   const { namedSecretNames, readNamedSecret } = await import('./credential-vault.js');
   const names = await namedSecretNames(stateDir);
   if (!names.includes(`${id}/key`) && !(id.startsWith('amazonaws-') && names.includes('aws/clikdeploy-connector-key'))) return false;
   const { liveClient } = await import('./connector-runner-live.js');
-  const data = await liveClient(signal).tool('connector_spec_get', { id }) as { spec?: { id?: string; auth?: { signing?: { scheme?: string } }; http?: { baseUrl?: string }; connectionValues?: Record<string, unknown> } };
+  const data = await liveClient(signal).tool('connector_spec_get', { id }) as { spec?: { id?: string; auth?: { kind?: string; signing?: { scheme?: string } }; http?: { baseUrl?: string }; connectionValues?: Record<string, unknown> } };
   if (!data.spec) return false;
   const { scrubSecrets } = await import('./secret-scrubber.js');
   const problems: string[] = [];
@@ -23,7 +33,11 @@ export async function reuseConnectorCredential(id: string, stateDir: string, sig
     const value = await readNamedSecret(stateDir, name);
     if (!value) continue;
     const values = name.startsWith('aws/') && data.spec.connectionValues?.region ? { region: 'us-east-1' } : undefined;
-    const deliveries = await sendToDestinations(stateDir, [{ to: 'clikdeploy-connection', with: { integration: id }, ...(values ? { connectionValues: values } : {}) }], value, signal);
+    // The form follows the spec's auth. A basic-auth key is the password, and its username is the one saved beside it; without one,
+    // nothing is sent (the API-key form was refused for every basic-auth vendor, DataForSEO among them).
+    const destination = basicDestination(id, data.spec.auth?.kind, names);
+    if (destination === 'no-username') { problems.push(`${id} declares basic auth and no username is saved beside its key: save it as ${id}/login, then onboard again`); continue; }
+    const deliveries = await sendToDestinations(stateDir, [destination ?? { to: 'clikdeploy-connection', with: { integration: id }, ...(values ? { connectionValues: values } : {}) }], value, signal);
     if (deliveries.length && deliveries.every(d => d.ok)) return true;
     problems.push(...deliveries.filter(d => !d.ok).map(d => scrubSecrets(d.message).slice(0, 600)));
   }
