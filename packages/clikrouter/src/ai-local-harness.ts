@@ -1195,7 +1195,6 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // fails at the one moment it matters.
   // cn 1.5.47 has no model selector: `--model <slug>` ADDS a hub model (owner/package), so a
   // plain model id is not passed; the model comes from the assistant's config.yaml / --config.
-  { command: 'cn', quotaProbe: { none: '`cn --help` has no usage, status or quota command' }, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: false, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'continue', displayName: 'Continue', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cn', npmPackage: '@continuedev/cli', loginArgv: [], authFiles: [{ path: '${CONTINUE_GLOBAL_DIR:-~/.continue}/config.yaml', contains: 'apiKey:' }], authEnv: ['ANTHROPIC_API_KEY'], planMode: { option: 'readonly', value: true }, permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--auto'] } }, turn: { stateless: true, startArgv: [], promptArgvPrefix: ['-p'], output: 'text' } },
   // ACP entrypoints checked against each vendor's own source. Devin CLI and
   // MiniMax Code also have session stores and native-thread writers, and
   // their failover carry was verified live on 2026-10-05: Devin with signed-in
@@ -1232,7 +1231,6 @@ const LIVE_CHECKS: Readonly<Record<string, AiHarnessLiveCheck>> = {
   junie: { at: '2026-10-12', verified: false, method: 'raw ACP session under the sandbox, and one `clikcode send` turn', note: 'the sandbox cannot read the sign-in (prompt answers "Authentication is required" or stopReason cancelled); initialize, session/new with model, effort and mode options, and `_session/steering` were read live' },
   amp: { at: '2026-10-12', verified: false, method: `${SANDBOX_TURN}, and \`amp usage\``, note: 'the account session has expired ("Session expired and could not be refreshed"); signing in again is an account change' },
   aider: { at: '2026-10-12', verified: false, method: `${SANDBOX_TURN} with a free OpenRouter model`, note: 'the turn ran and its error was reported cleanly (OpenRouter 404: the cached free model is gone); no PONG reached because a second turn was not allowed' },
-  cn: { at: '2026-10-12', verified: false, method: `${SANDBOX_TURN}`, note: 'the account has no model or key in ~/.continue/config.yaml (models: []), so ClikCode refuses the turn as not signed in' },
   dcode: { at: '2026-10-12', verified: false, method: `${SANDBOX_TURN}`, note: 'no provider key stored (~/.deepagents/.state/auth.json absent), so ClikCode refuses the turn as not signed in' },
   openclaw: { at: '2026-10-12', verified: false, method: 'not run', note: 'declares no sign-in file to link, and its configured models route through the claude-cli runtime, i.e. another harness account' },
   mcode: { at: '2026-10-12', verified: false, method: 'not run', note: 'account is exhausted' },
@@ -1749,29 +1747,6 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     ],
     managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.commandcode', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'] }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Mods', manageArgv: ['mods'] } },
     features: ['skills', 'mods', 'taste learning', 'MCP', 'managed worktrees', 'plan mode'],
-  },
-  // Continue: these are the raw vendor rows for the flags `cn --help` really
-  // lists. --model stays the model selector's own flag (the help's --model
-  // hub-slug spelling is the same flag name) and --prompt is the turn's own
-  // prompt, so neither becomes a row beside its owner. The permission surface
-  // (--readonly / --auto / --allow / --ask / --exclude) overlaps the selector:
-  // only the two tool-list spellings --allow and --ask sit here as rows, and
-  // they are the pieces of that surface the selector does not drive.
-  cn: {
-    options: [
-      value('agent', 'Agent', 'Agent file loaded from the hub', 'mode', ['--agent']),
-      flag('readonly', 'Plan mode', 'Start in plan mode (read-only tools; `cn --help`: --readonly)', 'mode', ['--readonly']),
-      value('config', 'Config', 'Configuration file path or hub slug', 'advanced', ['--config']),
-      value('org', 'Organization', 'Organization slug used in headless mode', 'advanced', ['--org']),
-      flag('verbose', 'Verbose', 'Verbose logging', 'output', ['--verbose']),
-      flag('beta-status-tool', 'Beta status tool', 'Enable the beta status tool', 'tools', ['--beta-status-tool']),
-      flag('beta-subagent-tool', 'Beta subagent tool', 'Enable the beta subagent tool', 'tools', ['--beta-subagent-tool']),
-      value('rules', 'Rules', 'Rules added for the session', 'context', ['--rule'], 'string-list', { argvStyle: 'repeat' }),
-      value('mcp', 'MCP servers', 'MCP servers loaded from the hub as owner/package slugs', 'tools', ['--mcp'], 'string-list', { argvStyle: 'repeat' }),
-      value('allow', 'Allowed tools', 'Tools allowed, overriding default policies', 'permissions', ['--allow'], 'string-list', { argvStyle: 'repeat' }),
-      value('ask', 'Ask about tools', 'Tools that ask for permission before use', 'permissions', ['--ask'], 'string-list', { argvStyle: 'repeat' }),
-      value('exclude', 'Excluded tools', 'Tools excluded from use', 'tools', ['--exclude'], 'string-list', { argvStyle: 'repeat' }),
-    ],
   },
 };
 

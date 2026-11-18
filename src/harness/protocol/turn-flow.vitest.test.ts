@@ -42,8 +42,8 @@ describe('how a turn reads', () => {
     expect(turnStatus({ asking: true, toolPhase: 'running tests' })).toEqual({ label: 'waiting for you', tone: 'asking' });
     expect(turnStatus({ toolPhase: 'running tests' })).toEqual({ label: 'running tests', tone: 'tool' });
     expect(turnStatus({ thought: '**Inspecting the parser** I should look at…', phase: 'thinking' }).label).toBe('Inspecting the parser');
-    expect(turnStatus({ phase: 'thinking' }).label).toBe('thinking');
-    expect(turnStatus({}).label).toBe('thinking');
+    expect(turnStatus({ phase: 'thinking' }).label).toBe('Working');
+    expect(turnStatus({}).label).toBe('Working');
     expect(turnStatus({ phase: 'generating response' }).label).toBe('generating response');
     expect(turnStatus({ phase: 'thinking', writing: true }).label).toBe('writing');
     expect(turnStatus({ phase: 'thinking', writing: true, toolPhase: 'running git' }).label).toBe('running git');
@@ -182,7 +182,7 @@ describe('a turn that waits on background commands only', () => {
     expect(waitingOn).toBe('waiting on background command: node x.mjs · running 32h · cpu 100% · no output');
     expect(turnStatus({ phase: 'thinking', waitingOn }).label).toBe(waitingOn);
     expect(turnStatus({ phase: 'background work', waitingOn }).label).toBe(waitingOn);
-    expect(turnStatus({ phase: 'thinking' }).label).toBe('thinking');
+    expect(turnStatus({ phase: 'thinking' }).label).toBe('Working');
     expect(turnStatus({ phase: 'thinking', waitingOn, writing: true }).label).toBe('writing');
     expect(turnStatus({ phase: 'thinking', waitingOn, toolPhase: 'Running tests' }).label).toBe('Running tests');
     expect(turnStatus({ phase: 'thinking', waitingOn, asking: true }).label).toBe('waiting for you');

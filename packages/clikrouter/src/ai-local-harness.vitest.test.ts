@@ -31,7 +31,7 @@ describe('local harness catalog', () => {
     // harness silently appearing or disappearing, which is the part worth
     // guarding.
     expect(AI_LOCAL_HARNESSES.map((item) => item.command).sort()).toEqual([
-      'aider', 'amp', 'antigravity', 'auggie', 'claude', 'cline', 'cn', 'codex',
+      'aider', 'amp', 'antigravity', 'auggie', 'claude', 'cline', 'codex',
       'command', 'copilot', 'cursor', 'dcode', 'devin', 'droid', 'gemini', 'goose',
       'grok', 'hermes', 'junie', 'kilo', 'kimi', 'kiro', 'mcode', 'openclaw',
       'opencode', 'openhands', 'pi', 'qwen', 'vibe',
@@ -162,7 +162,7 @@ describe('local harness catalog', () => {
   it('drives one Plan mode through each harness’s own planning flag', () => {
     const expected: Record<string, string[]> = {
       copilot: ['--plan'], cline: ['--plan'], command: ['--plan'], droid: ['--use-spec'], auggie: ['--ask'],
-      cn: ['--readonly'], kimi: ['--plan'], cursor: ['--mode', 'plan'],
+      kimi: ['--plan'], cursor: ['--mode', 'plan'],
     };
     const planned = AI_LOCAL_HARNESSES.filter((harness) => harness.planMode);
     expect(planned.map((harness) => harness.command).sort()).toEqual(Object.keys(expected).sort());
@@ -211,7 +211,7 @@ describe('local harness catalog', () => {
   it('declares permission-mode support for exactly the harnesses that map it to a real flag', () => {
     // Kept hardcoded on purpose: deriving these from the catalog would make
     // the test agree with whatever the catalog says, which is not a test.
-    // grok, kimi, vibe, openhands and cn were added after the previous lists
+    // grok, kimi, vibe and openhands were added after the previous lists
     // were written.
     const fullThreeTier = new Set(['codex', 'claude', 'grok', 'gemini', 'cursor', 'qwen', 'droid', 'command', 'kimi', 'vibe', 'goose']);
     const askAndAuto = new Set(['kilo', 'dcode']);
@@ -220,7 +220,7 @@ describe('local harness catalog', () => {
     const bypassOnly = new Set(['aider']);
     const askAndBypass = new Set([
       'opencode', 'copilot', 'antigravity', 'kiro', 'cline',
-      'hermes', 'cn',
+      'hermes',
     ]);
     // Devin carries all three as ACP session modes (permissionModeIds), no flag.
     fullThreeTier.add('devin');
@@ -306,7 +306,6 @@ describe('local harness catalog', () => {
       expect(Boolean(harness.statusArgv || harness.authFiles?.length || harness.authEnv?.length), `${harness.command} sign-in state`).toBe(true);
       expect(harness.loginArgv, `${harness.command} sign-in`).toBeDefined();
     }
-    expect(localHarnessForCommand('cn')!.loginArgv, 'cn 1.5 has no login subcommand').toEqual([]);
     expect(localHarnessForCommand('pi')!.loginArgv, 'Pi signs in inside its own session').toEqual([]);
     expect(nativeHarnessTurnArgv(claw, { prompt: 'hi', model: 'openai/gpt-5.5', nativeSessionId: 's-1', createdHere: true }))
       .toEqual(['agent', '--local', '--json', '--agent', 'main', '--session-id', 's-1', '--model', 'openai/gpt-5.5', '--message', 'hi']);
@@ -479,7 +478,7 @@ describe('local harness catalog', () => {
   });
 
   it('orders pickers by declared tier and keeps basic adapters behind More', () => {
-    for (const command of ['aider', 'amp', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']) expect(localHarnessForCommand(command)!.tier, command).toBe('more');
+    for (const command of ['aider', 'amp', 'kimi', 'auggie', 'vibe', 'openhands']) expect(localHarnessForCommand(command)!.tier, command).toBe('more');
     expect(localHarnessForCommand('claude')!.tier).toBe('primary');
     expect(harnessTierRank(localHarnessForCommand('codex')!)).toBeLessThan(harnessTierRank(localHarnessForCommand('aider')!));
   });

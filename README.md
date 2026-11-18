@@ -365,6 +365,11 @@ clikcode mcp login <name>                   # OAuth sign-in to a remote server
 clikcode mcp logout <name>                  # forget that sign-in
 ```
 
+An open ClikCode chat detects changes to this shared MCP configuration and
+quietly restarts at the next idle prompt, reopening the same conversation with
+the updated servers. A running turn finishes first; if the window never goes
+idle, `/restart` switches it when you choose.
+
 A tool's own servers are managed with that tool's own commands (`/mcp` in a
 conversation on it).
 
@@ -428,7 +433,7 @@ conversation board — so it pins eleven; typed, `/resume` still works.)
 | `/model [name]` | choose or set a model |
 | `/hosted ai` | search Hugging Face and run a hosted AI model on ClikDeploy compute |
 | `/machine` | the machine this chat runs on: move it, add one, or update or remove one |
-| `/restart` | switch this window to the newest installed ClikCode; the chat stays and what is running keeps running |
+| `/restart` | reload this window after a ClikCode build or shared tool configuration changes; the chat stays and what is running keeps running |
 | `/new [first message]` | start a fresh conversation (the current one stays resumable) |
 | `/permissions [ask\|bypass\|auto]` (also `/permission`) | approval behavior |
 | `/settings` | configure this workspace (below) |

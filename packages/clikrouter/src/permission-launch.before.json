@@ -343,30 +343,6 @@
    ]
   }
  },
- "cn": {
-  "ask": {
-   "acp": null,
-   "turn": [
-    "-p",
-    "hi"
-   ]
-  },
-  "auto": {
-   "acp": null,
-   "turn": [
-    "-p",
-    "hi"
-   ]
-  },
-  "bypass": {
-   "acp": null,
-   "turn": [
-    "--auto",
-    "-p",
-    "hi"
-   ]
-  }
- },
  "codex": {
   "ask": {
    "acp": null,

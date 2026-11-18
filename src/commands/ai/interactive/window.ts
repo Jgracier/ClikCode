@@ -199,13 +199,10 @@ function settledBuild(): string | undefined {
 function startBuildWatch(
   terminal: TerminalHarnessPrompter | undefined, ref: WindowRef, refreshUsage: ChatWindow['refreshUsage'], stopLockNotices: (() => void) | undefined,
 ): Pick<ChatWindow, 'beginBuildReplace' | 'releaseWindow'> {
-  // This process's own build, fingerprinted once at startup the same way a
-  // session worker's is (registry.ts). The terminal cannot hot-swap the code
-  // it has loaded. When a newer build is on disk, this process re-execs onto
-  // the same chat at a quiet moment: an idle composer, or the board after
-  // running chats finish. Nothing is said until then: a build landing is not
-  // the user's news, and the re-exec keeps the screen. Workers already step
-  // down on their own (idle now, busy when the turn ends).
+  // This process's runtime fingerprint, including its build and shared MCP
+  // config (registry.ts). The terminal cannot hot-swap either after startup.
+  // When either changes, this process re-execs onto the same chat at a quiet
+  // moment: an idle composer, or the board after running chats finish.
   const startupBuild = settledBuild();
   let updateSeen = false;
   let usageInterval: ReturnType<typeof setInterval> | undefined;
@@ -261,7 +258,7 @@ function startBuildWatch(
     // build all day. Said once, after a while, with the way out.
     if (terminal && shouldTellStale(waitingSince, toldWaiting, Date.now())) {
       toldWaiting = true;
-      terminal.activity('A newer ClikCode is installed and this window is still on the old one (it was never idle). /restart switches to it; the chat stays and what is running keeps running.');
+      terminal.activity('ClikCode or its shared tool configuration changed while this window was busy. /restart reloads it; the chat stays and what is running keeps running.');
     }
   };
   // Without this tick, usage only ever refreshed at session-open and right after

@@ -181,7 +181,8 @@ async function runAgentTurnOn(input: {
         currentSandbox: () => sessionSandboxMode(liveSettings.sandbox),
         currentPlanMode: () => liveSettings.planMode === true,
         // ClikDeploy's own account tools come with the Gateway.
-        mcpServers: [...routeMcpServers(session, config), ...(agentServer ? [agentServer] : [])],
+        // The mode is read now, not when the conversation opened: a change in /permissions reconnects the server with the new one.
+        mcpServers: [...routeMcpServers(session, config, liveSettings.permissionMode), ...(agentServer ? [agentServer] : [])],
         ...(agent?.system ? { agentInstructions: agent.system } : {}),
         ...(prompter ? { prompter } : {}),
         ...(signal ? { signal } : {}),

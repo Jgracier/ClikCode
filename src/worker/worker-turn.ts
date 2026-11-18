@@ -242,18 +242,25 @@ export function createTurnRunner(ctx: WorkerContext) {
     let lastHarness: string | undefined;
     // What the vendor was saying on its own is saved first: this turn's journal reads the conversation, and its
     // live view takes the windows over from that one.
+    const outOfTurnStarted = performance.now();
     if (ctx.outOfTurn.active) await ctx.outOfTurn.settle();
+    const outOfTurnSettleMs = Math.round(performance.now() - outOfTurnStarted);
     // A prompt ClikCode sent itself is not named to the windows: they would echo it as the
     // user's. Its journal, written next, carries it with the notice drawn in its place.
-    observer.startTurn(command.label ?? 'thinking', command.automatic ? undefined : command.text);
+    observer.startTurn(command.label ?? 'working', command.automatic ? undefined : command.text);
     try {
       // A background turn's record still being saved: this turn's checkpoint
       // would read the conversation without it and then write it back whole.
+      const vendorBackgroundStarted = performance.now();
       await ctx.vendorBackground.settled();
+      const vendorBackgroundSettleMs = Math.round(performance.now() - vendorBackgroundStarted);
       // The vendor being opened ahead of this turn (a chat that moved here):
       // the turn starts on it once it is ready, instead of opening a second.
+      const warmStarted = performance.now();
       if (ctx.warming) await ctx.warming;
+      const warmWaitMs = Math.round(performance.now() - warmStarted);
       if (controller.signal.aborted) throw turnCancelledError();
+      markTurn('worker-ready', { outOfTurnSettleMs, vendorBackgroundSettleMs, warmWaitMs });
       const running = runSessionTurn(config, sessionId, command.text, controller.signal, {
         onWorkFinished: () => { ctx.turnWorkDone = true; },
         onCompletedHarness: (harness) => { lastHarness = harness; },

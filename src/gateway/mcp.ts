@@ -14,6 +14,7 @@
 
 import type Conf from 'conf';
 import type { McpServerSpec } from '../agent/mcp/config.js';
+import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import { gatewayConnection } from '../agent/models/for-session.js';
 import { isGatewayService } from '../session/route.js';
 import type { HarnessSession } from '../session/model.js';
@@ -31,12 +32,24 @@ export const CLIKDEPLOY_CORE_TOOLS: readonly string[] = [
 /** How long a Gateway turn waits for ClikDeploy's MCP server. */
 export const CLIKDEPLOY_MCP_TURN_WAIT_MS = 3000;
 
-export function clikDeployMcpServer(connection: { baseUrl: string; apiKey: string }, adminMfaToken?: string): McpServerSpec {
+/** The header the platform reads (clikdeploy packages/clikagents permission-mode.ts HOST_PERMISSION_MODE_HEADER). */
+export const PERMISSION_MODE_HEADER = 'x-clikdeploy-permission-mode';
+
+/**
+ * `permissionMode` is the mode this conversation runs in. The agent already asks the person by that mode before it runs a tool (its
+ * approval card, or not at all in bypass), so the server is told which, and does not ask a second time by the account's assistant mode:
+ * a bypass conversation is not stopped on every write. Left out while the conversation has no mode set, so the account's mode decides.
+ */
+export function clikDeployMcpServer(connection: { baseUrl: string; apiKey: string }, adminMfaToken?: string, permissionMode?: AiHarnessPermissionMode): McpServerSpec {
   return {
     name: CLIKDEPLOY_MCP_SERVER,
     transport: 'http',
     url: `${connection.baseUrl.replace(/\/+$/, '')}/mcp?toolmode=search`,
-    headers: { authorization: `Bearer ${connection.apiKey}`, ...(adminMfaToken ? { 'x-admin-mfa': adminMfaToken } : {}) },
+    headers: {
+      authorization: `Bearer ${connection.apiKey}`,
+      ...(adminMfaToken ? { 'x-admin-mfa': adminMfaToken } : {}),
+      ...(permissionMode ? { [PERMISSION_MODE_HEADER]: permissionMode } : {}),
+    },
     core: CLIKDEPLOY_CORE_TOOLS,
     // Its tools/list took the whole 30 s connect timeout in a harness
     // benchmark run (bench/harness), and every Gateway turn waited for it
@@ -48,11 +61,11 @@ export function clikDeployMcpServer(connection: { baseUrl: string; apiKey: strin
 
 /** The servers a conversation's route brings: the ClikDeploy server on the
  * Gateway (when signed in), none elsewhere. */
-export function routeMcpServers(session: HarnessSession, config: Conf): McpServerSpec[] {
+export function routeMcpServers(session: HarnessSession, config: Conf, permissionMode: AiHarnessPermissionMode | undefined = session.permissionMode): McpServerSpec[] {
   if (!isGatewayService(session)) return [];
   try {
     const token = typeof config.get === 'function' ? config.get('adminMfaToken') : undefined;
-    return [clikDeployMcpServer(gatewayConnection(config), typeof token === 'string' ? token : undefined)];
+    return [clikDeployMcpServer(gatewayConnection(config), typeof token === 'string' ? token : undefined, permissionMode)];
   } catch {
     // Not signed in: the turn itself says so; there is no account to control.
     return [];

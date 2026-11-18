@@ -46,7 +46,6 @@ export const MODEL_OWNER_NAMES: Readonly<Record<string, readonly string[]>> = {
   auggie: ['augment', 'Augment Auggie'],
   vibe: ['mistral-vibe', 'vibe-acp', 'Mistral Vibe'],
   openhands: ['OpenHands CLI'],
-  cn: ['continue', 'Continue'],
   dcode: ['deepagents-code', 'Deep Agents Code'],
   devin: ['Devin CLI'],
   junie: ['Junie CLI'],

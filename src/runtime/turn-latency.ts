@@ -15,7 +15,7 @@ import { lifecycle } from './lifecycle-log.js';
 
 /** The moments, in the order they happen on the path. */
 const TURN_MARKS = [
-  'submit', 'accepted', 'account', 'spawned', 'ready', 'prompt-sent',
+  'submit', 'accepted', 'worker-ready', 'account', 'spawned', 'ready', 'prompt-sent',
   'first-byte', 'first-thought', 'first-event', 'first-text', 'first-paint', 'first-text-paint', 'end',
 ] as const;
 type TurnMarkName = (typeof TURN_MARKS)[number];
@@ -84,6 +84,12 @@ interface TurnBreakdown {
   marks: Partial<Record<TurnMarkName, number>>;
   /** submit -> the worker took the turn (the window's own work + the hop). */
   submitToAccepted?: number;
+  /** Worker ordering barriers and eligible warm-up have finished. */
+  submitToWorkerReady?: number;
+  outOfTurnSettleMs?: number;
+  vendorBackgroundSettleMs?: number;
+  barrierWaitMs?: number;
+  warmWaitMs?: number;
   /** submit -> the vendor process spawned or reused: ClikCode's, entirely. */
   submitToSpawn?: number;
   /** spawn -> the handshake done, the prompt about to go. */
@@ -134,6 +140,9 @@ export function turnLatency(lines: ReadonlyArray<string | Raw>, turnId?: string)
   let harness: string | undefined;
   let session: string | undefined;
   let reused: boolean | undefined;
+  let outOfTurnSettleMs: number | undefined;
+  let vendorBackgroundSettleMs: number | undefined;
+  let warmWaitMs: number | undefined;
   for (const line of lines) {
     const entry = parseLine(line);
     if (!entry || entry.event !== 'turn.mark' || typeof entry.turnId !== 'string' || typeof entry.mark !== 'string' || typeof entry.ms !== 'number') continue;
@@ -145,14 +154,24 @@ export function turnLatency(lines: ReadonlyArray<string | Raw>, turnId?: string)
     if (typeof entry.harness === 'string' && !harness) harness = entry.harness;
     if (typeof entry.session === 'string' && !session) session = entry.session;
     if (mark === 'spawned' && typeof entry.reused === 'boolean') reused = entry.reused;
+    if (mark === 'worker-ready') {
+      if (typeof entry.outOfTurnSettleMs === 'number') outOfTurnSettleMs = entry.outOfTurnSettleMs;
+      if (typeof entry.vendorBackgroundSettleMs === 'number') vendorBackgroundSettleMs = entry.vendorBackgroundSettleMs;
+      if (typeof entry.warmWaitMs === 'number') warmWaitMs = entry.warmWaitMs;
+    }
   }
   if (id === undefined || !Object.keys(marks).length) return undefined;
   const out: TurnBreakdown = { turnId: id, marks };
   if (harness) out.harness = harness;
   if (session) out.session = session;
   if (reused !== undefined) out.reused = reused;
+  if (outOfTurnSettleMs !== undefined) out.outOfTurnSettleMs = outOfTurnSettleMs;
+  if (vendorBackgroundSettleMs !== undefined) out.vendorBackgroundSettleMs = vendorBackgroundSettleMs;
+  if (outOfTurnSettleMs !== undefined || vendorBackgroundSettleMs !== undefined) out.barrierWaitMs = (outOfTurnSettleMs ?? 0) + (vendorBackgroundSettleMs ?? 0);
+  if (warmWaitMs !== undefined) out.warmWaitMs = warmWaitMs;
   const set = <K extends keyof TurnBreakdown>(key: K, value: TurnBreakdown[K] | undefined): void => { if (value !== undefined) out[key] = value; };
   set('submitToAccepted', span(marks, 'submit', 'accepted'));
+  set('submitToWorkerReady', span(marks, 'submit', 'worker-ready'));
   // `ms` is already since submit; without a submit mark (a headless turn) the
   // clock's own start stands in for it.
   set('submitToSpawn', marks.spawned);
@@ -192,7 +211,7 @@ export function turnsLatency(lines: ReadonlyArray<string | Raw>): TurnBreakdown[
 }
 
 const NUMERIC: ReadonlyArray<keyof TurnBreakdown> = [
-  'submitToAccepted', 'submitToSpawn', 'spawnToReady', 'readyToPromptSent', 'promptToFirstByte', 'readyToFirstByte', 'firstByteToFirstThought', 'firstByteToFirstEvent',
+  'submitToAccepted', 'submitToWorkerReady', 'barrierWaitMs', 'warmWaitMs', 'submitToSpawn', 'spawnToReady', 'readyToPromptSent', 'promptToFirstByte', 'readyToFirstByte', 'firstByteToFirstThought', 'firstByteToFirstEvent',
   'firstEventToFirstText', 'submitToFirstPaint', 'firstEventToFirstPaint', 'firstTextToTextPaint', 'submitToTextPaint', 'total', 'vendorMs', 'clikcodeMs',
 ];
 
@@ -223,6 +242,9 @@ export function medianLatencyByHarness(turns: readonly TurnBreakdown[]): Array<{
 const COLUMNS: ReadonlyArray<{ head: string; key: keyof TurnBreakdown }> = [
   { head: 'echo', key: 'submitToFirstPaint' },
   { head: 'accept', key: 'submitToAccepted' },
+  { head: 'setup', key: 'submitToWorkerReady' },
+  { head: 'barriers', key: 'barrierWaitMs' },
+  { head: 'warm', key: 'warmWaitMs' },
   { head: 'spawn', key: 'submitToSpawn' },
   { head: 'ready', key: 'spawnToReady' },
   { head: 'vendor', key: 'vendorMs' },
@@ -249,5 +271,5 @@ export function formatLatencyTable(turns: readonly TurnBreakdown[]): string {
     const widths = table[0]!.map((_, index) => Math.max(...table.map((row) => row[index]!.length)));
     return table.map((row) => row.map((value, index) => (index < 2 ? value.padEnd(widths[index]!) : value.padStart(widths[index]!))).join('  ').trimEnd());
   };
-  return [...draw(rows), '', ...draw(summary), '', 'ms. vendor = prompt-sent..first answer text (the model\'s thinking included); clikcode = submit..prompt-sent plus first text..drawn; thought = first byte..first thought, event = first byte..first answer or tool.'].join('\n');
+  return [...draw(rows), '', ...draw(summary), '', 'ms. setup = submit..worker ready; barriers = prior vendor/background work; warm = pre-opened vendor wait; vendor = prompt-sent..first answer text; clikcode = submit..prompt-sent plus first text..drawn; thought = first byte..first thought, event = first byte..first answer or tool.'].join('\n');
 }
