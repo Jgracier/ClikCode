@@ -65,6 +65,11 @@ const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   'clikdeploy-vendor-mfa': { about: 'store a vendor authenticator seed in ClikDeploy (account, e.g. "aws/root"; label optional, no spaces); only the rolling code is ever handed out, never the seed', optionalSlots: ['label'],
     run: ['clikdeploy', 'tools', 'run', 'admin_vendor_mfa_store', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"account":"{{account}}","seed":"{{secret|json}}","label":"{{label}}"') },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
+  // A harness's own API key (OpenCode's, from opencode.ai/auth) signed into a ClikCode account on this machine: the sign-in reads it
+  // from stdin as a pasted key, so it is never on screen. `label`: the account to sign in again (left out: the harness's only one
+  // that needs a sign-in, else a new account).
+  'clikcode-account': { about: 'sign a ClikCode harness account in with this key (harness, e.g. opencode; label optional: the account to sign in again)', optionalSlots: ['label'],
+    run: ['clikcode', 'accounts', 'login', '{{harness}}', '--label', '{{label}}'], stdin: '{{secret}}\n' },
 };
 
 const CONNECTION_TO = new Set(['clikdeploy-connection', 'clikdeploy-connection-basic', 'clikdeploy-connection-basic-key']);
