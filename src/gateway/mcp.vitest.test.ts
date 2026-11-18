@@ -31,4 +31,24 @@ describe('ClikDeploy’s own MCP server', () => {
     const [server] = routeMcpServers({ route: 'gateway' } as never, { get: () => 'verified-token' } as never);
     expect(server?.transport === 'http' && server.headers['x-admin-mfa']).toBe('verified-token');
   });
+
+  it("tells the platform the conversation's permission mode, so it does not ask a second time; nothing while no mode is set", () => {
+    const header = (mode: 'ask' | 'auto' | 'bypass' | undefined) => {
+      const [server] = routeMcpServers({ route: 'gateway' } as never, {} as never, mode);
+      return server?.transport === 'http' ? server.headers['x-clikdeploy-permission-mode'] : 'not http';
+    };
+    expect(header('bypass')).toBe('bypass');
+    expect(header('ask')).toBe('ask');
+    expect(header('auto')).toBe('auto');
+    expect(header(undefined)).toBeUndefined();
+    // By default the conversation's own saved mode.
+    const [saved] = routeMcpServers({ route: 'gateway', permissionMode: 'bypass' } as never, {} as never);
+    expect(saved?.transport === 'http' && saved.headers['x-clikdeploy-permission-mode']).toBe('bypass');
+  });
+
+  it('is a different spec when the mode changes, so the connection is made again with the new header', () => {
+    const [ask] = routeMcpServers({ route: 'gateway' } as never, {} as never, 'ask');
+    const [bypass] = routeMcpServers({ route: 'gateway' } as never, {} as never, 'bypass');
+    expect(JSON.stringify(ask)).not.toBe(JSON.stringify(bypass));
+  });
 });

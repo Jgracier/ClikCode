@@ -9,7 +9,7 @@ import type { HarnessDefaultSettings } from '../session/model.js';
 const defaults: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'ask' };
 const codex = localHarnessForCommand('codex')!;
 const opencode = localHarnessForCommand('opencode')!;
-const cn = localHarnessForCommand('cn')!;
+const aider = localHarnessForCommand('aider')!;
 const source = { effort: 'xhigh', permissionMode: 'auto' } as const;
 
 describe('carriedHandoffSettings', () => {
@@ -23,8 +23,8 @@ describe('carriedHandoffSettings', () => {
   it("falls back to the target's defaults for what it does not take", () => {
     // OpenCode has no `xhigh` and no `auto` mode.
     expect(carriedHandoffSettings(source, opencode, defaults, ['minimal', 'low', 'medium', 'high', 'max'])).toMatchObject({ effort: 'medium', permissionMode: 'ask' });
-    // Continue takes no effort at all (none is invented), but does take bypass.
-    expect(carriedHandoffSettings({ ...source, permissionMode: 'bypass' }, cn, defaults)).toMatchObject({ effort: '', permissionMode: 'bypass' });
+    // Aider takes no effort setting and only supports bypass.
+    expect(carriedHandoffSettings({ ...source, permissionMode: 'bypass' }, aider, defaults)).toMatchObject({ effort: '', permissionMode: 'bypass' });
   });
 
   it('carries a permission mode by meaning, never escalating', () => {

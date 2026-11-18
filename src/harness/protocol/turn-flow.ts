@@ -173,8 +173,8 @@ export type StatusTone = 'thinking' | 'tool' | 'asking';
 
 /** What the status line says and how it looks: waiting on the user, else the
  * open call's verb, else the reasoning's own heading, else "writing" while
- * answer text arrives, else "thinking". A quiet clock does not invent a
- * longer phrase. */
+ * answer text arrives, else one neutral "Working" label. Setup and model
+ * startup are not separate animated stages. */
 export function turnStatus(state: {
   phase?: string; toolPhase?: string; thought?: string; asking?: boolean; writing?: boolean;
   /** Background commands are all that runs (waitingOnCommands): said in place of 'thinking'. */
@@ -185,8 +185,9 @@ export function turnStatus(state: {
   const heading = reasoningHeading(state.thought);
   const phase = state.phase?.replace(/(…|\.\.\.)$/, '').trim();
   const thinking = !phase || /^thinking$/i.test(phase);
+  const working = /^working$/i.test(phase ?? '');
   if (state.waitingOn && !heading && !state.writing && (thinking || /^background work$/i.test(phase ?? ''))) return { label: state.waitingOn, tone: 'thinking' };
-  const label = heading ?? (!thinking ? phase! : state.writing ? 'writing' : 'thinking');
+  const label = heading ?? (working ? 'Working' : !thinking ? phase! : state.writing ? 'writing' : 'Working');
   return { label, tone: 'thinking' };
 }
 

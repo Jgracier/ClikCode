@@ -17,9 +17,6 @@ import { forceStoreSession, unforceStoreSession } from '../session/ephemeral.js'
 import { leaveProvider } from '../session/native-thread.js';
 import { runSessionTurn } from './session-turn.js';
 import { resumePromptForPendingTurn } from '../session/exhaustion.js';
-import { NATIVE_SESSION_STORES } from '../session/discovery/registry.js';
-import type { NativeSessionStore, NativeThreadWriteContext } from '../session/discovery/stores.js';
-import type { CanonicalRecord } from '../session/canonical.js';
 
 const saved = { ...process.env };
 let root: string;
@@ -32,16 +29,15 @@ beforeEach(async () => {
   await mkdir(bin, { recursive: true });
   await mkdir(join(root, 'home'), { recursive: true });
   promptLog = join(root, 'prompts.jsonl');
-  // Continue's `cn`: text output, the prompt after `-p`. It records what it
-  // was asked and answers.
-  await writeFile(join(bin, 'cn'), `#!/usr/bin/env node
+  // Aider's text output. It records the message it was asked and answers.
+  await writeFile(join(bin, 'aider'), `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes('--version')) { console.log('1.0.0'); process.exit(0); }
-const at = args.indexOf('-p');
+const at = args.indexOf('--message');
 require('node:fs').appendFileSync(${JSON.stringify(promptLog)}, JSON.stringify(at >= 0 ? args[at + 1] : null) + '\\n');
 console.log('carried on');
 `);
-  await chmod(join(bin, 'cn'), 0o755);
+  await chmod(join(bin, 'aider'), 0o755);
   Object.assign(process.env, { HOME: join(root, 'home'), USERPROFILE: join(root, 'home'), CLIKCODE_HOME: join(root, 'clikcode') });
   process.env.PATH = [bin, dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter);
 });
@@ -53,12 +49,12 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-/** A Claude Code chat that ran out mid-turn, moved to Continue in place (as
+/** A Claude Code chat that ran out mid-turn, moved to Aider in place (as
  * moveToProvider does, without installing anything). */
 async function handedOff(pendingTurn?: HarnessSession['pendingTurn'], fields: Partial<HarnessSession> = {}): Promise<string> {
   const state = await readState();
   const now = new Date().toISOString();
-  const account = { id: 'cn-1', provider: 'continue', label: 'cn', authKind: 'vendor-cli', models: [], status: 'ready' } as unknown as AiHarnessAccount;
+  const account = { id: 'aider-1', provider: 'aider', label: 'aider', authKind: 'vendor-cli', models: [], status: 'ready' } as unknown as AiHarnessAccount;
   state.accounts.push(account);
   const source: HarnessSession = {
     id: randomUUID(), conversationId: randomUUID(), route: 'local', accountId: null, provider: 'anthropic', model: null,
@@ -74,7 +70,7 @@ async function handedOff(pendingTurn?: HarnessSession['pendingTurn'], fields: Pa
     ...(pendingTurn ? { pendingTurn } : {}), ...fields,
   };
   leaveProvider(source);
-  Object.assign(source, { nativeHarness: 'cn', provider: 'continue', accountId: account.id, model: null });
+  Object.assign(source, { nativeHarness: 'aider', provider: 'aider', accountId: account.id, model: null });
   state.sessions.push(source);
   forceStoreSession(source.id); forced.push(source.id);
   await writeState(state);
@@ -90,7 +86,7 @@ describe("the first vendor turn after a provider switch", () => {
     const id = await handedOff();
     let completedHarness: string | undefined;
     await runSessionTurn({} as never, id, 'now run the focused test', undefined, { onCompletedHarness: (harness) => { completedHarness = harness; } });
-    expect(completedHarness).toBe('cn');
+    expect(completedHarness).toBe('aider');
     const [wire] = await sentPrompts();
     expect(wire).toContain('rename the parser');
     expect(wire).toContain('renamed it to Reader');
@@ -102,32 +98,6 @@ describe("the first vendor turn after a provider switch", () => {
     expect(wire).toMatch(/<tool_digest>[\s\S]*edit src\/parser\.ts; run npm test \(failed, exit 1\)/);
     expect(wire).toMatch(/<touched_files>[\s\S]*- src\/parser\.ts/);
     expect(wire).toMatch(/<attachments>[\s\S]*spec\.md/);
-  }, 30_000);
-
-  it('always transfers history to a stateless harness, even if a writer was registered', async () => {
-    const writes: Array<{ record: CanonicalRecord; context: NativeThreadWriteContext }> = [];
-    const stores = NATIVE_SESSION_STORES as Record<string, NativeSessionStore>;
-    stores.cn = {
-      root: () => join(root, 'cn-store'),
-      writer: {
-        testedVersions: ['1.0.0'],
-        versionOk: (context) => context.version === '1.0.0',
-        write: async (record, context) => { writes.push({ record, context }); return { nativeId: 'written-thread' }; },
-      },
-    };
-    try {
-      const id = await handedOff();
-      await runSessionTurn({} as never, id, 'now run the focused test');
-      const [wire] = await sentPrompts();
-      expect(wire).toContain('now run the focused test');
-      expect(wire).toContain('rename the parser');
-      expect(wire).toContain('renamed it to Reader');
-      expect(writes).toHaveLength(0);
-      const state = await readState();
-      expect(state.sessions.find((item) => item.id === id)?.nativeSessionId).toBeUndefined();
-    } finally {
-      delete stores.cn;
-    }
   }, 30_000);
 
   it('sends the user own request with its partial answer carried into "Resume in"', async () => {

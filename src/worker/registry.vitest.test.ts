@@ -4,7 +4,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { watchHandoffRequest, conversationHandoffRequested, ensureWorkersDirectory, listWorkerRecords, readWorkerRecord, removeWorkerRecord, requestConversationHandoff, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord } from './registry.js';
+import { watchHandoffRequest, conversationHandoffRequested, currentWorkerBuild, ensureWorkersDirectory, listWorkerRecords, readWorkerRecord, removeWorkerRecord, requestConversationHandoff, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord } from './registry.js';
+import { mcpConfigFilePath } from '../agent/mcp/config.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root: string | undefined;
@@ -37,6 +38,15 @@ describe('worker registry', () => {
   it('returns undefined for a session with no record at all', async () => {
     await isolatedHome();
     expect(await readWorkerRecord('never-written')).toBeUndefined();
+  });
+
+  it('changes the worker runtime fingerprint when the shared MCP config changes', async () => {
+    await isolatedHome();
+    const before = currentWorkerBuild();
+    expect(before).toBeDefined();
+    const config = mcpConfigFilePath(root!);
+    await writeFile(config, JSON.stringify({ mcpServers: { brain: { url: 'http://localhost:4021/sse' } } }));
+    expect(currentWorkerBuild()).not.toBe(before);
   });
 
   it('lists every worker record and skips owner files', async () => {

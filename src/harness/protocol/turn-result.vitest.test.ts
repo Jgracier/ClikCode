@@ -6,7 +6,7 @@ import { codex } from './vendor-fixtures.vitest.js';
 
 describe('native harness turn results', () => {
   it('never treats assistant prose as a session identity for a text harness', () => {
-    const result = nativeTurnResult(localHarnessForCommand('cn')!, 'Example session: abcdefgh1234', { exitCode: 0 });
+    const result = nativeTurnResult(localHarnessForCommand('aider')!, 'Example session: abcdefgh1234', { exitCode: 0 });
     expect(result.text).toBe('Example session: abcdefgh1234');
     expect(result.nativeSessionId).toBeUndefined();
   });
@@ -137,20 +137,20 @@ describe('native harness turn results', () => {
   });
 
   describe('plain-text output', () => {
-    const continueCli = localHarnessForCommand('cn')!;
+    const plainTextCli = localHarnessForCommand('aider')!;
 
     it('treats a non-zero exit as the failure, explained by what the process printed', () => {
       let failure: (Error & { stderrTail?: string }) | undefined;
       try {
-        nativeTurnResult(continueCli, 'Error: You have exceeded your monthly quota\n', { exitCode: 1, stderr: '' });
+      nativeTurnResult(plainTextCli, 'Error: You have exceeded your monthly quota\n', { exitCode: 1, stderr: '' });
       } catch (error) { failure = error as typeof failure; }
-      expect(failure?.message).toBe('Continue: Error: You have exceeded your monthly quota');
+      expect(failure?.message).toBe('Aider: Error: You have exceeded your monthly quota');
       // Not an answer, so it is safe to classify: failover reads it as quota.
       expect(failure?.stderrTail).toContain('exceeded your monthly quota');
     });
 
     it('returns the output as the answer on a clean exit', () => {
-      expect(nativeTurnResult(continueCli, 'PONG\n', { exitCode: 0 }).text).toBe('PONG');
+      expect(nativeTurnResult(plainTextCli, 'PONG\n', { exitCode: 0 }).text).toBe('PONG');
     });
   });
 });

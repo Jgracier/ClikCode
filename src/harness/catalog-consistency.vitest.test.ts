@@ -135,8 +135,6 @@ describe('every declared capability is usable', () => {
     const byCommand = new Map(harnesses.map((h) => [h.command, h]));
     // droid refuses --disable-builtin-skills in every ACP mode (0.223.0).
     expect(JSON.stringify(localHarnessCapabilityManifest(byCommand.get('droid')!).options)).not.toContain('disable-builtin-skills');
-    // cn --model ADDS a hub model (owner/package); it is no model selector (1.5.47).
-    expect(byCommand.get('cn')?.modelArgvPrefix).toBeUndefined();
     // junie's launcher finds its builds through JUNIE_DATA, empty under a private HOME.
     expect(HOME_REDIRECT_ENV_DEFAULTS.JUNIE_DATA).toBe('~/.local/share/junie');
     // devin session/new offers accept-edits|smart|ask|plan|bypass and starts in accept-edits.
@@ -156,7 +154,6 @@ describe('every declared capability is usable', () => {
     // Grok Build's initialize says image:false and it has no attach flag.
     expect(harnessSupportsImages(byCommand.get('grok')!)).toBe(false);
     // A CLI-only harness without an attach flag carries none.
-    expect(harnessSupportsImages(byCommand.get('cn')!)).toBe(false);
     expect(harnessSupportsImages(byCommand.get('openclaw')!)).toBe(false);
   });
 

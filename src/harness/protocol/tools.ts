@@ -200,7 +200,6 @@ export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>>
   kimi: { stream: 'structured', note: 'its CLI turn emits stream-json, and its ACP surface is a subcommand rather than a flag.' },
   vibe: { stream: 'structured', note: '--output streaming is newline-delimited JSON per message; vibe-acp is a separate binary.' },
   openhands: { stream: 'structured', note: '--json streams JSONL events in headless mode; `acp` is a subcommand.' },
-  cn: { stream: 'text', note: 'text-only turn output; the vendor CLI publishes no machine-readable tool events.' },
   [GATEWAY_HARNESS_COMMAND]: {
     stream: 'structured',
     // read_file/list_dir/glob/grep/write_file/edit_file/multi_edit/bash/

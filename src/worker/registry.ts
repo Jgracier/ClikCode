@@ -9,7 +9,7 @@
  */
 import { quiet } from '../runtime/lifecycle-log.js';
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, statSync, watch, writeSync } from 'node:fs';
+import { closeSync, readFileSync, statSync, watch, writeSync } from 'node:fs';
 import { link, mkdir, readdir, readFile, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { hostname, tmpdir } from 'node:os';
@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { atomicWriteFile } from '../session/store/files.js';
 import { breakStaleLock, pidIsAlive } from '../session/store/locks.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { mcpConfigFilePath } from '../agent/mcp/config.js';
 
 import type { BackgroundCommand } from '../harness/protocol/background-agents.js';
 import { sleep } from '../runtime/sleep.js';
@@ -55,8 +56,10 @@ export interface WorkerRuntimeRecord {
   runningTurn?: { since: string };
 }
 
-/** What identifies a build: the entry file a worker actually loads, by
- * modification time and size.
+/** What identifies the worker runtime: the entry file it loads, by
+ * modification time and size, plus the shared MCP config it provisions
+ * into vendor sessions. Changing that config retires idle workers just like
+ * replacing the entry file, so a new MCP server is available on the next turn.
  *
  * Not the version string -- the whole problem is two processes running
  * different code with the SAME version between two releases. Not a content
@@ -73,7 +76,10 @@ export function currentWorkerBuild(): string | undefined {
   if (!entry) return undefined;
   try {
     const stats = statSync(entry);
-    return `${Math.round(stats.mtimeMs)}:${stats.size}`;
+    let mcp = 'missing';
+    try { mcp = createHash('sha256').update(readFileSync(mcpConfigFilePath(stateDirectory()))).digest('hex'); }
+    catch { /* no config yet, or a transient write; the next check sees the completed file */ }
+    return `${Math.round(stats.mtimeMs)}:${stats.size}:mcp-${mcp}`;
   } catch {
     return undefined;
   }
