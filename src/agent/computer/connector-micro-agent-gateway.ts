@@ -16,14 +16,31 @@ const benchedModels = new Map<string, number>();
 const PROVIDER_OUTAGE_MS = 5 * 60_000;
 const providerCircuit = new ProviderCircuit();
 
+/** A version read from a model id ("claude-opus-4-8" -> [4, 8], "gpt-5.6-terra" -> [5, 6]), to rank a family newest first. */
+const versionOf = (id: string): number[] => (/(\d+(?:[.-]\d+)*)/.exec(id)?.[1] ?? '0').split(/[.-]/).map(Number);
+const newerFirst = (a: string, b: string): number => {
+  const x = versionOf(a), y = versionOf(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (y[i] ?? 0) - (x[i] ?? 0); if (d) return d; }
+  return 0;
+};
+/** Families strong enough to run a tool-calling hand-off, best first; each listed id in a family, newest first, two per family. Variants
+ * (batch, thinking, small, mini, nano, codex, preview) are left out: they refuse tools, answer late, or are too weak for browser work. */
+const FAMILIES = [/^claude-sonnet-\d/, /^claude-opus-\d/, /^gpt-5(?:\.\d+)?(?:-(?:luna|terra|sol))?$/, /^gemini-\d+(?:\.\d+)?-pro$/];
+const WEAK = /batch|thinking|:|mini|nano|codex|preview|lite|flash|haiku|uncensored|derestricted/i;
+export function familyModels(listed: readonly string[]): string[] {
+  return FAMILIES.flatMap(family => listed.filter(id => family.test(id) && !WEAK.test(id)).sort(newerFirst).slice(0, 2));
+}
+
 /** The models to try for a hand-off, in order: those the Gateway lists (the names as it lists them), minus any that failed lately. */
 export async function microModels(listed?: readonly string[]): Promise<string[]> {
   const wanted = [...(process.env.CLIKCODE_MICRO_AGENT_MODEL ? [process.env.CLIKCODE_MICRO_AGENT_MODEL] : []), ...MICRO_MODELS];
   let known = listed;
   if (!known) { try { known = (await (await import('../../gateway/models.js')).gatewayModels()).models.map(model => model.id); } catch { known = undefined; } }
   const resolved = known ? listedModels(wanted, known) : [];
-  // A list that could not be read, or that holds none of them, is asked for by the names as written: the Gateway accepts aliases it does not list.
-  const all = resolved.length ? resolved : wanted;
+  // The named models first; then the strongest models of each family the Gateway lists now, so a list that dropped every named one
+  // (2026-11-18: 177 models, none of the five) still runs agents. A list that could not be read is asked for by the names as written.
+  const family = known ? familyModels(known).filter(id => !resolved.includes(id)) : [];
+  const all = resolved.length || family.length ? [...resolved, ...family] : wanted;
   const now = Date.now();
   const fit = all.filter(id => (benchedModels.get(id) ?? 0) <= now);
   return fit.length ? fit : all;

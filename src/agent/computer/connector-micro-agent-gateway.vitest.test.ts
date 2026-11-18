@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { microModels, runGatewayMicro } from './connector-micro-agent-gateway.js';
+import { familyModels, microModels, runGatewayMicro } from './connector-micro-agent-gateway.js';
 import { ProviderCircuit } from '../../gateway/provider-circuit.js';
 
 const reply = (message: unknown): Response => new Response(JSON.stringify({ choices: [{ message }] }), { status: 200 });
@@ -119,5 +119,15 @@ describe('which models run a hand-off', () => {
   });
   it('asks for the names as written when the list holds none of them', async () => {
     expect((await microModels(['some-other-model']))[0]).toBe('claude-sonnet-5-5');
+  });
+});
+
+describe('models when the Gateway lists none of the named ones', () => {
+  const listed = ['claude-sonnet-4-5', 'claude-opus-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-5-batch', 'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5-mini', 'gpt-5.1-codex-mini', 'gemini-3.1-flash-lite', 'claude-haiku-4-5'];
+  it('takes the newest strong models of each family, two each, and no small, batch or codex variant', () => {
+    expect(familyModels(listed)).toEqual(['claude-sonnet-4-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.6-luna', 'gpt-5.6-terra']);
+  });
+  it('tries those after the named models instead of asking for names the Gateway does not list', async () => {
+    expect(await microModels(listed)).toEqual(['claude-sonnet-4-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.6-luna', 'gpt-5.6-terra']);
   });
 });
