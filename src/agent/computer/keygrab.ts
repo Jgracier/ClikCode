@@ -263,8 +263,10 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   let phoneTried = false;
   /** A phone check is not a wall when the user's texts can be read: the profile phone is typed (when the page asks for the number), the
    * code it texts is read and typed. Once per run; a page that still asks after that is the person's. */
-  const pastPhone = async (view: KeyView): Promise<boolean> => {
-    if (phoneTried || !port.smsCode) return false;
+  /** passed: the code was typed. no-code: the form was worked and no text came (a real wall: the vendor did not send to this number).
+   * form: the form was not one this code can work (no send button, no code box): an agent with read_sms_code can, so it is no wall yet. */
+  const pastPhone = async (view: KeyView): Promise<'passed' | 'no-code' | 'form' | 'none'> => {
+    if (phoneTried || !port.smsCode) return 'none';
     phoneTried = true;
     let v = view;
     let since = Date.now() - 180_000;
@@ -274,20 +276,20 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       await act('type the profile phone', () => port.fill(phoneField));
       since = Date.now();
       const send = [...v.controls].reverse().find(c => pressable(c) && /^(send|text me|send (?:the )?code|get (?:a )?code|verify|continue|next|submit)\b/i.test(c.name));
-      if (!send) return false;
+      if (!send) { say('phone check: no button to send the code'); return 'form'; }
       await click(send.name);
       await sleep(2_000);
       v = await port.look();
     }
     const field = codeField(v.fields) ?? (v.fields.length === 1 ? v.fields[0] : undefined);
-    if (!field) return false;
+    if (!field) { say('phone check: no box for the code'); return 'form'; }
     const code = await act('read the texted code', () => port.smsCode!(since));
-    if (!code) return false;
+    if (!code) return 'no-code';
     await act('type the texted code', () => port.fill(field, code));
     const go = [...v.controls].reverse().find(c => pressable(c) && /^(verify|confirm|continue|submit|next|done)\b/i.test(c.name));
     if (go) await click(go.name);
     await sleep(1_500);
-    return true;
+    return 'passed';
   };
   let cardTried = false;
   /** A payment page the standing card rule allows: every box filled from the profile and the saved card, then its own continue button. Once. */
@@ -306,7 +308,12 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     if (wall?.kind === 'captcha' && !view.captchaFrame && wordsOnly.has(pathOf(view.url) || view.url)) return;
     if (wall?.kind === 'mfa' && await pastAuthenticator(view)) return;
     if (wall?.kind === 'decision' && /work-email|free-mail/.test(wall.reasonCode) && await pastFreeMail(view)) return;
-    if ((wall?.kind === 'sms' || (wall?.kind === 'mfa' && /text|sms|phone|mobile/i.test(view.text))) && await pastPhone(view)) return;
+    if (wall?.kind === 'sms' || (wall?.kind === 'mfa' && /text|sms|phone|mobile/i.test(view.text))) {
+      const phone = await pastPhone(view);
+      if (phone === 'passed') return;
+      // The texts can be read, but this form is not one the runner can work: an agent with read_sms_code gets it, as an unknown screen.
+      if (phone === 'form') throw await stop('unknown', `a phone-code form at ${hostOf(view.url) || 'the vendor'} the runner cannot work; texted codes can be read (read_sms_code)`, undefined, view);
+    }
     if (wall?.kind === 'payment' && await pastPayment(view)) return;
     if (wall) throw await wallStop(view, wall);
   };

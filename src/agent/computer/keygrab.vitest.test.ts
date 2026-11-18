@@ -766,6 +766,19 @@ describe('a phone check', () => {
     expect(asked[0]).toBeGreaterThanOrEqual(began);
     expect(done).toMatchObject({ ok: true });
   });
+  it('hands a phone form it cannot work to an agent, as an unknown screen with no person step, when texts can be read', async () => {
+    // No button that sends the code: the runner cannot work this form, but an agent with read_sms_code can.
+    const odd = { ...pages, 'https://vendor.example/': { text: 'Verify your phone number to continue. We will text you a code.', controls: ['Back'], fields: ['Phone number'] } };
+    const site = fakeSite(odd);
+    const done = await runKeygrab({ ...site.port, smsCode: async () => '482913' }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
+    expect(done).toMatchObject({ ok: false, stop: { kind: 'unknown' } });
+    expect((done as { stop: { human?: unknown } }).stop.human).toBeUndefined();
+  });
+  it('keeps "no code came" as the person\'s step: the vendor did not text this number', async () => {
+    const silent = fakeSite(pages);
+    const done = await runKeygrab({ ...silent.port, smsCode: async () => undefined }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
+    expect(done).toMatchObject({ ok: false, stop: { human: { kind: 'sms' } } });
+  });
   it('is the person\'s step when no Mac reads the texts, or no code came', async () => {
     const none = fakeSite(pages);
     expect(await runKeygrab(none.port, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined })).toMatchObject({ ok: false });
