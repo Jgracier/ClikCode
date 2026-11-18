@@ -126,7 +126,7 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
         await storeKey(harness, spec, envOverrides, key, screen.signal);
         return;
       }
-      await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), key ?? instead.key));
+      await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), key ?? instead.key, !local));
       return;
     }
     // A vendor that reads its key only from a variable: its own sign-in, with
@@ -318,9 +318,11 @@ export async function keyRoutedScreen(
   spec: NativeHarnessSpec, routes: readonly AiHarnessKeyRoute[], screen: SignInScreen,
   providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>> = keyProviders(),
   given?: string,
+  /** No browser here (a phone, a remote shell): the vendor's menus choose the device-code sign-in where they offer one. */
+  remote = false,
 ): Promise<SignInUi> {
   const key = given ?? await askKey(spec, screen);
-  if (!key) return screen;
+  if (!key) return remote ? preferDeviceCode(screen) : screen;
   const route = await routeFor(spec, routes, key, screen.signal, providers);
   const labels = [...route.choose];
   let searched: string | undefined;
@@ -371,7 +373,24 @@ async function askKey(spec: NativeHarnessSpec, screen: SignInScreen): Promise<st
   if (page) { try { screen.show({ url: page }); } catch { /* fail-open-ok: the prompt below still names the page */ } }
   const key = (await screen.ask(`${spec.displayName} API key${page ? ` (make one at ${page})` : ''}, or Enter to choose a provider`, true, true)).trim();
   if (screen.signal.aborted) throw new Error(`sign-in to ${spec.displayName} was cancelled`);
+  // None given: the person is signing in another way, and the page for making a key is not what the next screens are about.
+  if (!key && page) screen.hide?.();
   return key;
+}
+
+/** The method menu of a provider's own sign-in ("Login method": OpenAI's ChatGPT browser, headless, or a key) answered for a
+ * session with no browser of its own: the one that gives a device code, which any browser can finish, rather than a
+ * localhost callback only this machine can receive. Every other question stays the person's. */
+export function preferDeviceCode(screen: SignInScreen): SignInUi {
+  return {
+    ...screen,
+    show: (link) => screen.show(link),
+    ask: (...args) => screen.ask(...args),
+    choose: async (title, choices, selected) => {
+      const device = /login method|sign.?in method/i.test(title) ? choices.findIndex((choice) => /\b(headless|device)\b/i.test(choice)) : -1;
+      return device >= 0 ? device : screen.choose(title, choices, selected);
+    },
+  };
 }
 
 /** The first route whose endpoint takes `key`. Throws when none does. */

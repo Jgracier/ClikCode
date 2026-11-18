@@ -46,6 +46,8 @@ export function isKeyShaped(text: string): boolean {
 /** What a sign-in needs from the screen showing it. */
 export interface SignInUi {
   show(link: LoginLink): void;
+  /** Takes the link down: what it was for (a page to make a key on) no longer is, because the person chose another sign-in. */
+  hide?(): void;
   /** A typed answer. `secret`: a key, drawn as dots. `optional`: an empty
    * answer is one (a shown default, a skipped key). `alongside`: a key the
    * user may paste while the vendor's own sign-in goes on -- the composer
@@ -530,6 +532,7 @@ export async function runVendorSignIn(input: {
   const secrets: string[] = [];
   const ui: SignInUi = {
     show: (link) => given.show(link),
+    ...(given.hide ? { hide: () => given.hide!() } : {}),
     choose: (title, choices, selected) => given.choose(title, choices, selected),
     ...(given.signal ? { signal: given.signal } : {}),
     ask: async (prompt, secret, optional, alongside) => {

@@ -48,6 +48,11 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
     ];
     band();
   };
+  // The link is no longer the sign-in's (the person chose another way in): off the band.
+  const hide = (): void => {
+    linkLines = [];
+    band();
+  };
   // A code or key typed under the link: the waiting composer takes it, and
   // the band says what it is for.
   // What was typed before the sign-in asked: set aside for the code, and
@@ -132,7 +137,7 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
     this.updateWaiting();
   };
   return {
-    signal: controller.signal, show, ask, choose,
+    signal: controller.signal, show, hide, ask, choose,
     withdraw,
     stop: screenStop,
   };

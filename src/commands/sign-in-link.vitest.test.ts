@@ -26,6 +26,7 @@ describe.skipIf(process.platform === 'win32')('a sign-in on the prompter\'s own 
     const screen: SignInScreen = {
       signal: controller.signal,
       show: (link) => { calls.push(`show ${link.url} ${link.code ?? ''}`.trim()); },
+      hide: () => { calls.push('hide'); },
       ask: async (prompt) => { calls.push(`ask ${prompt}`); return ''; },
       choose: async () => undefined,
       stop: () => { calls.push('stop'); },
@@ -57,7 +58,10 @@ describe.skipIf(process.platform === 'win32')('a sign-in on the prompter\'s own 
     await withSignIn(value, 'OpenCode', () => loginNativeHarness(spec, { HOME: dir })).catch(() => undefined);
     const shown = calls.indexOf('show https://opencode.ai/auth');
     expect(shown).toBeGreaterThan(-1);
-    expect(calls.findIndex((call) => call.startsWith('ask OpenCode API key'))).toBeGreaterThan(shown);
+    const asked = calls.findIndex((call) => call.startsWith('ask OpenCode API key'));
+    expect(asked).toBeGreaterThan(shown);
+    // No key was given (the test screen answers ''): the page for making one comes down before the vendor's own menus.
+    expect(calls.indexOf('hide')).toBeGreaterThan(asked);
   });
 
   it('shows the link and code on that screen, takes it down, and says nothing of a sign-in that worked', async () => {
