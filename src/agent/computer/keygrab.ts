@@ -332,6 +332,10 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       if (outcome !== 'cleared') break;
       await sleep(800);
       v = await dismissBanner(await port.look());
+      // Cleared, and the solver's own detector sees no check left: what still reads as a captcha is the answered widget's words
+      // ("Success!", "verify you are human" in its frame). Pressing the solver again on them, then stopping at the second try, turned
+      // two cleared Turnstiles (Quickbase, Instamojo) into captcha walls.
+      if (!v.captchaFrame) { wordsOnly.add(pathOf(v.url) || v.url); return v; }
     }
     return v;
   };

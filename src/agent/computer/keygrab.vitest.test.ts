@@ -816,6 +816,18 @@ describe('keygrab and a checkbox-style human check', () => {
     expect(tries).toBe(2);
   });
 
+  it('carries on once a check is cleared, though its answered widget still reads like a captcha', async () => {
+    // A cleared Turnstile keeps its frame and its words ("Success!", "verify you are human") on the page; the solver's detector no longer
+    // sees a check. Quickbase and Instamojo stopped here as captcha walls after two clears each.
+    const pages: Record<string, Page> = { 'https://vendor.example/': { text: 'Verify you are human. Dashboard for your account', controls: ['API Keys'], on: { 'API Keys': 'https://vendor.example/keys' }, captchaFrame: true },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey };
+    const site = fakeSite(pages);
+    let tries = 0;
+    site.port.humanCheck = async () => { tries++; pages['https://vendor.example/'] = { ...pages['https://vendor.example/']!, captchaFrame: false }; return 'cleared'; };
+    expect(await run(site)).toMatchObject({ ok: true });
+    expect(tries).toBe(1);
+  });
+
   it('carries on when the solver finds no check behind the captcha words', async () => {
     const site = fakeSite({ 'https://vendor.example/': { text: 'Complete the security check before continuing. Dashboard for your account', controls: ['API Keys'], on: { 'API Keys': 'https://vendor.example/keys' } }, 'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey });
     let tries = 0;
