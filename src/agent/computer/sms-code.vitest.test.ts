@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { codeFromRows, messagesQuery, setSmsSource, smsProblem, smsSource, waitForTextedCode } from './sms-code.js';
+import { codeFromRows, messagesQuery, setSmsSource, smsProblem, smsSource, textedCode, waitForTextedCode } from './sms-code.js';
 
 const row = (at: number, from: string, text: string) => `${at}\u001f${from}\u001f${text}`;
 
@@ -39,5 +39,21 @@ describe('reading a texted code', () => {
     expect(found).toEqual({ code: '7731', from: '22395', at: 1001 });
     await setSmsSource(dir, undefined);
     expect(await smsSource(dir)).toBeUndefined();
+  });
+});
+
+describe('the code in a real vendor text', () => {
+  it.each([
+    ['Your CallHub-OTP-Verify verification code is: 3250', '3250'],
+    ['Your verification PIN is: 5824', '5824'],
+    ['Vonage code: 1045. Valid for 3 minutes.', '1045'],
+    ['*9644* is your verification code.', '9644'],
+    ['Welcome to SMSGlobal, your verification code is 604061. Use this to continue', '604061'],
+    ['873179 is your verification code for app.chekhub.com.', '873179'],
+    ['Your OTP: 4410', '4410'],
+  ])('%s', (text, code) => { expect(textedCode(text)).toBe(code); });
+
+  it('finds no code in a text without one', () => {
+    expect(textedCode('Your order has shipped and will arrive Tuesday.')).toBeUndefined();
   });
 });

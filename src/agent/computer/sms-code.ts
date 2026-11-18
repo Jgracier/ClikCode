@@ -37,7 +37,10 @@ export function messagesQuery(sinceUnixSeconds: number, limit = 12): string {
 
 /** The code in a text: the email rule, then the forms texts use ("G-123456 is your Google verification code"). */
 export function textedCode(text: string): string | undefined {
-  return verificationCode(text) ?? /(?:^|[^\w])(?:[A-Z]{1,3}-)?(\d{4,8})\b[^.\n]{0,50}\b(?:code|otp|passcode|pin)\b/i.exec(text)?.[1];
+  return verificationCode(text)
+    // "verification code is: 3250", "Your verification PIN is 5824", "OTP: 4410" (CallHub's and others' texts, missed on 2026-11-18).
+    ?? /\b(?:code|otp|passcode|pin)\s*(?:is\s*)?[:#-]?\s*(?:[A-Z]{1,3}-)?(\d{4,8})\b/i.exec(text)?.[1]
+    ?? /(?:^|[^\w])(?:[A-Z]{1,3}-)?(\d{4,8})\b[^.\n]{0,50}\b(?:code|otp|passcode|pin)\b/i.exec(text)?.[1];
 }
 
 export interface TextedCode { code: string; from: string; at: number }
