@@ -7,6 +7,7 @@ export async function reviewGatewayModelAgreement(model: string, prompter: Harne
   if (!gatewayModelForWord(list.models, model)?.tags?.includes('uncensored')) return true;
   const consent = await gatewayUncensoredConsent();
   if (consent.accepted) return true;
+  if (!prompter.select) throw new Error('Review the Gateway agreement with clikcode gateway-agreement before selecting this model.');
   const accepted = await prompter.select(`Uncensored models · agreement ${consent.version}\n\n${consent.terms}\n\nAccepting records this choice for your ClikDeploy account.`, [
     { label: 'I accept — continue', value: true },
     { label: 'Cancel', value: false },
