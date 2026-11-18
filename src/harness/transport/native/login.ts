@@ -366,6 +366,9 @@ function isSearch(choice: string): boolean {
 async function askKey(spec: NativeHarnessSpec, screen: SignInScreen): Promise<string> {
   // Where the vendor's own key is made, for a vendor whose own sign-in is a key (it has no link of its own to show).
   const page = localHarnessForCommand(spec.command)?.loginKeyPage;
+  // Shown as the sign-in's link, the way an OAuth link is: tappable on the phone, opened in a browser here, and still there while
+  // the key is asked for. In the prompt's text alone it was easy to miss, and on the phone it could not be opened at all.
+  if (page) { try { screen.show({ url: page }); } catch { /* fail-open-ok: the prompt below still names the page */ } }
   const key = (await screen.ask(`${spec.displayName} API key${page ? ` (make one at ${page})` : ''}, or Enter to choose a provider`, true, true)).trim();
   if (screen.signal.aborted) throw new Error(`sign-in to ${spec.displayName} was cancelled`);
   return key;
