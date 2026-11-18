@@ -55,6 +55,6 @@ it('headless reading never accepts, and a stale version cannot be accepted', asy
 });
 
 it('requires an interactive review or explicit headless acceptance without a picker', async () => {
-  await expect(reviewGatewayModelAgreement('uncensored', {} as never)).rejects.toThrow('gateway-agreement');
+  await expect(reviewGatewayModelAgreement('uncensored', {} as never)).rejects.toThrow('gateway agreement');
   expect(api.accept).not.toHaveBeenCalled();
 });
