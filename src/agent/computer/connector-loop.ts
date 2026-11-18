@@ -80,7 +80,7 @@ export interface LoopLimits {
   /** Stop starting vendors after this long, finish those running. */ maxHoursMs: number;
   renewMs: number; tickMs: number; idleMs: number;
   pauseBaseMs: number; pauseMaxMs: number; pressureLimit: number;
-  /** Pause new claims after a confirmed Gateway-wide model outage; active vendors finish and are retried when service returns. */ agentOutagePauseMs: number;
+  /** Pause new claims while the chat's account has no usage left (every agent would fail); active vendors finish and are retried. */ agentOutagePauseMs: number;
   /** Extra time past maxMs before a hung vendor is cut off. */ graceMs: number;
 }
 export const DEFAULT_LIMITS: LoopLimits = {
@@ -101,10 +101,10 @@ export function allowedMs(ctx: Pick<WorkContext, 'limits' | 'agentMs' | 'agentSi
   return ctx.limits.maxMs + ctx.limits.graceMs + Math.min(agent, ctx.limits.agentMs);
 }
 /** A browser that did not open is a fault of ours, not a verdict on the vendor: try the vendor again in minutes, not hours. */
-/** A vendor that did not get its turn because something it runs on was down -- the browser, or the agent (no model available, no account with usage,
- * a Gateway refusal) -- says nothing about the vendor: it is tried again in minutes, not shelved for hours like a wall. On 2026-11-17 an unavailable
+/** A vendor that did not get its turn because something it runs on was down -- the browser, or the agent (the chat's account out of usage,
+ * a harness that would not start) -- says nothing about the vendor: it is tried again in minutes, not shelved for hours like a wall. On 2026-11-17 an unavailable
  * model shelved 225 vendors for six hours each. */
-const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)|the agent could not run|Gateway temporarily unavailable|Gateway request failed|Gateway \d{3}:/i;
+const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)|the agent could not run/i;
 const BROWSER_RETRY_MS = 5 * 60_000;
 /** A vendor whose captcha was not cleared is tried again after this (keygrab-park.ts BACKOFF_HOURS holds it as long). */
 const CAPTCHA_RETRY_MS = 3_600_000;
@@ -169,7 +169,8 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     const kind = outcome.status === 'published' ? 'published' : wall ? 'wall' : outcome.status;
     summary.done[kind] = (summary.done[kind] ?? 0) + 1;
     if (wall) summary.walls[wall] = (summary.walls[wall] ?? 0) + 1;
-    const providerDown = !wall && outcome.status !== 'published' && /Gateway temporarily unavailable|every configured Gateway model is unavailable/i.test(outcome.summary);
+    // The chat's account has no usage left: every agent hand-off would fail the same way until it renews.
+    const providerDown = !wall && outcome.status !== 'published' && /has no usage left now/i.test(outcome.summary);
     const browserDown = !wall && outcome.status !== 'published' && BROWSER_DOWN.test(outcome.summary);
     // A captcha wall is the one wall worth an early second try: the solver may clear it once the site has cooled.
     const dependencyRetryMs = providerDown ? limits.agentOutagePauseMs : BROWSER_RETRY_MS;
@@ -186,7 +187,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     if (providerDown) {
       pausedUntil = Math.max(pausedUntil ?? 0, finishedAt + limits.agentOutagePauseMs);
       summary.pauses++;
-      ports.log(`${new Date(finishedAt).toISOString()} Gateway providers unavailable: no new connector claims for ${Math.round(limits.agentOutagePauseMs / 1000)}s; active work continues`);
+      ports.log(`${new Date(finishedAt).toISOString()} the chat's account has no usage left: no new connector claims for ${Math.round(limits.agentOutagePauseMs / 1000)}s; active work continues`);
     }
     ports.log(`${new Date(finishedAt).toISOString()} id=${id} outcome=${outcome.status} wall=${wall ?? '-'} calls=${budget.used} minutes=${minutes.toFixed(1)} steps=${outcome.steps} reported=${reported}${outcome.recipe ? ' recipe=yes' : ''} ${JSON.stringify(reason.slice(0, 160))}`);
   };

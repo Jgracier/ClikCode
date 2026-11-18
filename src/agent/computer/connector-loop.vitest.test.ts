@@ -44,22 +44,21 @@ describe('browser faults', () => {
 
   it.each([
     'the task is not one of the known kinds; the agent micro-task did not finish (0 calls): the agent could not run: No saved Claude or Codex account currently has usage available.',
-    'an unrecognized screen: the agent micro-task did not finish (0 calls): the agent could not run: Gateway 404: claude-sonnet-5-5 is not available to you right now.',
-    'the agent micro-task did not finish (0 calls): Gateway request failed: fetch failed',
+        'the agent micro-task did not finish (0 calls): the agent could not run: Claude Code (justin@example.com) exited 1',
   ])('a vendor whose agent could not run is retried in minutes, not shelved for hours: %s', async (summary) => {
     const f = fakes(['a'], async id => outcome(id, { status: 'handoff', summary }));
     await runLoop(f.ports, limits({ cooldownMs: 6 * 3_600_000 }));
     expect(f.reports[0]![1]).toMatchObject({ outcome: 'retry', retryAfterMs: 5 * 60_000 });
   });
 
-  it('pauses new vendor claims during a confirmed Gateway-wide outage, while preserving the vendor retry', async () => {
+  it("pauses new vendor claims while the chat's account has no usage left, while preserving the vendor retry", async () => {
     const queue = ['a', 'b'];
     const worked: string[] = [];
-    const f = fakes(queue, async id => { worked.push(id); return outcome(id, { status: 'handoff', summary: 'agent could not run: Gateway temporarily unavailable until later' }); });
+    const f = fakes(queue, async id => { worked.push(id); return outcome(id, { status: 'handoff', summary: "the agent could not run: The current chat's claude account (justin@example.com) has no usage left now." }); });
     await runLoop(f.ports, limits({ parallel: 1, maxHoursMs: 180, tickMs: 10, agentOutagePauseMs: 120_000 }));
     expect(worked).toEqual(['a']);
     expect(f.reports[0]![1]).toMatchObject({ outcome: 'retry', retryAfterMs: 120_000 });
-    expect(f.log.some(line => line.includes('Gateway providers unavailable: no new connector claims'))).toBe(true);
+    expect(f.log.some(line => line.includes("the chat's account has no usage left: no new connector claims"))).toBe(true);
   });
 
   it('an ordinary unfinished handoff still takes the long cooldown', async () => {

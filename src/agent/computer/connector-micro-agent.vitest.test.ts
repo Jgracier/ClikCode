@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { connectorTaskTool, agentMcpHandler, opensCloudConsole } from './connector-micro-agent-mcp.js';
-import { microAccount, microPrompt, microTab, parseMicroResult, runMicroTask, type MicroPorts } from './connector-micro-agent.js';
+import { chatRoute, microAccount, microPrompt, microTab, parseMicroResult, runMicroTask, type MicroPorts } from './connector-micro-agent.js';
 import { runConnectors, type BrowserDriver, type DeployClient, type DriveOutcome, type OnboardResult, type StopInfo } from './connector-runner.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
 
@@ -255,4 +255,23 @@ it('tells the agent an unreadable texted-code reader is a wall to report at once
   const stop: StopInfo = { kind: 'unknown', message: 'a phone check', url: 'https://vendor.example/verify', pageText: 'Enter the code we texted you', controls: [] };
   const prompt = microPrompt('acme', stop, 20);
   expect(prompt).toContain('do not wait or hand off, end with RESULT: wall sms');
+});
+
+describe('the route a connector agent runs on', () => {
+  const account = (id: string, provider: string, env: string, quotaState: 'available' | 'exhausted' = 'available'): import('../../harness/definition.js').AiHarnessAccount => ({ id, provider, label: `${id}@example.com`, authKind: 'vendor-cli', credentialRef: id, status: 'ready', quotaState, ...(quotaState === 'exhausted' ? { quotaExhaustedAt: new Date().toISOString(), quotaRetryAt: new Date(Date.now() + 3_600_000).toISOString() } : {}), nativeProfile: { env, path: `/tmp/${id}` } } as never);
+  const chat = (updatedAt: string, nativeHarness: string, accountId: string, model?: string) => ({ id: updatedAt, route: 'local', nativeHarness, accountId, updatedAt, ...(model ? { model } : {}) }) as never;
+  const accounts = [account('claude-a', 'anthropic', 'CLAUDE_CONFIG_DIR'), account('codex-b', 'openai', 'CODEX_HOME')];
+
+  it('is the harness, account and model of the most recent chat', () => {
+    const route = chatRoute({ accounts, sessions: [chat('2026-11-18T10:00:00Z', 'codex', 'codex-b'), chat('2026-11-18T12:00:00Z', 'claude', 'claude-a', 'opus')] });
+    expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'opus' });
+  });
+  it('does not fall back to another account when the chat\'s has no usage left', () => {
+    const spent = [account('claude-a', 'anthropic', 'CLAUDE_CONFIG_DIR', 'exhausted'), account('codex-b', 'openai', 'CODEX_HOME')];
+    const route = chatRoute({ accounts: spent, sessions: [chat('2026-11-18T12:00:00Z', 'claude', 'claude-a')] });
+    expect(route).toEqual({ error: expect.stringContaining('has no usage left now') });
+  });
+  it('says so when the chat runs on a harness a connector agent cannot use', () => {
+    expect(chatRoute({ accounts, sessions: [chat('2026-11-18T12:00:00Z', 'opencode', 'claude-a')] })).toEqual({ error: expect.stringContaining('runs on opencode') });
+  });
 });

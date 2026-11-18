@@ -3,6 +3,7 @@
  * The prompt is the screen as the runner saw it plus one goal. On success the agent has captured the key (unseen) and saved a recipe, so
  * the next vendor on that host needs no agent. */
 import type { AiHarnessAccount } from '../../harness/definition.js';
+import type { HarnessSession } from '../../session/model.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
@@ -102,15 +103,32 @@ export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCall
   return { ok: false, agentCalls: ran.calls, stop: { ...stop, message: `the agent micro-task did not finish (${ran.calls} calls): ${why}`.slice(0, 300) } };
 }
 
-/** Use a saved, usable native profile. A limit on Claude must not strand the line when Codex is available. */
+/** Use a saved, usable native profile. A limit on Claude must not strand the line when Codex is available. (The captcha
+ * subscription voter's pick: connector agents run on the user's chat route instead, chatRoute below.) */
 export function microAccount(accounts: readonly AiHarnessAccount[]): AiHarnessAccount | undefined {
   const usable = accounts.filter((account) => accountCanTakeTurn(account) && account.authKind === 'vendor-cli');
   return usable.find((account) => account.provider === 'anthropic' && account.nativeProfile?.env === 'CLAUDE_CONFIG_DIR')
     ?? usable.find((account) => account.provider === 'openai' && account.nativeProfile?.env === 'CODEX_HOME');
 }
 
-/** Claude exited without doing anything (usually its usage limit): use Codex for a while instead of failing every task. */
-let claudeDownUntil = 0;
+/** The harnesses a connector agent can be run headless on, by the command that runs them. */
+const CHAT_HARNESSES = { claude: 'claude', codex: 'codex' } as const;
+type ChatHarness = keyof typeof CHAT_HARNESSES;
+
+/** What the user is chatting on right now -- the harness, the signed-in account and the model of their most recent chat -- which is
+ * what a connector agent runs on: the same subscription doing the same kind of work, never Gateway credit and never another account.
+ * An error says why it cannot, in words for the outcome (the loop retries an agent that could not run, it is no vendor wall). */
+export function chatRoute(state: { sessions: readonly HarnessSession[]; accounts: readonly AiHarnessAccount[] }, now = Date.now()): { harness: ChatHarness; account: AiHarnessAccount; model?: string } | { error: string } {
+  const chat = [...state.sessions].filter(session => session.route === 'local' && session.nativeHarness && session.accountId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  if (!chat) return { error: 'No chat with a signed-in harness was found to run the connector agent on.' };
+  const harness = chat.nativeHarness as string;
+  if (!(harness in CHAT_HARNESSES)) return { error: `The current chat runs on ${harness}; connector agents run on Claude Code or Codex.` };
+  const account = state.accounts.find(item => item.id === chat.accountId);
+  if (!account?.nativeProfile) return { error: `The current chat's ${harness} account is not signed in on this computer.` };
+  if (!accountCanTakeTurn(account, now)) return { error: `The current chat's ${harness} account (${account.label}) has no usage left now.` };
+  return { harness: harness as ChatHarness, account, ...(chat.model ? { model: chat.model } : {}) };
+}
 
 export function livePorts(stateDir: string): MicroPorts {
   return {
@@ -121,38 +139,21 @@ export function livePorts(stateDir: string): MicroPorts {
     },
     async recipeStamp() { const { listRecipes } = await import('./signup-recipes.js'); return (await listRecipes(stateDir)).map(r => `${r.host}:${r.loginRoute}:${r.verifiedAt}`).sort().join('|'); },
     async run(prompt, options) {
-      // ClikDeploy Gateway first (Sonnet 5.5): no vendor account or usage limit. CLIKCODE_MICRO_AGENT=claude|codex keeps the vendor CLIs.
-      if (!['claude', 'codex'].includes(process.env.CLIKCODE_MICRO_AGENT ?? '')) {
-        const { runGatewayMicro } = await import('./connector-micro-agent-gateway.js');
-        const { mkdtemp, readFile, rm } = await import('node:fs/promises');
-        const { tmpdir } = await import('node:os');
-        const { join } = await import('node:path');
-        const dir = await mkdtemp(join(tmpdir(), 'clikcode-micro-'));
-        try {
-          const counter = join(dir, 'calls');
-          const ran = await runGatewayMicro(prompt, { tab: options.tab, maxCalls: options.maxCalls, maxMs: options.maxMs, counter, connector: options.tab.replace(/^agent-/, '') });
-          const calls = Number(await readFile(counter, 'utf8').catch(() => '0')) || ran.calls;
-          if (!ran.error) return { text: ran.text, timedOut: ran.timedOut, calls };
-          // A process-wide provider outage is already known. Do not fan out to a second exhausted provider family
-          // (Claude/Codex CLI accounts); return it as unavailable so the connector loop retries after its short cooldown.
-          if (/Gateway temporarily unavailable/.test(ran.error)) return { text: '', timedOut: false, calls: 0, error: ran.error };
-        } finally { await rm(dir, { recursive: true, force: true }).catch(quiet('agent/computer/connector-micro-agent')); }
-      }
       const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);
       const { readState } = await import('../../session/state/read.js');
-      const all = (await readState({ transcripts: [] })).accounts;
-      const account = (Date.now() < claudeDownUntil || process.env.CLIKCODE_MICRO_AGENT === 'codex' ? microAccount(all.filter(a => a.provider !== 'anthropic')) : undefined) ?? microAccount(all);
-      if (!account) throw new Error('No saved Claude or Codex account currently has usage available.');
-      const useCodex = account.provider === 'openai';
+      const route = chatRoute(await readState({ transcripts: [] }));
+      if ('error' in route) throw new Error(route.error);
+      const { account, model } = route;
+      const useCodex = route.harness === 'codex';
       const dir = await mkdtemp(join(tmpdir(), 'clikcode-micro-'));
       const counter = join(dir, 'calls');
       try {
         const entry = process.env.CLIKCODE_MCP_ENTRY || process.argv[1]!;
         const config = join(dir, 'mcp.json');
         await writeFile(config, JSON.stringify({ mcpServers: { clikcode: { command: process.execPath, args: [entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter, '--connector', options.tab.replace(/^agent-/, '')] } } }));
-        const argv = ['-p', prompt, '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', '', '--allowedTools', 'mcp__clikcode__browser_use', 'mcp__clikcode__account_use', 'mcp__clikcode__connector_task', '--permission-mode', 'dontAsk', '--no-session-persistence', ...(process.env.CLIKCODE_MICRO_AGENT_MODEL ? ['--model', process.env.CLIKCODE_MICRO_AGENT_MODEL] : [])];
+        const argv = ['-p', prompt, ...(model ? ['--model', model] : []), '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', '', '--allowedTools', 'mcp__clikcode__browser_use', 'mcp__clikcode__account_use', 'mcp__clikcode__connector_task', '--permission-mode', 'dontAsk', '--no-session-persistence', ...(process.env.CLIKCODE_MICRO_AGENT_MODEL ? ['--model', process.env.CLIKCODE_MICRO_AGENT_MODEL] : [])];
         const final = join(dir, 'final.txt');
-        const args = useCodex ? ['exec', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only',
+        const args = useCodex ? ['exec', ...(model ? ['-m', model] : []), '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only',
           '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"',
           '-c', `mcp_servers.clikcode.command=${JSON.stringify(process.execPath)}`,
           '-c', `mcp_servers.clikcode.args=${JSON.stringify([entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter, '--connector', options.tab.replace(/^agent-/, '')])}`,
@@ -170,10 +171,9 @@ export function livePorts(stateDir: string): MicroPorts {
         const timer = setTimeout(() => { timedOut = true; kill(); }, options.maxMs);
         const code = await new Promise<number | null>(resolve => { child.once('close', code => resolve(code)); child.once('error', () => resolve(-1)); });
         clearTimeout(timer);
-        if (!useCodex && code !== 0 && !timedOut) claudeDownUntil = Date.now() + 30 * 60_000;
         if (useCodex) text = await readFile(final, 'utf8').catch(() => '');
         const calls = Number(await readFile(counter, 'utf8').catch(() => '0')) || 0;
-        return { text, timedOut, calls, ...(code !== 0 && !timedOut ? { error: `${useCodex ? 'Codex' : 'Claude'} micro-task could not complete (exit ${code}); retry after account availability changes.` } : {}) };
+        return { text, timedOut, calls, ...(code !== 0 && !timedOut ? { error: `the agent could not run: ${useCodex ? 'Codex' : 'Claude Code'} (${account.label}) exited ${code}` } : {}) };
       } finally { await rm(dir, { recursive: true, force: true }).catch(quiet('agent/computer/connector-micro-agent')); }
     },
   };
