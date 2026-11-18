@@ -47,6 +47,19 @@ describe.skipIf(process.platform === 'win32')('a sign-in on the prompter\'s own 
     return path;
   };
 
+  it('a vendor signed in with a key it makes on a page (OpenCode) shows that page as the sign-in\'s link, before asking for the key', async () => {
+    const path = join(dir, 'opencode');
+    await writeFile(path, '#!/bin/sh\nexit 0\n');
+    await chmod(path, 0o755);
+    const { localHarnessForCommand } = await import('../runtime/lazy-bridge.js');
+    const spec = { ...localHarnessForCommand('opencode')!, binary: path };
+    const { value, calls } = prompter();
+    await withSignIn(value, 'OpenCode', () => loginNativeHarness(spec, { HOME: dir })).catch(() => undefined);
+    const shown = calls.indexOf('show https://opencode.ai/auth');
+    expect(shown).toBeGreaterThan(-1);
+    expect(calls.findIndex((call) => call.startsWith('ask OpenCode API key'))).toBeGreaterThan(shown);
+  });
+
   it('shows the link and code on that screen, takes it down, and says nothing of a sign-in that worked', async () => {
     const spec = { command: 'grok', binary: await vendor(0.5), displayName: 'Grok Build', loginArgv: [] };
     const { value, calls } = prompter();
