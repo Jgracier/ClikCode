@@ -276,3 +276,17 @@ it('shows the effective rate without a promotion, for both operator cost and ret
   expect(gatewayPriceLabel({ full: { inMTok: 4, outMTok: 20 }, charged: { inMTok: 1, outMTok: 2 }, discountPercent: 0 })).toBe('$1/$2 per 1M');
   expect(gatewayPriceLabel({ full: { inMTok: 4, outMTok: 20 }, charged: { inMTok: 5, outMTok: 25 }, discountPercent: 0 })).toBe('$5/$25 per 1M');
 });
+
+it('excludes every explicit non-chat type and never calls an unknown deployment state running', async () => {
+  const { fromOpenAIModelList } = await import('./models.js');
+  const list = fromOpenAIModelList([
+    ...['embedding', 'image', 'video', 'speech', 'transcription', 'unknown'].map((type) => ({ id: type, type })),
+    { id: 'chat', type: 'chat' }, { id: 'legacy' },
+    ...['failed', 'unexpected', 'running', 'asleep', 'starting'].map((state) => ({ id: state, type: 'chat', owned_by: 'self-hosted', deployment: { state, detail: 'GPU refused' } })),
+  ]);
+  expect(list.models.map((model) => model.id)).toEqual(['chat', 'legacy', 'failed', 'unexpected', 'running', 'asleep', 'starting']);
+  expect(list.models[2].own).toMatchObject({ state: 'failed', detail: 'GPU refused' });
+  expect(list.models[3].own?.state).toBe('failed');
+  expect(gatewayModelDetail(list.models[2])).toContain('failed: GPU refused');
+  expect(gatewayModelDetail(list.models[2])).not.toContain('running');
+});

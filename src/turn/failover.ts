@@ -277,20 +277,13 @@ export function accountSwitchNotice(reason: AccountMoveReason, to: string): stri
   return `${accountMoveReasonText(reason)}, switching to ${to}`;
 }
 
-/** A failed turn of ClikCode's own agent on the Gateway (agent/run-turn.ts) as the account
- * failure a vendor's refusal would be: the server's status decides. 402 is spent credit; 429 is
- * a throttle when the server says when to come back (retry-after), a spent limit when it does
- * not; 401 and 403 are a sign-in, unless the refusal says the account cannot use this at all
- * (ineligible, or the Gateway switched off for it), which signing in again cannot fix. */
-export function agentTurnFailureKind(result: { text: string; statusCode?: number; retryAfter?: number }): AccountFailureKind {
+/** Own-agent refusals use their structured kind; a permission refusal cannot be fixed by signing in. */
+export function agentTurnFailureKind(result: { text: string; statusCode?: number; retryAfter?: number; errorKind?: string }): AccountFailureKind {
   const status = result.statusCode;
-  if (status === 402) return INELIGIBLE_TEXT.test(result.text) ? 'account-ineligible' : 'quota-exhausted';
-  if (status === 429) return result.retryAfter !== undefined ? 'temporarily-throttled' : 'quota-exhausted';
-  if (status === 401 || status === 403) {
-    if (/gateway_disabled|turned off/i.test(result.text)) return 'other';
-    const kind = classifyAccountFailure(new Error(result.text), { statusCode: status });
-    return kind === 'account-ineligible' ? kind : 'authentication-required';
-  }
+  if (result.errorKind === 'auth' || status === 401) return 'authentication-required';
+  if (status === 403) return 'other';
+  if (status === 402 || result.errorKind === 'quota') return INELIGIBLE_TEXT.test(result.text) ? 'account-ineligible' : 'quota-exhausted';
+  if (status === 429) return 'temporarily-throttled';
   return status === undefined ? 'other' : classifyAccountFailure(new Error(result.text), { statusCode: status });
 }
 

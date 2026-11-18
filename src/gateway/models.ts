@@ -42,7 +42,7 @@ interface GatewayModel {
    * server), not charged per token. `asleep` and `starting` ones are chosen like any other: the first
    * message waits for the model to come up (agent/turn-recovery.ts startMayContinue).
    * `tools` false: the runtime it was started on cannot answer tool calls for it. */
-  own?: { state: 'running' | 'asleep' | 'starting'; tools: boolean; /** The model the deployment serves: the list id is an opaque deployment id. */ modelId?: string };
+  own?: { state: 'running' | 'asleep' | 'starting' | 'failed'; detail?: string; tools: boolean; /** The model the deployment serves: the list id is an opaque deployment id. */ modelId?: string };
 }
 
 type GatewayAccess = 'subscription' | 'free' | 'paid';
@@ -142,7 +142,7 @@ export function acceptGatewayUncensoredTerms(version: string, options: { config?
 export function gatewayModelDetail(model: GatewayModel): string {
   if (model.own) {
     return [
-      model.own.state === 'asleep' ? 'asleep: wakes when used (a few minutes)' : model.own.state === 'starting' ? 'starting' : 'running',
+      model.own.state === 'asleep' ? 'asleep: wakes when used (a few minutes)' : model.own.state === 'failed' ? `failed${model.own.detail ? `: ${model.own.detail}` : ''}` : model.own.state === 'starting' ? 'starting' : 'running',
       'on your compute, no per-token charge',
       model.own.tools ? '' : 'no tool calls',
     ].filter(Boolean).join(' · ');
@@ -287,11 +287,11 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     const entry = raw as {
       id?: unknown; owned_by?: unknown; root?: unknown; type?: unknown; access?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
       capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown }; pricing?: Record<string, unknown>; tags?: unknown;
-      deployment?: { state?: unknown; modelId?: unknown };
+      deployment?: { state?: unknown; modelId?: unknown; detail?: unknown };
     };
     if (typeof entry.id !== 'string' || !entry.id) continue;
-    // Embedding models share the list; a conversation cannot run on one.
-    if (entry.type === 'embedding') continue;
+    // Media and embedding models share this list; only chat models can run a conversation.
+    if (entry.type !== undefined && entry.type !== 'chat') continue;
     if (entry.id === GATEWAY_AUTO_MODEL) {
       const contextWindow = typeof entry.context_length === 'number' && entry.context_length > 0 ? entry.context_length : undefined;
       const maxOutput = typeof entry.max_output_tokens === 'number' && entry.max_output_tokens > 0 ? entry.max_output_tokens : undefined;
@@ -304,10 +304,10 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     }
     // One of the user's own models (owned_by self-hosted, with its deployment's state).
     if (entry.owned_by === 'self-hosted' && entry.deployment && typeof entry.deployment === 'object') {
-      const state = entry.deployment.state === 'asleep' || entry.deployment.state === 'starting' ? entry.deployment.state : 'running';
+      const state = entry.deployment.state === 'asleep' || entry.deployment.state === 'starting' ? entry.deployment.state : entry.deployment.state === 'running' ? 'running' : 'failed';
       models.push({
         id: entry.id,
-        own: { state, tools: entry.capabilities?.tools !== false, ...(typeof entry.deployment.modelId === 'string' && entry.deployment.modelId ? { modelId: entry.deployment.modelId } : {}) },
+        own: { state, ...(typeof entry.deployment.detail === 'string' ? { detail: entry.deployment.detail } : {}), tools: entry.capabilities?.tools !== false, ...(typeof entry.deployment.modelId === 'string' && entry.deployment.modelId ? { modelId: entry.deployment.modelId } : {}) },
         ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
       });
       continue;

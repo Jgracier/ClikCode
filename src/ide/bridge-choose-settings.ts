@@ -14,6 +14,7 @@ export async function chooseSetting(cx: ChooseContext, choice: IdeChoice): Promi
   switch (choice.kind) {
     case 'model': {
       const { session } = await host.current();
+      if (session.route === 'gateway' && !await (await import('../gateway/agreement.js')).reviewGatewayModelAgreement(choice.model, host.prompter)) { done(); return true; }
       const line = session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`;
       await setting(line);
       done();

@@ -516,8 +516,8 @@ describe('runAgentLoop', () => {
   });
 
   it('classifies model failures from structured status', async () => {
-    const quota = await runAgentLoop(harness([{ error: Object.assign(new Error('slow down'), { statusCode: 429, retryAfter: 12 }) }]).input);
-    expect(quota).toMatchObject({ isError: true, errorKind: 'quota', retryAfter: 12, text: 'slow down', stopReason: 'model-error' });
+    const quota = await runAgentLoop(harness([{ error: Object.assign(new Error('no credit'), { statusCode: 402, retryAfter: 12 }) }]).input);
+    expect(quota).toMatchObject({ isError: true, errorKind: 'quota', retryAfter: 12, text: 'no credit', stopReason: 'model-error' });
     const auth = await runAgentLoop(harness([{ error: Object.assign(new Error('nope'), { statusCode: 401 }) }]).input);
     expect(auth.errorKind).toBe('auth');
     const other = await runAgentLoop(harness([{ error: new Error('quota exceeded in prose only') }]).input);
@@ -960,6 +960,12 @@ describe('runAgentLoop', () => {
       expect(retryDelaySeconds(1, 45, () => 0.5)).toBe(45);
       expect(retryDelaySeconds(1, 9999, () => 0.5)).toBe(120);
       expect(retryDelaySeconds(2, 0, () => 0.5)).toBe(2);
+    });
+
+    it('retries a temporary 429 through to success without quota recovery', async () => {
+      const h = harness([{ error: Object.assign(new Error('slow down'), { statusCode: 429, retryAfter: 12, kind: 'other' }) }, { text: 'ready' }]);
+      expect(await driven(runAgentLoop(h.input))).toMatchObject({ text: 'ready', stopReason: 'completed' });
+      expect(h.client.requests).toHaveLength(2);
     });
 
     it('does not compact or retry a rejected oversized request', () => {

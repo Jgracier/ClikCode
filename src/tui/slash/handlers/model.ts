@@ -172,7 +172,7 @@ export const modelHandlers = {
       if (chosen?.tags?.includes('uncensored')) {
         const consent = await gatewayUncensoredConsent().catch(() => null);
         if (!consent?.accepted) {
-          emitHarnessOutput({ panel: 'error', message: 'This model requires the uncensored-model agreement. Open the /model picker, select the model, and review the agreement before continuing.' });
+          emitHarnessOutput({ panel: 'error', message: 'This model requires the uncensored-model agreement. Run `clikcode gateway agreement` to read it, then `clikcode gateway agreement --accept-version <version>` to accept the version you reviewed, or use the /model picker.' });
           return;
         }
       }

@@ -1,5 +1,5 @@
 /** A Gateway turn refused for the account's sake ends the way a vendor's does: out of usage is
- * "All accounts exhausted" (which offers Resume in), a 429 that says when to come back is a
+ * "All accounts exhausted" (which offers Resume in), a 429 is a temporary
  * throttle, and a refused sign-in signs in and asks again once. A real turn against a real
  * OpenAI-compatible HTTP server standing in for the Gateway; only the sign-in's browser half and
  * the Gateway's model facts are stubbed. */
@@ -21,6 +21,10 @@ vi.mock('../agent/models/for-session.js', async (importOriginal) => {
     modelClientForSession: async (session: HarnessSession) => modelClients.push(`${session.effort}/${session.speed ?? 'default'}`) && actual.gatewayModelClient({ baseUrl: gateway.url, apiKey: gateway.key, sessionId: session.id, contextWindow: 32768 }),
   };
 });
+vi.mock('../agent/turn-recovery.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../agent/turn-recovery.js')>(),
+  pause: vi.fn(async () => {}),
+}));
 vi.mock('../gateway/mcp.js', () => ({ routeMcpServers: () => [] }));
 vi.mock('../commands/gateway.js', () => ({
   gatewayLogin: async (_config: unknown, _options: unknown, deps: { openBrowser?: (url: string) => void }) => {
@@ -103,12 +107,22 @@ describe('a Gateway turn refused for the account', () => {
     expect(watching.activity.join('\n')).not.toContain('Insufficient credits');
   }, 30_000);
 
-  it('a 429 without a time to come back is out of usage; with one it is a throttle', async () => {
-    replies.push(() => ({ status: 429 }));
-    await expect(runSessionTurn(config, 's1', 'go', undefined, {})).rejects.toThrow(/^All accounts exhausted$/);
-    replies.push(() => ({ status: 429, headers: { 'retry-after': '30' } }));
-    await expect(runSessionTurn(config, 's1', 'go', undefined, {})).rejects.toThrow(/HTTP 429/);
-  }, 30_000);
+  it('retries 429s with and without a Retry-After and finishes without sign-in or quota exhaustion', async () => {
+    for (const headers of [undefined, { 'retry-after': '30' }]) {
+      replies.push(() => ({ status: 429, headers }));
+      await runSessionTurn(config, 's1', 'go', undefined, {});
+      const session = (await readState()).sessions.find((item) => item.id === 's1')!;
+      expect(session.messages?.at(-1)?.content).toBe('answered');
+      expect(gateway.logins).toBe(0);
+    }
+  });
+
+  it('permission and agreement refusals keep their message and never start sign-in', async () => {
+    replies.push(() => ({ status: 403, body: { error: { code: 'uncensored_consent_required', message: 'Review the current agreement' } } }));
+    await expect(runSessionTurn(config, 's1', 'go', undefined, {})).rejects.toThrow('Review the current agreement');
+    expect(gateway.logins).toBe(0);
+    expect(replies).toHaveLength(0);
+  });
 
   it('a refused sign-in signs in, then asks again once, with the request in memory once', async () => {
     replies.push((auth) => (auth === 'Bearer fresh' ? 'answer' : { status: 401, body: { error: { message: 'Invalid API key', code: 'invalid_api_key' } } }));
@@ -174,10 +188,13 @@ describe('settings changed while a Gateway turn runs', () => {
 describe('agentTurnFailureKind', () => {
   it('reads the Gateway\'s status the way a vendor refusal is read', () => {
     expect(agentTurnFailureKind({ text: 'HTTP 402', statusCode: 402 })).toBe('quota-exhausted');
-    expect(agentTurnFailureKind({ text: 'HTTP 429', statusCode: 429 })).toBe('quota-exhausted');
+    expect(agentTurnFailureKind({ text: 'HTTP 429', statusCode: 429 })).toBe('temporarily-throttled');
     expect(agentTurnFailureKind({ text: 'HTTP 429', statusCode: 429, retryAfter: 30 })).toBe('temporarily-throttled');
     expect(agentTurnFailureKind({ text: 'HTTP 401', statusCode: 401 })).toBe('authentication-required');
     expect(agentTurnFailureKind({ text: 'HTTP 403: ClikDeploy Gateway is turned off (gateway_disabled)', statusCode: 403 })).toBe('other');
+    expect(agentTurnFailureKind({ text: 'Agreement required', statusCode: 403 })).toBe('other');
+    expect(agentTurnFailureKind({ text: 'Invalid key', statusCode: 403, errorKind: 'auth' })).toBe('authentication-required');
+    expect(agentTurnFailureKind({ text: 'Spent quota', statusCode: 429, errorKind: 'quota' })).toBe('quota-exhausted');
     expect(agentTurnFailureKind({ text: 'HTTP 500', statusCode: 500 })).toBe('other');
     expect(agentTurnFailureKind({ text: 'socket hang up' })).toBe('other');
   });

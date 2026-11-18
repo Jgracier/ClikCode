@@ -25,6 +25,7 @@ export async function chooseProvider(cx: ChooseContext, choice: IdeChoice): Prom
         const moved = await selectProviderConversation(host.config, host.prompter, id, providerConversationKey(choice.provider), { offerLocal: true });
         if (choice.model) {
           const { session } = await host.current(moved);
+          if (session.route === 'gateway' && !await (await import('../gateway/agreement.js')).reviewGatewayModelAgreement(choice.model, host.prompter)) return { sessionId: moved };
           await aiSessionCommand(moved, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);
         } else await resolveSessionModel(moved);
         // A sign-in let the queue go: the user may have opened another
