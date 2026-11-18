@@ -23,7 +23,7 @@ import { readState } from '../session/state/read.js';
 import { accountView } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
 import { accountUsageCanBeAsked, accountUsageLabel, accountUsageReading, probeInFlight } from '../harness/accounts/account-usage.js';
-import { USAGE_RECHECK_MS, accountCanTakeTurn, usageAskedAt, usageResetLabel } from '../harness/accounts/usage-reading.js';
+import { USAGE_RECHECK_MS, accountCanTakeTurn, clearQuotaMark, usageAskedAt, usageResetLabel } from '../harness/accounts/usage-reading.js';
 import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, matchingVendorAccount, nameAccount } from '../harness/accounts/labels.js';
@@ -265,6 +265,13 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   }
 }
 
+/** What an account knew through the credential it just replaced: the models that key listed (OpenCode's expired one listed a
+ * `beam-free` the new key does not, and a chat started on it) and a quota mark of that key. Read again from the new one. */
+function forgetOldCredential(account: AiHarnessAccount): void {
+  account.models = [];
+  clearQuotaMark(account);
+}
+
 async function signInAccount(harnessCommandName: string, label: string | undefined, touched: Set<string>): Promise<string> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
@@ -366,6 +373,7 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
       const left = await settleReauthenticatedProfile(harness, existingMatch, nativeProfile, state);
       if (left) touched.add(left);
       existingMatch.verification = undefined;
+      forgetOldCredential(existingMatch);
       await writeState(state);
       emitHarnessOutput({ status: 'connected', harness: harness.command, account: existingMatch.label, credentialBoundary: 'local-only' });
       return existingMatch.label;
@@ -386,6 +394,7 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
       const left = await settleReauthenticatedProfile(harness, again, nativeProfile, state);
       if (left) touched.add(left);
       again.verification = undefined;
+      forgetOldCredential(again);
       await writeState(state);
       emitHarnessOutput({ status: 'connected', harness: harness.command, account: again.label, credentialBoundary: 'local-only' });
       return again.label;
