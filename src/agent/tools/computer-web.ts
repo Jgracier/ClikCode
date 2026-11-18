@@ -1681,6 +1681,16 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
         const saved = await recordVerified(ctx.stateDir, key, { kind: 'capture', url: page.url(), hint: `${triggerLabel ? `Click "${triggerLabel}" to make the key show, then capture_secret. ` : ''}Verified: ${check.verdict === 'works' ? 'the key works' : 'a key was found and stored'}.` }).catch(quiet('agent/tools/computer-web'));
         if (saved) recipeLint = lintRecipe(saved).map(finding => finding.message);
       }
+      // A key that reached a ClikDeploy connector takes the page it was made on with it: that page becomes the connector's
+      // "where to get your key" link (access.keysUrl), so the next person is sent straight to it. Deterministic: every delivered key.
+      const keysPages: string[] = [];
+      if (!refused) {
+        const connectors = [...new Set((plan ?? []).flatMap((destination, index) => /^clikdeploy-connection/.test(destination.to) && sent[index]?.ok && typeof destination.with?.integration === 'string' ? [destination.with.integration] : []))];
+        for (const integration of connectors) {
+          const done = await recordKeysPage(ctx.stateDir, integration, page.url());
+          keysPages.push(done.recorded ? `KEY PAGE recorded on ${integration}: ${done.recorded}` : `Key page not recorded on ${integration}: ${done.skipped}`);
+        }
+      }
       // An authenticator seed has one home. Once ClikDeploy holds it, the copy this computer kept for the hand-over is removed,
       // so a stolen laptop vault cannot make the account's codes.
       const seedOnly = !!plan?.length && plan.every(destination => destination.to === VENDOR_MFA_DESTINATION);
@@ -1693,6 +1703,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
           : check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
         ...(recipeLint.length ? [`Recipe saved (tidied; the recorded steps are kept in the .bak file). Still to fix: ${recipeLint.join('; ')}.`] : []),
         ...sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`),
+        ...keysPages,
         ...(handedOver ? ['ClikDeploy now keeps this setup key; the copy in ClikCode Secrets Manager was removed. Use auth_code with the same account for its codes.'] : []),
         ...(refused ? [] : sent.some(delivery => !delivery.ok) ? ['The key is still saved. Fix the cause, then send it again with send_secret.'] : sent.length ? [] : ['Nothing was sent anywhere: use send_to to send it on, or send_secret later.']),
       ];
