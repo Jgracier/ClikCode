@@ -23,6 +23,20 @@ const firstLine = (text: string): string => text.split('\n')[0] ?? text;
 const scrubArgs = (call: AgentCall): AgentCall => JSON.parse(scrubSecrets(JSON.stringify(call))) as AgentCall;
 const say = (text: string): string => scrubSecrets(text);
 
+/** A human step in the shape connector_work_report accepts: instructions at most 300 characters, profile field names at most 32 (12 of
+ * them), a reason code of lower-case letters, digits and dashes (40 at most), and an http(s) page only. */
+export function reportableStep(step: HumanStep): HumanStep {
+  const code = step.reasonCode.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || step.kind;
+  const url = step.url && /^https?:\/\//i.test(step.url) ? step.url.slice(0, 2048) : undefined;
+  const prefill = step.prefill?.filter(field => field.length <= 32).slice(0, 12);
+  return {
+    kind: step.kind, reasonCode: code,
+    ...(url ? { url } : {}),
+    ...(step.instructions ? { instructions: cap(step.instructions, 300) } : {}),
+    ...(prefill?.length ? { prefill } : {}),
+  };
+}
+
 /** Runs one vendor from the result of its latest onboarding step until it is finished, handed on, or out of budget. */
 export async function runVendor(first: OnboardResult, client: DeployClient, driver: BrowserDriver, options: RunnerOptions, gate: <T>(job: () => Promise<T>) => Promise<T>): Promise<VendorOutcome> {
   const now = options.now ?? Date.now;
@@ -74,13 +88,16 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     } catch (error) { recorded = `could not write the work item note (${cap(say(error instanceof Error ? error.message : String(error)), 120)})`; }
     return out('handoff', why, { handoff: { ...(file ? { file } : {}), request }, recorded, ...(stop?.parked ? { resume: resumeCommand(id) } : {}) });
   };
-  const wall = async (human: HumanStep, fromServer: boolean): Promise<VendorOutcome> => {
-    if (fromServer) return out('human', result.reason, { humanStep: human, recorded: 'ClikDeploy already holds this human step' });
+  const wall = async (given: HumanStep, fromServer: boolean): Promise<VendorOutcome> => {
+    if (fromServer) return out('human', result.reason, { humanStep: given, recorded: 'ClikDeploy already holds this human step' });
+    // The step goes to ClikDeploy twice (here, and again by the loop with the outcome), so it is made valid once and the same copy goes both
+    // times: an untrimmed copy was refused by connector_work_report's schema ("Input validation error ... humanStep").
+    const human = reportableStep(given);
     let recorded = 'reported blocked with the human step';
     try {
-      await client.report({ id, outcome: 'blocked', reason: cap(say(`${human.kind}: ${human.instructions ?? result.reason}`), 480).padEnd(10, '.'), humanStep: { ...human, instructions: cap(human.instructions ?? '', 300) } });
+      await client.report({ id, outcome: 'blocked', reason: cap(say(`${human.kind}: ${given.instructions ?? result.reason}`), 480).padEnd(10, '.'), humanStep: human });
     } catch (error) { recorded = `could not report it (${cap(say(error instanceof Error ? error.message : String(error)), 120)})`; }
-    return out('human', human.instructions ?? human.kind, { humanStep: human, recorded });
+    return out('human', given.instructions ?? given.kind, { humanStep: human, recorded });
   };
   // Each distinct onboarding task gets one bounded agent attempt. A completed task may
   // advance to another task within the vendor budget; an unchanged task never retries.

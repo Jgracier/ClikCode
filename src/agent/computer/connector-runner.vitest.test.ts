@@ -646,3 +646,23 @@ describe('live tests blocked for time alone', () => {
     expect(planFor(blocked('2 x credential-rejected (status 401)'), false)).toMatchObject({ do: 'handoff' });
   });
 });
+
+describe('a human step sent to ClikDeploy', () => {
+  it('fits connector_work_report: instructions, field names, reason code and page are cut to what it accepts', async () => {
+    const { reportableStep } = await import('./connector-runner.js');
+    const step = reportableStep({ kind: 'sms', reasonCode: 'SMS Code (Korean)', url: 'chrome-error://chromewebdata/', instructions: 'x'.repeat(500), prefill: ['phone', 'a-field-name-that-is-far-too-long-to-pass'] });
+    expect(step.instructions!.length).toBeLessThanOrEqual(300);
+    expect(step.reasonCode).toMatch(/^[a-z0-9][a-z0-9-]{0,39}$/);
+    expect(step.url).toBeUndefined();
+    expect(step.prefill).toEqual(['phone']);
+  });
+
+  it('the copy on the outcome, which the loop reports again, is the same valid one', async () => {
+    const keygrab: OnboardResult = { id: 'solapi', state: 'needs-agent', stage: 'connect', reason: 'key', next: { kind: 'agent', task: 'get a key at https://solapi.example/, capture_secret' } };
+    const c = fakeClient([keygrab]);
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'mfa', message: 'texted code', human: { kind: 'sms', reasonCode: 'sms', url: 'https://solapi.example/verify', instructions: 'z'.repeat(450) } }) }]);
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(outcomes[0]!.humanStep!.instructions!.length).toBeLessThanOrEqual(300);
+    expect((c.reports[0] as { humanStep: { instructions: string } }).humanStep.instructions.length).toBeLessThanOrEqual(300);
+  });
+});
