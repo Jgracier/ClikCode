@@ -36,6 +36,21 @@ function endpoints(...accepts: string[]) {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('keyRoutedScreen', () => {
+  it('with no key (Enter), a remote session takes the device-code method of a provider\'s own sign-in; a local one is asked', async () => {
+    const methods = ['ChatGPT Pro/Plus (browser)', 'ChatGPT Pro/Plus (headless)', 'Manually enter API Key'];
+    const remote = screen({}, '');
+    const ui = await keyRoutedScreen(spec, routes, remote, KEY_PROVIDERS, undefined, true);
+    expect(await ui.choose('Login method', methods)).toBe(1);
+    // Anything else stays the person's: another menu, or a method menu with no device code in it.
+    expect(await ui.choose('Select provider', ['OpenAI', 'GitHub Copilot'])).toBe(0);
+    expect(await ui.choose('Login method', ['Login with GitHub', 'Manually enter API Key'])).toBe(0);
+    expect(remote.asked).toEqual(['Qwen Code API key, or Enter to choose a provider', 'Select provider', 'Login method']);
+    const local = screen({}, '');
+    const here = await keyRoutedScreen(spec, routes, local, KEY_PROVIDERS, undefined, false);
+    expect(await here.choose('Login method', methods)).toBe(0);
+    expect(local.asked).toEqual(['Qwen Code API key, or Enter to choose a provider', 'Login method']);
+  });
+
   it('asks only for the key, then answers the menus from the first route that accepts it', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response('{}', { status: url.startsWith('https://us.') ? 401 : 404 })));
     const own = screen();
