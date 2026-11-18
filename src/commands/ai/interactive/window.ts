@@ -49,7 +49,7 @@ export interface ChatWindow {
   slashCommandsFor: (target: HarnessSession) => PickerOption<string>[];
   warmCatalogFor: (target: HarnessSession, targetState: HarnessState) => void;
   refreshUsage: (target: HarnessSession, targetState: HarnessState, afterTurn?: boolean) => void;
-  beginBuildReplace: () => Promise<void> | undefined;
+  beginBuildReplace: (force?: boolean) => Promise<void> | undefined;
   releaseWindow: () => Promise<void>;
 }
 
@@ -182,6 +182,20 @@ function createUsageRefresher(config: Conf, terminal: TerminalHarnessPrompter | 
 }
 
 /** Watch for a newer build on disk and keep the usage fresh: the 15 s tick and the two ways out of the window. */
+/** The installed build's fingerprint, read again for a moment while there is none: the install swaps its directory with two
+ * renames (install-local.mjs), and a window that started between them -- as one reloading onto that very install does -- read
+ * nothing. With no fingerprint to compare, it never saw a newer build again: no automatic reload, and `/restart` said it was
+ * already on the newest (a window ran the build of 06:38 all day, every sign-in fix missing). */
+function settledBuild(): string | undefined {
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const build = currentWorkerBuild();
+    if (build !== undefined) return build;
+    Atomics.wait(pause, 0, 0, 20);
+  }
+  return undefined;
+}
+
 function startBuildWatch(
   terminal: TerminalHarnessPrompter | undefined, ref: WindowRef, refreshUsage: ChatWindow['refreshUsage'], stopLockNotices: (() => void) | undefined,
 ): Pick<ChatWindow, 'beginBuildReplace' | 'releaseWindow'> {
@@ -192,7 +206,7 @@ function startBuildWatch(
   // running chats finish. Nothing is said until then: a build landing is not
   // the user's news, and the re-exec keeps the screen. Workers already step
   // down on their own (idle now, busy when the turn ends).
-  const startupBuild = currentWorkerBuild();
+  const startupBuild = settledBuild();
   let updateSeen = false;
   let usageInterval: ReturnType<typeof setInterval> | undefined;
   /** Let go on both ways out: leaving, and handing over to a newer build. */
@@ -210,8 +224,8 @@ function startBuildWatch(
     await reconcileLocalModelLeases(undefined).catch(quiet('commands/ai/interactive/window'));
   };
   const newerBuild = (): boolean => Boolean(startupBuild && currentWorkerBuild() !== startupBuild);
-  const beginBuildReplace = (): Promise<void> | undefined => {
-    if (!terminal || !newerBuild()) return undefined;
+  const beginBuildReplace = (force = false): Promise<void> | undefined => {
+    if (!terminal || (!force && !newerBuild())) return undefined;
     const sessionId = ref.id;
     const draft = ephemeralSession(sessionId);
     return replaceCliWithNewBuild({
@@ -227,7 +241,8 @@ function startBuildWatch(
       },
     });
   };
-  registerBuildReplacer(beginBuildReplace);
+  // `/restart` is the user's word: with no reading of the build this window started on, it cannot be compared, so it reloads.
+  registerBuildReplacer(() => beginBuildReplace(startupBuild === undefined));
   /** When a newer build was first seen and this window could not take it: said once if it stays that way. */
   let waitingSince: number | undefined;
   let toldWaiting = false;
