@@ -105,8 +105,11 @@ const NAME = /^[a-z][a-z0-9-]{1,40}$/;
 const SAFE_VALUE = /^[A-Za-z0-9_][\w.@:/ -]{0,119}$/;
 const VAULT_REF = /^secret:([A-Za-z0-9][\w./-]{0,80})$/;
 const VALUE_NAME = /^[A-Za-z_][\w-]{0,40}$/;
-const VALUE_TEXT = /^[A-Za-z0-9][\w.-]{0,119}$/;
-const VALUE_FORMAT = 'letters, digits, dot, dash or underscore, no spaces, slashes or https://';
+/** A connection value as ClikDeploy's connect route takes it (short plain text: an id, a region, an account email for a header), and never
+ * a web address pasted where an id belongs. The narrower old rule (letters, digits, dot, dash, underscore) refused account emails, which
+ * vendors such as ZoomConnect send in a header; a value that fills the API host is checked again by ClikDeploy against its host rule. */
+const VALUE_TEXT = /^(?!https?:\/\/)[^\s\u0000-\u001f\u007f]{1,256}$/i;
+const VALUE_FORMAT = 'short plain text with no spaces (an id, a region, an account email), not a web address';
 
 /** The connection values as a plain map, or the problem with them. A harness may hand the map over as JSON text. */
 function readConnectionValues(raw: unknown): { values?: Record<string, string>; problem?: string } {
