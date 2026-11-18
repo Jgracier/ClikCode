@@ -302,6 +302,14 @@ it('connectionValues keeps the read-back: NOT connected when nothing is stored, 
   expect(await problem({ a: 'b' }, 'clikdeploy-secret')).toContain('only goes with clikdeploy-connection');
 });
 
+it('a connection value may be an account email or carry a plus sign, but never a web address or text with spaces', async () => {
+  const declared = async (): Promise<DeclaredValues | undefined> => ({ email: { label: 'Account email' } });
+  const plan = (value: string) => normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'zoomconnect' }, values: { email: value } })!;
+  expect(await destinationProblem(dir, plan('ops+connectors@example.com'), declared)).toBeUndefined();
+  expect(await destinationProblem(dir, plan('https://api.example.com'), declared)).toContain('not a web address');
+  expect(await destinationProblem(dir, plan('two words'), declared)).toContain('no spaces');
+});
+
 it('values is the plain name for connectionValues, checked against the connector\'s declared values, with the allowed names and format in the error', async () => {
   const declared = async (id: string): Promise<DeclaredValues | undefined> => id === 'knack' ? { app_id: { label: 'Application ID', description: 'Settings, API & Code' } } : id === 'plain' ? {} : undefined;
   const plan = normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' }, values: { app_id: ' 5f1c2d3e4a ' } })!;
@@ -314,7 +322,7 @@ it('values is the plain name for connectionValues, checked against the connector
   const missing = await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' } })!, declared);
   expect(missing).toContain('needs a value for app_id');
   expect(missing).toContain('Application ID');
-  expect(missing).toContain('letters, digits, dot, dash or underscore');
+  expect(missing).toContain('short plain text with no spaces');
   const wrong = await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' }, values: { subdomain: 'x' } })!, declared);
   expect(wrong).toContain('does not take');
   expect(wrong).toContain('app_id');
