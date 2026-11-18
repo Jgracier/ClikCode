@@ -250,3 +250,9 @@ describe('a sign-up that wants a work email', () => {
     expect(seen).toContain('me@company.example');
   });
 });
+
+it('tells the agent an unreadable texted-code reader is a wall to report at once, not a hand-off to wait on', async () => {
+  const stop: StopInfo = { kind: 'unknown', message: 'a phone check', url: 'https://vendor.example/verify', pageText: 'Enter the code we texted you', controls: [] };
+  const prompt = microPrompt('acme', stop, 20);
+  expect(prompt).toContain('do not wait or hand off, end with RESULT: wall sms');
+});
