@@ -25,7 +25,11 @@ export function turnEnvironment(
   // A turn (it has a permission mode) also gets the features the catalog says
   // this vendor keeps off by default -- Claude Code's task-list tools.
   const turn = permissionMode ? harness.turnEnv : undefined;
-  return { ...environment, ...(turn ?? {}), ...(permission ?? {}) };
+  // The session's mode, for the ClikDeploy tools a turn reaches (the `clikdeploy` command line and the platform's tool server): the
+  // platform then leaves asking to this session, by its mode, instead of asking a second time (clikdeploy packages/clikagents
+  // permission-mode.ts). Every vendor, whatever its own approval flags.
+  const session: Record<string, string> = permissionMode ? { CLIKDEPLOY_PERMISSION_MODE: permissionMode } : {};
+  return { ...environment, ...(turn ?? {}), ...(permission ?? {}), ...session };
 }
 
 const linked = new Set<string>();

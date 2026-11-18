@@ -8,6 +8,12 @@ describe('a harness turn\'s environment', () => {
     expect(turnEnvironment(harness, undefined)).not.toHaveProperty('CLAUDE_CODE_ENABLE_TODO_TOOLS');
   });
 
+  it("tells the ClikDeploy tools a turn reaches the session's mode, on every vendor, and nothing on a management command", () => {
+    const harness = { command: 'opencode' } as never;
+    for (const mode of ['ask', 'auto', 'bypass'] as const) expect(turnEnvironment(harness, undefined, mode)).toMatchObject({ CLIKDEPLOY_PERMISSION_MODE: mode });
+    expect(turnEnvironment(harness, undefined)).not.toHaveProperty('CLIKDEPLOY_PERMISSION_MODE');
+  });
+
   it('is switched on for Claude Code in the catalog', async () => {
     const { AI_LOCAL_HARNESSES } = await import('../../packages/clikrouter/src/ai-local-harness.js');
     expect(AI_LOCAL_HARNESSES.find((h) => h.command === 'claude')?.turnEnv).toEqual({ CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' });
