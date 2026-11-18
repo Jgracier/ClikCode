@@ -78,6 +78,12 @@ export function completeLoginUrl(value: string): boolean {
   } catch { return false; }
 }
 
+/** A sign-in's localhost callback reaches this machine from where the person is: here, or through ClikDeploy Mobile, which forwards the
+ * callback port of a link tapped in its terminal. Plain SSH from any other app cannot, so a device sign-in is the one that finishes there. */
+export function callbacksReachable(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return hasLocalDisplay(environment) || environment.CLIKDEPLOY_REMOTE_TERMINAL === '1';
+}
+
 /** Is a browser on THIS machine any use? Over SSH it is not: opening one on
  * the server helps nobody sitting at a phone. */
 export function hasLocalDisplay(environment: NodeJS.ProcessEnv = process.env): boolean {

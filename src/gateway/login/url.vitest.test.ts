@@ -146,3 +146,21 @@ describe('scriptArgv', () => {
       .toBe("stty rows 40 cols 100 2>/dev/null; exec 'agy' '-p' 'hi' '--output-format' 'json'");
   });
 });
+
+describe('which sign-in a session takes', () => {
+  it('a localhost callback reaches this machine from a browser here or ClikDeploy Mobile, never from plain SSH', async () => {
+    const { callbacksReachable } = await import('./url.js');
+    expect(callbacksReachable({ CLIKDEPLOY_REMOTE_TERMINAL: '1', SSH_CONNECTION: 'x' })).toBe(true);
+    expect(callbacksReachable({ SSH_CONNECTION: '1 2 3 4' })).toBe(false);
+    expect(callbacksReachable({ SSH_TTY: '/dev/pts/1', DISPLAY: ':0' })).toBe(false);
+  });
+
+  it('reads the callback port of every name vendors give it, Command Code\'s `callback` too', async () => {
+    const { loginCallbackPort, loginPortForwardHint } = await import('./link-info.js');
+    expect(loginCallbackPort('https://commandcode.ai/studio/auth/cli?callback=http%3A%2F%2F127.0.0.1%3A37805%2Fcallback&state=x')).toBe(37805);
+    expect(loginCallbackPort('https://openrouter.ai/auth?callback_url=http%3A%2F%2Flocalhost%3A3000')).toBe(3000);
+    expect(loginCallbackPort('https://x.example/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A46601%2Foauth2callback')).toBe(46601);
+    expect(loginCallbackPort('https://antigravity.google/oauth-callback')).toBeUndefined();
+    expect(loginPortForwardHint('https://commandcode.ai/studio/auth/cli?callback=http%3A%2F%2F127.0.0.1%3A37805%2Fcallback', { CLIKDEPLOY_REMOTE_TERMINAL: '1' })).toContain('37805');
+  });
+});

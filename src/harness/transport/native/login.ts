@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline/promises';
 import { runVendorSignIn, SEARCH_CHOICE, type SignInScreen, type SignInUi } from '../../../gateway/login/vendor-sign-in.js';
 import { keyProviders, localHarnessForCommand } from '../../../runtime/lazy-bridge.js';
 import type { AiHarnessKeyRoute, AiKeyProvider, AiKeyProviderId, AiLocalHarnessDefinition } from '../../definition.js';
-import { hasLocalDisplay, loginLinkLine, loginUrlNotice, openLoginUrl } from '../../../gateway/login/url.js';
+import { callbacksReachable, hasLocalDisplay, loginLinkLine, loginUrlNotice, openLoginUrl } from '../../../gateway/login/url.js';
 import { loginPortForwardHint } from '../../../gateway/login/link-info.js';
 import { NativeHarnessSpec } from './binary.js';
 import { captureNativeHarnessOutput } from './command.js';
@@ -100,7 +100,9 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
     const run = (ui: SignInUi) => runVendorSignIn({
       ...(before !== undefined ? { signedIn: async () => (await authFilesStamp(spec, envOverrides)) !== before && authFilePresent(spec, envOverrides) } : {}),
       binary: spec.binary,
-      args: !local && spec.loginRemoteArgv ? spec.loginRemoteArgv : spec.loginArgv ?? [],
+      // The order, everywhere: a sign-in whose localhost callback reaches this machine (a browser here, or ClikDeploy Mobile forwarding
+      // the port), else the vendor's device sign-in, else a key. loginRemoteArgv is the device sign-in, for plain SSH only.
+      args: !callbacksReachable(loginEnvironment) && spec.loginRemoteArgv ? spec.loginRemoteArgv : spec.loginArgv ?? [],
       env: envOverrides, displayName: spec.displayName, local,
       ...(spec.loginSteps ? { steps: spec.loginSteps } : {}),
       ui,
@@ -126,7 +128,7 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
         await storeKey(harness, spec, envOverrides, key, screen.signal);
         return;
       }
-      await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), key ?? instead.key, !local));
+      await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), key ?? instead.key, callbacksReachable(loginEnvironment)));
       return;
     }
     // A vendor that reads its key only from a variable: its own sign-in, with
@@ -318,11 +320,12 @@ export async function keyRoutedScreen(
   spec: NativeHarnessSpec, routes: readonly AiHarnessKeyRoute[], screen: SignInScreen,
   providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>> = keyProviders(),
   given?: string,
-  /** No browser here (a phone, a remote shell): the vendor's menus choose the device-code sign-in where they offer one. */
-  remote = false,
+  /** Whether a localhost callback reaches this machine (callbacksReachable): the vendor's method menus are answered by it --
+   * browser where it does, device code where it does not. Undefined: left to the person. */
+  callbacks?: boolean,
 ): Promise<SignInUi> {
   const key = given ?? await askKey(spec, screen);
-  if (!key) return remote ? preferDeviceCode(screen) : screen;
+  if (!key) return callbacks === undefined ? screen : preferredSignInMethod(screen, callbacks);
   const route = await routeFor(spec, routes, key, screen.signal, providers);
   const labels = [...route.choose];
   let searched: string | undefined;
@@ -378,17 +381,19 @@ async function askKey(spec: NativeHarnessSpec, screen: SignInScreen): Promise<st
   return key;
 }
 
-/** The method menu of a provider's own sign-in ("Login method": OpenAI's ChatGPT browser, headless, or a key) answered for a
- * session with no browser of its own: the one that gives a device code, which any browser can finish, rather than a
- * localhost callback only this machine can receive. Every other question stays the person's. */
-export function preferDeviceCode(screen: SignInScreen): SignInUi {
+/** The method menu of a provider's own sign-in ("Login method": OpenAI's ChatGPT browser, headless, or a key), answered by the one
+ * order every sign-in follows: the browser method (its localhost callback) where it reaches this machine -- a browser here, or ClikDeploy
+ * Mobile forwarding the port -- else the device method (headless/device code), which any browser can finish. Every other question, and a
+ * method menu without the one wanted, stays the person's. */
+export function preferredSignInMethod(screen: SignInScreen, callbacks: boolean): SignInUi {
+  const wanted = callbacks ? /\bbrowser\b/i : /\b(headless|device)\b/i;
   return {
     ...screen,
     show: (link) => screen.show(link),
     ask: (...args) => screen.ask(...args),
     choose: async (title, choices, selected) => {
-      const device = /login method|sign.?in method/i.test(title) ? choices.findIndex((choice) => /\b(headless|device)\b/i.test(choice)) : -1;
-      return device >= 0 ? device : screen.choose(title, choices, selected);
+      const pick = /login method|sign.?in method/i.test(title) ? choices.findIndex((choice) => wanted.test(choice)) : -1;
+      return pick >= 0 ? pick : screen.choose(title, choices, selected);
     },
   };
 }

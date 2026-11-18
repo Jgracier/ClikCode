@@ -10,8 +10,9 @@ export function shortenLoginUrl(url: string, maxLength = 56): string {
 export function loginCallbackPort(url: string): number | undefined {
   try {
     const auth = new URL(url);
+    // Command Code names it `callback`.
     const redirect = auth.searchParams.get('redirect_uri') ?? auth.searchParams.get('redirect_url')
-      ?? auth.searchParams.get('callback_url');
+      ?? auth.searchParams.get('callback_url') ?? auth.searchParams.get('callback');
     const callback = redirect ? new URL(redirect) : auth;
     if (callback.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(callback.hostname)) return undefined;
     const port = Number(callback.port);
