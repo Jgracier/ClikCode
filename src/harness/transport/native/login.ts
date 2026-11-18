@@ -117,7 +117,16 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
           isKey: async (text) => keyCandidates(routes, text, keyProviders()).length > 0 && Boolean(await routeFor(spec, routes, text, screen.signal).catch(quiet('harness/transport/native/login'))),
         })
         : { key: undefined };
-      if (instead) await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), instead.key));
+      if (!instead) return;
+      // The vendor's OWN key (OpenCode's, from opencode.ai/auth): kept in the account's profile as the variable the vendor reads, which
+      // every plan of it uses (OpenCode Zen and OpenCode Go take the same key) -- nothing to choose, nothing to try in turn. Any other
+      // provider's key still goes through the vendor's own menu.
+      const key = instead.key ?? (keyVariables(harness).length ? await askKey(spec, screen) : undefined);
+      if (key && (await keyVariableFor(harness, key, screen.signal))?.checked) {
+        await storeKey(harness, spec, envOverrides, key, screen.signal);
+        return;
+      }
+      await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), key ?? instead.key));
       return;
     }
     // A vendor that reads its key only from a variable: its own sign-in, with
@@ -355,7 +364,9 @@ function isSearch(choice: string): boolean {
 /** The key, asked first and alone; '' when the user gave none (Enter: the
  * vendor's own sign-in). */
 async function askKey(spec: NativeHarnessSpec, screen: SignInScreen): Promise<string> {
-  const key = (await screen.ask(`${spec.displayName} API key, or Enter to choose a provider`, true, true)).trim();
+  // Where the vendor's own key is made, for a vendor whose own sign-in is a key (it has no link of its own to show).
+  const page = localHarnessForCommand(spec.command)?.loginKeyPage;
+  const key = (await screen.ask(`${spec.displayName} API key${page ? ` (make one at ${page})` : ''}, or Enter to choose a provider`, true, true)).trim();
   if (screen.signal.aborted) throw new Error(`sign-in to ${spec.displayName} was cancelled`);
   return key;
 }

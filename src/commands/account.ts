@@ -371,7 +371,27 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
       return existingMatch.label;
     }
     accountLabel = nameAccount(state.accounts, harness, derived);
-  } else accountLabel = nameAccount(state.accounts, harness, accountLabel);
+  } else {
+    // A sign-in that reveals no identity (a key with no email behind it: OpenCode's own) re-authenticates the account it is for: the
+    // one the user named, or the provider's only account when that one needs a sign-in. A new key for an expired one became a second
+    // "OpenCode 2" beside it, the dead one kept.
+    const same = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli');
+    const named = explicit ? same.find((account) => account.label.toLowerCase() === explicit.toLowerCase()) : undefined;
+    const onlyOne = !explicit && same.length === 1 && (same[0]!.status === 'needs_login' || same[0]!.verification) ? same[0] : undefined;
+    const again = named ?? onlyOne;
+    if (again) {
+      again.status = 'ready';
+      again.signedInAt = new Date().toISOString();
+      delete again.neverSignedIn;
+      const left = await settleReauthenticatedProfile(harness, again, nativeProfile, state);
+      if (left) touched.add(left);
+      again.verification = undefined;
+      await writeState(state);
+      emitHarnessOutput({ status: 'connected', harness: harness.command, account: again.label, credentialBoundary: 'local-only' });
+      return again.label;
+    }
+    accountLabel = nameAccount(state.accounts, harness, accountLabel);
+  }
   const created: AiHarnessAccount = { id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) };
   state.accounts.push(created);
   await writeState(state);

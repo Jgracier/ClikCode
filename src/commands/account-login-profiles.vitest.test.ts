@@ -62,6 +62,22 @@ describe('account sign-in profiles', () => {
     expect(await readdir(join(root, 'profiles', 'codex')).catch(() => [])).toEqual([]);
   });
 
+  it('a new key for an account that reveals no identity (OpenCode\'s own) signs that account in again: no "OpenCode 2" beside the dead one', async () => {
+    const { writeProfileKey } = await import('../harness/accounts/profile-key.js');
+    const state = await readState();
+    state.accounts.push({ id: 'old', provider: 'opencode', label: 'OpenCode', authKind: 'vendor-cli', models: [], status: 'needs_login', credentialRef: 'native:opencode' });
+    await writeState(state);
+    vendor.signIn = async (environment) => { await writeProfileKey(environment.HOME!, 'OPENCODE_API_KEY', 'fresh-key'); };
+    const { aiAccountLogin } = await import('./account.js');
+    expect(await aiAccountLogin('opencode')).toBe('OpenCode');
+    const accounts = (await readState()).accounts.filter((account) => account.provider === 'opencode');
+    expect(accounts.map((account) => [account.id, account.label, account.status])).toEqual([['old', 'OpenCode', 'ready']]);
+    expect(accounts[0]!.nativeProfile?.path).toContain(join('profiles', 'opencode'));
+    // Named, it is that account again even while it still reads as ready.
+    expect(await aiAccountLogin('opencode', 'OpenCode')).toBe('OpenCode');
+    expect((await readState()).accounts.filter((account) => account.provider === 'opencode')).toHaveLength(1);
+  });
+
   it('removes the profile a failed sign-in created', async () => {
     const { aiAccountLogin } = await import('./account.js');
     await expect(aiAccountLogin('codex')).rejects.toThrow('sign-in cancelled');
