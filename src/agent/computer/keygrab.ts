@@ -306,6 +306,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const guard = async (view: KeyView): Promise<void> => {
     const wall = keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields });
     if (wall?.kind === 'captcha' && !view.captchaFrame && wordsOnly.has(pathOf(view.url) || view.url)) return;
+    if (wall?.kind === 'captcha' && answered.has(pathOf(view.url) || view.url)) return;
     if (wall?.kind === 'mfa' && await pastAuthenticator(view)) return;
     if (wall?.kind === 'decision' && /work-email|free-mail/.test(wall.reasonCode) && await pastFreeMail(view)) return;
     if (wall?.kind === 'sms' || (wall?.kind === 'mfa' && /text|sms|phone|mobile/i.test(view.text))) {
@@ -321,13 +322,15 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const checkedAt = new Map<string, number>();
   /** Pages whose "captcha" was words alone: the solver found no check there. */
   const wordsOnly = new Set<string>();
+  /** Pages whose check the solver answered twice in a row: the widget's frame stays (showing "Success!") but holds an accepted answer. */
+  const answered = new Set<string>();
   let checks = 0;
   /** A captcha in the way is answered in this tab, which keeps its cookies and sign-in: up to twice per page (a
    * site that says "wrong code" shows a new one) and six times per run (one on the sign-up form, another after it
    * is sent, another at sign-in). A page still blocked after that ends as a human step. */
   const pastCaptcha = async (view: KeyView): Promise<KeyView> => {
     let v = view;
-    while (captchaOn(v) && port.humanCheck) {
+    while (captchaOn(v) && port.humanCheck && !answered.has(pathOf(v.url) || v.url)) {
       const here = pathOf(v.url) || v.url;
       const tries = checkedAt.get(here) ?? 0;
       if (tries >= 2 || checks >= 6) break;
@@ -338,6 +341,8 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       // (a "security question" box, a page that mentions captchas). Those words no longer stop this page.
       if (outcome === 'none' && !v.captchaFrame) { wordsOnly.add(here); return v; }
       if (outcome !== 'cleared') break;
+      // A second "cleared" on the same page is the accepted answer still there, not a new challenge: the page is past its check.
+      if (tries >= 1) { answered.add(here); return v; }
       await sleep(800);
       v = await dismissBanner(await port.look());
       // Cleared, and the solver's own detector sees no check left: what still reads as a captcha is the answered widget's words

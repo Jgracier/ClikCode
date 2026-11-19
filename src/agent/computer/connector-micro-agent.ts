@@ -80,11 +80,16 @@ const WALL_TO_STOP: Record<string, StopInfo['kind']> = { captcha: 'captcha', sms
 export interface MicroPorts {
   /** A connected mailbox on a business domain, for sign-ups that refuse a free address. */
   businessEmail?(): Promise<string | undefined>;
-  /** Runs the agent to its end or the deadline; its final text. */
-  run(prompt: string, options: { tab: string; maxCalls: number; maxMs: number }): Promise<{ text: string; timedOut: boolean; calls: number; error?: string }>;
+  /** Runs the agent to its end; its final text. It is stopped only when it stalls (no tool call for STALL_MS) or reaches the
+   * ceiling maxMs: an agent still working is never cut off by the clock. `stalled` says which stop it was. */
+  run(prompt: string, options: { tab: string; maxCalls: number; maxMs: number }): Promise<{ text: string; timedOut: boolean; stalled?: boolean; calls: number; error?: string }>;
   /** A stamp of the saved recipes, to see whether one was recorded. */
   recipeStamp(): Promise<string>;
 }
+
+/** How long an agent may go without a tool call before it is taken as stuck. Model turns and a texted or mailed code (read_sms_code
+ * waits inside one call) fit well inside it. */
+export const STALL_MS = 5 * 60_000;
 
 export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }, ports: MicroPorts): Promise<DriveOutcome> {
   const before = await ports.recipeStamp().catch(() => '');
@@ -92,7 +97,7 @@ export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCall
   const businessEmail = await ports.businessEmail?.().catch(() => undefined);
   const ran = await ports.run(microPrompt(id, stop, budget.maxCalls, businessEmail ? { businessEmail } : {}), { tab, ...budget }).catch((error: unknown) => ({ text: '', timedOut: false, calls: 0, error: scrubSecrets(error instanceof Error ? error.message : String(error)) }));
   const err = 'error' in ran ? ran.error : undefined;
-  const result = ran.timedOut ? { kind: 'gave-up', why: `the agent used its ${Math.round(budget.maxMs / 1000)}s` } as MicroResult : err ? { kind: 'gave-up', why: `the agent could not run: ${err.slice(0, 200)}` } as MicroResult : parseMicroResult(ran.text);
+  const result = ran.timedOut ? { kind: 'gave-up', why: 'stalled' in ran && ran.stalled ? `the agent stalled: no tool call for ${Math.round(STALL_MS / 1000)}s` : `the agent reached the ${Math.round(budget.maxMs / 60_000)} min ceiling while still working` } as MicroResult : err ? { kind: 'gave-up', why: `the agent could not run: ${err.slice(0, 200)}` } as MicroResult : parseMicroResult(ran.text);
   const after = await ports.recipeStamp().catch(() => '');
   if (result.kind === 'captured') return { ok: true, agentCalls: ran.calls, note: `an agent micro-task finished its assigned task (${ran.calls} tool calls)${after !== before ? ' and saved a recipe' : ''}`, actions: ran.calls, recipe: after !== before };
   if (result.kind === 'wall') {
@@ -164,16 +169,24 @@ export function livePorts(stateDir: string): MicroPorts {
         delete env.OPENAI_API_KEY;
         delete env.ANTHROPIC_API_KEY;
         const child = spawn(useCodex ? 'codex' : 'claude', args, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
-        let text = '', timedOut = false;
+        let text = '', timedOut = false, stalled = false;
         child.stdout!.on('data', c => { text = (text + String(c)).slice(-20_000); });
         child.stderr!.on('data', quiet('agent/computer/connector-micro-agent'));
         const kill = (): void => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); } };
         const timer = setTimeout(() => { timedOut = true; kill(); }, options.maxMs);
+        // Working is a tool call now and then: each one moves the stall deadline. Only an agent that has stopped calling is cut off.
+        let seen = 0, lastCall = Date.now();
+        const watch = setInterval(() => {
+          void readFile(counter, 'utf8').then(raw => raw, () => '').then(raw => {
+            const count = parseInt(raw, 10) || 0;
+            if (count > seen || raw.endsWith('+')) { seen = count; lastCall = Date.now(); } else if (Date.now() - lastCall > STALL_MS && !timedOut) { timedOut = true; stalled = true; kill(); }
+          });
+        }, 5_000);
         const code = await new Promise<number | null>(resolve => { child.once('close', code => resolve(code)); child.once('error', () => resolve(-1)); });
-        clearTimeout(timer);
+        clearTimeout(timer); clearInterval(watch);
         if (useCodex) text = await readFile(final, 'utf8').catch(() => '');
-        const calls = Number(await readFile(counter, 'utf8').catch(() => '0')) || 0;
-        return { text, timedOut, calls, ...(code !== 0 && !timedOut ? { error: `the agent could not run: ${useCodex ? 'Codex' : 'Claude Code'} (${account.label}) exited ${code}` } : {}) };
+        const calls = parseInt(await readFile(counter, 'utf8').catch(() => '0'), 10) || 0;
+        return { text, timedOut, ...(stalled ? { stalled } : {}), calls, ...(code !== 0 && !timedOut ? { error: `the agent could not run: ${useCodex ? 'Codex' : 'Claude Code'} (${account.label}) exited ${code}` } : {}) };
       } finally { await rm(dir, { recursive: true, force: true }).catch(quiet('agent/computer/connector-micro-agent')); }
     },
   };

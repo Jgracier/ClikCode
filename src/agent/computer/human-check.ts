@@ -113,6 +113,9 @@ export async function humanCheckAnswered(page: Page): Promise<boolean> {
   return page.evaluate(() => {
     const doc = (globalThis as unknown as { document: { querySelectorAll(selector: string): ArrayLike<{ value?: string; getBoundingClientRect?(): { width: number } }> } }).document;
     if (Array.from(doc.querySelectorAll('#g-recaptcha-response, [name="g-recaptcha-response"], [name="cf-turnstile-response"], [name="h-captcha-response"], [name="lot_number"], [name="geetest_validate"]')).some(field => (field.value ?? '').length > 8)) return true;
+    // Auth0's sign-in pages (Twilio and many more) copy the widget's token into their own hidden "captcha" field. A token is
+    // hundreds of characters; a typed answer to Auth0's own text captcha (same name) is a few, so only a long value counts.
+    if (Array.from(doc.querySelectorAll('input[type="hidden"][name="captcha"]')).some(field => (field.value ?? '').length > 100)) return true;
     // GeeTest shows its success state on its own button instead of filling a field the page can see at once.
     return Array.from(doc.querySelectorAll('[class*="geetest_lock_success"], [class*="geetest_success_radar"], [class*="geetest_btn_click"][class*="geetest_success"]')).some(el => (el.getBoundingClientRect?.().width ?? 0) > 0);
   }).catch(() => false);

@@ -48,6 +48,10 @@ describe('agent micro-task', () => {
     expect(walled).toMatchObject({ ok: false, stop: { kind: 'captcha', human: { kind: 'captcha', reasonCode: 'captcha' } } });
     const late = await runMicroTask('acme', stop, { maxCalls: 25, maxMs: 60_000 }, ports('', { timedOut: true }));
     expect(late.ok).toBe(false);
+    expect(late).toMatchObject({ stop: { message: expect.stringContaining('ceiling while still working') } });
+    const stalledPorts = ports('');
+    stalledPorts.run = async () => ({ text: '', timedOut: true, stalled: true, calls: 3 });
+    expect(await runMicroTask('acme', stop, { maxCalls: 25, maxMs: 60_000 }, stalledPorts)).toMatchObject({ ok: false, stop: { message: expect.stringContaining('stalled: no tool call') } });
     const none = await runMicroTask('acme', stop, { maxCalls: 25, maxMs: 60_000 }, ports('thinking...'));
     expect(none).toMatchObject({ ok: false, stop: { message: expect.stringContaining('did not finish') } });
   });

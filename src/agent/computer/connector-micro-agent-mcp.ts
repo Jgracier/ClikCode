@@ -84,7 +84,9 @@ export function agentMcpHandler(options: AgentMcpOptions): (message: Rpc) => Pro
         if (!tool) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
         if (calls >= options.maxCalls) return reply({ content: [{ type: 'text', text: `Call budget of ${options.maxCalls} used. Stop now and end with your RESULT line.` }], isError: true });
         calls++;
-        if (options.counter) await writeFile(options.counter, String(calls)).catch(quiet('agent/computer/connector-micro-agent-mcp'));
+        // "N+" while the call runs, "N" once it returns: a long call (a captcha solve, a texted code) is work, not a stall.
+        const mark = (text: string): Promise<void> => options.counter ? writeFile(options.counter, text).catch(quiet('agent/computer/connector-micro-agent-mcp')) : Promise.resolve();
+        await mark(`${calls}+`);
         try {
           // The tab is ours, whatever the agent passes.
           const args = { ...(message.params?.arguments ?? {}), tab: options.tab } as Record<string, unknown>;
@@ -100,7 +102,7 @@ export function agentMcpHandler(options: AgentMcpOptions): (message: Rpc) => Pro
           return reply({ content: [{ type: 'text', text: scrubSecrets(result.output) }], isError: !!result.isError });
         } catch (error) {
           return reply({ content: [{ type: 'text', text: scrubSecrets(error instanceof Error ? error.message : String(error)) }], isError: true });
-        }
+        } finally { await mark(String(calls)); }
       }
       default: return { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } };
     }

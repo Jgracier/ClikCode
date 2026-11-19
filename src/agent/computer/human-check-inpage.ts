@@ -45,6 +45,9 @@ export const POW_STATE = `(() => {
     const done = (frc && frcValue.length > 20 && !frcValue.startsWith('.')) || (altcha && (value('[name="altcha"]').length > 20 || !!(altchaRoot && altchaRoot.querySelector('[data-state="verified"], .altcha[data-state="verified"]'))));
     const box = frc || altcha;
     const where = box.getBoundingClientRect();
+    // A widget with no size is not shown to the visitor: a "floating" ALTCHA appears only when its own form is submitted (urlr's
+    // link shortener on the home page). It is in nobody's way until then, and a form that needs it shows it.
+    if (!done && where.width <= 4 && where.height <= 4) return null;
     if (where.top > innerHeight - 40 || where.bottom < 40) box.scrollIntoView({ block: 'center' });
     // Friendly Captcha v2 draws its box in a frame; v1 has a start button; ALTCHA has a checkbox.
     const press = frc ? (frc.querySelector('iframe.frc-i-widget') || (frc.shadowRoot || frc).querySelector('button.frc-button, button')) : altchaRoot ? altchaRoot.querySelector('input[type="checkbox"]') : null;
