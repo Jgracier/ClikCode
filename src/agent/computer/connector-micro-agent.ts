@@ -124,11 +124,14 @@ type ChatHarness = keyof typeof CHAT_HARNESSES;
  * what a connector agent runs on: the same subscription doing the same kind of work, never Gateway credit and never another account.
  * An error says why it cannot, in words for the outcome (the loop retries an agent that could not run, it is no vendor wall). */
 export function chatRoute(state: { sessions: readonly HarnessSession[]; accounts: readonly AiHarnessAccount[] }, now = Date.now()): { harness: ChatHarness; account: AiHarnessAccount; model?: string } | { error: string } {
-  const chat = [...state.sessions].filter(session => session.route === 'local' && session.nativeHarness && session.accountId)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
-  if (!chat) return { error: 'No chat with a signed-in harness was found to run the connector agent on.' };
+  const chats = [...state.sessions].filter(session => session.route === 'local' && session.nativeHarness && session.accountId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  if (!chats.length) return { error: 'No chat with a signed-in harness was found to run the connector agent on.' };
+  // The most recent chat on a harness that can run headless: a newer chat on Copilot or OpenCode left every hand-off unable to start
+  // (27 on 2026-11-18) although a Claude Code chat on the user's own account was right behind it.
+  const chat = chats.find(session => (session.nativeHarness as string) in CHAT_HARNESSES);
+  if (!chat) return { error: `The recent chats run on ${chats[0]!.nativeHarness}; connector agents run on Claude Code or Codex.` };
   const harness = chat.nativeHarness as string;
-  if (!(harness in CHAT_HARNESSES)) return { error: `The current chat runs on ${harness}; connector agents run on Claude Code or Codex.` };
   const account = state.accounts.find(item => item.id === chat.accountId);
   if (!account?.nativeProfile) return { error: `The current chat's ${harness} account is not signed in on this computer.` };
   if (!accountCanTakeTurn(account, now)) return { error: `The current chat's ${harness} account (${account.label}) has no usage left now.` };

@@ -276,6 +276,10 @@ describe('the route a connector agent runs on', () => {
     expect(route).toEqual({ error: expect.stringContaining('has no usage left now') });
   });
   it('says so when the chat runs on a harness a connector agent cannot use', () => {
-    expect(chatRoute({ accounts, sessions: [chat('2026-11-18T12:00:00Z', 'opencode', 'claude-a')] })).toEqual({ error: expect.stringContaining('runs on opencode') });
+    expect(chatRoute({ accounts, sessions: [chat('2026-11-18T12:00:00Z', 'opencode', 'claude-a')] })).toEqual({ error: expect.stringContaining('run on opencode') });
+  });
+  it('skips a newer chat on a harness that cannot run headless for the most recent Claude Code or Codex chat', () => {
+    const route = chatRoute({ accounts, sessions: [chat('2026-11-18T10:00:00Z', 'claude', 'claude-a', 'opus'), chat('2026-11-18T12:00:00Z', 'copilot', 'claude-a')] });
+    expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'opus' });
   });
 });
