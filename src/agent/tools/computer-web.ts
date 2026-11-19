@@ -1010,6 +1010,9 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   // fills the page. One account is shown so its email or password can be changed. A different email is stored as a new
   // account; the same email with a new password replaces that account.
   let confirmSignIn = false;
+  // What the page is, by its path, never its host: "https://login.twilio.com/u/reset-password/change" matched /\/login\b/ on the
+  // host, so a reset page on a login.* host counted as a sign-in, no new password was made or saved, and the next sign-in had none.
+  const where = ((): string => { try { const u = new URL(page.url()); return `${u.pathname}${u.search}`; } catch { return page.url(); } })();
   if (fields.filter(field => field.password).length <= 1) {
     const everyLogin = await savedLoginsForSite(ctx.stateDir, page.url()).catch(() => []);
     siteHasLogin = everyLogin.length > 0;
@@ -1018,7 +1021,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     if (fields.some(field => field.password) && accounts.some(account => account.usable)) accounts = accounts.filter(account => account.usable);
     const accountField = fields.some(field => loginValueFor({ username: 'x', password: 'x' }, field));
     // Google's first page is only the email box. That is still a sign-in, and the email has to be asked.
-    const signIn = accountField && (fields.filter(field => field.password).length === 1 || /signin|identifier|\/login\b/i.test(page.url()));
+    const signIn = accountField && (fields.filter(field => field.password).length === 1 || /signin|identifier|\/login\b/i.test(where));
     if (accounts.length && accountField) {
       let account = accounts.length === 1 ? accounts[0] : accounts.find(candidate => candidate.id === profileChoice.get(`${ctx.stateDir}|login|${origin}`));
       // Several logins and the profile's email names one of them: that is the account, with no question.
@@ -1042,12 +1045,12 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   const boxesOnPage = passwordFields.length ? await page.locator('input[type="password"]:visible').count().catch(() => 0) : 0;
   // A /login page is a sign-in even when the page has a second password box. Treating that as a signup would skip the
   // confirm prompt and fill the profile email with no chance to change it.
-  const loginPage = /\/login\b|signin|identifier/i.test(page.url());
+  const loginPage = /\/login\b|signin|identifier/i.test(where);
   // The page's own words decide a page the address and boxes do not (a post-signup "Create your new password"): see classifyPasswordPage.
   const pageKind = passwordFields.length ? classifyPasswordPage(await readPasswordPageContext(page)) : undefined;
   const newPasswordPage = pageKind?.kind === 'signup' && await generatedPasswordsAllowed(ctx.stateDir);
   const signingUp = newPasswordPage || !loginPage && (passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
-    || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join|password\/(?:edit|new|reset)|(?:reset|set|new|change)[-_ ]?password/i.test(page.url())));
+    || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join|password\/(?:edit|new|reset)|(?:reset|set|new|change)[-_ ]?password/i.test(where)));
   // A sign-up gets a password of its own for this site, like a phone's "Strong Password": the one already typed into this
   // form (filled box by box), else the one saved for this site and email, else a new one that fits what the page asks.
   // The profile's `password` secret is only a fallback for when generating is switched off.
