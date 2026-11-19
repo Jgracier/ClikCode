@@ -383,6 +383,15 @@ describe('keygrab as the policy when no recipe fits', () => {
     expect(c.reports).toHaveLength(1);
     expect(c.reports[0]).toMatchObject({ id: 'appcenter-ms', outcome: 'blocked', humanStep: { kind: 'sms' } });
   });
+  it('gives a sign-in keygrab could not finish to an agent before parking it for a person', async () => {
+    const c = fakeClient([keyAt('twilio-x')], { 'twilio-x': [published('twilio-x')] });
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'password', message: 'Google needs a sign-in the runner cannot do', url: 'https://login.twilio.com/u/login', human: { kind: 'worker-setup', reasonCode: 'sign-in-needed', instructions: 'The saved Google login could not complete sign-in' } }) }]);
+    let asked = 0;
+    d.driver.agentTask = async () => { asked++; return { ok: true }; };
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(asked).toBe(1);
+    expect(outcomes[0]).toMatchObject({ status: 'published' });
+  });
   it('hands an unknown keygrab page on with its text, buttons and screenshot', async () => {
     const c = fakeClient([keyAt('newco')]);
     const d = fakeDriver([{ ok: false, stop: stop({ kind: 'unknown', message: 'no API key page was found', pageText: 'Hello', controls: ['Home'], screenshot: '/tmp/s.png' }) }]);

@@ -111,7 +111,11 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   const viaAgent = async (given: StopInfo, wholeTask = false): Promise<DriveOutcome | undefined> => {
     const stop = leads ? { ...given, pageText: `${given.pageText}\nWhat the qualifier read on the vendor's pages (unverified leads, not walls: check them on the live site): ${leads}` } : given;
     const taskKey = JSON.stringify([result.stage, result.next.kind, result.next.task]);
-    if (agentTasksTried.has(taskKey) || !driver.agentTask || !wholeTask && (stop.human || humanStepFor(id, stop))) return undefined;
+    // A sign-in the runner could not finish (the saved Google login was refused, the site asks for a password it has none for) is
+    // not a person's job yet: an agent can sign in by email, reset the password through the mailbox, or sign up. It is parked only
+    // after that.
+    const signIn = given.kind === 'password';
+    if (agentTasksTried.has(taskKey) || !driver.agentTask || !wholeTask && !signIn && (stop.human || humanStepFor(id, stop))) return undefined;
     agentTasksTried.add(taskKey);
     actions.push('an unrecognized screen: one bounded agent micro-task');
     const agentBegan = now();
