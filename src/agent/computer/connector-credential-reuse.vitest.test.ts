@@ -14,6 +14,9 @@ describe('the form a saved key is connected in', () => {
     const { basicDestination } = await import('./connector-credential-reuse.js');
     expect(basicDestination('dataforseo', 'basic', ['dataforseo/key', 'dataforseo/login'])).toEqual({ to: 'clikdeploy-connection-basic', with: { integration: 'dataforseo', username: 'secret:dataforseo/login' } });
     expect(basicDestination('acme', 'basic', ['acme/key', 'acme/email'])).toEqual({ to: 'clikdeploy-connection-basic', with: { integration: 'acme', username: 'secret:acme/email' } });
+    // Twilio: the key's SID is the username, saved by agents as sid, key-sid or api-key-sid.
+    expect(basicDestination('twilio-api', 'basic', ['twilio-api/key', 'twilio-api/sid'])).toEqual({ to: 'clikdeploy-connection-basic', with: { integration: 'twilio-api', username: 'secret:twilio-api/sid' } });
+    expect(basicDestination('twilio-x', 'basic', ['twilio-x/key', 'twilio-x/api-key-sid'])).toMatchObject({ with: { username: 'secret:twilio-x/api-key-sid' } });
     // Without a saved username nothing is sent: the API-key form is refused for basic auth.
     expect(basicDestination('acme', 'basic', ['acme/key'])).toBe('no-username');
     expect(basicDestination('acme', 'api-key', ['acme/key', 'acme/login'])).toBeUndefined();

@@ -10,7 +10,10 @@ export function credentialNames(id: string, spec: { id?: string; auth?: { signin
 }
 
 /** Saved names that hold a basic-auth username, in the order they are looked for. */
-const USERNAME_NAMES = ['login', 'username', 'user', 'email'];
+const USERNAME_NAMES = ['login', 'username', 'user', 'email',
+  // A key's own id is the username of vendors that sign with a key id and secret: Twilio (sid, key-sid, api-key-sid), and the client and
+  // key ids others use. Saved under these names by agents, they were not looked for, so a saved Twilio key never reached its connector.
+  'sid', 'key-sid', 'api-key-sid', 'account-sid', 'key-id', 'client-id', 'app-id'];
 /** Where a saved key goes for a basic-auth connector: the basic form with the saved username, or 'no-username' when none is saved.
  * Undefined for any other auth, which keeps the API-key form. */
 export function basicDestination(id: string, kind: string | undefined, names: readonly string[]): { to: string; with: Record<string, string> } | 'no-username' | undefined {
