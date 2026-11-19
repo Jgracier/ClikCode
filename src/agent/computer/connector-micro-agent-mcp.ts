@@ -19,7 +19,7 @@ const CONNECTOR_TASK_TOOLS = ['connector_spec_get', 'connector_spec_put', 'conne
 export function connectorTaskTool(id: string, ports?: { describe(tool: string): Promise<unknown>; call(tool: string, args: Record<string, unknown>): Promise<unknown> }): ToolDefinition {
   return {
     name: 'connector_task', class: 'write',
-    description: `Research, build from official documentation, or finish the assigned connector ${id}. The id is fixed by the worker. Read the platform task before making changes; Use tool=describe with args.tool to read the exact argument schema before an unfamiliar operation. Save progress with connector_work_note. copy_task supplies wording slots. Never invent live proof.`,
+    description: `Research, build from official documentation, or finish the assigned connector ${id}. The id is fixed by the worker. Read the platform task before making changes; Use tool=describe with args.tool to read the exact argument schema before an unfamiliar operation. Save progress with connector_work_note. copy_task supplies wording slots. A large answer comes back as an outline: read one part with args.path (a JSON pointer such as "/http" or "/actions/12") and fix it with connector_spec_patch on that path. Never invent live proof.`,
     parameters: { type: 'object', properties: { tool: { type: 'string', enum: ['describe', ...CONNECTOR_TASK_TOOLS], description: 'The bounded connector operation to call.' }, args: { type: 'object', description: 'Operation arguments; id is supplied by the worker.', additionalProperties: true } }, required: ['tool'] },
     label: () => `Work on ${id}`,
     async run(input) {
@@ -41,12 +41,57 @@ export function connectorTaskTool(id: string, ports?: { describe(tool: string): 
         }
       } else {
         const { liveClient, WORKER } = await import('./connector-runner-live.js');
-        const scoped = { ...args, id, ...(target === 'connector_work_note' || target === 'connector_onboard' ? { worker: WORKER } : {}) };
+        // path picks the part of a large answer to show (readable below); it is the worker's, not the platform tool's.
+        const { path: _shownPart, ...forTool } = args;
+        const scoped = { ...forTool, id, ...(target === 'connector_work_note' || target === 'connector_onboard' ? { worker: WORKER } : {}) };
         result = ports ? await ports.call(String(target), scoped) : await liveClient().tool(String(target), scoped);
       }
-      return { output: scrubSecrets(JSON.stringify(result)) };
+      return { output: scrubSecrets(readable(result, typeof args.path === 'string' ? args.path : undefined)) };
     },
   };
+}
+
+/** Largest tool answer an agent can take whole; past it the agent saw a cut-off fragment and could not fix the spec (AdSense, 1up). */
+export const MAX_TOOL_OUTPUT = 60_000;
+
+/** The value at a JSON pointer ("/actions/3/run", "/http"), or undefined. */
+export function atPointer(value: unknown, pointer: string): unknown {
+  if (!pointer || pointer === '/') return value;
+  let at: unknown = value;
+  for (const raw of pointer.replace(/^\//, '').split('/')) {
+    const key = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (at === null || typeof at !== 'object') return undefined;
+    at = Array.isArray(at) ? at[Number(key)] : (at as Record<string, unknown>)[key];
+  }
+  return at;
+}
+
+/** What the agent is shown: the answer whole when it fits; the part at `path` when asked; else an outline it can drill into. A spec
+ * answer is found under spec (connector_spec_get returns { spec }), and paths are taken from there. */
+export function readable(result: unknown, path?: string): string {
+  const root = result && typeof result === 'object' && 'spec' in (result as Record<string, unknown>) ? (result as { spec: unknown }).spec : result;
+  if (path !== undefined) {
+    const part = atPointer(root, path);
+    if (part === undefined) return JSON.stringify({ error: `Nothing at ${path}.`, outline: outline(root) });
+    const text = JSON.stringify(part);
+    return text.length <= MAX_TOOL_OUTPUT ? text : JSON.stringify({ note: `${path} is ${text.length} characters; read a deeper path.`, outline: outline(part) });
+  }
+  const whole = JSON.stringify(result);
+  if (whole.length <= MAX_TOOL_OUTPUT) return whole;
+  return JSON.stringify({ note: `The answer is ${whole.length} characters, too large to read at once. Read one part with args.path (a JSON pointer into the spec, e.g. "/http" or "/actions/12"); fix it with connector_spec_patch on the same path.`, outline: outline(root) });
+}
+
+/** Keys and sizes, and for a spec every operation's name and request line, so a part can be found without reading the whole. */
+function outline(value: unknown): unknown {
+  if (Array.isArray(value)) return { items: value.length, first: value.slice(0, 3).map(v => (v && typeof v === 'object' ? Object.keys(v as object).slice(0, 12) : v)) };
+  if (!value || typeof value !== 'object') return value;
+  const object = value as Record<string, unknown>;
+  const keys = Object.fromEntries(Object.entries(object).map(([k, v]) => [k, Array.isArray(v) ? `${v.length} items` : v && typeof v === 'object' ? `${JSON.stringify(v).length} chars` : v]));
+  const operations = (list: unknown): string[] | undefined => Array.isArray(list) ? list.map((op, i) => {
+    const o = op as { event?: string; name?: string; run?: { request?: { method?: string; path?: string } } };
+    return `${i}: ${o.event ?? o.name ?? '?'} ${o.run?.request?.method ?? ''} ${o.run?.request?.path ?? ''}`.trim();
+  }) : undefined;
+  return { keys, ...(operations(object.actions) ? { actions: operations(object.actions) } : {}), ...(operations(object.triggers) ? { triggers: operations(object.triggers) } : {}) };
 }
 
 /**
