@@ -158,7 +158,7 @@ describe('waiting for mail', () => {
     messages = [{ id: 'reset', internalDate: String(Date.now()), from: 'no-reply@twilio.com', subject: 'Password reset requested', html: '<a class="reset_password_anchor" href=https://links.example/ls/click?upn=reset>Reset your password</a> <a href="https://links.example/ls/click?upn=docs">Support</a>' }];
     const mail = await waitForEmail(dir, { from: 'no-reply@twilio.com', endpoints, timeoutMs: 5_000, pollMs: 50 });
     expect(mail.links).toEqual(['https://links.example/ls/click?upn=reset', 'https://links.example/ls/click?upn=docs']);
-    expect(mail.anchors[0]).toMatchObject({ href: 'https://links.example/ls/click?upn=reset', text: 'Reset your password' });
+    expect(mail.anchors?.[0]).toMatchObject({ href: 'https://links.example/ls/click?upn=reset', text: 'Reset your password' });
   });
 
   it('waits for an email that has not arrived yet, then returns it', async () => {
