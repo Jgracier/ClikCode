@@ -57,7 +57,7 @@ export interface KeygrabPort {
   profileEmail(): Promise<string | undefined>;
 }
 
-interface KeygrabOptions { id: string; url: string; /** Continue from the page the browser is on (a resumed run): no start page is opened. */ resume?: { visited?: string[]; menus?: string[]; signedIn?: boolean }; /** Most pages post-login exploration follows (default 8). */ exploreMax?: number; /** Other starting points to try when `url` is no web page (the spec's homepage, sign-up and docs addresses). */ alternates?: string[]; maxSteps?: number; maxMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void }
+interface KeygrabOptions { id: string; url: string; /** Continue from the page the browser is on (a resumed run): no start page is opened. */ resume?: { visited?: string[]; menus?: string[]; signedIn?: boolean }; /** Most pages post-login exploration follows (default 8). */ exploreMax?: number; /** Other starting points to try when `url` is no web page (the spec's homepage, sign-up and docs addresses). */ alternates?: string[]; /** Key pages already known for this site (a saved recipe's key page, often account-specific like Twilio's /account/<AC>/settings/us1/api-keys): tried once signed in, before menus and guessed paths. */ knownKeyPages?: string[]; maxSteps?: number; maxMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void }
 type KeygrabResult = { ok: true; note: string; steps: number; route: string } | { ok: false; stop: StopInfo; steps: number };
 
 const KEY_NAME = 'ClikDeploy';
@@ -586,6 +586,16 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     let v = start;
     shown = start;
     if (isKeyPage(v)) return v;
+    // A key page this site is known to use comes before any search: the generic paths never reach an account-specific address,
+    // which sent ~40 Twilio connectors to "no API key page was found" although a recipe held the exact page.
+    for (const known of (options.knownKeyPages ?? []).slice(0, 3)) {
+      let page = await openAt(known);
+      if (!page) continue;
+      if (authWall(page) && authTries < 2) { await authenticate(); page = await openAt(known); if (!page) continue; }
+      if (isKeyPage(page)) return page;
+      // A key LIST page offers the create control a click away; the normal walk from here finds it.
+      v = page; shown = page;
+    }
     const explored = await exploreSignedIn(v);
     if (explored?.found) return explored.found;
     if (explored) { v = explored.last; shown = v; }

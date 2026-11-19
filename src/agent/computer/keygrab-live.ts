@@ -200,8 +200,9 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
       for (const item of finished) await desk.removeDeskItem(options.stateDir, item.id);
     }
     const port = await liveKeygrabPort({ ...options, id });
+    const knownKeyPages = await knownKeyPagesFor(options.stateDir, [url, ...(budget.alternates ?? [])]);
     const done = await runKeygrab(port, {
-      id, url, maxMs: budget.maxMs, ...(budget.maxSteps ? { maxSteps: budget.maxSteps } : {}), ...(budget.alternates?.length ? { alternates: budget.alternates } : {}),
+      id, url, maxMs: budget.maxMs, ...(knownKeyPages.length ? { knownKeyPages } : {}), ...(budget.maxSteps ? { maxSteps: budget.maxSteps } : {}), ...(budget.alternates?.length ? { alternates: budget.alternates } : {}),
       ...(budget.resume ? { resume: { visited: budget.resume.visited, menus: budget.resume.menus, ...(budget.resume.signedIn ? { signedIn: true } : {}) } } : {}),
     });
     if (done.ok) {
@@ -231,4 +232,24 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
     if (!parked) await closeComputerPage(options.stateDir, TAB).catch(quiet('agent/computer/keygrab-live'));
     if (!options.keepBrowser) await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/keygrab-live'));
   }
+}
+
+/** The site a host belongs to (twilio.com for 1console.twilio.com, example.co.uk for app.example.co.uk). */
+export function siteOf(host: string): string {
+  const labels = host.toLowerCase().replace(/^www\./, '').split('.');
+  const keep = labels.length > 2 && /^(?:co|com|org|net|gov|ac)$/.test(labels.at(-2)!) && labels.at(-1)!.length === 2 ? 3 : 2;
+  return labels.slice(-keep).join('.');
+}
+
+/** Key pages saved recipes recorded for the same site as these addresses, newest first. */
+export async function knownKeyPagesFor(stateDir: string, urls: readonly string[]): Promise<string[]> {
+  const sites = new Set(urls.flatMap(u => { try { return [siteOf(new URL(u).hostname)]; } catch { return []; } }));
+  if (!sites.size) return [];
+  try {
+    const { listRecipes } = await import('./signup-recipes.js');
+    const pages = (await listRecipes(stateDir))
+      .filter(r => r.keyPage && sites.has(siteOf(r.host)) && (() => { try { return sites.has(siteOf(new URL(r.keyPage!).hostname)); } catch { return false; } })())
+      .sort((a, b) => b.verifiedAt.localeCompare(a.verifiedAt)).map(r => r.keyPage!);
+    return [...new Set(pages)];
+  } catch { return []; }
 }

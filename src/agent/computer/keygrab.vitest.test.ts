@@ -876,3 +876,15 @@ describe('keygrab and a checkbox-style human check', () => {
     expect(await run(site)).toMatchObject({ ok: false, stop: { kind: 'captcha' } });
   });
 });
+
+describe('keygrab and a key page known for the site', () => {
+  it('opens a recipe\'s account-specific key page before searching (Twilio: /account/<AC>/settings/us1/api-keys)', async () => {
+    const pages: Record<string, Page> = {
+      'https://vendor.example/': { text: 'Dashboard for your account and settings', controls: ['Home'] },
+      'https://vendor.example/account/AC1/settings/api-keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    };
+    const site = fakeSite(pages);
+    expect(await run(site)).toMatchObject({ ok: false });
+    expect(await run(fakeSite(pages), { knownKeyPages: ['https://vendor.example/account/AC1/settings/api-keys'] })).toMatchObject({ ok: true });
+  });
+});
