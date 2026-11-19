@@ -97,6 +97,10 @@ export function buildBaseProgram(): Command {
   // cursor hidden, autowrap off and bracketed paste on; an error printed into
   // that state is unreadable and the shell it returns to is unusable. A no-op
   // when no terminal UI was ever started.
+  const isIdleSocketNotice = (err: unknown): boolean => {
+    const e = err as { name?: string; code?: string; message?: string } | undefined;
+    return !!e && (e.name === 'InformationalError' || e.code === 'UND_ERR_INFO') && /idle timeout|socket idle/i.test(e.message ?? '');
+  };
   const onCrash = (kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void => {
     // The stream 'error' listener below covers writes to stdout itself. A
     // write anywhere else (a socket, a pipe) with the same code still arrives
@@ -105,6 +109,11 @@ export function buildBaseProgram(): Command {
     if (isClosedStream(err)) {
       lifecycle('process.hangup', { code: (err as { code?: string }).code });
       process.exit(process.exitCode ?? 0);
+    }
+    // An idle HTTP/2 session timing out is undici telling us it closed a connection nobody was using (InformationalError,
+    if (isIdleSocketNotice(err)) {
+      lifecycle('process.idle-socket', { message: (err as Error).message });
+      return;
     }
     restoreTerminal();
     logCrashToDisk(kind, err);
