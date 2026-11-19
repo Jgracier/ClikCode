@@ -107,6 +107,7 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       await atomicWriteFile(loopStatePath(), `${JSON.stringify(state, null, 1)}\n`, { durable: false });
     },
     async loadCooldown() { return (await readLoopState())?.cooldown; },
+    async loadStuck() { return (await readLoopState())?.stuck; },
     async finishedByUser() {
       const [desk, park] = await Promise.all([import('./handoff-desk-store.js'), import('./keygrab-park.js')]);
       const ids: string[] = [];

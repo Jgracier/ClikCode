@@ -110,6 +110,8 @@ const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|b
 const BROWSER_RETRY_MS = 5 * 60_000;
 /** A vendor whose captcha was not cleared is tried again after this (keygrab-park.ts BACKOFF_HOURS holds it as long). */
 const CAPTCHA_RETRY_MS = 3_600_000;
+/** Runs in a row an agent hand-off may end the same unfinished way before the vendor is parked as attention. */
+export const STUCK_AFTER = 3;
 
 export interface LoopReport { outcome: 'done' | 'blocked' | 'retry'; reason: string; retryAfterMs?: number; humanStep?: VendorOutcome['humanStep'] }
 export interface LoopState {
@@ -117,6 +119,8 @@ export interface LoopState {
   active: Array<{ id: string; tab: string; since: string; calls: number }>;
   done: Record<string, number>; walls: Record<string, number>;
   cooldown: Record<string, string>;
+  /** Vendors whose agent hand-off ended the same way run after run: the reason and how many times in a row. */
+  stuck?: Record<string, { reason: string; count: number }>;
   pressure?: { io?: number; cpu?: number; memory?: number; stalled: boolean; pausedUntil?: string };
 }
 export interface LoopPorts {
@@ -135,6 +139,7 @@ export interface LoopPorts {
   /** Vendors whose human step the user just finished (on the handoff desk): they are due again now, whatever their cooldown. */
   finishedByUser?(): Promise<string[]>;
   loadCooldown?(): Promise<Record<string, string> | undefined>;
+  loadStuck?(): Promise<LoopState['stuck']>;
   now(): number;
   sleep(ms: number): Promise<void>;
   stopRequested?(): boolean;
@@ -157,13 +162,16 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
   const endAt = started + limits.maxHoursMs;
   const cooldown = new Cooldown(limits.cooldownMs, now);
   cooldown.restore(await ports.loadCooldown?.().catch(quiet('agent/computer/connector-loop')));
+  // An agent hand-off that ends the same way STUCK_AFTER runs in a row is parked as attention instead of retried every cooldown
+  // forever (lambdatest, nexmo-conversion, convergehub: one judgement task re-run for days with the same result).
+  const stuck: NonNullable<LoopState['stuck']> = { ...(await ports.loadStuck?.().catch(quiet('agent/computer/connector-loop')) ?? {}) };
   const active = new Map<string, { job: Promise<void>; since: number; lastRenew: number; budget: CallBudget; tab: string }>();
   const summary: LoopSummary = { vendors: 0, done: {}, walls: {}, pauses: 0, restarts: 0, renewals: 0 };
   let stalls = 0, pausedUntil: number | undefined, last: { stalled: boolean; io?: number; cpu?: number; memory?: number } = { stalled: false };
   const save = (stopping: boolean): Promise<void> => ports.saveState({
     pid: ports.pid ?? process.pid, startedAt: new Date(started).toISOString(), until: new Date(endAt).toISOString(), parallel: limits.parallel, updatedAt: new Date(now()).toISOString(), ...(stopping ? { stopping: true } : {}),
     active: [...active].map(([id, a]) => ({ id, tab: a.tab, since: new Date(a.since).toISOString(), calls: a.budget.used })),
-    done: summary.done, walls: summary.walls, cooldown: cooldown.snapshot(),
+    done: summary.done, walls: summary.walls, cooldown: cooldown.snapshot(), stuck,
     pressure: { ...last, ...(pausedUntil && pausedUntil > now() ? { pausedUntil: new Date(pausedUntil).toISOString() } : {}) },
   }).catch(quiet('agent/computer/connector-loop'));
 
@@ -182,7 +190,17 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     cooldown.mark(id, waitingRetryMs ?? (browserDown ? dependencyRetryMs : wall === 'captcha' ? CAPTCHA_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs));
     const reason = scrubSecrets(outcome.summary).replace(/\s+/g, ' ').slice(0, 400);
     let report: LoopReport | undefined;
-    if (outcome.status === 'published') report = { outcome: 'done', reason: reason || 'published' };
+    // The same unfinished hand-off again: counted, and parked once it has happened STUCK_AFTER times in a row.
+    let parkStuck = false;
+    if (outcome.status === 'handoff' && !browserDown && !providerDown) {
+      const key = `${outcome.stage}|${reason.replace(/\(\d+ (?:tool )?calls\)|\d+/g, '').slice(0, 90)}`;
+      stuck[id] = stuck[id]?.reason === key ? { reason: key, count: stuck[id]!.count + 1 } : { reason: key, count: 1 };
+      parkStuck = stuck[id]!.count >= STUCK_AFTER;
+    } else if (outcome.status !== 'waiting' && !browserDown && !providerDown) delete stuck[id];
+    if (parkStuck) {
+      report = { outcome: 'blocked', reason: `wall:agent-stuck: the same agent task ended unfinished ${stuck[id]!.count} runs in a row: ${reason}`.slice(0, 480), humanStep: { kind: 'decision', reasonCode: 'agent-stuck', instructions: `An agent tried this ${stuck[id]!.count} times and ended the same way each time: ${reason}`.slice(0, 300) } };
+      delete stuck[id];
+    } else if (outcome.status === 'published') report = { outcome: 'done', reason: reason || 'published' };
     else if (outcome.status === 'human' && wall && !/already holds/.test(outcome.recorded ?? '')) report = { outcome: 'blocked', reason: `wall:${wall}: ${reason}`.padEnd(10, '.').slice(0, 480), ...(outcome.humanStep ? { humanStep: outcome.humanStep } : {}) };
     else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff' || outcome.status === 'waiting') report = { outcome: 'retry', retryAfterMs: waitingRetryMs ?? (browserDown ? dependencyRetryMs : limits.cooldownMs), reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
     let reported = report ? report.outcome : 'none';

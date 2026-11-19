@@ -322,3 +322,27 @@ it('knows browser trouble by the error\'s name or code first, and by its words o
   expect(browserTrouble(new Error('browser has been closed'))).toBe(true);
   expect(browserTrouble(new Error('the vendor rejected the email address'))).toBe(false);
 });
+
+describe('an agent hand-off that ends the same way every run', () => {
+  it('is parked as agent-stuck attention on the third identical end, not retried forever, and remembered across restarts', async () => {
+    const same = (id: string) => outcome(id, { status: 'handoff', stage: 'finish', summary: 'the agent micro-task did not finish (12 calls): the live tests run 0 checks' });
+    let saved: LoopState | undefined;
+    for (let run = 1; run <= 3; run++) {
+      const f = fakes(['lt'], async id => same(id), { loadStuck: async () => saved?.stuck, saveState: async s => { saved = s; } });
+      await runLoop(f.ports, limits({ maxHoursMs: 60 }));
+      if (run < 3) expect(f.reports[0]![1]).toMatchObject({ outcome: 'retry' });
+      else expect(f.reports[0]![1]).toMatchObject({ outcome: 'blocked', humanStep: { kind: 'decision', reasonCode: 'agent-stuck' } });
+    }
+    expect(saved!.stuck?.lt).toBeUndefined();
+  });
+  it('starts the count again when the hand-off ends differently', async () => {
+    let saved: LoopState | undefined;
+    const ends = ['no key page was found', 'no key page was found', 'a different screen'];
+    for (const end of ends) {
+      const f = fakes(['v'], async id => outcome(id, { status: 'handoff', stage: 'connect', summary: end }), { loadStuck: async () => saved?.stuck, saveState: async s => { saved = s; } });
+      await runLoop(f.ports, limits({ maxHoursMs: 60 }));
+      expect(f.reports[0]![1].outcome).toBe('retry');
+    }
+    expect(saved!.stuck?.v).toMatchObject({ count: 1 });
+  });
+});
