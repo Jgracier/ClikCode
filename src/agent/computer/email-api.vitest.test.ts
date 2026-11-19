@@ -153,6 +153,14 @@ describe('waiting for mail', () => {
     expect(mail.links).toEqual(['https://acme.io/confirm?t=1&u=2']);
   });
 
+  it('reads a link whose href has no quotes (Twilio\'s reset button), with its anchor text', async () => {
+    await connect();
+    messages = [{ id: 'reset', internalDate: String(Date.now()), from: 'no-reply@twilio.com', subject: 'Password reset requested', html: '<a class="reset_password_anchor" href=https://links.example/ls/click?upn=reset>Reset your password</a> <a href="https://links.example/ls/click?upn=docs">Support</a>' }];
+    const mail = await waitForEmail(dir, { from: 'no-reply@twilio.com', endpoints, timeoutMs: 5_000, pollMs: 50 });
+    expect(mail.links).toEqual(['https://links.example/ls/click?upn=reset', 'https://links.example/ls/click?upn=docs']);
+    expect(mail.anchors[0]).toMatchObject({ href: 'https://links.example/ls/click?upn=reset', text: 'Reset your password' });
+  });
+
   it('waits for an email that has not arrived yet, then returns it', async () => {
     await connect();
     setTimeout(() => { messages = [{ id: 'late', internalDate: String(Date.now()), from: 'hello@vendor.com', subject: 'Code', html: 'Your code: 654321' }]; }, 200);
