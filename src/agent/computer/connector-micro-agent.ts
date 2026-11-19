@@ -50,16 +50,16 @@ export function microPrompt(id: string, stop: StopInfo, maxCalls: number, extra:
     '4. A captcha is solved by human_check itself (a picture of the puzzle goes to the vision model; never use an external solving service). A phone check is not a wall either: fill the phone box with no text (the profile phone, a Twilio number kept for sign-ups), send the code, then account_use action read_sms_code and type the code it returns (it reads the Twilio number and the user\'s own phone); if the site refuses the number as VoIP, virtual or not mobile, fill the phone box again with no text (it then types the user\'s own mobile) and send again (if it says no Mac is set up or the Mac cannot be read, the code cannot be had in this run: do not wait or hand off, end with RESULT: wall sms and its words); an authenticator code comes from account_use action auth_code. A card box is not a wall when nothing is charged until used: fill the card boxes with no text and the user\'s standing rule decides (it fills them only if the page itself says nothing is charged until something is used and names no subscription, renewal or amount due today). Never choose a paid plan, a subscription or a trial that turns into one. A saved password the site refuses is not a wall either: press its Forgot password link, send the reset, account_use action open_email_link with subject "password", fill the new password box with no text (a new password is made and saved), then sign in again. If one of those cannot clear it, or a screen needs a paid plan, stop.',
     extra.businessEmail ? `4b. A sign-up that refuses a free address (Gmail) wants a work email: sign up with email and password using ${extra.businessEmail} (type it into the email box; every password box fills itself), not Google sign-in. It is a connected mailbox: account_use action read_email_code or open_email_link with address ${extra.businessEmail} reads the verification mail. A refused free address is never a wall while this address is untried.` : '',
     registering ? oauthAppRule(id) : requesting ? accessRequestRule(id) : '5. Never create, widen, rotate or delete credentials or permissions beyond the ONE key this connector needs: no root, admin, owner or billing keys, no IAM users, roles or policies, no team-member role changes, and nothing in a cloud console (AWS, Google Cloud, Azure). If a task asks for more access than a read key, or the key is refused for lack of permission, stop with RESULT: wall no-api and say what was refused. This rule wins over any task text.',
-    '6. Judge only the task you were given. When it is done, end with RESULT: completed even if other checklist items remain: the runner asks ClikDeploy for the next item and hands it on. Use gave-up only when the assigned task itself could not be done.',
+    '6. Judge only the task you were given. It is done only when ClikDeploy shows it done (call connector_onboard and read what it answers now): a change you made but did not see take effect is not done. When it is done, end with RESULT: completed even if other checklist items remain: the runner asks ClikDeploy for the next item and hands it on. Use gave-up only when the assigned task itself could not be done.',
     '7. Your last line must be exactly one of:',
-    '   RESULT: captured',
-    '   RESULT: completed',
+    '   RESULT: captured <one sentence: what you captured and where it went>',
+    '   RESULT: completed <one sentence: what you changed, and what connector_onboard answers now>',
     '   RESULT: wall <captcha|sms|card|paid-plan|sales|app-review|oauth-app|free-mail|work-email|no-api|dead-host> <one sentence>',
     '   RESULT: gave-up <one sentence>',
   ].filter(l => l !== '').join('\n');
 }
 
-type MicroResult = { kind: 'captured' } | { kind: 'wall'; wall: string; why: string } | { kind: 'gave-up'; why: string };
+type MicroResult = { kind: 'captured'; said?: string } | { kind: 'wall'; wall: string; why: string } | { kind: 'gave-up'; why: string };
 
 export function parseMicroResult(text: string): MicroResult {
   const lines = scrubSecrets(text).split('\n').map(l => l.trim()).filter(Boolean);
@@ -67,7 +67,7 @@ export function parseMicroResult(text: string): MicroResult {
     const m = /^RESULT:\s*(captured|completed|wall|gave-up)\b\s*(.*)$/i.exec(line.replace(/^[`*>\s-]+/, ''));
     if (!m) continue;
     const kind = m[1]!.toLowerCase();
-    if (kind === 'captured' || kind === 'completed') return { kind: 'captured' };
+    if (kind === 'captured' || kind === 'completed') return { kind: 'captured', ...(m[2]!.trim() ? { said: m[2]!.trim().slice(0, 200) } : {}) };
     if (kind === 'wall') { const [wall = 'unknown', ...rest] = m[2]!.split(/\s+/); return { kind: 'wall', wall: wall.toLowerCase(), why: rest.join(' ').slice(0, 300) }; }
     return { kind: 'gave-up', why: m[2]!.slice(0, 300) };
   }
@@ -99,7 +99,9 @@ export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCall
   const err = 'error' in ran ? ran.error : undefined;
   const result = ran.timedOut ? { kind: 'gave-up', why: 'stalled' in ran && ran.stalled ? `the agent stalled: no tool call for ${Math.round(STALL_MS / 1000)}s` : `the agent reached the ${Math.round(budget.maxMs / 60_000)} min ceiling while still working` } as MicroResult : err ? { kind: 'gave-up', why: `the agent could not run: ${err.slice(0, 200)}` } as MicroResult : parseMicroResult(ran.text);
   const after = await ports.recipeStamp().catch(() => '');
-  if (result.kind === 'captured') return { ok: true, agentCalls: ran.calls, note: `an agent micro-task finished its assigned task (${ran.calls} tool calls)${after !== before ? ' and saved a recipe' : ''}`, actions: ran.calls, recipe: after !== before };
+  // What the agent said it did goes into the step log: a "finished" after two calls that left the platform's task unchanged could not
+  // be told from real work without it.
+  if (result.kind === 'captured') return { ok: true, agentCalls: ran.calls, note: `an agent micro-task finished its assigned task (${ran.calls} tool calls)${after !== before ? ' and saved a recipe' : ''}${result.said ? `: ${result.said}` : ''}`, actions: ran.calls, recipe: after !== before };
   if (result.kind === 'wall') {
     const kind = WALL_TO_HUMAN[result.wall];
     if (kind) return { ok: false, agentCalls: ran.calls, stop: { kind: WALL_TO_STOP[result.wall] ?? 'unknown', message: `${result.wall}: ${result.why}`, url: stop.url, pageText: stop.pageText, controls: stop.controls, human: { kind, ...(stop.url ? { url: stop.url } : {}), instructions: `${result.wall}: ${result.why}`.slice(0, 300), reasonCode: result.wall } } };

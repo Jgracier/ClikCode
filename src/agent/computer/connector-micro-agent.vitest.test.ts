@@ -203,6 +203,7 @@ it('rejects cross-connector edits and unlisted operations before any platform ca
  await expect(tool.run({ tool: 'connector_spec_patch', args: { id: 'other' } }, {} as never)).rejects.toThrow('assigned connector');
  await expect(tool.run({ tool: 'connector_spec_set', args: {} }, {} as never)).rejects.toThrow('not available');
  expect(parseMicroResult('RESULT: completed')).toEqual({ kind: 'captured' });
+    expect(parseMicroResult('RESULT: completed fixed the base URL; connector_onboard now asks for live tests')).toEqual({ kind: 'captured', said: 'fixed the base URL; connector_onboard now asks for live tests' });
 });
 
 it('describes allowed operations and saves notes with the assigned id and worker, never another connector', async () => {
