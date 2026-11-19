@@ -185,3 +185,12 @@ describe('waiting for mail', () => {
     await expect(waitForEmail(dir, { from: 'a@b.io', endpoints })).rejects.toThrow(/No mailbox is connected/);
   });
 });
+
+describe('the words of a message', () => {
+  it('reads the HTML when the plain part is a stub ("none"), and keeps a real plain part', async () => {
+    const { mailText } = await import('./email-api.js');
+    expect(mailText('none', '<p>Your One-Time Password is <b>482913</b>. It expires in 10 minutes.</p>')).toContain('482913');
+    expect(mailText('Your code is 111222. Enter it on the sign-in page to continue.', '<p>Your code is <b>111222</b></p>')).toBe('Your code is 111222. Enter it on the sign-in page to continue.');
+    expect(mailText('', '<p>Hello</p>')).toBe('Hello');
+  });
+});

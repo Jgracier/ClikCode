@@ -140,3 +140,14 @@ describe('verification mail, not marketing', () => {
     expect(await emailedCode(dir, { site: 'https://acme.io', since: Date.now() - 60_000, endpoints, passes: 1, ...fast })).toMatchObject({ hold: expect.any(String) });
   });
 });
+
+describe('codes worded loosely', () => {
+  it('reads a code a few words after the word "code" ("Enter this activation code on the website: 4501")', async () => {
+    const { verificationCode } = await import('./email-code.js');
+    expect(verificationCode('Welcome to Vincario! Activate Your Account Enter this activation code on the website: 4501 Or click here')).toBe('4501');
+    expect(verificationCode('Your one-time passcode for sign in is 820417.')).toBe('820417');
+    // Words after "code" are never the code, and a code-less mail stays code-less.
+    expect(verificationCode('Use the discount code on the website today')).toBeUndefined();
+    expect(verificationCode('Thanks for signing up. See you soon.')).toBeUndefined();
+  });
+});

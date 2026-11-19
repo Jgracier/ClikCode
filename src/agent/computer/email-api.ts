@@ -215,6 +215,15 @@ function htmlToText(html: string): string {
 const HREF = /href\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>"']+))/gi;
 const hrefValue = (m: RegExpMatchArray): string => (m[1] ?? m[2] ?? m[3] ?? '').replace(/&amp;/g, '&');
 
+/** The message's words: its plain-text part, unless that is a stub ("none", a line telling you to view the HTML) and the HTML
+ * says more. Paystack's OTP mail has a plain part reading only "none", so the code in its HTML was never seen. */
+export function mailText(plain: string, html: string): string {
+  const own = plain.trim();
+  if (!html) return own;
+  const fromHtml = htmlToText(html);
+  return own.length >= 40 || own.length >= fromHtml.length ? own || fromHtml : fromHtml;
+}
+
 function hrefs(html: string): string[] {
   return [...html.matchAll(HREF)].map(hrefValue).filter(href => /^https:/.test(href));
 }
@@ -288,7 +297,7 @@ export async function waitForEmail(stateDir: string, query: { address?: string; 
       const header = (name: string): string => message.payload?.headers?.find(h => h.name.toLowerCase() === name)?.value ?? '';
       const html = collect(message.payload, 'text/html').join('\n');
       const plain = collect(message.payload, 'text/plain').join('\n');
-      found.push({ id, from: header('from'), subject: header('subject'), text: plain.trim() || htmlToText(html), links: [...new Set([...hrefs(html), ...textLinks(plain)])], anchors: anchors(html), receivedAt: Number(message.internalDate ?? 0), mailbox: address });
+      found.push({ id, from: header('from'), subject: header('subject'), text: mailText(plain, html), links: [...new Set([...hrefs(html), ...textLinks(plain)])], anchors: anchors(html), receivedAt: Number(message.internalDate ?? 0), mailbox: address });
     }
     found = found.filter(mail => mail.receivedAt >= since && (!query.accept || query.accept(mail)));
     if (query.site) {
