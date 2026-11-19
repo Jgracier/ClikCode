@@ -227,6 +227,13 @@ describe('connectors run', () => {
     expect(pauses[3]!).toBeGreaterThan(pauses[0]!);
   });
 
+  it('yields a job still running after the whole wait as waiting (back in minutes), not a budget stop', async () => {
+    const running = (): OnboardResult => ({ id: 'long', state: 'running', stage: 'proof', reason: 'chunk 0 of 420 done', next: { kind: 'call', task: 'call connector_onboard again' } });
+    const c = fakeClient([running()], { long: Array.from({ length: 30 }, running) });
+    const { outcomes } = await runConnectors(c.client, fakeDriver([]).driver, { ...quick, maxSteps: 50, sleep: async () => undefined });
+    expect(outcomes[0]).toMatchObject({ status: 'waiting', retryAfterMs: 5 * 60_000 });
+  });
+
   it('stops at the step budget', async () => {
     let n = 0;
     const next = (): OnboardResult => ({ id: 'busy', state: 'running', stage: `proof${n++}`, reason: '', next: { kind: 'call', task: `call again ${n}` } });

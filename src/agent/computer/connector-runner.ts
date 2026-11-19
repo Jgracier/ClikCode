@@ -165,6 +165,9 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     // "Call onboard again" is ClikDeploy saying its own work (a test job, a build) is still running: that is waited out with longer
     // and longer pauses for up to WAIT_LIMIT_MS, not counted as the runner going round in circles.
     const stillRunning = result.next.kind === 'call' && waitedMs < WAIT_LIMIT_MS;
+    // Waited the whole WAIT_LIMIT_MS and ClikDeploy's job is still running (a proof run of hundreds of chunks): the job is persisted, so
+    // this run yields and the vendor comes back in minutes. Reporting it as a budget stop shelved it for the 6-hour cooldown.
+    if (times > 3 && result.next.kind === 'call' && !stillRunning) return out('waiting', `ClikDeploy's job is still running after ${Math.round(waitedMs / 1000)}s of waiting; resume in 5 min`, { retryAfterMs: 5 * 60_000 });
     if (times > 3 && !stillRunning) return out('budget', `no progress: the same task came back ${times - 1} times (${cap(say(result.next.task), 120)})`);
 
     const recipe = result.next && result.next.kind === 'agent' && !result.next.call && !/oauth_connect/i.test(result.next.task) ? await driver.hasRecipe(id, siteUrl(result.next.task)) : false;
