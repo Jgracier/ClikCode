@@ -77,6 +77,7 @@ export interface LoopLimits {
   /** One agent hand-off's own budget, on top of the vendor's: minutes and tool calls for judgement work. */ agentMs: number; agentCalls: number;
   /** No second try of one vendor before this. */ cooldownMs: number;
   /** A wall holds longer than a budget stop. */ wallCooldownMs: number;
+  /** A vendor is cut off when nothing has happened for this long: no browser action in its tabs, no new step, no agent running. */ stallMs?: number;
   /** Stop starting vendors after this long, finish those running. */ maxHoursMs: number;
   renewMs: number; tickMs: number; idleMs: number;
   pauseBaseMs: number; pauseMaxMs: number; pressureLimit: number;
@@ -84,13 +85,14 @@ export interface LoopLimits {
   /** Extra time past maxMs before a hung vendor is cut off. */ graceMs: number;
 }
 export const DEFAULT_LIMITS: LoopLimits = {
-  parallel: 2, maxSteps: 12, maxMs: 5 * 60_000, maxCalls: 60, agentMs: 20 * 60_000, agentCalls: 120, cooldownMs: 6 * 3_600_000, wallCooldownMs: 24 * 3_600_000, maxHoursMs: 8 * 3_600_000,
+  parallel: 2, maxSteps: 12, maxMs: 5 * 60_000, maxCalls: 60, agentMs: 20 * 60_000, agentCalls: 120, cooldownMs: 6 * 3_600_000, wallCooldownMs: 24 * 3_600_000, stallMs: 5 * 60_000, maxHoursMs: 8 * 3_600_000,
   renewMs: 10 * 60_000, tickMs: 15_000, idleMs: 60_000, pauseBaseMs: 30_000, pauseMaxMs: 5 * 60_000, pressureLimit: 10, agentOutagePauseMs: 5 * 60_000, graceMs: 90_000,
 };
 
 export interface WorkContext {
   tab: string; budget: CallBudget; limits: LoopLimits; deadline: number; signal?: AbortSignal;
   /** The last action the vendor started, set by the work. */ last?: string;
+  /** When the work last showed progress (a new step), set by the work. */ progressAt?: number;
   /** Time spent in agent hand-offs so far, and when the running one began: that time is the agent's budget (limits.agentMs), not the vendor's. */
   agentMs?: number; agentSince?: number;
 }
@@ -123,6 +125,8 @@ export interface LoopPorts {
   renew(id: string): Promise<void>;
   /** Works one vendor in its own tab to a finished outcome. */
   work(id: string, ctx: WorkContext): Promise<VendorOutcome>;
+  /** When the vendor's own tabs (its tab and its agent's) were last used in the browser. */
+  activity?(id: string): Promise<number | undefined>;
   report(id: string, report: LoopReport): Promise<void>;
   pressure(): Promise<{ stalled: boolean; io?: number; cpu?: number; memory?: number }>;
   closeTab(id: string): Promise<void>;
@@ -203,12 +207,21 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
       const ctx: WorkContext = { signal: abort.signal, tab, budget, limits, deadline: began + limits.maxMs + limits.agentMs };
       // The hard limit grows while an agent hand-off runs: cutting one off at the vendor's own limit ended every long
       // judgement task as "out of time" (49 of 58 time-outs on 2026-11-15) with its own 20 minutes barely begun.
-      let stopped = false;
+      // And it is a STALL limit, not a clock: work that keeps acting (browser actions in its tabs, new steps, an agent running) is
+      // never cut off for taking long; only work that has done nothing for stallMs is, or work past the ceiling. Keygrab on a loaded
+      // browser was cut mid-run ("hard time limit during keygrab", 47 runs on 2026-11-18) while still clicking.
+      let stopped = false, stalled = false;
+      const stallMs = limits.stallMs ?? limits.maxMs;
       const hard = (async (): Promise<'timeout'> => {
         for (;;) {
-          const left = began + allowedMs(ctx, now()) - now();
-          if (left <= 0 || stopped) return 'timeout';
-          await sleep(Math.min(left, 5_000));
+          const at = now();
+          const seen = await ports.activity?.(id).catch(() => undefined);
+          const progressAt = Math.max(began, ctx.progressAt ?? 0, seen ?? 0, ctx.agentSince !== undefined ? at : 0);
+          const ceiling = began + allowedMs(ctx, at) - at;
+          const idle = progressAt + stallMs + limits.graceMs - at;
+          if (stopped) return 'timeout';
+          if (ceiling <= 0 || idle <= 0) { stalled = idle <= 0 && ceiling > 0; return 'timeout'; }
+          await sleep(Math.min(ceiling, idle, 5_000));
         }
       })();
       const run = async (): Promise<VendorOutcome> => {
@@ -233,7 +246,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
         if (raced === 'timeout') {
           abort.abort(new Error('Connector task deadline expired'));
           await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
-          outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round(allowedMs(ctx, now()) / 1000)}s ${ctx.last ? `during "${ctx.last.slice(0, 120)}"` : 'before the first step'}; the task was cancelled and its own tabs were closed`, actions: [] };
+          outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `${stalled ? `no progress for ${Math.round((stallMs + limits.graceMs) / 1000)}s` : `hard time limit of ${Math.round(allowedMs(ctx, now()) / 1000)}s`} ${ctx.last ? `during "${ctx.last.slice(0, 120)}"` : 'before the first step'}; the task was cancelled and its own tabs were closed`, actions: [] };
         } else if ('failed' in raced) {
           const message = scrubSecrets(raced.failed instanceof Error ? raced.failed.message : String(raced.failed));
           if (browserTrouble(raced.failed)) await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));

@@ -113,6 +113,21 @@ describe('an agent hand-off and the hard time limit', () => {
   });
 });
 
+describe('a stall limit, not a clock', () => {
+  it('keeps work that keeps acting (browser use in its tabs) past the stall time, up to the ceiling', async () => {
+    // Stall 40 ms; the work acts every 10 ms for 150 ms and finishes. The ceiling (maxMs 300 + grace) is not reached.
+    const f = fakes(['busy'], async id => { await wait(150); return outcome(id); }, { activity: async () => Date.now() });
+    const sum = await runLoop(f.ports, limits({ stallMs: 40, graceMs: 0, maxMs: 300, maxHoursMs: 400 }));
+    expect(sum.done.published).toBe(1);
+  });
+  it('cuts off work that has done nothing for the stall time, and says so', async () => {
+    const f = fakes(['idle'], (_id, ctx) => { ctx.last = 'keygrab signs in'; return new Promise<VendorOutcome>(() => undefined); }, { activity: async () => undefined });
+    const sum = await runLoop(f.ports, limits({ stallMs: 40, graceMs: 0, maxMs: 10_000, maxHoursMs: 400 }));
+    expect(sum.walls.budget).toBe(1);
+    expect(f.reports[0]![1].reason).toContain('no progress for 0s during "keygrab signs in"');
+  });
+});
+
 describe('tabs', () => {
   it('names a separate tab per vendor, never the default tab, and works at most --parallel at once', async () => {
     let live = 0, peak = 0;
