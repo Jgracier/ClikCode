@@ -72,6 +72,8 @@ const providerRank = (c: KeyControl): number => /\b(continue|sign ?in|sign ?up|l
 const API_LINK = /api (keys?|tokens?|credentials|developers?)/i;
 /** "Word Associations API Account", "API console": the way into the vendor's API area, ranked between the key links and the bare ones. */
 const API_LINK_AREA = /\bapi\b[^.]{0,30}\b(?:account|portal|console|dashboard|access|sign ?up|register)\b|\b(?:developer|api) (?:portal|console|dashboard|account)\b/i;
+/** Links that read like the API area but are reading matter: "Go to the API Developer Blog". */
+const NOT_A_WAY_IN = /\b(?:blog|news|articles?|press|careers|webinars?|podcasts?|changelog|status)\b/i;
 const API_LINK_WEAK = /^(developers?|api|api access|developer portal|for developers|credentials|keys|tokens?|developer settings)$/i;
 const SIGN_IN_ENTRY = /^(log ?in|sign ?in)$/i;
 const SIGN_UP_ENTRY = /^(sign ?up|get started|get (your )?api key|register|create (an )?account|try (it )?(for )?free|start (for )?free|start building)\b[\w ]{0,15}$/i;
@@ -496,8 +498,11 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   };
 
   /** Controls that mean sign-in, outside the footer, a provider's own link excluded: "Continue with Google" style first. */
+  // A bare "GitHub" or "Google" is a sign-in button only on a page that is about signing in; elsewhere (a blog's social links) it led
+  // keygrab off to github.com (three Vonage connectors).
+  const authContext = (v: KeyView): boolean => v.hasPassword || v.fields.some(f => /e-?mail|user ?name|login/i.test(f)) || /\b(?:sign|log) ?(?:in|up) (?:with|using)\b|\bcontinue with\b/i.test(v.text.slice(0, 3000));
   const providerButtons = (v: KeyView, re: RegExp): KeyControl[] => v.controls
-    .filter(c => c.name.length <= 80 && (!c.leaf || providerRank(c) < 2) && !c.footer && re.test(c.name) && !(c.href && SOCIAL_HOST.test(hostOf(c.href))))
+    .filter(c => c.name.length <= 80 && (!c.leaf || providerRank(c) < 2) && (providerRank(c) < 2 || authContext(v)) && !c.footer && re.test(c.name) && !(c.href && SOCIAL_HOST.test(hostOf(c.href))))
     .sort((a, b) => providerRank(a) - providerRank(b));
   const entryOf = (v: KeyView, re: RegExp): KeyControl | undefined => v.controls.find(c => pressable(c) && !c.footer && re.test(c.name.replace(/\s*last used\s*$/i, '').trim()));
 
@@ -602,7 +607,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && API_LINK.test(c.name)),
       ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && !API_LINK.test(c.name) && API_LINK_AREA.test(c.name) && c.name.length <= 60),
       ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && !API_LINK.test(c.name) && API_LINK_WEAK.test(c.name)),
-    ].filter(c => !triedNames.has(c.name)).filter((c, i, all) => all.findIndex(o => o.name === c.name) === i).slice(0, 3);
+    ].filter(c => !triedNames.has(c.name) && !NOT_A_WAY_IN.test(c.name)).filter((c, i, all) => all.findIndex(o => o.name === c.name) === i).slice(0, 3);
     // The page we are on after signing in (an account area, a sign-in host) may have no API menu: the vendor's own front page does.
     const sources: Array<{ at?: string; page: KeyView }> = [{ page: v }];
     if (homeUrl && pathOf(homeUrl) !== pathOf(v.url)) sources.push({ at: homeUrl, page: v });
@@ -699,6 +704,12 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     if (!options.resume && !v.controls.length && !v.fields.length && labels.length > 2) {
       const apex = await openAt(`https://${labels.slice(1).join('.')}/`);
       if (apex) v = apex;
+    }
+    // A key page known for this site comes first: signed in already, it IS the key page; signed out, it is the account's own sign-in
+    // (not the front page's "Start for free" sign-up, which took a signed-in Twilio into a new-account form).
+    if (!options.resume && options.knownKeyPages?.length) {
+      const known = await openAt(options.knownKeyPages[0]!);
+      if (known && (isKeyPage(known) || authWall(known))) v = known;
     }
     // A page that offers sign-in and no key controls (or asks which product to sign in to): sign in first, then look for the key page.
     if (authWall(v) || (!isKeyPage(v) && hasEntry(v))) { await authenticate(); v = await look(); }

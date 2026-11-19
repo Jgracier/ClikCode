@@ -888,3 +888,25 @@ describe('keygrab and a key page known for the site', () => {
     expect(await run(fakeSite(pages), { knownKeyPages: ['https://vendor.example/account/AC1/settings/api-keys'] })).toMatchObject({ ok: true });
   });
 });
+
+describe('keygrab does not wander off', () => {
+  it('opens the known key page before the front page\'s sign-up (a signed-in Twilio was taken into a new-account form)', async () => {
+    const pages: Record<string, Page> = {
+      'https://vendor.example/': { text: 'Build with our API', controls: ['Start for free'], on: { 'Start for free': 'https://vendor.example/signup' } },
+      'https://vendor.example/signup': { text: 'Sign up for free', fields: ['First name', 'Email address', 'Password'], password: true, controls: ['Continue'] },
+      'https://vendor.example/account/AC1/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    };
+    const site = fakeSite(pages);
+    expect(await run(site, { knownKeyPages: ['https://vendor.example/account/AC1/keys'] })).toMatchObject({ ok: true });
+    expect(site.log).not.toContain('click Start for free');
+  });
+  it('does not follow a blog link, nor take a bare "GitHub" on a page that is not about signing in for a sign-in button', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Communications APIs for developers', controls: ['Go to the API Developer Blog'], on: { 'Go to the API Developer Blog': 'https://vendor.example/blog' } },
+      'https://vendor.example/blog': { text: 'Developer blog: articles about our APIs', controls: [{ name: 'GitHub' }], on: { GitHub: 'https://github.com/vendor' } },
+    });
+    await run(site);
+    expect(site.log).not.toContain('click Go to the API Developer Blog');
+    expect(site.log).not.toContain('click GitHub');
+  });
+});
