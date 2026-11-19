@@ -926,6 +926,17 @@ export function requiredNoValue(field: { label: string; step: { target?: unknown
 /** Fields that type themselves as they are entered (06/18/1998, (719) 744-3850). */
 const PROFILE_FORMATS: Readonly<Record<string, string>> = { phone: 'phone', birthday: 'date' };
 
+/** The frame a step's target lives in (a ref like f2e12 is inside a frame), or the page itself. */
+async function frameOf(page: Page, target: string | undefined): Promise<Page | Frame> {
+  if (!target) return page;
+  try {
+    const handle = await (await locate(page, target)).elementHandle({ timeout: 2_000 });
+    const frame = await handle?.ownerFrame();
+    await handle?.dispose();
+    return frame && frame !== page.mainFrame() ? frame : page;
+  } catch { return page; }
+}
+
 /** Words a page uses to refuse a VoIP or virtual number (a Twilio number) for phone verification. */
 export const VOIP_REFUSED = /\b(?:voip|virtual (?:phone )?numbers?|internet (?:phone|calling) numbers?|non-?mobile (?:phone )?numbers?|landline|this (?:phone )?number (?:type )?(?:is )?not (?:supported|allowed|accepted|eligible)|(?:can ?not|can't|cannot) (?:be )?(?:use|accept)(?:d)? (?:this|that) (?:phone )?number|(?:please )?(?:use|enter|provide) a (?:real|valid|personal) mobile(?: phone)?(?: number)?|only mobile (?:phone )?numbers)\b/i;
 
@@ -1051,13 +1062,16 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   // A signup form (two password boxes, a new-password box, or a sign-up page): one strong password for the whole form
   // (see below), kept in Secrets Manager with the login, never shown.
   const passwordFields = fields.filter(field => field.password);
+  // The password box may sit in a frame (Braintree's activation form): its count, its page's words and its rules are read in that
+  // frame. Read from the top page they were absent, so the site's "at least 14 characters" never reached the generator.
+  const scope = passwordFields.length ? await frameOf(page, passwordFields[0]!.step.target) : page;
   // A form filled one box per call shows only one password box here, so the page itself is asked how many it has.
-  const boxesOnPage = passwordFields.length ? await page.locator('input[type="password"]:visible').count().catch(() => 0) : 0;
+  const boxesOnPage = passwordFields.length ? await scope.locator('input[type="password"]:visible').count().catch(() => 0) : 0;
   // A /login page is a sign-in even when the page has a second password box. Treating that as a signup would skip the
   // confirm prompt and fill the profile email with no chance to change it.
   const loginPage = /\/login\b|signin|identifier/i.test(where);
   // The page's own words decide a page the address and boxes do not (a post-signup "Create your new password"): see classifyPasswordPage.
-  const pageKind = passwordFields.length ? classifyPasswordPage(await readPasswordPageContext(page)) : undefined;
+  const pageKind = passwordFields.length ? classifyPasswordPage({ ...await readPasswordPageContext(scope), url: page.url() }) : undefined;
   const newPasswordPage = pageKind?.kind === 'signup' && await generatedPasswordsAllowed(ctx.stateDir);
   const signingUp = newPasswordPage || !loginPage && (passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
     || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join|password\/(?:edit|new|reset)|(?:reset|set|new|change)[-_ ]?password/i.test(where)));
@@ -1074,7 +1088,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     if (generated) mine = generatedFor(page)?.password === generated;
     // The vault keeps logins for https sites only, and a password that cannot be kept is not worth making.
     if (!generated && page.url().startsWith('https:') && await generatedPasswordsAllowed(ctx.stateDir)) {
-      policy = await readPasswordPolicy(page);
+      policy = await readPasswordPolicy(scope);
       generated = await savedPasswordFor(ctx.stateDir, page.url(), email) ?? generatePassword(policy);
       mine = true;
     }
@@ -1159,7 +1173,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   if (generated) {
     registerSecret(generated);
     await holdSignup(ctx.stateDir, page, generated, email);
-    if (mine) rememberGenerated(page, generated, policy ?? await readPasswordPolicy(page));
+    if (mine) rememberGenerated(page, generated, policy ?? await readPasswordPolicy(scope));
   }
   if (ask.length) {
     // A sign-in password with no saved login for this site and none in the profile cannot be made up: say so and park
