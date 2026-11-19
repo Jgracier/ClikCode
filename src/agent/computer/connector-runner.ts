@@ -141,6 +141,19 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     return { ...out2, ...(resume ? { resume } : {}), ...(until ? { backoffUntil: until.toISOString() } : {}) };
   };
 
+  let specRepairTried = false;
+  /** One agent repairs the connector spec (connector_task: proof, spec, spec patch, then the proof again); true when it did and onboard moved on. */
+  const specRepair = async (problem: string): Promise<boolean> => {
+    if (specRepairTried || !driver.agentTask) return false;
+    specRepairTried = true;
+    const task = `Repair the connector spec of "${id}". ${cap(say(problem), 600)}\nThe connection is saved and working; do not sign up, create a key or open the vendor console for a credential. With connector_task: read the latest proof and its failed calls, read the spec, compare the failing request (base URL, auth header or query placement, path, required headers) with the vendor's official API documentation in the browser, and fix the spec with connector_spec_patch (keep the id). Then run the proof again. End with RESULT: captured when a live call passes.`;
+    const done = await viaAgent({ kind: 'unknown', message: cap(say(problem), 280), url: siteUrl(result.next.task) ?? '', pageText: task, controls: [] }, true);
+    if (!done?.ok) return false;
+    actions.push(done.note ?? 'an agent repaired the spec');
+    const before = JSON.stringify([result.stage, result.next.kind, result.reason]);
+    result = fix(await client.onboard(id));
+    return JSON.stringify([result.stage, result.next.kind, result.reason]) !== before;
+  };
   let reusedCredential = false;
   let waitedMs = 0;
   for (;;) {
@@ -186,7 +199,16 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
         if (q.lane !== 'auto') leads = cap(say(q.summary), 400);
       }
       switch (plan.do) {
-        case 'done': return out(plan.status, result.reason || result.next.task);
+        case 'done': {
+          // Connected, but no live call passes: almost always the spec (base URL, auth placement, a path), not the vendor. One agent
+          // repairs the spec from the proof's own failures before the item is left blocked.
+          const why = result.reason || result.next.task;
+          if (plan.status === 'blocked' && /no live proof/i.test(why)) {
+            const fixed = await specRepair(`No live call passes although the connection is active: ${why}`);
+            if (fixed) continue;
+          }
+          return out(plan.status, why);
+        }
         case 'human': {
           // Registering the platform's own OAuth app at a vendor is form-filling an agent can do: one bounded try, under its own rule
           // (connector-micro-agent.ts oauthAppRule). A vendor that reviews apps, or a second visit, stays a person's step.
@@ -318,8 +340,9 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           return out('blocked', `reported blocked: ${cap(say(reason), 160)}`, { recorded: 'the item is attention on the list' });
         }
         case 'specfix': {
-          // Deterministic spec work for the gate/enrich tools, not browser work: the file is for an agent that can use connector_spec_patch.
+          // Spec work, not browser work: an agent with connector_task repairs the spec first; only what it cannot fix goes to a builder.
           actions.push('spec-fix: the auth probe ended path-wrong or in the wrong place');
+          if (await specRepair(`The auth probe ended path-wrong or in the wrong place: ${plan.why}`)) continue;
           const handed = await handoff(plan.why);
           const reason = `platform-gap: ${cap(say(result.reason || firstLine(result.next.task)), 250)}`.padEnd(10, '.');
           let recorded = handed.recorded ?? '';

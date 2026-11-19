@@ -392,6 +392,20 @@ describe('keygrab as the policy when no recipe fits', () => {
     expect(asked).toBe(1);
     expect(outcomes[0]).toMatchObject({ status: 'published' });
   });
+  it('has one agent repair the spec when the connection is active but no live call passes, then asks again', async () => {
+    const noProof: OnboardResult = { id: 'mondaycom', state: 'blocked', stage: 'proof', reason: 'no live proof: the proof is current but no operation has a passing live call', next: { kind: 'none', task: 'nothing' } };
+    const c = fakeClient([noProof], { mondaycom: [published('mondaycom')] });
+    const d = fakeDriver([]);
+    const tasks: string[] = [];
+    d.driver.agentTask = async (_id, given) => { tasks.push(given.pageText); return { ok: true }; };
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toContain('connector_spec_patch');
+    expect(outcomes[0]).toMatchObject({ status: 'published' });
+    // Without an agent it stays blocked, as before.
+    const c2 = fakeClient([noProof]);
+    expect((await runConnectors(c2.client, fakeDriver([]).driver, quick)).outcomes[0]).toMatchObject({ status: 'blocked' });
+  });
   it('hands an unknown keygrab page on with its text, buttons and screenshot', async () => {
     const c = fakeClient([keyAt('newco')]);
     const d = fakeDriver([{ ok: false, stop: stop({ kind: 'unknown', message: 'no API key page was found', pageText: 'Hello', controls: ['Home'], screenshot: '/tmp/s.png' }) }]);
