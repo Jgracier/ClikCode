@@ -10,7 +10,10 @@ import { saveTask } from './work-queue.js';
 /** The one-time code in an email: a 4-8 character code that the text calls a code, else a lone 6-digit number. */
 export function verificationCode(text: string): string | undefined {
   const flat = text.replace(/\s+/g, ' ');
-  const named = /\b(?:verification|security|confirmation|login|sign[- ]?in|one[- ]time|access)?\s*code\b[^A-Za-z0-9]{0,20}([A-Z0-9]{4,8})\b/i.exec(flat)
+  const named = /\b(?:verification|security|confirmation|activation|login|sign[- ]?in|one[- ]time|access)?\s*code\b[^A-Za-z0-9]{0,20}([A-Z0-9]{4,8})\b/i.exec(flat)
+    // A few words may stand between the word and the code ("Enter this activation code on the website: 4501"): then the code is
+    // all digits, so ordinary words after "code" are never taken for it.
+    ?? /\b(?:verification|security|confirmation|activation|login|sign[- ]?in|one[- ]time|access|otp)?\s*(?:code|otp|passcode|pin)\b[^.\d]{0,40}?[:\s](\d{4,8})\b/i.exec(flat)
     ?? /\b([A-Z0-9]{4,8})\b[^.]{0,30}\bis your (?:\w+ )?code\b/i.exec(flat);
   if (named && /\d/.test(named[1]!)) return named[1];
   const sixes = [...new Set(flat.match(/(?<![\w.-])\d{6}(?![\w-])/g) ?? [])];
