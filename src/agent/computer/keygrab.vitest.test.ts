@@ -926,3 +926,12 @@ describe('a phone check that refuses the VoIP sign-up number', () => {
     expect(done).toMatchObject({ ok: true });
   });
 });
+
+describe('a key captured but not connected', () => {
+  it('says the key is saved and gives the delivery reason, not "may have been created"', async () => {
+    const { capturedButNotConnected } = await import('./keygrab.js');
+    const msg = 'SAVED "rasayel/key" in ClikCode Secrets Manager (36 characters, a UUID, taken from the text of the target itself)\nNOT SENT - clikdeploy-connection (rasayel): NOT connected: Rasayel rejected this key (HTTP 401).';
+    expect(capturedButNotConnected(msg)).toBe('a key was captured and saved as rasayel/key, but ClikDeploy did not connect it: NOT SENT - clikdeploy-connection (rasayel): NOT connected: Rasayel rejected this key (HTTP 401).');
+    expect(capturedButNotConnected('Not saved: no key was found')).toBeUndefined();
+  });
+});

@@ -75,6 +75,14 @@ const API_LINK_AREA = /\bapi\b[^.]{0,30}\b(?:account|portal|console|dashboard|ac
 /** Links that read like the API area but are reading matter: "Go to the API Developer Blog". */
 /** A page refusing a VoIP or virtual number (keep in step with VOIP_REFUSED in tools/computer-web.ts, which picks the number to type). */
 const VOIP_WORDS = /\b(?:voip|virtual (?:phone )?numbers?|landline|non-?mobile|this (?:phone )?number (?:type )?(?:is )?not (?:supported|allowed|accepted|eligible)|real mobile)\b/i;
+/** A capture that saved the key but whose delivery to ClikDeploy failed says so, with the delivery's own reason: "may have been created
+ * but could not be captured" hid that the key was safe in the vault (Rasayel), and the reason was cut off behind the SAVED line. */
+export function capturedButNotConnected(message: string): string | undefined {
+  const saved = /SAVED "([^"]+)"/.exec(message)?.[1];
+  if (!saved) return undefined;
+  const failed = message.split('\n').map(l => l.trim()).find(l => /^(?:NOT SENT|NOT connected|FAILED|ERROR)\b|not connected|refused|rejected/i.test(l) && !/^SAVED/.test(l));
+  return `a key was captured and saved as ${saved}, but ClikDeploy did not connect it: ${(failed ?? 'the delivery failed').slice(0, 220)}`;
+}
 const NOT_A_WAY_IN = /\b(?:blog|news|articles?|press|careers|webinars?|podcasts?|changelog|status)\b/i;
 const API_LINK_WEAK = /^(developers?|api|api access|developer portal|for developers|credentials|keys|tokens?|developer settings)$/i;
 const SIGN_IN_ENTRY = /^(log ?in|sign ?in)$/i;
@@ -744,7 +752,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
           if (reveal) got = await captured(reveal.name);
         }
         if (got.ok) return { ok: true, note: `key created (named ClikDeploy${chosen.length ? `; broadest access chosen: ${chosen.join('; ')}` : ''}), captured unseen and sent to ClikDeploy`, steps, route };
-        throw await stop('unknown', `a key may have been created but could not be captured: ${got.message.slice(0, 200)}`, undefined, dialog);
+        throw await stop('unknown', capturedButNotConnected(got.message) ?? `a key may have been created but could not be captured: ${got.message.slice(0, 200)}`, undefined, dialog);
       }
       const reveal = revealOf(page);
       if (reveal) {
