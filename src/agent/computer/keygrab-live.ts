@@ -132,8 +132,8 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
       return (await emailStatus(options.stateDir)).mailboxes.map(m => m.email).find(address => !free.test(address));
     },
     smsCode: async (since: number) => {
-      const { smsSource, waitForTextedCode } = await import('./sms-code.js');
-      if (!await smsSource(options.stateDir)) return undefined;
+      const { smsSource, twilioSms, waitForTextedCode } = await import('./sms-code.js');
+      if (!await smsSource(options.stateDir) && !await twilioSms(options.stateDir)) return undefined;
       const found = await waitForTextedCode(options.stateDir, { since, seconds: 90, ...(options.signal ? { signal: options.signal } : {}) });
       return 'error' in found ? undefined : found.code;
     },

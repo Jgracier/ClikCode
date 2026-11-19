@@ -910,3 +910,19 @@ describe('keygrab does not wander off', () => {
     expect(site.log).not.toContain('click GitHub');
   });
 });
+
+describe('a phone check that refuses the VoIP sign-up number', () => {
+  it('types the phone again (the fill gives the personal mobile) and sends the code once more', async () => {
+    const pages: Record<string, Page> = {
+      'https://vendor.example/': { text: 'Verify your phone. We will text you a code.', fields: ['Phone number'], controls: ['Send code'], on: { 'Send code': 'https://vendor.example/refused' } },
+      'https://vendor.example/refused': { text: 'VoIP numbers are not supported. Please use a real mobile number.', fields: ['Phone number'], controls: ['Send code'], on: { 'Send code': 'https://vendor.example/code' } },
+      'https://vendor.example/code': { text: 'Enter the code we texted', fields: ['Verification code'], controls: ['Verify'], on: { Verify: 'https://vendor.example/keys' } },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    };
+    const site = fakeSite(pages);
+    const done = await runKeygrab({ ...site.port, smsCode: async () => '482913' }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
+    expect(site.log.filter(l => l === 'fill Phone number')).toHaveLength(2);
+    expect(site.filled).toContainEqual(['Verification code', '482913']);
+    expect(done).toMatchObject({ ok: true });
+  });
+});

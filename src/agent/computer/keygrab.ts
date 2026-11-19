@@ -73,6 +73,8 @@ const API_LINK = /api (keys?|tokens?|credentials|developers?)/i;
 /** "Word Associations API Account", "API console": the way into the vendor's API area, ranked between the key links and the bare ones. */
 const API_LINK_AREA = /\bapi\b[^.]{0,30}\b(?:account|portal|console|dashboard|access|sign ?up|register)\b|\b(?:developer|api) (?:portal|console|dashboard|account)\b/i;
 /** Links that read like the API area but are reading matter: "Go to the API Developer Blog". */
+/** A page refusing a VoIP or virtual number (keep in step with VOIP_REFUSED in tools/computer-web.ts, which picks the number to type). */
+const VOIP_WORDS = /\b(?:voip|virtual (?:phone )?numbers?|landline|non-?mobile|this (?:phone )?number (?:type )?(?:is )?not (?:supported|allowed|accepted|eligible)|real mobile)\b/i;
 const NOT_A_WAY_IN = /\b(?:blog|news|articles?|press|careers|webinars?|podcasts?|changelog|status)\b/i;
 const API_LINK_WEAK = /^(developers?|api|api access|developer portal|for developers|credentials|keys|tokens?|developer settings)$/i;
 const SIGN_IN_ENTRY = /^(log ?in|sign ?in)$/i;
@@ -281,6 +283,14 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       await click(send.name);
       await sleep(2_000);
       v = await port.look();
+      // Refused as VoIP (the Twilio sign-up number): typed again, the fill gives the user's own mobile, and the code is sent once more.
+      const again = v.fields.find(f => /phone|mobile|\btel\b|cell/i.test(f));
+      if (again && !codeField(v.fields) && VOIP_WORDS.test(v.text)) {
+        await act('type the personal mobile (the site refused the VoIP number)', () => port.fill(again));
+        since = Date.now();
+        const resend = [...v.controls].reverse().find(c => pressable(c) && /^(send|text me|send (?:the )?code|get (?:a )?code|verify|continue|next|submit)\b/i.test(c.name));
+        if (resend) { await click(resend.name); await sleep(2_000); v = await port.look(); }
+      }
     }
     const field = codeField(v.fields) ?? (v.fields.length === 1 ? v.fields[0] : undefined);
     if (!field) { say('phone check: no box for the code'); return 'form'; }

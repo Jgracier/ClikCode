@@ -483,18 +483,25 @@ export async function computerOauthConnect(connector: string): Promise<void> {
 /** `clikcode computer sms <user@host>|off|test`: where texted one-time codes are read from (agent/computer/sms-code.ts). */
 export async function computerSms(setting: string | undefined): Promise<void> {
   const dir = stateDirectory();
-  const { askMessages, setSmsSource, smsSource } = await import('../agent/computer/sms-code.js');
-  if (setting === 'off') await setSmsSource(dir, undefined);
+  const { askMessages, askTwilio, setSmsSource, setTwilioSms, smsSource, twilioSms } = await import('../agent/computer/sms-code.js');
+  // twilio:+<number>:<AC account sid> (or twilio:off) sets the Twilio number sign-ups use; anything else is the Mac.
+  const twilioSetting = /^twilio:(.+)$/i.exec(setting ?? '')?.[1];
+  if (twilioSetting === 'off') await setTwilioSms(dir, undefined);
+  else if (twilioSetting) { const [number, account] = twilioSetting.split(':'); await setTwilioSms(dir, { number: number ?? '', account: account ?? '' }); }
+  else if (setting === 'off') await setSmsSource(dir, undefined);
   else if (setting && setting !== 'test') await setSmsSource(dir, setting);
-  const target = await smsSource(dir);
-  let check: string | undefined;
-  if (target && setting) {
-    // A read of the last day's incoming texts: proves SSH and Full Disk Access, and says how many arrived, never what they say.
-    const answer = await askMessages(target, Math.floor(Date.now() / 1000) - 86_400);
-    check = 'error' in answer ? answer.error : `The Mac answers: ${answer.rows.split('\n').filter(Boolean).length} incoming texts in the last day are readable.`;
+  const [target, twilio] = await Promise.all([smsSource(dir), twilioSms(dir)]);
+  const checks: string[] = [];
+  if (setting) {
+    // A read of the last day's incoming texts: proves the source answers, and says how many arrived, never what they say.
+    const since = Math.floor(Date.now() / 1000) - 86_400;
+    if (twilio) { const answer = await askTwilio(dir, twilio, since); checks.push('error' in answer ? answer.error : `Twilio answers: ${answer.rows.split('\n').filter(Boolean).length} incoming texts to ${twilio.number} in the last day are readable.`); }
+    if (target) { const answer = await askMessages(target, since); checks.push('error' in answer ? answer.error : `The Mac answers: ${answer.rows.split('\n').filter(Boolean).length} incoming texts in the last day are readable.`); }
   }
-  if (isJsonDefaultMode()) return emitResult({ computer: { sms: target ?? null, ...(check ? { check } : {}) } });
-  process.stdout.write(target ? `Texted codes are read from ${target}.${check ? ` ${check}` : ''}\n` : 'No Mac is set up to read texted codes. Run: clikcode computer sms <user@host>\n');
+  const check = checks.join(' ') || undefined;
+  if (isJsonDefaultMode()) return emitResult({ computer: { sms: target ?? null, smsTwilio: twilio ?? null, ...(check ? { check } : {}) } });
+  const where = [twilio ? `the Twilio number ${twilio.number}` : '', target ?? ''].filter(Boolean).join(' and ');
+  process.stdout.write(where ? `Texted codes are read from ${where}.${check ? ` ${check}` : ''}\n` : 'No phone is set up to read texted codes. Run: clikcode computer sms twilio:+<number>:<account sid>, or clikcode computer sms <user@host>\n');
 }
 
 /** `clikcode computer cards [usage-only|off|uses]`: the standing rule for cards in unattended sign-ups (agent/computer/card-rule.ts). */
