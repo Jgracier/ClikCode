@@ -1,6 +1,6 @@
 /** Decides whether a page with password boxes makes a new password (a sign-up, an invite, a set-your-password step) or asks for the
  * one an account already has (a sign-in). One rule for both, so the answer is the same wherever it is asked, and the reason is named. */
-import type { Page } from 'playwright-core';
+import type { Frame, Page } from 'playwright-core';
 
 type PasswordPageContext = {
   url: string;
@@ -94,7 +94,7 @@ export function classifyPasswordPage(page: PasswordPageContext): PasswordPageKin
 }
 
 /** What the page shows that the classifier needs. */
-export async function readPasswordPageContext(page: Page): Promise<PasswordPageContext> {
+export async function readPasswordPageContext(page: Page | Frame): Promise<PasswordPageContext> {
   const seen = await page.evaluate(() => {
     const doc = (globalThis as unknown as { document: any }).document;
     const visible = (el: any): boolean => { const box = el.getBoundingClientRect(); return box.width > 0 && box.height > 0 && (globalThis as unknown as { getComputedStyle(e: unknown): { visibility: string } }).getComputedStyle(el).visibility !== 'hidden'; };

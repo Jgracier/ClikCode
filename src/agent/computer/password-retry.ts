@@ -3,7 +3,7 @@
  * the scrubber and typed straight into the page; the model sees neither the password nor a count of its characters.
  * What it may be told is that the site refused and how many tries it took. */
 import { quiet } from '../../runtime/lifecycle-log.js';
-import type { Page } from 'playwright-core';
+import type { Frame, Page } from 'playwright-core';
 import { holdSignup } from './signup-login.js';
 import { generatePassword, MAX_PASSWORD_ATTEMPTS, parsePolicy, relax, type PasswordPolicy, type PolicyHints } from './password-policy.js';
 import { registerSecret, scrubSecrets } from './secret-scrubber.js';
@@ -18,7 +18,7 @@ const generated = sharedState('generated-password', () => new WeakMap<Page, Gene
 export function generatedFor(page: Page): Generated | undefined { return generated.get(page); }
 
 /** The page's own words about its password: attributes of each visible password box, the text that describes it, and the text around it. */
-export async function readPasswordPolicy(page: Page): Promise<PasswordPolicy> {
+export async function readPasswordPolicy(page: Page | Frame): Promise<PasswordPolicy> {
   try {
     const hints = await page.locator(PASSWORD_BOX).evaluateAll((boxes): PolicyHints[] => boxes.map(node => {
       type El = { getAttribute(name: string): string | null; parentElement: El | null; innerText?: string; textContent: string | null; ownerDocument: { getElementById(id: string): { textContent: string | null } | null }; title?: string };
@@ -36,7 +36,7 @@ export async function readPasswordPolicy(page: Page): Promise<PasswordPolicy> {
 }
 
 /** An error the page shows next to a password box about its length, characters or symbols; '' when there is none. */
-async function readPasswordRejection(page: Page): Promise<string> {
+async function readPasswordRejection(page: Page | Frame): Promise<string> {
   try {
     return await page.locator(PASSWORD_BOX).evaluateAll((boxes) => {
       type El = { getAttribute(name: string): string | null; parentElement: El | null; closest(selector: string): El | null; querySelectorAll(selector: string): ArrayLike<El>; innerText?: string; textContent: string | null;
@@ -64,8 +64,15 @@ async function readPasswordRejection(page: Page): Promise<string> {
   } catch { return ''; }
 }
 
+/** The page, or the frame that holds its password boxes when the page itself has none. */
+async function passwordFrame(page: Page): Promise<Page | Frame> {
+  if (await page.locator(PASSWORD_BOX).count().catch(() => 0)) return page;
+  for (const frame of page.frames()) if (frame !== page.mainFrame() && await frame.locator(PASSWORD_BOX).count().catch(() => 0)) return frame;
+  return page;
+}
+
 /** Types a password into every visible password box, as keystrokes (the page checks each one). */
-async function typePassword(page: Page, password: string): Promise<number> {
+async function typePassword(page: Page | Frame, password: string): Promise<number> {
   const boxes = page.locator(PASSWORD_BOX);
   const count = await boxes.count();
   for (let index = 0; index < count; index++) {
@@ -97,7 +104,9 @@ export async function retryRejectedPassword(options: RetryOptions): Promise<stri
   const { page } = options;
   const state = generated.get(page);
   if (!state || state.attempts >= MAX_PASSWORD_ATTEMPTS || page.isClosed()) return undefined;
-  let rejection = await readPasswordRejection(page);
+  // The form may be in a frame (Braintree's activation): its refusal is read, and the new password typed, there.
+  const form = await passwordFrame(page);
+  let rejection = await readPasswordRejection(form);
   if (!rejection) return undefined;
   const first = rejection;
   let tries = 0;
@@ -109,13 +118,13 @@ export async function retryRejectedPassword(options: RetryOptions): Promise<stri
     state.past.add(state.password);
     state.password = next;
     await holdSignup(options.stateDir, page, next, options.username);
-    if (!await typePassword(page, next)) break;
+    if (!await typePassword(form, next)) break;
     if (options.resubmit) { await options.resubmit().catch(quiet('agent/computer/password-retry')); await options.settle(page); }
-    if (page.isClosed() || !await page.locator(PASSWORD_BOX).count().catch(() => 0)) { rejection = ''; break; } // the form is gone: the site took it
-    rejection = await readPasswordRejection(page);
+    if (page.isClosed() || !await form.locator(PASSWORD_BOX).count().catch(() => 0)) { rejection = ''; break; } // the form is gone: the site took it
+    rejection = await readPasswordRejection(form);
   }
   const said = scrubSecrets(first).slice(0, 120);
-  const refused = !page.isClosed() && state.attempts >= MAX_PASSWORD_ATTEMPTS && await readPasswordRejection(page) !== '';
+  const refused = !page.isClosed() && state.attempts >= MAX_PASSWORD_ATTEMPTS && await readPasswordRejection(form) !== '';
   return refused
     ? `The site refused the generated password ${state.attempts} times ("${said}"). The last one is saved with the login; do not retry, hand off to the user for this form.`
     : `The site refused the first generated password ("${said}"); a new one under looser rules was typed in (${tries} ${tries === 1 ? 'retry' : 'retries'}).`;
