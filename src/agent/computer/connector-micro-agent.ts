@@ -82,7 +82,7 @@ export interface MicroPorts {
   businessEmail?(): Promise<string | undefined>;
   /** Runs the agent to its end; its final text. It is stopped only when it stalls (no tool call for STALL_MS) or reaches the
    * ceiling maxMs: an agent still working is never cut off by the clock. `stalled` says which stop it was. */
-  run(prompt: string, options: { tab: string; maxCalls: number; maxMs: number }): Promise<{ text: string; timedOut: boolean; stalled?: boolean; calls: number; error?: string }>;
+  run(prompt: string, options: { tab: string; maxCalls: number; maxMs: number; /** The vendor run's egress (egress.ts); the agent's browser keeps to it. */ egress?: string }): Promise<{ text: string; timedOut: boolean; stalled?: boolean; calls: number; error?: string }>;
   /** A stamp of the saved recipes, to see whether one was recorded. */
   recipeStamp(): Promise<string>;
 }
@@ -91,11 +91,11 @@ export interface MicroPorts {
  * waits inside one call) fit well inside it. */
 export const STALL_MS = 5 * 60_000;
 
-export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }, ports: MicroPorts): Promise<DriveOutcome> {
+export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }, ports: MicroPorts, egress?: string): Promise<DriveOutcome> {
   const before = await ports.recipeStamp().catch(() => '');
   const tab = microTab(id);
   const businessEmail = await ports.businessEmail?.().catch(quiet('agent/computer/connector-micro-agent'));
-  const ran = await ports.run(microPrompt(id, stop, budget.maxCalls, businessEmail ? { businessEmail } : {}), { tab, ...budget }).catch((error: unknown) => ({ text: '', timedOut: false, calls: 0, error: scrubSecrets(error instanceof Error ? error.message : String(error)) }));
+  const ran = await ports.run(microPrompt(id, stop, budget.maxCalls, businessEmail ? { businessEmail } : {}), { tab, ...budget, ...(egress && egress !== 'home' ? { egress } : {}) }).catch((error: unknown) => ({ text: '', timedOut: false, calls: 0, error: scrubSecrets(error instanceof Error ? error.message : String(error)) }));
   const err = 'error' in ran ? ran.error : undefined;
   const result = ran.timedOut ? { kind: 'gave-up', why: 'stalled' in ran && ran.stalled ? `the agent stalled: no tool call for ${Math.round(STALL_MS / 1000)}s` : `the agent reached the ${Math.round(budget.maxMs / 60_000)} min ceiling while still working` } as MicroResult : err ? { kind: 'gave-up', why: `the agent could not run: ${err.slice(0, 200)}` } as MicroResult : parseMicroResult(ran.text);
   const after = await ports.recipeStamp().catch(() => '');
@@ -160,13 +160,15 @@ export function livePorts(stateDir: string): MicroPorts {
       try {
         const entry = process.env.CLIKCODE_MCP_ENTRY || process.argv[1]!;
         const config = join(dir, 'mcp.json');
-        await writeFile(config, JSON.stringify({ mcpServers: { clikcode: { command: process.execPath, args: [entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter, '--connector', options.tab.replace(/^agent-/, '')] } } }));
+        // The MCP server runs the agent's browser calls in its own process: the egress goes with the tab, on its command line.
+        const serverArgs = [entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter, '--connector', options.tab.replace(/^agent-/, ''), ...(options.egress ? ['--egress', options.egress] : [])];
+        await writeFile(config, JSON.stringify({ mcpServers: { clikcode: { command: process.execPath, args: serverArgs } } }));
         const argv = ['-p', prompt, ...(model ? ['--model', model] : []), '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', '', '--allowedTools', 'mcp__clikcode__browser_use', 'mcp__clikcode__account_use', 'mcp__clikcode__connector_task', '--permission-mode', 'dontAsk', '--no-session-persistence', ...(process.env.CLIKCODE_MICRO_AGENT_MODEL ? ['--model', process.env.CLIKCODE_MICRO_AGENT_MODEL] : [])];
         const final = join(dir, 'final.txt');
         const args = useCodex ? ['exec', ...(model ? ['-m', model] : []), '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only',
           '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"',
           '-c', `mcp_servers.clikcode.command=${JSON.stringify(process.execPath)}`,
-          '-c', `mcp_servers.clikcode.args=${JSON.stringify([entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter, '--connector', options.tab.replace(/^agent-/, '')])}`,
+          '-c', `mcp_servers.clikcode.args=${JSON.stringify(serverArgs)}`,
           '-c', 'mcp_servers.clikcode.required=true', '-c', 'mcp_servers.clikcode.enabled_tools=["browser_use","account_use","connector_task"]',
           '-c', 'mcp_servers.clikcode.default_tools_approval_mode="approve"', '-o', final, prompt] : argv;
         const env = { ...process.env, ...nativeProfileEnvironment(account.nativeProfile) };

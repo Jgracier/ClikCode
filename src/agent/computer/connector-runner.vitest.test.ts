@@ -219,6 +219,25 @@ describe('connectors run', () => {
     expect(c.notes).toHaveLength(0);
   });
 
+  it('holds a captcha wall back when another egress is left: nothing reported, no back-off, the outcome says egressRetry', async () => {
+    const c = fakeClient([oauthTask('hubspot')]);
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'captcha', url: 'https://app.hubspot.com/signup', pageText: 'Verify you are human' }) }]);
+    let backoffs = 0;
+    d.driver.recordBackoff = async () => { backoffs++; return new Date(); };
+    const { outcomes } = await runConnectors(c.client, d.driver, { ...quick, egressRetry: true });
+    expect(outcomes[0]).toMatchObject({ status: 'human', egressRetry: true, humanStep: { kind: 'captcha', reasonCode: 'captcha' } });
+    expect(c.reports).toEqual([]);
+    expect(backoffs).toBe(0);
+  });
+
+  it('with another egress left, a wall that is not a captcha is reported as before', async () => {
+    const c = fakeClient([oauthTask('hubspot')]);
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'payment', pageText: 'Add credits to continue' }) }]);
+    const { outcomes } = await runConnectors(c.client, d.driver, { ...quick, egressRetry: true });
+    expect(outcomes[0]!.egressRetry).toBeUndefined();
+    expect(c.reports).toHaveLength(1);
+  });
+
   it.each([
     ['mfa', 'Enter the code', 'mfa'], ['payment', 'Add credits to continue', 'payment'], ['unrecognized-client', 'Unrecognized client_id', 'app-registration'], ['password', 'Password', 'worker-setup'],
   ] as const)('maps a %s stop to the %s human step', (kind, pageText, human) => {

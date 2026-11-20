@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BudgetError, budgeted, CallBudget, Cooldown, DEFAULT_LIMITS, parsePressure, runLoop, stalledBy, tabName, wallOf, type LoopLimits, type LoopPorts, type LoopReport, type LoopState, type WorkContext } from './connector-loop.js';
+import { BudgetError, EGRESS_RETRY_MS, budgeted, CallBudget, Cooldown, DEFAULT_LIMITS, parsePressure, runLoop, stalledBy, tabName, wallOf, type LoopLimits, type LoopPorts, type LoopReport, type LoopState, type WorkContext } from './connector-loop.js';
 import { claimable } from './connector-loop-live.js';
 import type { DeployClient, VendorOutcome } from './connector-runner.js';
 
@@ -344,5 +344,65 @@ describe('an agent hand-off that ends the same way every run', () => {
       expect(f.reports[0]![1].outcome).toBe('retry');
     }
     expect(saved!.stuck?.v).toMatchObject({ count: 1 });
+  });
+});
+
+describe('retrying a captcha wall through the next egress', () => {
+  const captcha = (id: string, held: boolean): VendorOutcome => outcome(id, { status: 'human', summary: 'a captcha at vendor.example', humanStep: { kind: 'captcha', reasonCode: 'captcha' }, ...(held ? { egressRetry: true } : {}) });
+  /** Egress choice the way connector-egress.ts makes it, in memory. */
+  function egressPorts(names: string[]) {
+    const tried = new Map<string, string[]>();
+    const done: Array<[string, string, string, boolean]> = [];
+    return {
+      done,
+      ports: {
+        async egressFor(id: string) { const left = names.filter(n => !(tried.get(id) ?? []).includes(n)); return { egress: left[0] ?? names[0]!, another: left.length > 1 }; },
+        async egressDone(id: string, egress: string, result: 'captcha' | 'worked' | 'other', retrying: boolean) {
+          done.push([id, egress, result, retrying]);
+          if (result === 'captcha') { const list = [...(tried.get(id) ?? []), egress]; tried.set(id, list.length >= names.length ? [] : list); }
+        },
+      } satisfies Partial<LoopPorts>,
+    };
+  }
+
+  it('re-queues the vendor through the next egress, and the wall stands after the last', async () => {
+    const runs: Array<{ egress?: string; left?: boolean }> = [];
+    const e = egressPorts(['home', 'prod']);
+    const work = async (id: string, ctx: WorkContext): Promise<VendorOutcome> => {
+      runs.push({ ...(ctx.egress ? { egress: ctx.egress } : {}), ...(ctx.egressLeft !== undefined ? { left: ctx.egressLeft } : {}) });
+      return captcha(id, ctx.egressLeft === true);
+    };
+    // The first claim, then ClikDeploy hands the vendor out again after the retry the loop asked for.
+    const first = fakes(['acme'], work, e.ports);
+    await runLoop(first.ports, limits({ parallel: 1 }));
+    expect(first.reports[0]![1]).toMatchObject({ outcome: 'retry', retryAfterMs: EGRESS_RETRY_MS, reason: expect.stringContaining('wall:captcha on egress home; trying the next egress') });
+    expect(Date.parse(first.states.at(-1)!.cooldown.acme!)).toBeLessThanOrEqual(Date.now() + EGRESS_RETRY_MS);
+    expect(first.log.some(line => /id=acme .*egress=home egress-retry=yes/.test(line))).toBe(true);
+    const second = fakes(['acme'], work, e.ports);
+    await runLoop(second.ports, limits({ parallel: 1 }));
+    expect(second.reports[0]![1]).toMatchObject({ outcome: 'blocked', reason: expect.stringMatching(/^wall:captcha:/) });
+    expect(runs).toEqual([{ egress: 'home', left: true }, { egress: 'prod', left: false }]);
+    expect(e.done).toEqual([['acme', 'home', 'captcha', true], ['acme', 'prod', 'captcha', false]]);
+  });
+
+  it('records the egress a vendor got through on', async () => {
+    const e = egressPorts(['home', 'prod']);
+    const f = fakes(['acme'], async id => outcome(id, { status: 'handoff', browserActions: 4, summary: 'an unrecognized screen' }), e.ports);
+    await runLoop(f.ports, limits({ parallel: 1 }));
+    expect(e.done).toEqual([['acme', 'home', 'worked', false]]);
+  });
+
+  it('a captcha the runner did not hold back is a wall as before, whatever the egress', async () => {
+    const f = fakes(['acme'], async id => captcha(id, false), { egressFor: async () => ({ egress: 'home', another: false }) });
+    await runLoop(f.ports, limits({ parallel: 1 }));
+    expect(f.reports[0]![1]).toMatchObject({ outcome: 'blocked', reason: expect.stringMatching(/^wall:captcha:/) });
+  });
+
+  it('with no egress port the loop runs as it always did', async () => {
+    const seen: WorkContext[] = [];
+    const f = fakes(['acme'], async (id, ctx) => { seen.push(ctx); return captcha(id, false); });
+    await runLoop(f.ports, limits({ parallel: 1 }));
+    expect(seen[0]!.egress).toBeUndefined();
+    expect(f.reports[0]![1].outcome).toBe('blocked');
   });
 });

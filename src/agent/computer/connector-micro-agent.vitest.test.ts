@@ -284,3 +284,15 @@ describe('the route a connector agent runs on', () => {
     expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'opus' });
   });
 });
+
+describe('the micro-task and the egress', () => {
+  it('hands the vendor run\'s egress to the agent run, and none for home', async () => {
+    const seen: Array<string | undefined> = [];
+    const ports: MicroPorts = { recipeStamp: async () => 'x', run: async (_prompt, options) => { seen.push(options.egress); return { text: 'RESULT: gave-up nothing', timedOut: false, calls: 1 }; } };
+    const stop = { kind: 'unknown' as const, message: 'm', url: 'https://acme.example', pageText: '', controls: [] };
+    await runMicroTask('acme', stop, { maxCalls: 5, maxMs: 60_000 }, ports, 'prod');
+    await runMicroTask('acme', stop, { maxCalls: 5, maxMs: 60_000 }, ports, 'home');
+    await runMicroTask('acme', stop, { maxCalls: 5, maxMs: 60_000 }, ports);
+    expect(seen).toEqual(['prod', undefined, undefined]);
+  });
+});

@@ -82,11 +82,15 @@ export interface RunnerOptions {
   onAction?: (line: string) => void;
   /** Told when an agent hand-off starts (true) and ends (false): its time is the agent's own budget, not the vendor's. */
   onAgent?: (running: boolean) => void;
+  /** Another egress is left for this vendor (connector-egress.ts): a captcha wall met in the browser is not reported to ClikDeploy and starts
+   * no back-off; the outcome says `egressRetry` and the loop runs the vendor again through the next way out. */
+  egressRetry?: boolean;
 }
 
 export type VendorStatus = 'published' | 'blocked' | 'human' | 'handoff' | 'budget' | 'waiting' | 'error';
 export interface VendorOutcome { id: string; status: VendorStatus; /** Runner steps (one onboard or browser job each). */ steps: number; /** Browser actions taken inside those steps (opens, clicks, fills, captures); the action trail below lists them. */ browserActions: number; stage: string; summary: string; actions: string[]; humanStep?: HumanStep; handoff?: { file?: string; request: HandoffRequest }; recorded?: string; attention?: { kind: string; owner: string };
-  /** The command that reattaches to the parked hidden tab and carries on. */ resume?: string; /** Set when a captcha put this vendor on a back-off. */ backoffUntil?: string; /** When to resume polling a persisted vendor job. */ retryAfterMs?: number; /** A key was captured and a recipe was recorded for the next run. */ recipe?: boolean }
+  /** The command that reattaches to the parked hidden tab and carries on. */ resume?: string; /** Set when a captcha put this vendor on a back-off. */ backoffUntil?: string; /** When to resume polling a persisted vendor job. */ retryAfterMs?: number; /** A key was captured and a recipe was recorded for the next run. */ recipe?: boolean;
+  /** A captcha wall held back (not reported) because another egress is left to try (RunnerOptions.egressRetry). */ egressRetry?: boolean }
 export interface HandoffRequest {
   id: string; why: string; /** The whole task text. */ task: string; url?: string; pageText?: string; controls?: string[]; screenshot?: string;
   call?: AgentCall; orElse?: AgentCall; attention?: unknown; /** The last 3 evidence lines. */ evidence?: string[];

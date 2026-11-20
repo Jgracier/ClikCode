@@ -95,6 +95,9 @@ export interface WorkContext {
   /** When the work last showed progress (a new step), set by the work. */ progressAt?: number;
   /** Time spent in agent hand-offs so far, and when the running one began: that time is the agent's budget (limits.agentMs), not the vendor's. */
   agentMs?: number; agentSince?: number;
+  /** The way out this run's browser work leaves through (egress.ts; `home` is this computer's own connection), and whether another is left
+   * for the vendor after it: then a captcha wall is held back and the vendor runs again through the next one. */
+  egress?: string; egressLeft?: boolean;
 }
 
 /** How long a vendor may run before it is cut off: its own time, the grace, and the time its agent hand-offs took (at most limits.agentMs). */
@@ -110,6 +113,8 @@ const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|b
 const BROWSER_RETRY_MS = 5 * 60_000;
 /** A vendor whose captcha was not cleared is tried again after this (keygrab-park.ts BACKOFF_HOURS holds it as long). */
 const CAPTCHA_RETRY_MS = 3_600_000;
+/** A vendor held back at a captcha wall is due again through the next egress after this. */
+export const EGRESS_RETRY_MS = 60_000;
 /** Runs in a row an agent hand-off may end the same unfinished way before the vendor is parked as attention. */
 export const STUCK_AFTER = 3;
 
@@ -140,6 +145,11 @@ export interface LoopPorts {
   finishedByUser?(): Promise<string[]>;
   loadCooldown?(): Promise<Record<string, string> | undefined>;
   loadStuck?(): Promise<LoopState['stuck']>;
+  /** The egress the vendor's next run leaves through, and whether another is left after it (connector-egress.ts pickEgress). */
+  egressFor?(id: string): Promise<{ egress: string; another: boolean }>;
+  /** How a run on `egress` ended for the vendor: at a captcha wall, through its browser work, or neither (connector-egress.ts afterRun).
+   * `retrying`: the wall was held back and the vendor runs again through the next egress. */
+  egressDone?(id: string, egress: string, result: 'captcha' | 'worked' | 'other', retrying: boolean): Promise<void>;
   now(): number;
   sleep(ms: number): Promise<void>;
   stopRequested?(): boolean;
@@ -175,19 +185,21 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     pressure: { ...last, ...(pausedUntil && pausedUntil > now() ? { pausedUntil: new Date(pausedUntil).toISOString() } : {}) },
   }).catch(quiet('agent/computer/connector-loop'));
 
-  const finish = async (id: string, outcome: VendorOutcome, began: number, budget: CallBudget): Promise<void> => {
+  const finish = async (id: string, outcome: VendorOutcome, began: number, budget: CallBudget, egress?: string): Promise<void> => {
     const wall = wallOf(outcome);
     const minutes = (now() - began) / 60_000;
-    const kind = outcome.status === 'published' ? 'published' : wall ? 'wall' : outcome.status;
+    // A captcha wall the runner held back because another egress is left: the vendor goes round again through the next way out.
+    const egressRetry = wall === 'captcha' && outcome.egressRetry === true && egress !== undefined;
+    const kind = egressRetry ? 'egress-retry' : outcome.status === 'published' ? 'published' : wall ? 'wall' : outcome.status;
     summary.done[kind] = (summary.done[kind] ?? 0) + 1;
-    if (wall) summary.walls[wall] = (summary.walls[wall] ?? 0) + 1;
+    if (wall && !egressRetry) summary.walls[wall] = (summary.walls[wall] ?? 0) + 1;
     // The chat's account has no usage left: every agent hand-off would fail the same way until it renews.
     const providerDown = !wall && outcome.status !== 'published' && /has no usage left now/i.test(outcome.summary);
     const browserDown = !wall && outcome.status !== 'published' && BROWSER_DOWN.test(outcome.summary);
     // A captcha wall is the one wall worth an early second try: the solver may clear it once the site has cooled.
     const dependencyRetryMs = providerDown ? limits.agentOutagePauseMs : BROWSER_RETRY_MS;
     const waitingRetryMs = outcome.status === 'waiting' ? Math.max(1_000, Math.min(outcome.retryAfterMs ?? (outcome.backoffUntil ? Date.parse(outcome.backoffUntil) - now() : BROWSER_RETRY_MS), 60 * 60_000)) : undefined;
-    cooldown.mark(id, waitingRetryMs ?? (browserDown ? dependencyRetryMs : wall === 'captcha' ? CAPTCHA_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs));
+    cooldown.mark(id, egressRetry ? EGRESS_RETRY_MS : waitingRetryMs ?? (browserDown ? dependencyRetryMs : wall === 'captcha' ? CAPTCHA_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs));
     const reason = scrubSecrets(outcome.summary).replace(/\s+/g, ' ').slice(0, 400);
     let report: LoopReport | undefined;
     // The same unfinished hand-off again: counted, and parked once it has happened STUCK_AFTER times in a row.
@@ -197,12 +209,18 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
       stuck[id] = stuck[id]?.reason === key ? { reason: key, count: stuck[id]!.count + 1 } : { reason: key, count: 1 };
       parkStuck = stuck[id]!.count >= STUCK_AFTER;
     } else if (outcome.status !== 'waiting' && !browserDown && !providerDown) delete stuck[id];
-    if (parkStuck) {
+    if (egressRetry) report = { outcome: 'retry', retryAfterMs: EGRESS_RETRY_MS, reason: `wall:captcha on egress ${egress}; trying the next egress: ${reason}`.slice(0, 480) };
+    else if (parkStuck) {
       report = { outcome: 'blocked', reason: `wall:agent-stuck: the same agent task ended unfinished ${stuck[id]!.count} runs in a row: ${reason}`.slice(0, 480), humanStep: { kind: 'decision', reasonCode: 'agent-stuck', instructions: `An agent tried this ${stuck[id]!.count} times and ended the same way each time: ${reason}`.slice(0, 300) } };
       delete stuck[id];
     } else if (outcome.status === 'published') report = { outcome: 'done', reason: reason || 'published' };
     else if (outcome.status === 'human' && wall && !/already holds/.test(outcome.recorded ?? '')) report = { outcome: 'blocked', reason: `wall:${wall}: ${reason}`.padEnd(10, '.').slice(0, 480), ...(outcome.humanStep ? { humanStep: outcome.humanStep } : {}) };
     else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff' || outcome.status === 'waiting') report = { outcome: 'retry', retryAfterMs: waitingRetryMs ?? (browserDown ? dependencyRetryMs : limits.cooldownMs), reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
+    if (egress !== undefined && ports.egressDone) {
+      // Got through: the run did browser work and did not end at a captcha, an error, a budget stop or a dependency that was down.
+      const worked = outcome.status === 'published' || outcome.recipe === true || (outcome.browserActions > 0 && wall !== 'captcha' && outcome.status !== 'error' && outcome.status !== 'budget' && !browserDown && !providerDown);
+      await ports.egressDone(id, egress, wall === 'captcha' ? 'captcha' : worked ? 'worked' : 'other', egressRetry).catch(quiet('agent/computer/connector-loop'));
+    }
     let reported = report ? report.outcome : 'none';
     if (report) await ports.report(id, report).catch(error => { reported = `${report!.outcome}-failed(${scrubSecrets(error instanceof Error ? error.message : String(error)).slice(0, 80)})`; });
     const finishedAt = now();
@@ -211,7 +229,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
       summary.pauses++;
       ports.log(`${new Date(finishedAt).toISOString()} the chat's account has no usage left: no new connector claims for ${Math.round(limits.agentOutagePauseMs / 1000)}s; active work continues`);
     }
-    ports.log(`${new Date(finishedAt).toISOString()} id=${id} outcome=${outcome.status} wall=${wall ?? '-'} calls=${budget.used} minutes=${minutes.toFixed(1)} steps=${outcome.steps} reported=${reported}${outcome.recipe ? ' recipe=yes' : ''} ${JSON.stringify(reason.slice(0, 160))}`);
+    ports.log(`${new Date(finishedAt).toISOString()} id=${id} outcome=${outcome.status} wall=${wall ?? '-'} calls=${budget.used} minutes=${minutes.toFixed(1)} steps=${outcome.steps} reported=${reported}${outcome.recipe ? ' recipe=yes' : ''}${egress && egress !== 'home' || egressRetry ? ` egress=${egress}${egressRetry ? ' egress-retry=yes' : ''}` : ''} ${JSON.stringify(reason.slice(0, 160))}`);
   };
 
   const start = (id: string): void => {
@@ -222,7 +240,8 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     const tab = tabName(id);
     const job = (async (): Promise<void> => {
       const abort = new AbortController();
-      const ctx: WorkContext = { signal: abort.signal, tab, budget, limits, deadline: began + limits.maxMs + limits.agentMs };
+      const route = await ports.egressFor?.(id).catch(quiet('agent/computer/connector-loop'));
+      const ctx: WorkContext = { signal: abort.signal, tab, budget, limits, deadline: began + limits.maxMs + limits.agentMs, ...(route ? { egress: route.egress, egressLeft: route.another } : {}) };
       // The hard limit grows while an agent hand-off runs: cutting one off at the vendor's own limit ended every long
       // judgement task as "out of time" (49 of 58 time-outs on 2026-11-15) with its own 20 minutes barely begun.
       // And it is a STALL limit, not a clock: work that keeps acting (browser actions in its tabs, new steps, an agent running) is
@@ -271,7 +290,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
           outcome = { id, status: 'error', steps: 0, browserActions: 0, stage: '', summary: message.slice(0, 300), actions: [] };
         } else outcome = raced;
       } finally { stopped = true; await ports.closeTab(id).catch(quiet('agent/computer/connector-loop')); }
-      await finish(id, outcome, began, budget);
+      await finish(id, outcome, began, budget, ctx.egress);
     })().catch(quiet('agent/computer/connector-loop')).finally(() => { active.delete(id); });
     active.set(id, { job, since: began, lastRenew: began, budget, tab });
   };

@@ -11,7 +11,9 @@ import type { ToolContext, ToolDefinition } from '../tool-contract.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
 type Rpc = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: Record<string, any> };
-interface AgentMcpOptions { tab: string; maxCalls: number; counter?: string; tools?: readonly ToolDefinition[]; stateDir?: string; connector?: string }
+interface AgentMcpOptions { tab: string; maxCalls: number; counter?: string; tools?: readonly ToolDefinition[]; stateDir?: string; connector?: string;
+  /** The way out the tab's pages leave through (egress.ts): the vendor's run chose it, and the agent's browser work keeps to it. */ egress?: string;
+  /** Binds the tab to the egress (browser.ts bindTabEgress); tests give a fake. */ bindEgress?: (stateDir: string, tab: string, egress: string) => Promise<void> }
 
 const CONNECTOR_TASK_TOOLS = ['connector_spec_get', 'connector_spec_put', 'connector_discover', 'connector_build', 'connector_build_apply', 'connector_copy_task', 'connector_copy_apply', 'connector_proof', 'connector_finish', 'connector_seed_plan', 'connector_seed_apply', 'connector_spec_patch', 'connector_enrich', 'connector_onboard', 'connector_work_note', 'connector_scope_check', 'connector_test', 'connector_test_job_start', 'connector_test_job_status', 'connector_test_job_step', 'connector_harvest_fixtures'] as const;
 
@@ -109,6 +111,13 @@ const CLOUD_REFUSAL = 'Refused: onboarding agents never work in a cloud console 
 
 export function agentMcpHandler(options: AgentMcpOptions): (message: Rpc) => Promise<Record<string, unknown> | undefined> {
   let calls = 0;
+  let bound: Promise<void> | undefined;
+  /** The tab is bound to its egress before its first page opens, once. */
+  const bindEgress = (stateDir: string): Promise<void> => {
+    if (!options.egress || options.egress === 'home') return Promise.resolve();
+    bound ??= (options.bindEgress ? options.bindEgress(stateDir, options.tab, options.egress) : import('./browser.js').then(browser => browser.bindTabEgress(stateDir, options.tab, options.egress)));
+    return bound;
+  };
   const load = async (): Promise<readonly ToolDefinition[]> => {
     if (options.tools) return options.tools;
     const { accountUseTool, browserUseTool } = await import('../tools/computer-web.js');
@@ -138,6 +147,7 @@ export function agentMcpHandler(options: AgentMcpOptions): (message: Rpc) => Pro
           const stateDir = options.stateDir ?? stateDirectory();
           const context = { cwd: process.cwd(), stateDir, homeDir: homedir(), emitOutput: () => undefined } as unknown as ToolContext;
           if ((tool.name === 'browser_use' || tool.name === 'account_use') && opensCloudConsole(args)) return reply({ content: [{ type: 'text', text: CLOUD_REFUSAL }], isError: true });
+          await bindEgress(stateDir);
           const result = await tool.run(args as never, context);
           // A page that redirected into a console (a sign-in carried over from another chat) is left at once and not shown.
           if ((tool.name === 'browser_use' || tool.name === 'account_use') && opensCloudConsole({}, result.output)) {

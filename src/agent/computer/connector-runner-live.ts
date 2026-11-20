@@ -124,7 +124,8 @@ export function findOnboard(value: unknown): OnboardResult | undefined {
   return undefined;
 }
 
-interface LiveDriverOptions { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; /** The named tab this driver works in (default 'connectors'). The loop gives each vendor its own. */ tab?: string; /** Leave the browser connection open when a job ends: other vendors' tabs share it. */ keepBrowser?: boolean }
+interface LiveDriverOptions { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; /** The named tab this driver works in (default 'connectors'). The loop gives each vendor its own. */ tab?: string; /** Leave the browser connection open when a job ends: other vendors' tabs share it. */ keepBrowser?: boolean;
+  /** The way out this vendor's browser work leaves through (egress.ts). The caller binds `tab` to it; the agent's own tab is bound in its MCP server. */ egress?: string }
 
 /** Page text and the names of what can be pressed, for a stop that has no detail of its own. */
 async function look(page: Page): Promise<{ text: string; controls: string[] }> {
@@ -171,7 +172,7 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
     ...(process.env.CLIKCODE_MICRO_AGENT === '0' ? {} : {
       async agentTask(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }): Promise<DriveOutcome> {
         const { runMicroTask, livePorts } = await import('./connector-micro-agent.js');
-        return runMicroTask(id, stop, budget, livePorts(options.stateDir));
+        return runMicroTask(id, stop, budget, livePorts(options.stateDir), options.egress);
       },
     }),
     // The vendor's rendered pages, read with no model: which wall, if any, a key stands behind.

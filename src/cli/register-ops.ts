@@ -43,10 +43,10 @@ export function registerOperatorCommands(program: Command, computer: Command): v
     .action(async (flags: { platform?: string }) => (await import('../commands/connector-credential.js')).connectorCredentialPrepare(flags));
   credential.command('status').description('Whether the loop has its own key and whether ClikDeploy accepts it').action(async () => (await import('../commands/connector-credential.js')).connectorCredentialStatus());
   credential.command('forget').description("Remove the key from this computer: the loop goes back to the person's CLI key").action(async () => (await import('../commands/connector-credential.js')).connectorCredentialForget());
-  connectors.command('agent-mcp', { hidden: true }).requiredOption('--tab <name>').requiredOption('--max-calls <n>').option('--counter <file>').option('--connector <id>')
-    .action(async (flags: { tab: string; maxCalls: string; counter?: string; connector?: string }) => {
+  connectors.command('agent-mcp', { hidden: true }).requiredOption('--tab <name>').requiredOption('--max-calls <n>').option('--counter <file>').option('--connector <id>').option('--egress <name>')
+    .action(async (flags: { tab: string; maxCalls: string; counter?: string; connector?: string; egress?: string }) => {
       const { agentMcpServe } = await import('../agent/computer/connector-micro-agent-mcp.js');
-      await serveThenExit((signal) => agentMcpServe({ tab: flags.tab, ...(flags.connector ? { connector: flags.connector } : {}), maxCalls: Number(flags.maxCalls), ...(flags.counter ? { counter: flags.counter } : {}) }, signal));
+      await serveThenExit((signal) => agentMcpServe({ tab: flags.tab, ...(flags.connector ? { connector: flags.connector } : {}), maxCalls: Number(flags.maxCalls), ...(flags.counter ? { counter: flags.counter } : {}), ...(flags.egress ? { egress: flags.egress } : {}) }, signal));
     });
   connectors.command('resume <id>').description('Carry on with a connector whose keygrab could not finish: reattach to its parked hidden tab, optionally press one thing or go to one address, and continue getting the API key')
     .option('--click <text>', 'Press the control with this visible text first')

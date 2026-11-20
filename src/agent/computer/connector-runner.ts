@@ -133,6 +133,10 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     const human = stop.human ?? humanStepFor(id, stop);
     const resume = stop.parked ? resumeCommand(id) : undefined;
     if (!human) return handoff(`${stop.kind === 'unknown' ? 'an unrecognized screen' : stop.kind}: ${stop.message}`, stop);
+    // Another way out is left for this vendor: the wall is not reported and no back-off starts; the loop tries it through the next egress.
+    if (options.egressRetry && (human.kind === 'captcha' || human.reasonCode === 'captcha')) {
+      return out('human', human.instructions ?? `a captcha at ${stop.url || id}`, { humanStep: reportableStep(human), recorded: 'not reported: the vendor is retried through another egress', egressRetry: true, ...(resume ? { resume } : {}) });
+    }
     // A captcha the solver could not get past: do not come back for an hour. The end time goes in the attention item.
     let until: Date | undefined;
     if (human.kind === 'captcha' && driver.recordBackoff) until = await driver.recordBackoff(id).catch(quiet('agent/computer/connector-runner'));

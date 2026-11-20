@@ -69,7 +69,10 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
     async renew(id) { await client.tool('connector_work_renew', { id, worker: WORKER }); },
     async work(id, ctx: WorkContext) {
       const counted = budgeted(ctx.signal && client.withSignal ? client.withSignal(ctx.signal) : client, ctx.budget);
-      const driver = liveDriver({ stateDir, tab: ctx.tab, keepBrowser: true, signal: ctx.signal });
+      // The vendor's tab leaves through the egress the loop chose for this run (home: as always).
+      const { bindTabEgress } = await import('./browser.js');
+      await bindTabEgress(stateDir, ctx.tab, ctx.egress);
+      const driver = liveDriver({ stateDir, tab: ctx.tab, keepBrowser: true, signal: ctx.signal, ...(ctx.egress ? { egress: ctx.egress } : {}) });
       const micro = driver.agentTask;
       // An agent hand-off has its own call and time budget (limits.agentCalls, limits.agentMs): the vendor's call budget guards
       // the deterministic steps, and spending it on the agent left judgement work a few calls and the last seconds of the vendor.
@@ -81,7 +84,25 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       notes.delete(id);
       if (saved && first.next.kind === 'agent') first.next.task += `\nSaved progress from the previous worker (verify before continuing):\n${saved}`;
       const { limits } = ctx;
-      return runVendor(first, counted, driver, { onAction: line => { ctx.last = line; ctx.progressAt = Date.now(); }, onAgent: running => { const at = Date.now(); if (running) ctx.agentSince = at; else if (ctx.agentSince !== undefined) { ctx.agentMs = (ctx.agentMs ?? 0) + at - ctx.agentSince; delete ctx.agentSince; } }, maxSteps: limits.maxSteps, maxMs: limits.maxMs, agentMs: limits.agentMs, agentCalls: limits.agentCalls, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
+      return runVendor(first, counted, driver, { ...(ctx.egressLeft ? { egressRetry: true } : {}), onAction: line => { ctx.last = line; ctx.progressAt = Date.now(); }, onAgent: running => { const at = Date.now(); if (running) ctx.agentSince = at; else if (ctx.agentSince !== undefined) { ctx.agentMs = (ctx.agentMs ?? 0) + at - ctx.agentSince; delete ctx.agentSince; } }, maxSteps: limits.maxSteps, maxMs: limits.maxMs, agentMs: limits.agentMs, agentCalls: limits.agentCalls, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
+    },
+    async egressFor(id) {
+      const [{ egressList }, egress] = await Promise.all([import('./settings.js'), import('./connector-egress.js')]);
+      const names = (await egressList(stateDir)).map(entry => entry.name);
+      // Only home: nothing to choose and nothing kept.
+      if (names.length < 2) return { egress: names[0] ?? 'home', another: false };
+      return egress.pickEgress(await egress.readVendorEgress(stateDir, id), names);
+    },
+    async egressDone(id, used, result, retrying) {
+      const [{ egressList }, egress] = await Promise.all([import('./settings.js'), import('./connector-egress.js')]);
+      const names = (await egressList(stateDir)).map(entry => entry.name);
+      if (names.length < 2) return;
+      await egress.recordVendorEgress(stateDir, id, used, result, names);
+      if (!retrying) return;
+      // The wall was this egress's: its back-off and the captcha it left on the handoff desk do not hold the next egress's run.
+      const [park, desk] = await Promise.all([import('./keygrab-park.js'), import('./handoff-desk-store.js')]);
+      await park.clearBackoff(stateDir, id).catch(quiet('agent/computer/connector-loop-live'));
+      for (const item of await desk.listDeskItems(stateDir).catch(() => [])) if (item.resume === id && item.status === 'waiting') await desk.removeDeskItem(stateDir, item.id).catch(quiet('agent/computer/connector-loop-live'));
     },
     async activity(id) {
       const { readTabRecords } = await import('./tab-registry.js');
