@@ -85,7 +85,9 @@ export async function askMessages(target: string, sinceUnixSeconds: number, sign
 // ── a Twilio number: the sign-up phone, so vendors' texts and calls do not go to the user's own phone ──
 
 /** The Twilio number sign-ups use and its account; the API key that reads its texts is kept in the vault as sms-twilio/sid and /key. */
-export interface TwilioSms { number: string; account: string }
+/** `number` is the sign-up phone; `others` are the account's numbers in other countries (Canada, …), offered when a site refuses a
+ * US number. Texts to every one of them are read. */
+export interface TwilioSms { number: string; account: string; others?: string[] }
 const TWILIO_NUMBER = /^\+[1-9]\d{6,14}$/;
 const TWILIO_ACCOUNT = /^AC[0-9a-f]{32}$/;
 export const TWILIO_SID_SECRET = 'sms-twilio/sid';
@@ -95,12 +97,14 @@ export async function twilioSms(stateDir: string): Promise<TwilioSms | undefined
   const { readFile } = await import('node:fs/promises');
   try {
     const value = (JSON.parse(await readFile(computerSettingsPath(stateDir), 'utf8')) as { smsTwilio?: Partial<TwilioSms> }).smsTwilio;
-    return value && TWILIO_NUMBER.test(value.number ?? '') && TWILIO_ACCOUNT.test(value.account ?? '') ? { number: value.number!, account: value.account! } : undefined;
+    if (!value || !TWILIO_NUMBER.test(value.number ?? '') || !TWILIO_ACCOUNT.test(value.account ?? '')) return undefined;
+    const others = (Array.isArray(value.others) ? value.others : []).filter((n): n is string => typeof n === 'string' && TWILIO_NUMBER.test(n));
+    return { number: value.number!, account: value.account!, ...(others.length ? { others } : {}) };
   } catch { return undefined; }
 }
 
 export async function setTwilioSms(stateDir: string, value: TwilioSms | undefined): Promise<void> {
-  if (value && (!TWILIO_NUMBER.test(value.number) || !TWILIO_ACCOUNT.test(value.account))) throw new Error('Give the Twilio number as +<country><number> and the account SID (AC followed by 32 hex digits).');
+  if (value && (!TWILIO_NUMBER.test(value.number) || !TWILIO_ACCOUNT.test(value.account) || (value.others ?? []).some(n => !TWILIO_NUMBER.test(n)))) throw new Error('Give the Twilio number as +<country><number> and the account SID (AC followed by 32 hex digits).');
   await updateJsonFile(computerSettingsPath(stateDir), objectOrEmpty, current => {
     const next = { ...current } as Record<string, unknown>;
     if (value) next.smsTwilio = value; else delete next.smsTwilio;
@@ -115,12 +119,15 @@ export async function askTwilio(stateDir: string, sms: TwilioSms, sinceUnixSecon
   if (!sid || !key) return { error: `No Twilio API key is saved to read ${sms.number}'s texts (vault names ${TWILIO_SID_SECRET} and ${TWILIO_KEY_SECRET}).` };
   // DateSent filters by day only: the day before covers a code sent just after midnight UTC; rows older than `since` are dropped here.
   const day = new Date((sinceUnixSeconds - 86_400) * 1000).toISOString().slice(0, 10);
-  const url = `https://api.twilio.com/2010-04-01/Accounts/${sms.account}/Messages.json?${new URLSearchParams({ To: sms.number, 'DateSent>': day, PageSize: '20' })}`;
+  const rowsOf: Array<{ direction?: string; from?: string; body?: string; date_sent?: string | null; date_created?: string }> = [];
   try {
-    const res = await fetcher(url, { headers: { authorization: `Basic ${Buffer.from(`${sid}:${key}`).toString('base64')}` }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) });
-    if (!res.ok) return { error: `Twilio would not list ${sms.number}'s texts (HTTP ${res.status}).` };
-    const data = await res.json() as { messages?: Array<{ direction?: string; from?: string; body?: string; date_sent?: string | null; date_created?: string }> };
-    const rows = (data.messages ?? []).filter(m => m.direction === 'inbound').map(m => ({ at: Math.floor(Date.parse(m.date_sent || m.date_created || '') / 1000), from: m.from ?? '?', body: (m.body ?? '').replace(/[\r\n\u001f]+/g, ' ') }))
+    for (const number of [sms.number, ...(sms.others ?? [])]) {
+      const url = `https://api.twilio.com/2010-04-01/Accounts/${sms.account}/Messages.json?${new URLSearchParams({ To: number, 'DateSent>': day, PageSize: '20' })}`;
+      const res = await fetcher(url, { headers: { authorization: `Basic ${Buffer.from(`${sid}:${key}`).toString('base64')}` }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) });
+      if (!res.ok) return { error: `Twilio would not list ${number}'s texts (HTTP ${res.status}).` };
+      rowsOf.push(...((await res.json() as { messages?: typeof rowsOf }).messages ?? []));
+    }
+    const rows = rowsOf.filter(m => m.direction === 'inbound').map(m => ({ at: Math.floor(Date.parse(m.date_sent || m.date_created || '') / 1000), from: m.from ?? '?', body: (m.body ?? '').replace(/[\r\n\u001f]+/g, ' ') }))
       .filter(m => Number.isFinite(m.at) && m.at >= sinceUnixSeconds).sort((a, b) => b.at - a.at);
     return { rows: rows.map(m => `${m.at}\u001f${m.from}\u001f${m.body}`).join('\n') };
   } catch (error) { return { error: `Reading ${sms.number}'s texts from Twilio failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}` }; }

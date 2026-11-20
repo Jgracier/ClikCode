@@ -81,6 +81,11 @@ describe('a Twilio number as the sign-up phone', () => {
     if ('error' in got) throw new Error(got.error);
     expect(asked).toContain('To=%2B17192497747');
     expect(codeFromRows(got.rows)).toMatchObject({ code: '305614', from: '22395' });
+    // Every number of the account is read: the sign-up number and the ones in other countries.
+    const toNumbers: string[] = [];
+    const both = await askTwilio(dir, { number: '+17192497747', account: AC, others: ['+18734578891'] }, now - 60, undefined, (async (url: string) => { toNumbers.push(new URL(url).searchParams.get('To')!); return new Response(JSON.stringify({ messages: [] }), { status: 200 }); }) as unknown as typeof fetch, { sid: 'SKtest', key: 'secret' });
+    expect('error' in both).toBe(false);
+    expect(toNumbers).toEqual(['+17192497747', '+18734578891']);
   });
   it('waits on the Twilio number and the Mac together: a code on either is found, a Mac that cannot be read does not stop it', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-sms-'));
