@@ -43,7 +43,11 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   const record = JSON.stringify({ pid: process.pid });
   try {
     await fs.writeFile(hostFile, record, { mode: 0o600 });
-    const stop = (): void => { void context.close().catch(quiet('agent/computer/browser-host')); };
+    // Closing a Chrome that is already gone never fires 'close', so a stop is bounded: the process ends either way.
+    const stop = (): void => {
+      void context.close().catch(quiet('agent/computer/browser-host'));
+      setTimeout(() => process.exit(0), 10_000).unref();
+    };
     // Tabs a recycle saved come back, then the janitor closes tabs nobody holds and recycles an oversized browser.
     await restoreTabs(stateDir, await takeRecycle(stateDir), {
       async openPage(url) {
@@ -55,7 +59,20 @@ export async function runComputerHost(stateDir: string): Promise<void> {
         } finally { await session.detach().catch(quiet('agent/computer/browser-host')); }
       },
     }).catch(quiet('agent/computer/browser-host'));
-    const stopJanitor = startBrowserJanitor({ stateDir, hostPid: process.pid, recycle: async () => { stop(); } });
+    const stopJanitor = startBrowserJanitor({
+      stateDir, hostPid: process.pid, recycle: async () => { stop(); },
+      // Still the host the workers use, and its Chrome still answers.
+      current: async () => {
+        const named = JSON.parse(await fs.readFile(hostFile, 'utf8').catch(() => '{}')) as { pid?: number };
+        if (named.pid !== process.pid) return false;
+        // A dead Chrome makes the next worker start a new host, which renames host.json: that is the signal. A live page that no
+        // longer answers CDP says the same sooner.
+        const page = context.pages()[0];
+        if (!page) return true;
+        return context.newCDPSession(page).then(async session => { await session.detach().catch(quiet('agent/computer/browser-host')); return true; }, () => false);
+      },
+      retire: () => stop(),
+    });
     // The handoff desk lives here because this process outlives every worker: one address for what waits on the user.
     const tailnet = tailnetAddress();
     const desk = tailnet ? await startHandoffDesk({ stateDir, host: tailnet, context }).catch(quiet('agent/computer/browser-host')) : undefined;

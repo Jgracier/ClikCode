@@ -155,11 +155,23 @@ interface JanitorDeps {
   now?: () => number;
   /** When this host's Chrome started (default: when the janitor did, since the host and its Chrome start together). */
   startedAt?: number;
+  /** Whether this host is still THE browser host (computer/host.json names it) and its Chrome is still connected. A host whose
+   * Chrome went away without a close event stayed alive for days and kept "recycling" every 30 s: it rewrote the restore file with
+   * the live host's tabs and swept the tab records the loop reads activity from (2026-11-20, 185 recycles in a day). */
+  current?: () => Promise<boolean>;
+  /** Ends this host for good (it is no longer the browser host). */
+  retire?: (why: string) => void;
 }
 
 /** One pass: sweep tabs, then recycle when the browser is over a ceiling. Returns the recycle reason when it recycled. */
 export async function janitorTick(deps: JanitorDeps): Promise<string | undefined> {
   const now = (deps.now ?? Date.now)();
+  // A superseded or browserless host touches nothing shared (the tab records, the restore file): it ends.
+  if (deps.current && !await deps.current().catch(() => true)) {
+    lifecycle('browser.host.superseded', { hostPid: deps.hostPid });
+    deps.retire?.('this host is no longer the browser host, or its Chrome is gone');
+    return 'superseded';
+  }
   await sweepTabs(deps.stateDir, { now }).catch(quiet('agent/computer/browser-janitor'));
   const measured = (deps.measure ?? (() => measureBrowser(deps.hostPid)))();
   const load: BrowserLoad = { ...measured, ...(measured.ageMs === undefined && deps.startedAt !== undefined ? { ageMs: now - deps.startedAt } : {}) };
