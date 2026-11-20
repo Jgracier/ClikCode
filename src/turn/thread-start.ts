@@ -126,11 +126,18 @@ const BRIEF_CALLS = 12;
  * arguments in one 256-turn conversation, against 0.8 MB of words. It was
  * once a `[Did: ...]` line at the end of the assistant's words; models took it
  * for their own style and wrote it under their answers (recap-line.ts). */
-function briefTurn(turn: CanonicalTurn): CanonicalTurn {
-  const labels = [...new Set(turn.tools.map((call) => call.label))];
-  const ran = labels.length
-    ? `\n\n(ClikCode note, not the user's words: answering this, the assistant ran ${labels.slice(0, BRIEF_CALLS).join('; ')}${labels.length > BRIEF_CALLS ? `; and ${labels.length - BRIEF_CALLS} more` : ''}.)`
+/** The note that tells a model, on the USER side of a turn, which calls ran while it was answered. Never on the
+ * assistant side: a weak model copies any line it finds in its own past answers (recap-line.ts) and then prints it
+ * instead of calling the tool. */
+export function ranNote(labels: readonly string[]): string {
+  const unique = [...new Set(labels)];
+  return unique.length
+    ? `\n\n(ClikCode note, not the user's words: answering this, the assistant ran ${unique.slice(0, BRIEF_CALLS).join('; ')}${unique.length > BRIEF_CALLS ? `; and ${unique.length - BRIEF_CALLS} more` : ''}.)`
     : '';
+}
+
+function briefTurn(turn: CanonicalTurn): CanonicalTurn {
+  const ran = ranNote(turn.tools.map((call) => call.label));
   return { ...turn, user: `${turn.user}${ran}`, parts: turn.assistant ? [{ type: 'text', text: turn.assistant }] : [], tools: [] };
 }
 

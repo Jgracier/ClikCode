@@ -17,7 +17,7 @@ import type { ConversationItem } from '../agent/model-client.js';
 import { canonicalRecord, markProviderBoundaries, withProviderNote, type CanonicalTurn } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
 import { writeFullRecord } from '../session/full-record.js';
-import { fitRecord, nativeThreadBudget } from './thread-start.js';
+import { fitRecord, nativeThreadBudget, ranNote } from './thread-start.js';
 import { BYTES_PER_TOKEN } from './transfer.js';
 
 /** Bytes of history the agent is seeded with: half the target model's window, as for any
@@ -36,28 +36,21 @@ export function agentSeedBudget(contextWindow?: number, readableTokens?: number)
 
 /** One turn as the two messages the agent's memory holds. */
 export function agentItemsFromTurn(turn: CanonicalTurn): ConversationItem[] {
-  const request = [withProviderNote(turn, turn.user), turn.attachments.length ? `[Attached files: ${turn.attachments.join(', ')}]` : '']
-    .filter((part) => part.trim()).join('\n\n');
+  const labels: string[] = [];
   const lines: string[] = [];
-  let calls: string[] = [];
-  const flush = (): void => {
-    if (calls.length) lines.push(`[Tool calls: ${calls.join('; ')}]`);
-    calls = [];
-  };
   for (const part of turn.parts) {
     if (part.type === 'text') {
-      if (!part.text.trim()) continue;
-      flush();
-      lines.push(part.text.trim());
+      if (part.text.trim()) lines.push(part.text.trim());
     } else {
       const status = part.call.status === 'failed' ? ' (failed)' : part.call.status === 'unfinished' ? ' (not finished)' : '';
-      calls.push(`${part.call.label}${status}`);
+      labels.push(`${part.call.label}${status}`);
     }
   }
-  flush();
   if (turn.interrupted) lines.push(INTERRUPTED_NOTE);
+  const request = [withProviderNote(turn, turn.user), turn.attachments.length ? `[Attached files: ${turn.attachments.join(', ')}]` : '']
+    .filter((part) => part.trim()).join('\n\n');
   return [
-    { type: 'text', role: 'user', text: request || '(no request)' },
+    { type: 'text', role: 'user', text: `${request || '(no request)'}${ranNote(labels)}` },
     { type: 'text', role: 'assistant', text: lines.join('\n\n') || '(no reply)' },
   ];
 }
