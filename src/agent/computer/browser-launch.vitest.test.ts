@@ -26,7 +26,7 @@ it('runs headless when forced, set, or when a Linux computer has no display', ()
 
 it('does not wrap a headless browser in a virtual display', () => {
   expect(hiddenDisplayCommand(['node', 'x'], { CLIKCODE_BROWSER_HEADLESS: '1' }, 'linux', () => true)).toEqual(['node', 'x']);
-  expect(hiddenDisplayCommand(['node', 'x'], {}, 'linux', () => true)[0]).toBe('xvfb-run');
+  expect(hiddenDisplayCommand(['node', 'x'], {}, 'linux', () => true)).toContain('xvfb-run');
 });
 
 it('keeps the headless setting in the account settings', async () => {

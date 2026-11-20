@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
-import { computerHostFile, computerProfile } from './browser-host.js';
+import { computerHostFile, computerProfile, VIRTUAL_DISPLAY_ENV } from './browser-host.js';
 import { hostStatusFile, installingMessage, liveHostStatus, readHostStatus } from './browser-launch.js';
 import { BROWSER_HOST_UNIT, browserHostLaunch } from './browser-host-scope.js';
 import { sharedState } from './shared-state.js';
@@ -666,11 +666,14 @@ export async function throwawayComputerPage(stateDir: string): Promise<Page> {
 }
 
 /** On Linux the browser runs on its own virtual display so its windows never take focus from the user's
- * screen. Handoff and screenshots go over CDP and are unaffected. CLIKCODE_BROWSER_VISIBLE=1 shows it. */
+ * screen. Handoff and screenshots go over CDP and are unaffected. CLIKCODE_BROWSER_VISIBLE=1 shows it.
+ * Chrome on Linux picks Wayland whenever it can reach a compositor -- through WAYLAND_DISPLAY, or the default `wayland-0` socket when that
+ * is unset -- so xvfb-run alone left its window on the user's GNOME desktop (seen 2026-11-20: the host's Chrome connected to wayland-0
+ * with DISPLAY=:99 set). WAYLAND_DISPLAY is removed and the host is told it is on a virtual display (it then asks Chrome for X11). */
 export function hiddenDisplayCommand(command: string[], env = process.env, platform = process.platform, hasXvfb = () => whichSync('xvfb-run')): string[] {
   // Headless needs no display, virtual or real.
   if (platform !== 'linux' || env.CLIKCODE_BROWSER_VISIBLE === '1' || /^(?:1|true|yes|on)$/i.test(env.CLIKCODE_BROWSER_HEADLESS ?? '') || !hasXvfb()) return command;
-  return ['xvfb-run', '-a', '-s', '-screen 0 1440x900x24', ...command];
+  return ['env', '-u', 'WAYLAND_DISPLAY', `${VIRTUAL_DISPLAY_ENV}=1`, 'xvfb-run', '-a', '-s', '-screen 0 1440x900x24', ...command];
 }
 
 function whichSync(name: string): boolean {
