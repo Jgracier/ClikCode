@@ -15,7 +15,7 @@ import { backgroundWorkOf } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
 import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
-import { commandDuringTurn } from '../tui/slash/queue.js';
+import { commandDuringTurn, pickerLineDuringTurn } from '../tui/slash/queue.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { answerWorkerApproval } from './approval-answer.js';
 import { WorkerClient } from './client.js';
@@ -574,6 +574,16 @@ async function driveWorkerTurn(
         // A slash line is never the worker's business: it is ClikCode's own
         // command, and it runs here when the turn ends.
         async (text) => {
+          // A bare setting command opens its picker here, over the turn, instead of waiting for the turn to end.
+          if (rl.pickDuringTurn) {
+            const now = (await readState({ transcripts: [] })).sessions.find((item) => item.id === sessionId);
+            if (now && pickerLineDuringTurn(text, now)) {
+              await rl.pickDuringTurn(text);
+              const changed = (await readState({ transcripts: [] })).sessions.find((item) => item.id === sessionId);
+              if (changed) client.send({ type: 'settings-changed', settings: liveSettingsOf(changed) });
+              return { disposition: 'command', submission: { id: randomUUID(), text, submittedAt: new Date().toISOString() }, commandOutcome: 'applied' };
+            }
+          }
           const result = await commandDuringTurn(sessionId, text);
           // /model, /effort, /permissions applied now: the turn learns of it from the worker.
           if (result.commandOutcome === 'applied') {

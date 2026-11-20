@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { slashLineIsCommand } from './queue.js';
+import { pickerLineDuringTurn, slashLineIsCommand } from './queue.js';
 import { routeSlashInput, slashRouteAppliesDuringTurn, type SlashRouteContext } from './registry.js';
 
 /** The half of the decision the composer cannot make: it takes the session,
@@ -108,5 +108,26 @@ describe('/restart typed while a turn streams', () => {
       if (before === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = before;
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+/** A bare setting command mid-turn opens its picker over the running turn (turn-bridge.ts), instead of waiting for the end. */
+describe('a picker typed while a turn streams', () => {
+  const session = { id: 's', route: 'gateway', messages: [] } as unknown as Parameters<typeof pickerLineDuringTurn>[1];
+
+  it('opens now for a bare setting command', () => {
+    for (const line of ['/model', '/effort', '/permissions', '/account', '/fast', '/sandbox', '/send']) {
+      expect(pickerLineDuringTurn(line, session), line).toBe(true);
+    }
+  });
+
+  it('leaves an argument form to the state write, and anything else to the turn boundary', () => {
+    expect(pickerLineDuringTurn('/model sonnet', session)).toBe(false);
+    expect(pickerLineDuringTurn('/export', session)).toBe(false);
+    expect(pickerLineDuringTurn('also check the disk', session)).toBe(false);
+  });
+
+  it('waits for the boundary for a local model, whose load needs the waiting line', () => {
+    expect(pickerLineDuringTurn('/model', { ...session, route: 'clikcode-local' } as typeof session)).toBe(false);
   });
 });

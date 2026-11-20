@@ -25,6 +25,7 @@
  * conversation is queued as conversation, exactly as before.
  */
 import { randomUUID } from 'node:crypto';
+import type { HarnessSession } from '../../session/model.js';
 import { existsSync } from 'node:fs';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
@@ -62,6 +63,20 @@ export async function enqueueCommandLine(sessionId: string, line: string): Promi
   enqueueSessionTurn(session, submission, submission.submittedAt);
   await writeState(state);
 }
+
+/** Whether a mid-turn line is a bare setting command whose picker the window can open right now, over the running turn:
+ * `/model`, `/effort`, `/permissions`, `/account`, `/fast`, `/sandbox`, `/send`. Its argument form applies at once already
+ * (slashRouteAppliesDuringTurn); without one it used to be queued for the turn's end and say nothing, which read as the
+ * menu not working. A picker's choice ends in the same state write, so the turn picks it up at its next model call. */
+export function pickerLineDuringTurn(line: string, session: HarnessSession): boolean {
+  const route = routeSlashInput(line, slashRouteContextFor(session, sessionHarness(session), (path) => existsSync(expandHomePath(path))));
+  if (route.kind !== 'command' || route.entry.duringTurn !== 'apply' || route.args.trim().length > 0) return false;
+  // Loading a local model needs the waiting line the answer is using (slashRouteAppliesDuringTurn).
+  if (route.entry.name === 'model' && session.route === 'clikcode-local') return false;
+  return PICKER_COMMANDS.has(route.entry.name);
+}
+
+const PICKER_COMMANDS = new Set(['model', 'effort', 'permissions', 'account', 'fast', 'sandbox', 'send']);
 
 export async function commandDuringTurn(sessionId: string, line: string): Promise<LiveTurnInputResult> {
   const state = await readState({ transcripts: [sessionId] });

@@ -137,8 +137,7 @@ export function flushPaint(this: TerminalHarnessPrompter): void {
 
 /** The waiting frame, with the slash palette when one is being typed.
  *
- * A hint list, not a picker: there is no selection to move, and Enter runs
- * what was typed. Without this a command was invisible AND unavailable while
+ * Up and Down choose a row (waiting-keys.ts), and Enter runs the chosen one. Without this a command was invisible AND unavailable while
  * an answer streamed; `/model` went to the model as the word "/model". */
 export function waitingPalette(this: TerminalHarnessPrompter, turn: WaitingTurn) {
   const draft = this.composer.text;
@@ -165,9 +164,10 @@ export function paintWaiting(this: TerminalHarnessPrompter, turn: WaitingTurn): 
     this.paint(text, [], 0, '› ', cursor);
     return;
   }
-  this.paint(text, matches, 0, '› ', cursor, {
+  const selected = Math.min(this.waitingPaletteSelected, matches.length - 1);
+  this.paint(text, matches, selected, '› ', cursor, {
     capacity: Math.min(matches.length, 8) + 2,
-    hint: `${keyHint('apply')} · ${keyHintFor('esc', 'close')} · ${keyHint('stop')}`,
+    hint: `↑↓ choose · ${keyHint('apply')} · ${keyHintFor('esc', 'close')} · ${keyHint('stop')}`,
   });
 }
 

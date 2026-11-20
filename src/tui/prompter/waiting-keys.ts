@@ -87,6 +87,17 @@ function waitingKey(this: TerminalHarnessPrompter, turn: NonNullable<TerminalHar
     approvalKey.call(this, turn, this.pendingApproval, key);
     return;
   }
+  // The command menu is a real menu mid-turn too: Up and Down choose its row (Enter runs it, submitWaiting). Without this the
+  // arrows went to the draft and only the first row could ever be run.
+  if ((key === '\u001b[A' || key === '\u001b[B') && !this.signInInput) {
+    const matches = this.waitingPalette(turn);
+    if (matches.length) {
+      const step = key === '\u001b[A' ? -1 : 1;
+      this.waitingPaletteSelected = (Math.min(this.waitingPaletteSelected, matches.length - 1) + step + matches.length) % matches.length;
+      this.updateWaiting();
+      return;
+    }
+  }
   // Left with nothing typed steps away from the turn -- to the conversation
   // board -- and leaves it running: the worker owns it, not this window.
   if (key === '\u001b[D' && !draft.text && turn.leave) {
@@ -151,6 +162,15 @@ function waitingKey(this: TerminalHarnessPrompter, turn: NonNullable<TerminalHar
       return;
     }
     if (!turn.submit) return;
+    // A command name being typed, the menu up: Enter runs the row chosen with Up and Down (or the first), as at rest.
+    const menu = !draft.text.includes(' ') ? this.waitingPalette(turn) : [];
+    const chosen = menu[Math.min(this.waitingPaletteSelected, menu.length - 1)];
+    if (chosen && !chosen.completes) {
+      draft.clear();
+      this.waitingPaletteSelected = 0;
+      this.submitWaiting(chosen.value);
+      return;
+    }
     // Enter again, nothing typed, on a message already waiting: it goes
     // into the chat at the next pause. The turn, and any sub-agent it
     // started, keeps running.
@@ -169,6 +189,6 @@ function waitingKey(this: TerminalHarnessPrompter, turn: NonNullable<TerminalHar
   } else if (turn.submit || turn.early || this.signingIn) {
     // The draft, by the composer's own rules (composer.ts draftKey): the same keys as at rest. A sign-in's wait keeps what is
     // typed under it too: it is the composer's, and still there when the next prompt or turn opens.
-    if (draftKey(this, draft, key) === 'edit') this.echoDraft();
+    if (draftKey(this, draft, key) === 'edit') { this.waitingPaletteSelected = 0; this.echoDraft(); }
   }
 }
