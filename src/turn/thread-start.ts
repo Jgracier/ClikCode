@@ -17,6 +17,7 @@
  * keeps no history (keepsNoHistory): a written thread would be resumed into
  * a provider that never sees it. */
 
+import { ranNote } from '../agent/ran-note.js';
 import { quiet } from '../runtime/lifecycle-log.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import { type CanonicalRecord, type CanonicalTurn } from '../session/canonical.js';
@@ -117,7 +118,6 @@ function writtenBytes(turn: CanonicalTurn): number {
 }
 
 /** Calls named in an older turn's summary line, at most. */
-const BRIEF_CALLS = 12;
 
 /** An older turn as its words, with what its calls did told on the USER side
  * of the same turn ("ClikCode note: ... ran: $ npm test; Edit src/a.ts"), and
@@ -126,16 +126,6 @@ const BRIEF_CALLS = 12;
  * arguments in one 256-turn conversation, against 0.8 MB of words. It was
  * once a `[Did: ...]` line at the end of the assistant's words; models took it
  * for their own style and wrote it under their answers (recap-line.ts). */
-/** The note that tells a model, on the USER side of a turn, which calls ran while it was answered. Never on the
- * assistant side: a weak model copies any line it finds in its own past answers (recap-line.ts) and then prints it
- * instead of calling the tool. */
-export function ranNote(labels: readonly string[]): string {
-  const unique = [...new Set(labels)];
-  return unique.length
-    ? `\n\n(ClikCode note, not the user's words: answering this, the assistant ran ${unique.slice(0, BRIEF_CALLS).join('; ')}${unique.length > BRIEF_CALLS ? `; and ${unique.length - BRIEF_CALLS} more` : ''}.)`
-    : '';
-}
-
 function briefTurn(turn: CanonicalTurn): CanonicalTurn {
   const ran = ranNote(turn.tools.map((call) => call.label));
   return { ...turn, user: `${turn.user}${ran}`, parts: turn.assistant ? [{ type: 'text', text: turn.assistant }] : [], tools: [] };
