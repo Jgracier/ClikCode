@@ -26,7 +26,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { INERT_DEADLINE_MS, vendorCommandText } from './vendor-probe.js';
 import { harnessBinaryIdentity } from '../transport/native/version-memo.js';
 import { jsonMemo } from '../../session/store/json-memo.js';
 import { stripAnsi } from '../../tui/render/width.js';
@@ -152,7 +152,7 @@ async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] 
   let values: string[] = [];
   try {
     const helpArgv = harness.effortHelpArgv ?? ['--help'];
-    values = parseHelpEffortChoices(await captureNativeHarnessOutput(harness, helpArgv, {}), flag);
+    values = parseHelpEffortChoices(await vendorCommandText({ gate: { inert: 'help text' }, binary: harness.binary, argv: helpArgv, environment: {}, deadlineMs: INERT_DEADLINE_MS }), flag);
   } catch {
     // A failed ask is not an answer: nothing is remembered, the next call asks again.
     return undefined;

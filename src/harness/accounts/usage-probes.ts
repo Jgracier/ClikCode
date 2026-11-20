@@ -16,14 +16,15 @@ import { UsageReading, UsageWindow, claudeRateLimitReading, claudeUsageCommandRe
  * surface (or none at all); adding a harness here is the only step needed to light up
  * its usage footer, everything else (caching, dispatch, rendering) is shared. */
 
-/** The executable the catalog declares for a harness (`harness.binary`), never a
- * name assumed from the command: forks and renamed installs differ. */
-function harnessBinary(command: string, fallback: string = command): string {
+/** The catalog's entry for a harness: its binary (`harness.binary`, never a
+ * name assumed from the command: forks and renamed installs differ) and its
+ * sign-in evidence, which the background gate checks. */
+function catalogHarness(command: string): ReturnType<typeof localHarnessForCommand> {
   try {
-    return localHarnessForCommand(command)?.binary ?? fallback;
+    return localHarnessForCommand(command);
   } catch {
-    // fail-open-ok: the catalog runtime is unavailable; the documented default binary name is the best remaining answer.
-    return fallback;
+    // fail-open-ok: the catalog runtime is unavailable; with no sign-in to check, nothing is asked.
+    return undefined;
   }
 }
 
@@ -38,9 +39,10 @@ function harnessBinary(command: string, fallback: string = command): string {
  */
 async function codexUsageReading(environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   let signedOut = false;
-  const binary = harnessBinary('codex');
+  const harness = catalogHarness('codex');
+  if (!harness) return undefined;
   const response = await queryJsonRpc({
-    binary, argv: ['app-server', '--listen', 'stdio://'], environment, deadlineMs: PROBE_DEADLINE_MS, label: 'codex app-server', jsonrpcVersion: false,
+    gate: harness, argv: ['app-server', '--listen', 'stdio://'], environment, deadlineMs: PROBE_DEADLINE_MS, label: 'codex app-server', jsonrpcVersion: false,
   }, async (peer) => {
     // The server is ready once it has answered initialize and been told so.
     await peer.request('initialize', { clientInfo: { name: 'clikcode', version: CLIKCODE_VERSION } });
@@ -100,7 +102,7 @@ async function claudeUsageReading(environment: Readonly<Record<string, string>>)
   const harness = localHarnessForCommand('claude');
   if (!harness) return undefined;
   try {
-    const output = await probeCommand(harness.binary, CLAUDE_USAGE_PROBE_ARGV, environment);
+    const output = await probeCommand(harness, CLAUDE_USAGE_PROBE_ARGV, environment);
     if (output === undefined) return undefined;
     const result = (JSON.parse(output) as { result?: unknown }).result;
     return typeof result === 'string' ? claudeUsageCommandReading(result) : undefined;

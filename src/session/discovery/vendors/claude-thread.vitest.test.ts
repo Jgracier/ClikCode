@@ -186,7 +186,7 @@ describe('writers', () => {
     await chmod(fake, 0o755);
     // Hermes' importer: its writer's fallback where node:sqlite is missing.
     const written = await importClaudeThread(record, context(
-      { command: 'hermes', binary: fake, displayName: 'Hermes' }, { HERMES_HOME: '/profiles/h2' }, 'Hermes Agent v0.20.5', dir), HERMES_IMPORT_SPEC);
+      { command: 'hermes', binary: fake, displayName: 'Hermes', signInOptional: true }, { HERMES_HOME: '/profiles/h2' }, 'Hermes Agent v0.20.5', dir), HERMES_IMPORT_SPEC);
     expect(written).toEqual({ nativeId: '20261004_1_abc', transport: 'text-cli' });
     const argv = (await readFile(join(dir, 'argv'), 'utf8')).trim().split('\n');
     expect(argv.slice(0, 4)).toEqual(['sessions', 'import', '--from', 'claude']);
@@ -201,10 +201,10 @@ describe('writers', () => {
     const fake = join(dir, 'fake-goose');
     await writeFile(fake, '#!/bin/sh\necho "Detected format: Claude Code"\necho "Session imported:"\necho "20261005_3 - hi"\n');
     await chmod(fake, 0o755);
-    expect(await gooseSessionStore.writer!.write(record, context({ command: 'goose', binary: fake, displayName: 'Goose' }, {}, '1.51.0', dir)))
+    expect(await gooseSessionStore.writer!.write(record, context({ command: 'goose', binary: fake, displayName: 'Goose', signInOptional: true }, {}, '1.51.0', dir)))
       .toEqual({ nativeId: '20261005_3', transport: 'structured-cli' });
     const failing = claudeImportWriter({ testedVersions: ['1'], argv: () => [], parse: () => undefined });
-    expect(await failing.write(record, context({ command: 'goose', binary: fake, displayName: 'Goose' }, {}, '1', dir))).toBeUndefined();
+    expect(await failing.write(record, context({ command: 'goose', binary: fake, displayName: 'Goose', signInOptional: true }, {}, '1', dir))).toBeUndefined();
   });
 });
 

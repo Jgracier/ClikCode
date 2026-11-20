@@ -8,6 +8,7 @@
 
 import { copyFile, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import type { AiLocalHarnessDefinition } from '../definition.js';
@@ -214,19 +215,45 @@ export async function adoptAuthFiles(
 }
 
 /** Whether ClikCode can tell this vendor's sign-in state without asking it. */
-export function hasAuthEvidence(harness: Pick<AiLocalHarnessDefinition, 'authFiles' | 'authEnv'>): boolean {
-  return Boolean(harness.authFiles?.length || harness.authEnv?.length);
+export function hasAuthEvidence(harness: Pick<AiLocalHarnessDefinition, 'authFiles' | 'authEnv'> & { authKeychain?: AiLocalHarnessDefinition['authKeychain'] }): boolean {
+  return Boolean(harness.authFiles?.length || harness.authEnv?.length || (process.platform === 'darwin' && harness.authKeychain?.length));
 }
 
-/** Signed in: an API-key variable is set, or a credential is on disk. */
+/** Signed in: an API-key variable is set, or a credential is on disk (or,
+ * on a Mac, in the Keychain item the catalog names). */
 export async function authEvidencePresent(
-  harness: Pick<AiLocalHarnessDefinition, 'authFiles' | 'authEnv'>,
+  harness: Pick<AiLocalHarnessDefinition, 'authFiles' | 'authEnv'> & Partial<Pick<AiLocalHarnessDefinition, 'authKeychain' | 'profileEnv'>>,
   profileEnvironment: Readonly<Record<string, string>>,
   processEnvironment: Environment = process.env,
 ): Promise<boolean> {
   const environment = { ...processEnvironment, ...profileEnvironment };
   if (harness.authEnv?.some((name) => environment[name]?.trim())) return true;
-  return filesSignIn(harness.authFiles ?? [], environment);
+  if (await filesSignIn(harness.authFiles ?? [], environment)) return true;
+  return keychainSignIn(harness, environment);
+}
+
+/** The Keychain service a catalog entry names, for this profile. */
+export function keychainService(template: string, profileValue: string | undefined): string {
+  const hash = profileValue?.trim() ? `-${createHash('sha256').update(profileValue.trim()).digest('hex').slice(0, 8)}` : '';
+  return template.replace('{profileHash}', hash);
+}
+
+/** Whether one of the Keychain items the catalog names exists (macOS). Only
+ * `security find-generic-password -s` without `-w`/`-g`: the item's
+ * attributes, never its secret, so the Keychain never asks to unlock it. */
+async function keychainSignIn(
+  harness: Partial<Pick<AiLocalHarnessDefinition, 'authKeychain' | 'profileEnv'>>, environment: Environment,
+): Promise<boolean> {
+  if (process.platform !== 'darwin' || !harness.authKeychain?.length) return false;
+  const profileValue = harness.profileEnv ? environment[harness.profileEnv] : undefined;
+  for (const template of harness.authKeychain) {
+    const service = keychainService(template, profileValue);
+    const found = await new Promise<boolean>((resolve) => {
+      execFile('/usr/bin/security', ['find-generic-password', '-s', service], { timeout: 5_000, windowsHide: true }, (error) => resolve(!error));
+    });
+    if (found) return true;
+  }
+  return false;
 }
 
 /** What logout may remove: whole files holding nothing but the credential,

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 const capture = vi.fn(async () => '  --effort <level>   Effort level (low, medium, high)');
-vi.mock('../transport/native/command.js', () => ({ captureNativeHarnessOutput: capture }));
+vi.mock('./vendor-probe.js', async (original) => ({ ...await original<object>(), vendorCommandText: capture }));
 vi.mock('../transport/native/version-memo.js', () => ({ harnessBinaryIdentity: async () => '/bin/fake:1:2' }));
 
 const home = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), 'clikcode-effort-memo-'));

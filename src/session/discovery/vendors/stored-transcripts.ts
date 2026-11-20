@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as zlib from 'node:zlib';
 import type { AiLocalHarnessDefinition } from '../../../harness/definition.js';
-import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
+import { VENDOR_IMPORT_DEADLINE_MS, vendorCommandText } from '../../../harness/accounts/vendor-probe.js';
 import type { NativeSessionEnvironment } from '../stores.js';
 import { extractMessageText, type NativeTranscriptMessage } from '../transcript.js';
 import { piSessionStore } from './pi-store.js';
@@ -63,7 +63,7 @@ export async function readAiderTranscript(_harness: AiLocalHarnessDefinition, id
 
 /** Amp's official read-only JSON export, observed with the installed CLI. */
 export async function readAmpTranscript(harness: AiLocalHarnessDefinition, id: string, workspace: string, environment: NativeSessionEnvironment = {}): Promise<NativeTranscriptMessage[]> {
-  const raw = await captureNativeHarnessOutput(harness, ['threads', 'export', id], environment, undefined, workspace);
+  const raw = await vendorCommandText({ gate: harness, argv: ['threads', 'export', id], environment, deadlineMs: VENDOR_IMPORT_DEADLINE_MS, cwd: workspace });
   const data = JSON.parse(raw.slice(raw.indexOf('{'))) as Json;
   return (Array.isArray(data.messages) ? data.messages : []).flatMap((message: Json): NativeTranscriptMessage[] => {
     if (message.role !== 'user' && message.role !== 'assistant') return [];

@@ -21,6 +21,7 @@ export async function readAcpTranscript(
       await request('session/load', { sessionId: nativeId, cwd: workspace, mcpServers: [] });
       return true;
     }, undefined, {
+      gate: harness,
       cwd: workspace,
       onNotification: (method, params) => {
         if (method !== 'session/update' || params.sessionId !== nativeId) return;

@@ -1,10 +1,12 @@
 /** Asking a vendor's own CLI to list its sessions, and parsing whatever it
  * prints -- a table for some, structured output for others. */
 
-import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
-import { freshListing, lastSeenListing, rememberListing, withCacheLock } from './cache.js';
+import { runVendorCommand, vendorCommandText } from '../../harness/accounts/vendor-probe.js';
+import { markAccountNeedsSignIn } from '../../harness/accounts/background-outcome.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
+import { claimListing, freshListing, lastSeenListing, rememberListing } from './cache.js';
 import { harnessBinaryIdentity } from '../../harness/transport/native/version-memo.js';
-import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { DiscoveredNativeSession } from './discovered-session.js';
 
 function splitTableColumns(line: string): string[] {
@@ -142,16 +144,30 @@ function listedFolder(harness: AiLocalHarnessDefinition, workspace: string | und
   return harness.session?.discoverAllFolders ? undefined : workspace;
 }
 
+/** How long one vendor listing may take before its process group is ended.
+ * Kilo answers in ~1.8s, Hermes ~0.5s; one at load 250 took far longer. */
+export const LISTING_DEADLINE_MS = 30_000;
+
+/** Listings this process is running now, so a board that reopens shares it. */
+const listing = new Map<string, Promise<DiscoveredNativeSession[]>>();
+
 /** Never installs anything for a passive scan (only harnesses already found on
  * PATH are queried), and never throws — a harness that isn't installed, has
  * no discovery command, or returns something this parser doesn't recognize
- * just contributes zero results instead of failing the whole picker. */
+ * just contributes zero results instead of failing the whole picker.
+ *
+ * The CLI runs in the background (vendor-probe.ts): bounded, headless, and
+ * only for a profile with a sign-in on disk. One signed out is not started
+ * -- Kiro CLI's `chat --list-sessions` run signed out opened its sign-in in
+ * the browser and hung -- and its account is marked as needing a sign-in. */
 export async function discoverNativeSessions(
   harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>, workspace: string | undefined,
   /** The account profile this listing belongs to. Two accounts of the same
    * provider have separate vendor stores, so an empty result for one says
    * nothing about the other. */
   profile?: string,
+  /** The account listed for: marked as needing a sign-in when its profile has none. */
+  account?: Pick<AiHarnessAccount, 'id'>,
 ): Promise<DiscoveredNativeSession[]> {
   if (!harness.session?.discoverArgv) return [];
   // Installed is a PATH walk and a stat. A full inspection would also run
@@ -166,30 +182,55 @@ export async function discoverNativeSessions(
   const folder = listedFolder(harness, workspace);
   const fresh = await freshListing(harness.command, folder, profile, Date.now(), build);
   if (fresh) return fresh;
-  const discoverArgv = harness.session.discoverArgv;
-  // One window asks the CLI when the answer expires; the others wait for it and read its answer,
-  // instead of every open board spawning the same listing at the same moment.
-  return withCacheLock(`listing-${harness.command}`, async () => {
-    const answered = await freshListing(harness.command, folder, profile, Date.now(), build);
-    if (answered) return answered;
-    try {
-      const raw = await captureNativeHarnessOutput(harness, discoverArgv, environment, undefined, workspace);
-      const format = harness.session?.discoverFormat ?? 'json';
-      const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
-      await rememberListing(harness.command, folder, profile, found, Date.now(), build);
-      return found;
-    } catch {
-      // fail-open-ok: passive discovery must not break the picker when an
-      // optional vendor command fails. A failure is not evidence that there is
-      // nothing here, so the last answer stands in for it -- but it is written
-      // down again, for the same lifetime as an answer: unremembered, a CLI
-      // that fails or times out (every one of them, on a machine at load 250)
-      // was spawned again at every board open in every window.
-      const last = await lastSeenListing(harness.command, folder, profile);
-      await rememberListing(harness.command, folder, profile, last, Date.now(), build);
-      return last;
-    }
-  });
+  const key = [harness.command, folder ?? '', profile ?? ''].join('\u0000');
+  const running = listing.get(key);
+  if (running) return running;
+  const asked = listSessions(harness, harness.session.discoverArgv, environment, workspace, folder, profile, build, account)
+    .finally(() => { if (listing.get(key) === asked) listing.delete(key); });
+  listing.set(key, asked);
+  return asked;
+}
+
+async function listSessions(
+  harness: AiLocalHarnessDefinition, discoverArgv: readonly string[], environment: Readonly<Record<string, string>>,
+  workspace: string | undefined, folder: string | undefined, profile: string | undefined, build: string,
+  account: Pick<AiHarnessAccount, 'id'> | undefined,
+): Promise<DiscoveredNativeSession[]> {
+  // One window claims the ask when the answer expires; the others read the
+  // last answer meanwhile, instead of every open board spawning the same
+  // listing at the same moment. The claim is a lease written under a short
+  // lock, never a lock held across the CLI: a CLI that hung held every other
+  // window's board behind it, and a lock that could not be had failed it.
+  let claim: Awaited<ReturnType<typeof claimListing>>;
+  try {
+    claim = await claimListing(harness.command, folder, profile, Date.now(), build);
+  } catch (error) {
+    // fail-open-ok: the claim could not be had (another process holds the
+    // lock past its wait); what was listed last stands in, and nothing runs.
+    quiet('session/discovery/cli-listing')(error);
+    return lastSeenListing(harness.command, folder, profile).catch(() => []);
+  }
+  if ('fresh' in claim) return claim.fresh;
+  const { last, failures } = claim.claimed;
+  const outcome = await runVendorCommand({ gate: harness, argv: discoverArgv, environment, deadlineMs: LISTING_DEADLINE_MS, cwd: workspace });
+  if (outcome.status === 'ok') {
+    const raw = outcome.value.stdout;
+    const format = harness.session?.discoverFormat ?? 'json';
+    const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
+    await rememberListing(harness.command, folder, profile, found, Date.now(), build).catch(quiet('session/discovery/cli-listing'));
+    return found;
+  }
+  // No sign-in on disk: nothing was started, and the account says so, so the
+  // board does not ask for it again until the user signs in.
+  if (outcome.status === 'signed-out') await markAccountNeedsSignIn(account);
+  // A failure is not evidence that there is nothing here, so the last answer
+  // stands in for it -- written down again, held off longer for each failure
+  // in a row: unremembered, a CLI that fails or times out (every one of them,
+  // on a machine at load 250) was spawned again at every board open in
+  // every window.
+  const failed = outcome.status === 'failed' ? failures + 1 : failures;
+  await rememberListing(harness.command, folder, profile, last, Date.now(), build, { failures: failed }).catch(quiet('session/discovery/cli-listing'));
+  return last;
 }
 
 /** What this harness's listing returned last time, without running it: the
@@ -217,7 +258,7 @@ export async function adoptListedNativeId(
   const name = session.nativeSessionId;
   const listing = harness.session;
   if (!listing?.idByName || !listing.discoverArgv || !name || session.nativeSessionPreallocated || !MINTED_ID.test(name)) return false;
-  const raw = await captureNativeHarnessOutput(harness, listing.discoverArgv, environment, undefined, session.workspace).catch(() => '');
+  const raw = await vendorCommandText({ gate: harness, argv: listing.discoverArgv, environment, deadlineMs: LISTING_DEADLINE_MS, cwd: session.workspace }).catch(() => '');
   const found = parseDiscoveredSessionsStructured(raw, listing.discoverFormat === 'json-lines' ? 'json-lines' : 'json')
     .find((item) => item.title === name && item.nativeId !== name);
   if (!found) return false;

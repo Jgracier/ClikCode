@@ -28,6 +28,8 @@ import { takeUp } from './vendor-thread-takeup.js';
 import { prepareVendorAhead } from './vendor-session-attempt.js';
 import { reconcileNativeThread } from '../session/carry.js';
 import type { VendorTurnContext } from './vendor-turn-context.js';
+import { mayRunInBackground } from '../harness/accounts/vendor-probe.js';
+import { markAccountNeedsSignIn } from '../harness/accounts/background-outcome.js';
 
 /** What the take-up records of the vendor's thread, written back as it is. */
 const THREAD_FIELDS = ['nativeSessionId', 'nativeThreadAccountId', 'nativeSessionPreallocated', 'nativeTransport'] as const;
@@ -45,6 +47,14 @@ export async function warmVendor(sessionId: string): Promise<boolean> {
   const transport = sessionTurnTransport(harness, session);
   if (transport !== 'acp' && transport !== 'codex-app-server') return false;
   if (!(await inspectNativeHarness(harness).catch(quiet('turn/vendor-warm')))?.installed) return false;
+  const environment = turnEnvironment(harness, account, session.permissionMode ?? 'ask');
+  // A warm-up is nobody's request: a profile with no sign-in on disk is not
+  // started (its vendor could open its own sign-in), and is marked as
+  // needing one -- its next turn, which the user did ask for, signs in.
+  if (!await mayRunInBackground(harness, environment)) {
+    await markAccountNeedsSignIn(account);
+    return false;
+  }
   session.workspace ??= homedir();
   const persistNow = async (): Promise<void> => {
     const latest = await readState({ transcripts: [] });
@@ -66,7 +76,6 @@ export async function warmVendor(sessionId: string): Promise<boolean> {
     const ctx = { state, session, harness, account, model: session.model, checkpoint: { persistNow } } as unknown as VendorTurnContext;
     await takeUp(ctx, '', { interrupted: false, withJournal: false });
   }
-  const environment = turnEnvironment(harness, account, session.permissionMode ?? 'ask');
   await prepareVendorAhead({ harness, account, session: session as HarnessSession, transport, model: session.model, ...(session.effort ? { effort: session.effort } : {}), environment });
   lifecycle('worker.warm', { harness: harness.command, transport, thread: Boolean(session.nativeSessionId), ms: Date.now() - startedAt });
   return true;

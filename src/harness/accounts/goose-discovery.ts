@@ -101,7 +101,7 @@ export async function discoverGooseProviders(
     const setup = await request('_goose/unstable/providers/setup/catalog/list').catch(quiet('harness/accounts/goose-discovery'));
     const catalog = await request('_goose/unstable/providers/catalog/list').catch(quiet('harness/accounts/goose-discovery'));
     return gooseProviders(status, setup, catalog);
-  });
+  }, undefined, { gate: harness });
 }
 
 /** The models.dev catalog: OpenCode's copy when it keeps one, else fetched

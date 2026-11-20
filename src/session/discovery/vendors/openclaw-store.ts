@@ -30,7 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { readdir, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
+import { VENDOR_IMPORT_DEADLINE_MS, vendorCommandText } from '../../../harness/accounts/vendor-probe.js';
 import type { CanonicalToolCall } from '../../canonical.js';
 import { type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import { piCall, piThreadLines } from './pi-store.js';
@@ -89,10 +89,10 @@ const openClawThreadWriter: NativeThreadWriter = {
       await writeFileAtomic(index, `${JSON.stringify({
         [`agent:${AGENT}:explicit:${sessionId}`]: { sessionId, updatedAt: now.getTime(), sessionFile: transcript },
       }, null, 2)}\n`);
-      const output = await captureNativeHarnessOutput(
-        context.harness, ['doctor', '--session-sqlite', 'import', '--session-sqlite-agent', AGENT, '--json'],
-        context.environment, undefined, context.workspace,
-      );
+      const output = await vendorCommandText({
+        gate: context.harness, argv: ['doctor', '--session-sqlite', 'import', '--session-sqlite-agent', AGENT, '--json'],
+        environment: context.environment, deadlineMs: VENDOR_IMPORT_DEADLINE_MS, cwd: context.workspace,
+      });
       const report = JSON.parse(output.slice(output.indexOf('{'))) as ImportReport;
       const target = report.targets?.find((item) => item.agentId === AGENT);
       if (target?.storePath !== index || target.importedEntries !== 1 || target.importedTranscriptEvents !== events || target.issues?.length) {

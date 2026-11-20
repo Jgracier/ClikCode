@@ -1,6 +1,6 @@
 /** OpenCode's stored conversations. */
 
-import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
+import { VENDOR_IMPORT_DEADLINE_MS, vendorCommandText } from '../../../harness/accounts/vendor-probe.js';
 import type { AiLocalHarnessDefinition } from '../../../harness/definition.js';
 import type { NativeSessionEnvironment } from '../stores.js';
 
@@ -13,7 +13,7 @@ import type { NativeSessionEnvironment } from '../stores.js';
  * text blocks. */
 export async function readOpencodeTranscript(harness: AiLocalHarnessDefinition, nativeId: string, workspace: string, environment: NativeSessionEnvironment = {}): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
   let raw: string;
-  try { raw = await captureNativeHarnessOutput(harness, ['export', nativeId], environment, undefined, workspace); } catch {
+  try { raw = await vendorCommandText({ gate: harness, argv: ['export', nativeId], environment, deadlineMs: VENDOR_IMPORT_DEADLINE_MS, cwd: workspace }); } catch {
     // fail-open-ok: session adoption is optional; a failed read-only vendor export has no importable messages.
     return [];
   }

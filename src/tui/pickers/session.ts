@@ -56,10 +56,11 @@ type AdoptableNativeSession = {
  * FS_SESSION_DISCOVERY (Claude Code, Codex, Cursor, Pi). Neither list is
  * repeated here so it cannot go stale: a harness is wired by adding it there.
  *
- * Every one of those spawns a real vendor CLI (up to a 4s timeout each, once
- * per account profile) or walks a vendor's on-disk store, so this is slower
- * than the rest of /resume by orders of magnitude and must never be awaited
- * before the picker is on screen. */
+ * Every one of those spawns a real vendor CLI (once per signed-in account
+ * profile, each ended at LISTING_DEADLINE_MS, cli-listing.ts) or walks a
+ * vendor's on-disk store, so this is slower than the rest of /resume by
+ * orders of magnitude and must never be awaited before the picker is on
+ * screen. */
 async function discoverAdoptableSessions(
   state: HarnessState, workspace: string,
   /** Called once, early, with the vendor files plus what each CLI listed LAST
@@ -99,7 +100,7 @@ async function discoverAdoptableSessions(
     if (profiles[0] === undefined) return [];
     return (await Promise.all(profiles.map(async (account) => {
       const environment = nativeProfileEnvironment(account?.nativeProfile);
-      const found = await discoverNativeSessions(harness, environment, workspace, account?.nativeProfile?.path);
+      const found = await discoverNativeSessions(harness, environment, workspace, account?.nativeProfile?.path, account);
       return found.map((item) => ({ harness, item, accountId: account?.id }));
     }))).flat();
   }))).flat())();

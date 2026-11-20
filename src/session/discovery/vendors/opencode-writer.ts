@@ -49,7 +49,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
+import { VENDOR_IMPORT_DEADLINE_MS, vendorCommandText } from '../../../harness/accounts/vendor-probe.js';
 import type { CanonicalPart, CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../canonical.js';
 import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriteContext, type NativeThreadWriter, type NativeThreadWritten } from '../stores.js';
 
@@ -371,14 +371,14 @@ export function openCodeFamilyThreadWriter(testedVersions: readonly string[]): N
         await writeFile(file, JSON.stringify(exported), { mode: 0o600 });
         // --pure: no plugins -- importing is a database insert, and a plugin
         // may reach the network or open a session of its own.
-        const output = await captureNativeHarnessOutput(context.harness, ['import', '--pure', file], context.environment, undefined, context.workspace);
+        const output = await vendorCommandText({ gate: context.harness, argv: ['import', '--pure', file], environment: context.environment, deadlineMs: VENDOR_IMPORT_DEADLINE_MS, cwd: context.workspace });
         if (/Imported session: (\S+)/.exec(output)?.[1] === nativeId) return { nativeId };
         throw new Error('import did not report the session');
       } catch {
         // fail-open-ok: import validates message by message after inserting
         // the session row, so a refusal can leave part of it behind; the
         // caller transfers instead.
-        await captureNativeHarnessOutput(context.harness, ['session', 'delete', '--pure', nativeId], context.environment, undefined, context.workspace)
+        await vendorCommandText({ gate: context.harness, argv: ['session', 'delete', '--pure', nativeId], environment: context.environment, deadlineMs: VENDOR_IMPORT_DEADLINE_MS, cwd: context.workspace })
           .catch(quiet('session/discovery/vendors/opencode-writer'));
         return undefined;
       } finally {

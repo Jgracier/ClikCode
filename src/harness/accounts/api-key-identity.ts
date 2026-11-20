@@ -7,7 +7,7 @@
  * from an org, team or user id -- and the account keeps its placeholder.
  * What was checked per vendor is recorded in vendor-identity.ts's header. */
 
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { PROBE_DEADLINE_MS, vendorCommandText } from './vendor-probe.js';
 import { parseAmpUsage, parseCommandCodeApiWhoami, parseKimiUserInfo } from './vendor-identity.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { emailIn as email } from './droid-identity.js';
@@ -77,7 +77,7 @@ const READERS = {
   // Amp publishes no key endpoint; its own `amp usage` reads AMP_API_KEY
   // before its stored login and opens with "Signed in as <email>".
   amp: async (key, harness) => harness?.keyIdentityArgv && harness.authEnv?.[0]
-    ? parseAmpUsage(await captureNativeHarnessOutput(harness, harness.keyIdentityArgv, { [harness.authEnv[0]]: key }))
+    ? parseAmpUsage(await vendorCommandText({ gate: harness, argv: harness.keyIdentityArgv, environment: { [harness.authEnv[0]]: key }, deadlineMs: PROBE_DEADLINE_MS }))
     : undefined,
 } satisfies Record<string, KeyReader>;
 

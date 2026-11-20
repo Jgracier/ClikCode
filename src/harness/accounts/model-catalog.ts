@@ -6,7 +6,9 @@ import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { PROBE_DEADLINE_MS, mayRunInBackground, vendorCommandText } from './vendor-probe.js';
+import { heldOff, markAccountNeedsSignIn, recordBackgroundOutcome } from './background-outcome.js';
+import { createHash } from 'node:crypto';
 import { nativeAccountEnvironment, nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogConnect, ModelCatalogResult } from '../definition.js';
@@ -254,11 +256,11 @@ async function cachedCatalog(
 
 /** How long the model picker will wait for a vendor's own model list before
  * opening with whatever it already has. Measured on the installed harnesses:
- * `grok models` 708ms, `cursor-agent models` 1307ms, `agy models` 1807ms. The
- * 12-second cap in nativeModelCatalogUncached is a worst case for a harness
- * that hangs, not a typical cost, and waiting that long is what the
- * fire-and-forget path below was avoiding. Three seconds clears every
- * measured harness with room to spare and still bounds a bad one. */
+ * `grok models` 708ms, `cursor-agent models` 1307ms, `agy models` 1807ms.
+ * Each vendor run of a discovery is ended at PROBE_DEADLINE_MS (vendor-probe.ts),
+ * a worst case for a harness that hangs, not a typical cost. Three seconds
+ * clears every measured harness with room to spare and still bounds a bad one;
+ * the discovery itself keeps going and fills the cache. */
 const MODEL_CATALOG_PICKER_WAIT_MS = 3_000;
 
 /** Claude Code's family aliases, for when its own table cannot be read:
@@ -389,7 +391,7 @@ export async function nativeModelCatalog(
   const key = [cacheKey(harness, account), fingerprint, ...(account?.models ?? [])].join('\n');
   const running = discoveries.get(key);
   if (running) return running;
-  const discovery = discoverModelCatalog(harness, account, fingerprint)
+  const discovery = discoverModelCatalog(harness, account, fingerprint, key)
     .finally(() => { if (discoveries.get(key) === discovery) discoveries.delete(key); });
   discoveries.set(key, discovery);
   return discovery;
@@ -399,17 +401,39 @@ async function discoverModelCatalog(
   harness: AiLocalHarnessDefinition,
   account: AiHarnessAccount | undefined,
   fingerprint: string,
+  key: string,
 ): Promise<ModelCatalogResult> {
-  const result = await nativeModelCatalogUncached(harness, account);
+  // A discovery that failed a moment ago (every vendor run timed out, the
+  // agent crashed) is held off rather than run again at the next warm-up:
+  // what is on disk and on the account answers meanwhile. The fingerprint is
+  // in the key, so a sign-in or an update asks again at once.
+  const held = `catalog:${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
+  const offline = await heldOff(held);
+  const outcome: DiscoveryOutcome = { signedOut: false };
+  const result = await nativeModelCatalogUncached(harness, account, undefined, { offline, outcome });
   rememberVendorModelNames(harness, result);
+  // No sign-in on disk: nothing was started, and the account says it needs one.
+  if (outcome.signedOut) await markAccountNeedsSignIn(account);
   // A list read from a server (Copilot's, from models.dev) that came back
   // empty was offline, not empty: remembered, it stayed empty until Copilot
   // itself was updated. Asked again next time instead (a failed `models`
-  // run is the same: no list is not an empty list).
-  if (!result.models.length && (harness.modelsDevCatalog || harness.modelStrategy === 'aider-providers' || harness.acp || harness.modelDiscoveryArgv)) return result;
+  // run is the same: no list is not an empty list) -- after the hold.
+  if (!result.models.length && (harness.modelsDevCatalog || harness.modelStrategy === 'aider-providers' || harness.acp || harness.modelDiscoveryArgv)) {
+    if (!offline && !outcome.signedOut) await recordBackgroundOutcome(held, 'failed');
+    return result;
+  }
+  if (!offline) await recordBackgroundOutcome(held, 'ok');
   await rememberCatalog(harness, account, fingerprint, result);
   return result;
 }
+
+/** What a discovery learnt besides its list. */
+interface DiscoveryOutcome { signedOut: boolean }
+
+/** Strategies that start the vendor (or its server) to read the list. */
+const SPAWNING_STRATEGIES: ReadonlySet<NonNullable<AiLocalHarnessDefinition['modelStrategy']>> = new Set([
+  'hermes-inventory', 'openclaw-inventory', 'aider-providers', 'copilot-server', 'goose-providers',
+]);
 
 async function rememberCatalog(
   harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, fingerprint: string, result: ModelCatalogResult,
@@ -578,7 +602,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
     }
     try {
       if (!d.configured) {
-        const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, undefined)) as { default?: unknown; provider?: unknown };
+        const parsed = JSON.parse(await vendorCommandText({ gate: harness, argv: ['config', 'get', 'model', '--json'], environment, deadlineMs: PROBE_DEADLINE_MS })) as { default?: unknown; provider?: unknown };
         const model = typeof parsed.default === 'string' ? parsed.default.trim() : '';
         const provider = typeof parsed.provider === 'string' ? parsed.provider.trim() : '';
         if (model) d.configured = provider ? `${provider}:${model}` : model;
@@ -684,24 +708,30 @@ async function nativeModelCatalogUncached(
   account?: AiHarnessAccount,
   /** What a live session already offered: then no agent is started for it. */
   liveListed?: { models: string[]; labels: Record<string, string>; current?: string; efforts?: string[] },
+  /** `offline`: start no vendor process (a hold after a failure). */
+  run: { offline?: boolean; outcome?: DiscoveryOutcome } = {},
 ): Promise<ModelCatalogResult> {
   const d: DiscoveryState = { models: new Set(account?.models ?? []) };
   const { models } = d;
   const addDiscoveredModels = (raw: string): void => { for (const model of discoveredModelsFrom(raw)) models.add(model); };
   const profileRoot = catalogProfileRoot(harness, account);
   const context: DiscoveryContext = { harness, account, profileRoot, liveListed, state: d };
+  // Every vendor run below sits behind the background gate on its own; asked
+  // once here, a signed-out profile starts nothing and says so.
+  const mayRun = !run.offline && await mayRunInBackground(harness, nativeAccountEnvironment(harness, account));
+  if (!run.offline && !mayRun && run.outcome) run.outcome.signedOut = true;
   // What the vendor's own state says, by the catalog's declared strategy.
-  if (harness.modelStrategy) await VENDOR_MODEL_DISCOVERY[harness.modelStrategy](context);
+  if (harness.modelStrategy && (mayRun || !SPAWNING_STRATEGIES.has(harness.modelStrategy))) await VENDOR_MODEL_DISCOVERY[harness.modelStrategy](context);
   // No list command, but the ACP session says (Cline: 318 models through its
   // own gateway, none of which ClikCode could offer before).
   const liveOnly = Boolean(liveListed && harness.acp?.liveModelList);
-  if (harness.acp && harness.acp.listsModels !== false && (!harness.modelDiscoveryArgv || liveOnly)) {
+  if (harness.acp && harness.acp.listsModels !== false && (!harness.modelDiscoveryArgv || liveOnly) && (liveListed || mayRun)) {
     const listed = liveListed ?? await queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...await acpProbeArgv(harness, account)], nativeProfileEnvironment(account?.nativeProfile),
       async (request) => {
         const session = await acpDiscoverySession(request);
         const efforts = harness.acp?.effortConfigId ? acpConfigOptionValues(session, harness.acp.effortConfigId) : [];
         return { ...acpSessionModels(session), ...(efforts.length ? { efforts } : {}) };
-      }, undefined, { discovery: harness }).catch(quiet('harness/accounts/model-catalog'));
+      }, undefined, { gate: harness, discovery: harness }).catch(quiet('harness/accounts/model-catalog'));
     if (listed?.models.length) {
       // A declared ACP model list is authoritative for ACP sessions. Keeping
       // persisted CLI ids alongside it can select an id this transport does
@@ -716,10 +746,10 @@ async function nativeModelCatalogUncached(
     }
     if (listed?.efforts?.length) d.effortValues = listed.efforts;
   }
-  if (harness.modelDiscoveryArgv && !liveOnly) {
+  if (harness.modelDiscoveryArgv && !liveOnly && mayRun) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {
-      const printed = await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, undefined);
+      const printed = await vendorCommandText({ gate: harness, argv: harness.modelDiscoveryArgv, environment, deadlineMs: PROBE_DEADLINE_MS });
       // A vendor whose list is not plain ids declares how to read it.
       if (harness.modelListFormat) await PRINTED_MODEL_LIST[harness.modelListFormat](context, printed);
       else addDiscoveredModels(printed);
@@ -768,5 +798,5 @@ export async function acpModelEffortChoices(
       const option = (answer.configOptions as Record<string, any>[] | undefined)?.find((entry) => (entry?.id ?? entry?.configId) === effortConfigId);
       const fallback = typeof option?.currentValue === 'string' && values.includes(option.currentValue) ? option.currentValue : undefined;
       return { values, ...(fallback ? { default: fallback } : {}) };
-    }, undefined, { discovery: harness });
+    }, undefined, { gate: harness, discovery: harness });
 }

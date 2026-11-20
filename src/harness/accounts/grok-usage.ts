@@ -61,9 +61,10 @@ export function grokBillingReading(result: unknown): UsageReading | undefined {
 /** One short-lived `grok agent stdio`, asked `_x.ai/billing` and let go.
  * `--no-leader` keeps the probe off a shared leader another window owns. */
 export async function grokUsageReading(environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
-  let binary = 'grok';
-  try { binary = localHarnessForCommand('grok')?.binary ?? binary; } catch { /* fail-open-ok: the catalog default is the documented binary */ }
-  const result = await queryAcp(binary, ['agent', '--no-leader', 'stdio'], environment,
-    (request) => request('_x.ai/billing', { format: 'credits' }));
+  let harness: ReturnType<typeof localHarnessForCommand>;
+  try { harness = localHarnessForCommand('grok'); } catch { harness = undefined; } // fail-open-ok: without the catalog there is no sign-in to check, so nothing is asked
+  if (!harness) return undefined;
+  const result = await queryAcp(harness.binary, ['agent', '--no-leader', 'stdio'], environment,
+    (request) => request('_x.ai/billing', { format: 'credits' }), undefined, { gate: harness });
   return grokBillingReading(result);
 }

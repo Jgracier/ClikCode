@@ -19,29 +19,46 @@ import { processesWithEnvironment } from '../transport/process-group.js';
 import { vendorMcpServerNames } from '../../agent/mcp/import.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 import { sleep } from '../../runtime/sleep.js';
+import { PROBE_DEADLINE_MS, backgroundEnvironment, mayRunInBackground, type VendorGate } from './vendor-probe.js';
 
 type Json = Record<string, any>;
 
+export interface AcpQueryOptions {
+  /** Required: the background gate (vendor-probe.ts). A profile with no
+   * credential evidence is never started -- the query answers undefined. */
+  gate: VendorGate;
+  signal?: AbortSignal;
+  onNotification?: (method: string, params: Json) => void;
+  cwd?: string;
+  discovery?: AiLocalHarnessDefinition;
+}
+
 /** Runs `ask` against an initialized ACP peer and always shuts it down.
- * Undefined when the binary is missing or the server exits or errors before
- * answering. These are bounded metadata probes, never conversation turns. */
+ * Undefined when the gate refuses it (no sign-in), the binary is missing, or
+ * the server exits or errors before answering. These are bounded metadata
+ * probes, never conversation turns: the environment is the background one
+ * (no display, no session bus, no-op browser openers). */
 export async function queryAcp<T>(
   binary: string, argv: readonly string[], environment: Readonly<Record<string, string>>,
   ask: (request: (method: string, params?: Json) => Promise<Json>, capabilities: Json) => Promise<T>,
-  timeoutMs = 30_000,
-  options: { signal?: AbortSignal; onNotification?: (method: string, params: Json) => void; cwd?: string; discovery?: AiLocalHarnessDefinition } = {},
+  timeoutMs: number | undefined,
+  options: AcpQueryOptions,
 ): Promise<T | undefined> {
+  timeoutMs ??= PROBE_DEADLINE_MS;
   if (options.signal?.aborted) return undefined;
+  if (!await mayRunInBackground(options.gate, environment)) return undefined;
   const executable = await resolveBinaryPath(binary);
   if (!executable) return undefined;
   const detached = process.platform !== 'win32';
   // Everything this query starts carries the tag, so what escaped the
   // process group can still be found and stopped (see below).
   const tag = randomBytes(8).toString('hex');
+  const keyring = 'inert' in options.gate ? Boolean(options.gate.keyring) : Boolean(options.gate.keyringAuth);
   const child = spawnPortable(executable, [...argv], {
-    env: { ...process.env, ...environment, [QUERY_TAG]: tag }, stdio: ['pipe', 'pipe', 'pipe'], detached,
+    env: { ...backgroundEnvironment(environment, { keyring }), [QUERY_TAG]: tag }, stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true,
     ...(options.cwd ? { cwd: options.cwd } : {}),
   });
+  child.once('error', () => undefined);
   const peer = new JsonRpcPeer(child, { label: `${binary} ACP`, detached, forwardParentSignals: false, onNotification: options.onNotification });
   const signal = options.signal;
   let closing: Promise<void> | undefined;

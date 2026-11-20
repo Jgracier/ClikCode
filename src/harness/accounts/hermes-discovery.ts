@@ -1,7 +1,6 @@
-import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { PROBE_DEADLINE_MS, runVendorCommand, vendorCommandText } from './vendor-probe.js';
 import { harnessBinaryIdentity } from '../transport/native/version-memo.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 
@@ -60,7 +59,8 @@ async function hermesInstall(
   const key = await harnessBinaryIdentity(harness.binary) ?? harness.binary;
   let asked = installs.get(key);
   if (!asked) {
-    asked = captureNativeHarnessOutput(harness, ['--version'], environment).then(hermesInstallDirectory, () => undefined);
+    // A first `--version` checks upstream (~10s): the probe deadline, not the inert one.
+    asked = vendorCommandText({ gate: { inert: '--version' }, binary: harness.binary, argv: ['--version'], environment, deadlineMs: PROBE_DEADLINE_MS }).then(hermesInstallDirectory, () => undefined);
     installs.set(key, asked);
   }
   const install = await asked;
@@ -78,7 +78,7 @@ export async function discoverHermesChoices(
   harness: AiLocalHarnessDefinition, account?: AiHarnessAccount,
 ): Promise<{ toolsets: string[] }> {
   const environment = nativeProfileEnvironment(account?.nativeProfile);
-  const toolsText = await captureNativeHarnessOutput(harness, ['tools', 'list'], environment).catch(() => '');
+  const toolsText = await vendorCommandText({ gate: harness, argv: ['tools', 'list'], environment, deadlineMs: PROBE_DEADLINE_MS }).catch(() => '');
   return { toolsets: hermesToolsetNames(toolsText) };
 }
 
@@ -173,11 +173,12 @@ export async function discoverHermesModels(
   const found = await hermesInstall(harness, environment);
   if (!found) return undefined;
   const { install, python } = found;
-  const output = await new Promise<string>((resolve) => {
-    execFile(python, ['-c', INVENTORY_SCRIPT], {
-      cwd: install, timeout: 30_000, maxBuffer: 8 * 1024 * 1024,
-      env: { ...process.env, ...environment, PYTHONPATH: install, PYTHONHOME: '' },
-    }, (_error, stdout) => resolve(String(stdout ?? '')));
+  // Hermes' own Python, behind Hermes' own sign-in gate (vendor-probe.ts):
+  // its inventory runs each provider's auth check, headless and bounded.
+  const outcome = await runVendorCommand({
+    gate: harness, binary: python, argv: ['-c', INVENTORY_SCRIPT], cwd: install, deadlineMs: PROBE_DEADLINE_MS,
+    environment: { ...environment, PYTHONPATH: install, PYTHONHOME: '' },
   });
+  const output = outcome.status === 'ok' ? outcome.value.stdout : '';
   return hermesInventory(output);
 }

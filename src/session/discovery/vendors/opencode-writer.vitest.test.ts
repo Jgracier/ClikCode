@@ -170,7 +170,8 @@ describe('openCodeId', () => {
 });
 
 describe('OpenCode-family writers', () => {
-  const harness = (binary: string, command = 'opencode') => ({ command, binary, displayName: command }) as unknown as NativeThreadWriteContext['harness'];
+  // signInOptional: the background gate lets a fake that signs in to nothing run.
+  const harness = (binary: string, command = 'opencode') => ({ command, binary, displayName: command, signInOptional: true }) as unknown as NativeThreadWriteContext['harness'];
   const context = (overrides: Partial<NativeThreadWriteContext> = {}): NativeThreadWriteContext => ({
     harness: harness('opencode'), workspace: '/ws', environment: {}, model: 'opencode/big-pickle', version: '1.18.32', ...overrides,
   });

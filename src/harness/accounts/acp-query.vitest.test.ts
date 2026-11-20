@@ -107,7 +107,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 });
 `);
       await chmod(agent, 0o755);
-      expect(await queryAcp(agent, [], {}, async () => 'asked')).toBe('asked');
+      expect(await queryAcp(agent, [], {}, async () => 'asked', undefined, { gate: { inert: 'test agent' } })).toBe('asked');
       const daemon = Number(await readFile(pidFile, 'utf8'));
       const alive = (): boolean => { try { process.kill(daemon, 0); return true; } catch { return false; } };
       for (let wait = 0; wait < 20 && alive(); wait += 1) await new Promise((resolve) => setTimeout(resolve, 50));

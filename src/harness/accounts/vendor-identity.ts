@@ -47,7 +47,7 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { PROBE_DEADLINE_MS, vendorCommandText } from './vendor-probe.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { captureMistralVibeCredential, mistralVibeAccountEmail } from './mistral-vibe-identity.js';
 import { droidAccountEmail, emailIn as email } from './droid-identity.js';
@@ -140,9 +140,13 @@ export function parseOpenHandsUser(text: string): string | undefined {
   return email((json(text) as { email?: unknown } | undefined)?.email);
 }
 
+/** The vendor's own answer to "who is this?", run in the background
+ * (vendor-probe.ts): bounded, headless, and only for a profile with a
+ * credential on disk -- a profile signed out has no one to name, and its
+ * vendor (`claude auth status`, `kiro-cli whoami`) is never started there. */
 async function capture(harness: AiLocalHarnessDefinition, profilePath: string | undefined, argv: readonly string[]): Promise<string> {
-  const env = profilePath && harness.profileEnv ? nativeProfileEnvironment({ env: harness.profileEnv, path: profilePath }) : {};
-  return captureNativeHarnessOutput(harness, argv, env);
+  const environment = profilePath && harness.profileEnv ? nativeProfileEnvironment({ env: harness.profileEnv, path: profilePath }) : {};
+  return vendorCommandText({ gate: harness, argv, environment, deadlineMs: PROBE_DEADLINE_MS });
 }
 
 async function openHandsEmail(profilePath: string | undefined): Promise<string | undefined> {

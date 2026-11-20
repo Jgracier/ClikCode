@@ -46,7 +46,7 @@ import { removeSqliteSession } from './sqlite-carry.js';
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
+import { VENDOR_IMPORT_DEADLINE_MS, vendorCommandText } from '../../../harness/accounts/vendor-probe.js';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
 import {
   nativeDataRoot,
@@ -333,7 +333,7 @@ async function writeHermesThread(record: CanonicalRecord, context: NativeThreadW
   // its own schema on any command, so the thread lands in exactly the
   // layout it reads.
   if (!await stat(database).then(() => true, () => false)) {
-    await captureNativeHarnessOutput(context.harness, ['sessions', 'list', '--limit', '1'], context.environment, undefined, context.workspace).catch(quiet('session/discovery/vendors/hermes-store'));
+    await vendorCommandText({ gate: context.harness, argv: ['sessions', 'list', '--limit', '1'], environment: context.environment, deadlineMs: VENDOR_IMPORT_DEADLINE_MS, cwd: context.workspace }).catch(quiet('session/discovery/vendors/hermes-store'));
     if (!await stat(database).then(() => true, () => false)) return undefined;
   }
   const db = await openSqlite(database);

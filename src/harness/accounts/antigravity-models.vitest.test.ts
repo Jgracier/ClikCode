@@ -6,12 +6,18 @@ import { stateDirectory } from '../../session/store/paths.js';
 import type { AiHarnessAccount } from '../definition.js';
 
 const { capture, queryAcp } = vi.hoisted(() => ({ capture: vi.fn(), queryAcp: vi.fn() }));
-vi.mock('../transport/native/command.js', () => ({ captureNativeHarnessOutput: capture }));
+// The vendor run, and the gate before it (no credential exists in the test home).
+vi.mock('./vendor-probe.js', async (original) => ({
+  ...await original<typeof import('./vendor-probe.js')>(),
+  vendorCommandText: (spec: { gate: unknown; argv: readonly string[]; environment: Record<string, string> }) => capture(spec.gate, spec.argv, spec.environment),
+  mayRunInBackground: async () => true,
+}));
 vi.mock('../transport/native/binary.js', () => ({ resolveBinaryPath: async () => undefined }));
 vi.mock('./acp-query.js', async (original) => ({
   ...await original<typeof import('./acp-query.js')>(), queryAcp,
 }));
 const { nativeModelCatalog, recordLiveModelCatalog, resetModelCatalogMemo } = await import('./model-catalog.js');
+const { clearBackgroundBackoff } = await import('./background-outcome.js');
 
 const harness = localHarnessForCommand('antigravity')!;
 // Captured from agy 1.4.12 in vendor-sandbox: the CLI lists six models;
@@ -41,6 +47,7 @@ const memoPath = () => join(stateDirectory(), 'model-catalog.json');
 beforeEach(async () => {
   resetModelCatalogMemo();
   await rm(memoPath(), { force: true });
+  await clearBackgroundBackoff();
   capture.mockResolvedValue(printed);
 });
 afterEach(() => {
@@ -54,7 +61,7 @@ describe('Antigravity model discovery after the ACP migration', () => {
   it('uses the full native inventory with the account profile, without a metadata session', async () => {
     const account = { models: models.slice(0, 3), nativeProfile: { env: 'HOME', path: join(process.env.HOME!, 'agy-profile') } } as AiHarnessAccount;
     expect((await nativeModelCatalog(harness, account)).models).toEqual(models);
-    expect(capture).toHaveBeenCalledWith(harness, ['models'], expect.objectContaining({ HOME: account.nativeProfile!.path }), undefined);
+    expect(capture).toHaveBeenCalledWith(harness, ['models'], expect.objectContaining({ HOME: account.nativeProfile!.path }));
     expect(queryAcp).not.toHaveBeenCalled();
   });
 
@@ -103,9 +110,16 @@ describe('Antigravity model discovery after the ACP migration', () => {
     expect(capture).toHaveBeenCalledTimes(2);
   });
 
-  it('retries a failed native discovery instead of caching an empty or partial ACP answer', async () => {
+  it('retries a failed native discovery after a hold, instead of caching an empty or partial ACP answer', async () => {
     capture.mockRejectedValueOnce(new Error('offline'));
+    const start = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(start);
     expect((await nativeModelCatalog(harness)).models).toEqual([]);
+    // Held off: the next warm-up does not start the vendor again at once.
+    expect((await nativeModelCatalog(harness)).models).toEqual([]);
+    expect(capture).toHaveBeenCalledTimes(1);
+    // After the hold it is asked again, and its answer kept.
+    vi.spyOn(Date, 'now').mockReturnValue(start + 5 * 60_000 + 1);
     expect((await nativeModelCatalog(harness)).models).toEqual(models);
     expect(capture).toHaveBeenCalledTimes(2);
     expect(queryAcp).not.toHaveBeenCalled();

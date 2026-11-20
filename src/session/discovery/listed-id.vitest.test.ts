@@ -6,9 +6,9 @@ import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 
 const listing = vi.hoisted(() => ({ output: '', calls: 0 }));
-vi.mock('../../harness/transport/native/command.js', async (original) => ({
+vi.mock('../../harness/accounts/vendor-probe.js', async (original) => ({
   ...await original<object>(),
-  captureNativeHarnessOutput: async () => { listing.calls += 1; return listing.output; },
+  vendorCommandText: async () => { listing.calls += 1; return listing.output; },
 }));
 const { adoptListedNativeId } = await import('./cli-listing.js');
 
