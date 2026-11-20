@@ -5,6 +5,7 @@ import { quiet } from '../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ConversationItem, ImageInput } from './model-client.js';
+import { callsAsUserNotes } from './ran-note.js';
 
 /** Images (attached to a user message, or shown by a tool such as read_file)
  * live beside the item, never inside it: a build that predates them
@@ -143,7 +144,7 @@ export class ConversationStore {
         items = [{ type: 'summary', text: entry.summary }, ...keep];
       }
     }
-    return repairDanglingCalls(items);
+    return callsAsUserNotes(repairDanglingCalls(items));
   }
 }
 

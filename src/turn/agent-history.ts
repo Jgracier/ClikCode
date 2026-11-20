@@ -17,7 +17,8 @@ import type { ConversationItem } from '../agent/model-client.js';
 import { canonicalRecord, markProviderBoundaries, withProviderNote, type CanonicalTurn } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
 import { writeFullRecord } from '../session/full-record.js';
-import { fitRecord, nativeThreadBudget, ranNote } from './thread-start.js';
+import { ranNote } from '../agent/ran-note.js';
+import { fitRecord, nativeThreadBudget } from './thread-start.js';
 import { BYTES_PER_TOKEN } from './transfer.js';
 
 /** Bytes of history the agent is seeded with: half the target model's window, as for any
