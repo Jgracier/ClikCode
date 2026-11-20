@@ -83,6 +83,8 @@ export function capturedButNotConnected(message: string): string | undefined {
   const failed = message.split('\n').map(l => l.trim()).find(l => /^(?:NOT SENT|NOT connected|FAILED|ERROR)\b|not connected|refused|rejected/i.test(l) && !/^SAVED/.test(l));
   return `a key was captured and saved as ${saved}, but ClikDeploy did not connect it: ${(failed ?? 'the delivery failed').slice(0, 220)}`;
 }
+/** A page refusing a number from this country (keep in step with COUNTRY_REFUSED in tools/computer-web.ts). */
+const COUNTRY_WORDS = /\b(?:(?:u\.?s\.?|united states|american) (?:phone |mobile )?numbers? (?:are |is )?not (?:supported|accepted|allowed)|country (?:is )?not (?:supported|available)|not available in your (?:country|region))\b/i;
 const NOT_A_WAY_IN = /\b(?:blog|news|articles?|press|careers|webinars?|podcasts?|changelog|status)\b/i;
 const API_LINK_WEAK = /^(developers?|api|api access|developer portal|for developers|credentials|keys|tokens?|developer settings)$/i;
 const SIGN_IN_ENTRY = /^(log ?in|sign ?in)$/i;
@@ -293,7 +295,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       v = await port.look();
       // Refused as VoIP (the Twilio sign-up number): typed again, the fill gives the user's own mobile, and the code is sent once more.
       const again = v.fields.find(f => /phone|mobile|\btel\b|cell/i.test(f));
-      if (again && !codeField(v.fields) && VOIP_WORDS.test(v.text)) {
+      if (again && !codeField(v.fields) && (VOIP_WORDS.test(v.text) || COUNTRY_WORDS.test(v.text))) {
         await act('type the personal mobile (the site refused the VoIP number)', () => port.fill(again));
         since = Date.now();
         const resend = [...v.controls].reverse().find(c => pressable(c) && /^(send|text me|send (?:the )?code|get (?:a )?code|verify|continue|next|submit)\b/i.test(c.name));

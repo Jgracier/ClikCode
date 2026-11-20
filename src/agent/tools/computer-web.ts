@@ -937,10 +937,17 @@ async function frameOf(page: Page, target: string | undefined): Promise<Page | F
 export const VOIP_REFUSED = /\b(?:voip|virtual (?:phone )?numbers?|internet (?:phone|calling) numbers?|non-?mobile (?:phone )?numbers?|landline|this (?:phone )?number (?:type )?(?:is )?not (?:supported|allowed|accepted|eligible)|(?:can ?not|can't|cannot) (?:be )?(?:use|accept)(?:d)? (?:this|that) (?:phone )?number|(?:please )?(?:use|enter|provide) a (?:real|valid|personal) mobile(?: phone)?(?: number)?|only mobile (?:phone )?numbers)\b/i;
 
 /** The phone to type here: the profile's (the sign-up number), or the user's own mobile once the page has refused a VoIP number. */
-export async function phoneForPage(page: { evaluate<T>(fn: () => T): Promise<T> }, profilePhone: string, personal: string | undefined): Promise<string> {
-  if (!personal) return profilePhone;
+/** Words a page uses to refuse a number from this country (a US number) or to ask for another country's. */
+export const COUNTRY_REFUSED = /\b(?:(?:u\.?s\.?|united states|american|north american) (?:phone |mobile )?numbers? (?:are |is )?not (?:supported|accepted|allowed)|(?:this )?country (?:is )?not (?:supported|available)|not available in your (?:country|region)|(?:only|must be an?) (?:uk|united kingdom|canadian|canada|eu|european)\b|(?:uk|canadian|eu) (?:mobile |phone )?numbers? only)\b/i;
+
+/** The phone to type here: the profile's (the sign-up number); another country's number (the profile's phone_ca, …) once the page
+ * refuses a US number; the user's own mobile once it refuses a VoIP number. */
+export async function phoneForPage(page: { evaluate<T>(fn: () => T): Promise<T> }, profilePhone: string, personal: string | undefined, abroad: readonly string[] = []): Promise<string> {
+  if (!personal && !abroad.length) return profilePhone;
   const text = await page.evaluate(() => (globalThis as unknown as { document: { body?: { innerText?: string } } }).document.body?.innerText ?? '').catch(() => '');
-  return VOIP_REFUSED.test(text) ? personal : profilePhone;
+  if (personal && VOIP_REFUSED.test(text)) return personal;
+  if (abroad.length && COUNTRY_REFUSED.test(text)) return abroad[0]!;
+  return profilePhone;
 }
 const PROFILE_PROMPT: readonly [string, string, boolean][] = [['given_name', 'First name', true], ['family_name', 'Last name', true], ['email', 'Email', true], ['phone', 'Phone (with area code)', true], ['address_line1', 'Street address', true], ['address_line2', 'Apartment / suite (optional)', false], ['city', 'City', true], ['state', 'State', true], ['postal_code', 'Zip / postal code', true], ['country', 'Country', true], ['organization', 'Company (optional)', false], ['birthday', 'Date of birth (month/day/year)', false]];
 
@@ -1162,7 +1169,8 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     }
     // The profile phone is the Twilio number sign-ups use; a site that refuses it as VoIP or virtual gets the user's own mobile
     // (custom field phone_personal), whose texts the Mac reads. Decided by what the page says, so the runner and agents fill the same.
-    const phone = key === 'phone' && known ? await phoneForPage(page, known, profile?.custom?.phone_personal?.value) : known;
+    const abroad = Object.entries(profile?.custom ?? {}).filter(([name]) => /^phone_[a-z]{2}$/.test(name)).map(([, field]) => field.value).filter(Boolean);
+    const phone = key === 'phone' && known ? await phoneForPage(page, known, profile?.custom?.phone_personal?.value, abroad) : known;
     if (phone) { values.set(field.step, key === 'phone' ? phoneFor(phone, field.placeholder, field.current) : key === 'birthday' ? birthdayFor(phone, `${field.label} ${field.placeholder}`) : phone); continue; }
     ask.push({ step: field.step, key, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true } });
   }
