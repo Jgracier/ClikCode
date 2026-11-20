@@ -78,7 +78,13 @@ export const TEXT_CAPTCHA = `(() => {
     const seen = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 4 && r.height > 4 && s.visibility !== 'hidden' && s.display !== 'none' && el.type !== 'hidden'; };
     const asks = /captcha|security ?code|verification ?code|verify ?code|characters|code (shown|above|below|in the image)|text (shown|in the image)|type the (code|text|characters)|enter the (code|text|characters)|antispam|human/i;
     const labelOf = input => { const l = input.id && document.querySelector('label[for="' + CSS.escape(input.id) + '"]'); return [input.name, input.id, input.placeholder, input.getAttribute('aria-label'), l ? l.textContent : '', input.closest('label') ? input.closest('label').textContent : ''].join(' '); };
-    const input = Array.from(document.querySelectorAll('input:not([type]), input[type=text], input[type=tel], input[type=number]')).find(i => seen(i) && asks.test(labelOf(i)) && !/recaptcha|hcaptcha|turnstile|email|phone|name|company/i.test((i.name || '') + ' ' + (i.id || '')));
+    const boxes = Array.from(document.querySelectorAll('input:not([type]), input[type=text], input[type=tel], input[type=number]'));
+    // The instruction is often not a <label> but text in the field's own block ("To help stop spam, please type the text you
+    // see in the image below" in a form-group): the nearest container where this is the only visible box, read when short.
+    // That text must name the picture, so a one-time-code field ("enter the verification code we sent") is never taken for one.
+    const pictured = /captcha|(?:text|characters|letters|code|word)s? (?:\\w+ )?(?:that )?you see|in the (?:image|picture)|(?:image|picture) (?:below|above|shown)|stop spam|not a robot/i;
+    const blockOf = input => { for (let el = input.parentElement, up = 0; el && up < 4; el = el.parentElement, up++) { if (boxes.filter(b => el.contains(b) && seen(b)).length > 1) return ''; const text = (el.innerText || '').replace(/\\s+/g, ' ').trim(); if (text) return text.length <= 400 ? text : ''; } return ''; };
+    const input = boxes.find(i => seen(i) && (asks.test(labelOf(i)) || pictured.test(blockOf(i))) && !/recaptcha|hcaptcha|turnstile|email|phone|name|company/i.test((i.name || '') + ' ' + (i.id || '')));
     if (!input) return null;
     const near = input.getBoundingClientRect();
     const pics = Array.from(document.querySelectorAll('img, canvas')).filter(p => { if (!seen(p)) return false; const r = p.getBoundingClientRect(); return r.width >= 50 && r.width <= 450 && r.height >= 18 && r.height <= 180; });
