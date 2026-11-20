@@ -66,6 +66,15 @@ export async function shouldHoldOff(stateDir: string, host: string, now = Date.n
   return recent.length >= 3 && recent.slice(-3).every(record => record.outcome === 'still-there');
 }
 
+/** How long the reCAPTCHA spoken clip is left alone after Google refused it ("Try again later"). */
+export const RECAPTCHA_REFUSAL_COOLDOWN_MS = 6 * 60 * 60_000;
+
+/** Whether Google refused a reCAPTCHA on this machine within the cooldown: its "Try again later" judges the connection, not one site, so
+ * every site's reCAPTCHA leaves the spoken clip (the request that draws the refusal) alone for a while. */
+export async function recaptchaRefusedRecently(stateDir: string, now = Date.now()): Promise<boolean> {
+  return (await recordsSince(stateDir, now - RECAPTCHA_REFUSAL_COOLDOWN_MS)).some(record => record.family === 'recaptcha' && record.steps.includes('refused'));
+}
+
 /** Sites being left alone right now (three refusals in a row in the last half hour). */
 export async function heldOffHosts(stateDir: string, now = Date.now()): Promise<string[]> {
   const hosts = new Set((await recordsSince(stateDir, now - 30 * 60_000)).map(record => record.host).filter(Boolean));
@@ -160,6 +169,7 @@ export async function captchaTally(stateDir: string, days = 30, now = Date.now()
 
 /** The short step word for a solver trace line. */
 export function stepOf(traceLine: string): string | undefined {
+  if (/^Google refused|\(Google refused it\)/i.test(traceLine)) return 'refused';
   if (/^audio:/i.test(traceLine)) return 'audio';
   if (/^\d+ squares/i.test(traceLine)) return 'pictures';
   if (/GeeTest slide/i.test(traceLine)) return 'slide';

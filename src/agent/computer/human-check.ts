@@ -193,6 +193,8 @@ export interface SolveDeps {
   waitMs?: number;
   /** One line per step (instruction, squares picked, what the widget said after Verify), for logs and diagnosis. */
   trace?: (line: string) => void;
+  /** `refused`: Google refused the reCAPTCHA spoken clip on this connection lately, so it is not asked for (captcha-log recaptchaRefusedRecently). */
+  audio?: 'untried' | 'refused';
 }
 
 /** Answer whatever human check is on the page the way a person does, family by family, until the page holds an
@@ -201,6 +203,10 @@ export interface SolveDeps {
  * accepted) or `none` (nothing found to answer). Never throws. */
 /** Picture rounds reCAPTCHA gets before its spoken clip is tried. */
 export const RECAPTCHA_PICTURE_ROUNDS = 4;
+
+/** Whether Google's "Try again later" page (its automated-queries refusal) fills the reCAPTCHA challenge: the widget is finished for this
+ * session, and nothing clicked or typed into it can help. Read by its markup, not its words, which come in the visitor's language. */
+export const RECAPTCHA_REFUSED = `(() => Array.from(document.querySelectorAll('.rc-doscaptcha-header, .rc-doscaptcha-body')).some(el => el.getBoundingClientRect().height > 0))()`;
 
 export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise<HumanCheckResult> {
   if (!deps.stateDir) return solveShownCheck(page, deps, { refreshed: 0, kinds: [] });
@@ -216,7 +222,10 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   const memo: HcaptchaMemo = { refreshed: 0, kinds: [], avoid: await log.weakKinds(deps.stateDir) };
   const meter = newMeter();
   const order = await log.voterOrder(deps.stateDir);
-  const result = await solveShownCheck(page, { ...deps, trace: line => { const step = log.stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } }, memo, { meter, order });
+  // Google answers a request for the spoken clip with "Try again later" once it judges the connection to be sending automated queries, and that
+  // ends the widget. After one such refusal the clip is not asked for again for a while: the pictures alone keep the widget alive.
+  const audio = await log.recaptchaRefusedRecently(deps.stateDir) ? 'refused' as const : 'untried' as const;
+  const result = await solveShownCheck(page, { ...deps, audio, trace: line => { const step = log.stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } }, memo, { meter, order });
   const family = log.familyOf(result.widget, steps);
   // A `none` with nothing asked and nothing done is "no check was on the page", not a run of a family: recording it
   // as one made the tally count pages the solver never saw a check on (23 of 29 "unknown" runs were these).
@@ -275,7 +284,7 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
   const ended = (outcome: HumanCheckResult['outcome']): HumanCheckResult => ({ outcome, ...(widget ? { widget } : {}) });
   let repressed = 0, arkoseStuck = 0, unread = 0, verifyWaited = false;
   const inPage = { tries: 0, held: false, holds: 0, textTyped: false };
-  let pictureRounds = 0, audio: 'untried' | 'on' | 'refused' = 'untried';
+  let pictureRounds = 0, audio: 'untried' | 'on' | 'refused' = deps.audio ?? 'untried';
   while (Date.now() - began < budgetMs) {
     if (deps.signal?.aborted) break;
     const found = await findPuzzle(page);
@@ -317,6 +326,12 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
     }
     widget ??= found.widget;
     if (await humanCheckAnswered(page)) return ended('cleared');
+    // Google's "Try again later": the widget is finished here. Its page used to be read as an unknown challenge and shown to the voters to
+    // click on (14 of 60 failed runs on 2026-11-19/20 ended "pictures > audio > click"), which only spent asks.
+    if (found.widget === 'recaptcha' && await Promise.resolve().then(() => found.frame.evaluate(RECAPTCHA_REFUSED)).catch(() => false) === true) {
+      deps.trace?.('Google refused: try again later (automated queries)');
+      return ended('still-there');
+    }
     // Every square must be on screen to be clicked: a challenge taller than a small window is given room first.
     if (await fitPuzzle(page, found.box)) { await sleep(800); continue; }
     let confirm: { x: number; x2: number; y: number; y2: number };
@@ -341,6 +356,7 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
     }
     pictureRounds++;
     const grid = await gridRound(hands, found.frame, found.box);
+    if (grid === 'reloaded') continue;
     if (grid) confirm = grid.confirm;
     else if (found.widget === 'hcaptcha') {
       const round = await hcaptchaRound(hands, found.frame, found.box, hcaptcha);

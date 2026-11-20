@@ -3,9 +3,21 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { captchaCost, captchaTally, familyOf, heldOffHosts, recordCaptcha, recordVotes, saveSamples, shouldHoldOff, stepOf, voterOrder, weakKinds } from './captcha-log.js';
+import { captchaCost, captchaTally, familyOf, heldOffHosts, recaptchaRefusedRecently, recordCaptcha, recordVotes, saveSamples, shouldHoldOff, stepOf, voterOrder, weakKinds } from './captcha-log.js';
 
 describe('the captcha log', () => {
+  it("remembers Google's reCAPTCHA refusal for six hours, on every site", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
+    const now = Date.parse('2026-11-20T12:00:00Z');
+    await recordCaptcha(dir, { at: new Date(now - 60_000).toISOString(), host: 'a.example', family: 'recaptcha', outcome: 'still-there', seconds: 90, steps: ['pictures', 'audio'] });
+    await recordCaptcha(dir, { at: new Date(now - 60_000).toISOString(), host: 'b.example', family: 'hcaptcha', outcome: 'still-there', seconds: 90, steps: ['refused'] });
+    expect(await recaptchaRefusedRecently(dir, now)).toBe(false);
+    await recordCaptcha(dir, { at: new Date(now - 2 * 3_600_000).toISOString(), host: 'a.example', family: 'recaptcha', outcome: 'still-there', seconds: 90, steps: ['pictures', 'audio', 'refused'] });
+    expect(await recaptchaRefusedRecently(dir, now)).toBe(true);
+    expect(await recaptchaRefusedRecently(dir, now + 5 * 3_600_000)).toBe(false);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   it('counts runs and clears per family over the window, most runs first', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
     const now = Date.parse('2026-11-14T12:00:00Z');
@@ -22,6 +34,8 @@ describe('the captcha log', () => {
   it('names the step and the family from what the solver said it did', () => {
     expect(stepOf('16 squares, "Select all squares with buses" pass 1: asked 16, picked [5]')).toBe('pictures');
     expect(stepOf('audio: typing 3 words')).toBe('audio');
+    expect(stepOf('audio: not offered here (Google refused it)')).toBe('refused');
+    expect(stepOf('Google refused: try again later (automated queries)')).toBe('refused');
     expect(stepOf('GeeTest slide: the gap is 120px in, dragging 120px')).toBe('slide');
     expect(stepOf('something else')).toBeUndefined();
     expect(familyOf('recaptcha', ['pictures'])).toBe('recaptcha');

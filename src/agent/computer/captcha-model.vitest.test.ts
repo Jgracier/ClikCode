@@ -92,6 +92,14 @@ describe('one outlined square at a time', () => {
     expect(await askTileMatch(question, { modelClientsOf: async () => [fake(new Error('down')), fake('maybe')] })).toBeUndefined();
   });
 
+  it('takes one yes when the widget said a matching square is still unselected', async () => {
+    const { askTileMatch } = await import('./captcha-model.js');
+    // The majority said no last time and the widget refused that: a single voter that sees the target now decides.
+    expect(await askTileMatch({ ...question, lenient: true }, { modelClientsOf: async () => [fake('No'), fake('no'), fake('Yes')] })).toBe(true);
+    expect(await askTileMatch({ ...question, lenient: true }, { modelClientsOf: async () => [fake('No'), fake('no'), fake('No')] })).toBe(false);
+    expect(await askTileMatch(question, { modelClientsOf: async () => [fake('No'), fake('no'), fake('Yes')] })).toBe(false);
+  });
+
   it('asks about the outlined square and says how a split photo counts', async () => {
     const { tileQuestionText } = await import('./captcha-model.js');
     expect(tileQuestionText(question)).toMatch(/red-outlined square contain any part of buses\? The squares together form one photo/);
