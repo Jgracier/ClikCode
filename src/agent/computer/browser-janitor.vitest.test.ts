@@ -110,3 +110,21 @@ describe('with a state directory', () => {
     expect(recycled).toBe(0);
   });
 });
+
+describe('a superseded browser host', () => {
+  it('ends instead of recycling, and touches neither the tab records nor the restore file', async () => {
+    const { janitorTick, recycleFile } = await import('./browser-janitor.js');
+    const { mkdtemp, rm, access } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'janitor-superseded-'));
+    try {
+      let recycled = 0, retired = '';
+      const reason = await janitorTick({ stateDir: dir, hostPid: 1, recycle: async () => { recycled++; }, current: async () => false, retire: why => { retired = why; }, measure: () => ({ renderers: 0, bytes: 0, ageMs: 90 * 3_600_000 }), now: () => Date.now() });
+      expect(reason).toBe('superseded');
+      expect(recycled).toBe(0);
+      expect(retired).toMatch(/no longer the browser host/);
+      await expect(access(recycleFile(dir))).rejects.toThrow();
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
