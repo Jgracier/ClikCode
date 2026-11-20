@@ -199,6 +199,9 @@ export interface SolveDeps {
  * accepted answer or the budget runs out. Rounds continue while a widget keeps asking (reCAPTCHA often serves
  * several grids) and an expired challenge is pressed again. Resolves `cleared`, `still-there` (tried, not
  * accepted) or `none` (nothing found to answer). Never throws. */
+/** Picture rounds reCAPTCHA gets before its spoken clip is tried. */
+export const RECAPTCHA_PICTURE_ROUNDS = 4;
+
 export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise<HumanCheckResult> {
   if (!deps.stateDir) return solveShownCheck(page, deps, { refreshed: 0, kinds: [] });
   const log = await import('./captcha-log.js');
@@ -326,10 +329,10 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
       if (await humanCheckAnswered(page) || !await findPuzzle(page)) return ended('cleared');
       continue;
     }
-    // reCAPTCHA offers the same check as a spoken clip. After two picture rounds that did not clear, the clip is
-    // listened to instead: it is transcribed by the Gateway's speech-to-text and typed in. Google sometimes refuses
-    // audio ("automated queries"); then it is back to the pictures for the rest of the budget.
-    if (found.widget === 'recaptcha' && audio !== 'refused' && (audio === 'on' || pictureRounds >= 2)) {
+    // reCAPTCHA offers the same check as a spoken clip, as a LAST resort: after RECAPTCHA_PICTURE_ROUNDS picture rounds that did not
+    // clear. Asking for audio is what Google most often answers with "Try again later" (automated queries), which ends the widget for
+    // the session; measured 2026-11-19/20 audio rescued 7 of 47 runs while the pictures alone cleared 35, so the pictures get more rounds.
+    if (found.widget === 'recaptcha' && audio !== 'refused' && (audio === 'on' || pictureRounds >= RECAPTCHA_PICTURE_ROUNDS)) {
       const heard = await solveRecaptchaAudio(page, found.frame, found.box, hands.asks.transcribe, random, sleep, deps.trace);
       if (heard === 'refused') { audio = 'refused'; await sleep(1_000); continue; }
       audio = 'on';
