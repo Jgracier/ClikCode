@@ -68,7 +68,8 @@ function rpcBody(text: string): { result?: { content?: Array<{ type?: string; te
 }
 
 /**
- * One tool call at ClikDeploy's /mcp with the loop's own key. Answers in the shape `clikdeploy tools run` prints (`{status: 'success', data}` or
+ * One tool call at ClikDeploy's /mcp with the loop's own key. That server lists only its gateway tools (search_tools, call_tool), so the
+ * connector tool is run through call_tool, which checks the key's grant and the tool's own schema exactly as a direct call would. Answers in the shape `clikdeploy tools run` prints (`{status: 'success', data}` or
  * `{status:'error', error}`), so the caller reads both the same way (connector-runner-live.ts unwrapTool).
  */
 export async function callWithLoopKey(loop: LoopKey, name: string, args: Record<string, unknown>, options: { timeoutMs?: number; signal?: AbortSignal; fetchImpl?: typeof fetch } = {}): Promise<string> {
@@ -76,8 +77,8 @@ export async function callWithLoopKey(loop: LoopKey, name: string, args: Record<
   const response = await (options.fetchImpl ?? fetch)(`${loop.platform}/mcp`, {
     method: 'POST',
     signal: AbortSignal.any(signals),
-    headers: { authorization: `Bearer ${loop.key}`, accept: 'application/json, text/event-stream', 'content-type': 'application/json', 'mcp-method': 'tools/call', 'mcp-name': name },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { ...args, confirm: true } } }),
+    headers: { authorization: `Bearer ${loop.key}`, accept: 'application/json, text/event-stream', 'content-type': 'application/json', 'mcp-method': 'tools/call', 'mcp-name': 'call_tool' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'call_tool', arguments: { name, arguments: { ...args, confirm: true } } } }),
   });
   const text = await response.text();
   if (response.status === 401 || response.status === 403) {

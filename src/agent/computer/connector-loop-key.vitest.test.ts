@@ -54,7 +54,7 @@ describe('callWithLoopKey', () => {
     const headers = seen[0]!.init.headers as Record<string, string>;
     expect(headers.authorization).toBe(`Bearer ${LOOP.key}`);
     expect(Object.keys(headers).map(h => h.toLowerCase())).not.toContain('x-admin-mfa');
-    expect(JSON.parse(String(seen[0]!.init.body))).toMatchObject({ method: 'tools/call', params: { name: 'connector_work_claim', arguments: { worker: 'cc-runner', confirm: true } } });
+    expect(JSON.parse(String(seen[0]!.init.body))).toMatchObject({ method: 'tools/call', params: { name: 'call_tool', arguments: { name: 'connector_work_claim', arguments: { worker: 'cc-runner', confirm: true } } } });
     expect(unwrapTool(text)).toEqual({ id: 'acme' });
     expect(text).not.toContain(LOOP.key);
   });
