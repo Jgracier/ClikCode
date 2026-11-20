@@ -241,13 +241,39 @@ export function vendorMfaAccountFor(siteUrl: string, accounts: readonly string[]
 const ACCEPTS: Record<string, string[]> = { 'api-key': ['clikdeploy-connection'], basic: ['clikdeploy-connection-basic', 'clikdeploy-connection-basic-key'], custom: [], 'aws-sigv4': ['clikdeploy-connection'], oauth: ['clikdeploy-connection'] };
 
 /** One message listing the shapes a connector's declared auth accepts. */
+/** A connector's named credential fields, when its auth is custom, jwt, oauth1 or mtls (ClikDeploy's connect takes { props }). */
+export interface CustomProps { kind: string; props: Record<string, { required?: boolean; secret?: boolean; type?: string; label?: string }> }
+export async function declaredCustomProps(integration: string, signal?: AbortSignal): Promise<CustomProps | undefined> {
+  const stored = await runCli('clikdeploy', ['tools', 'run', 'connector_spec_get', '--args-json', JSON.stringify({ id: integration })], { signal, timeoutMs: 20_000, maxChars: 4_000_000 });
+  const auth = firstJsonObject<{ data?: { data?: { spec?: { auth?: { kind?: string; custom?: { props?: CustomProps['props'] } } } } } }>(stored.text)?.data?.data?.spec?.auth;
+  if (!auth?.kind || !['custom', 'jwt', 'oauth1', 'mtls'].includes(auth.kind) || !auth.custom?.props || !Object.keys(auth.custom.props).length) return undefined;
+  return { kind: auth.kind, props: auth.custom.props };
+}
+
+/** The { props } a custom-auth connect takes: the captured key in its secret prop (named by `prop`, else the only secret one, else the
+ * only one), the declared props given as values beside it; values that are not props stay base-URL values. */
+export function customAuthBody(custom: CustomProps, key: string, values: Record<string, string>, prop?: string): { props: Record<string, string>; rest: Record<string, string> } | { problem: string } {
+  const names = Object.keys(custom.props);
+  const secrets = names.filter(n => custom.props[n]!.secret || custom.props[n]!.type === 'secret');
+  const target = prop ?? (secrets.length === 1 ? secrets[0] : names.length === 1 ? names[0] : undefined);
+  const describe = names.map(n => `${n}${custom.props[n]!.secret || custom.props[n]!.type === 'secret' ? ' (secret)' : ''}${custom.props[n]!.required ? '' : ' (optional)'}`).join(', ');
+  if (!target || !names.includes(target)) return { problem: `declares ${custom.kind} auth with props ${describe}: say which one the captured key is with with.prop, and give the others as values ({"name": "text" or "secret:<saved name>"}).` };
+  const props: Record<string, string> = { [target]: key };
+  const rest: Record<string, string> = {};
+  for (const [name, v] of Object.entries(values)) (names.includes(name) ? props : rest)[name] = v;
+  const missing = names.filter(n => custom.props[n]!.required && !props[n]);
+  if (missing.length) return { problem: `declares ${custom.kind} auth with props ${describe}; the captured key went to ${target}, and ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} still needed: give ${missing.length === 1 ? 'it' : 'them'} as values ({"${missing[0]}": "text" or "secret:<saved name>"}).` };
+  return { props, rest };
+}
+
 function describeShapes(integration: string, kind: string): string {
   const shapes: Record<string, string> = {
     'api-key': `{"to":"clikdeploy-connection","with":{"integration":"${integration}"}} (the captured key is the API key)`,
     oauth: `{"to":"clikdeploy-connection","with":{"integration":"${integration}"}} (the captured key is a token; the connector may prefer oauth_connect)`,
     basic: `{"to":"clikdeploy-connection-basic","with":{"integration":"${integration}","username":"<name or secret:<saved name>>"}} (the captured key is the PASSWORD), or {"to":"clikdeploy-connection-basic-key","with":{"integration":"${integration}"}} (the captured key is the USERNAME; add "password" for a fixed one, else blank)`,
     'aws-sigv4': `a saved accessKeyId/secretAccessKey pair, optionally sessionToken, packed as JSON and sent through clikdeploy-connection for ${integration}`,
-    custom: 'a custom-auth connector takes named props, which capture_secret cannot send; connect it in ClikDeploy',
+    custom: `named props: the captured key fills the secret prop (with.prop names it when there are several), and the other props go as values, e.g. {"to":"clikdeploy-connection","with":{"integration":"${integration}","prop":"app_secret"},"connectionValues":{"app_id":"secret:<saved name>"}}`,
+    jwt: `named props, like custom auth: the captured key fills the secret prop, the public one goes as a value`,
   };
   return `${integration} declares ${kind} auth. Accepted: ${shapes[kind] ?? `none of the known shapes (auth kind "${kind}")`}.`;
 }
@@ -452,6 +478,20 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
       result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
     }
     if (result.missing) { out.push({ label, ok: false, message: `The ${program} command is not installed on this computer.` }); continue; }
+    // Custom, JWT, OAuth1 and mTLS connectors take their credential as named props (auth.custom.props), and ClikDeploy says so
+    // ("Provide { props: … }"). Then, and only then, the declared props are read: the captured key fills its secret prop, declared
+    // props given as values (plain, or secret:<saved name>) join it, and the call is made once more. Sent as { apiKey } these were
+    // refused every time (Lark, iLovePDF, PixelBin), and our own message said they could not be sent at all.
+    if (template.verify === 'connection' && params.integration && dash >= 0 && /Provide \{ props/.test(result.text)) {
+      const custom = await declaredCustomProps(params.integration, signal).catch(quiet('agent/computer/secret-destinations'));
+      const shaped = custom ? customAuthBody(custom, value, extra.values ?? {}, given.prop) : { problem: 'asks for named props, and its declared props could not be read' };
+      if ('problem' in shaped) { out.push({ label, ok: false, message: `NOT connected: ${params.integration} ${shaped.problem}` }); continue; }
+      const sent = JSON.parse(args[dash + 1] === '-' ? stdin ?? '{}' : args[dash + 1]!) as Record<string, unknown>;
+      const { apiKey: _key, baseUrlVariables: _values, ...keep } = sent;
+      const reshaped = JSON.stringify({ ...keep, props: shaped.props, ...(Object.keys(shaped.rest).length ? { baseUrlVariables: shaped.rest } : {}) });
+      if (args[dash + 1] === '-') stdin = reshaped; else args[dash + 1] = reshaped;
+      result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
+    }
     if (template.verify === 'connection' && params.integration) {
       // One line, whatever the command printed: `connected` only when ClikDeploy itself lists an active connection.
       const said = scrubSecrets(say(result.text)).replace(/\s+/g, ' ').slice(0, 160);

@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addDestination, declaredAuthKind, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf, type DeclaredValues } from './secret-destinations.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
 import { forgetCliStdinSupport, versionAtLeast } from './cli-stdin-support.js';
@@ -505,4 +505,34 @@ it('says an optional value is malformed instead of claiming it is needed', async
   expect(problem).toContain('takes with.label only as');
   expect(problem).not.toContain('needs with.label');
   expect(await destinationProblem(dir, [{ to: 'clikdeploy-vendor-mfa', with: { account: 'acme/console' } }])).toBeUndefined();
+});
+
+describe('a custom-auth connector (named props)', () => {
+  it('puts the captured key in its secret prop and the declared values beside it; says exactly what is missing', async () => {
+    const { customAuthBody } = await import('./secret-destinations.js');
+    const lark = { kind: 'custom', props: { app_id: { type: 'string', required: true }, app_secret: { type: 'string', required: true, secret: true } } };
+    expect(customAuthBody(lark, 'S3CR3T', { app_id: 'cli_a1' })).toEqual({ props: { app_secret: 'S3CR3T', app_id: 'cli_a1' }, rest: {} });
+    expect(customAuthBody(lark, 'S3CR3T', {})).toEqual({ problem: expect.stringContaining('app_id is still needed') });
+    const pixelbin = { kind: 'custom', props: { token: { type: 'secret', required: true } } };
+    expect(customAuthBody(pixelbin, 'tok', { region: 'eu' })).toEqual({ props: { token: 'tok' }, rest: { region: 'eu' } });
+    const ilovepdf = { kind: 'jwt', props: { secret_key: { required: true, secret: true }, public_key: { required: true, secret: false } } };
+    expect(customAuthBody(ilovepdf, 'secret_key_x', { public_key: 'project_public_y' })).toEqual({ props: { secret_key: 'secret_key_x', public_key: 'project_public_y' }, rest: {} });
+    const two = { kind: 'custom', props: { a: { secret: true, required: true }, b: { secret: true, required: true } } };
+    expect(customAuthBody(two, 'k', {})).toEqual({ problem: expect.stringContaining('with.prop') });
+    expect(customAuthBody(two, 'k', { b: 'v' }, 'a')).toEqual({ props: { a: 'k', b: 'v' }, rest: {} });
+  });
+});
+
+it('clikdeploy-connection resends a custom-auth connector as its declared props when ClikDeploy asks for props', async () => {
+  // First call refused for the shape; connector_spec_get answers the declared props; the reshaped call connects.
+  await writeFile(join(dir, 'show.out'), shown({ id: 'c1', status: 'active' }));
+  await fake('clikdeploy', `case "$1" in tools)
+    if [ "$3" = "connector_spec_get" ]; then printf '%s' '{"status":"success","data":{"data":{"spec":{"auth":{"kind":"custom","custom":{"props":{"app_id":{"required":true},"app_secret":{"required":true,"secret":true}}}}}}}}'; exit 0; fi
+    ${recordArgsJson()}; n=$(cat "${dir}/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${dir}/n"; cp "${dir}/stdin" "${dir}/body$n"
+    if [ $n = 1 ]; then printf '%s' '{"status":"error","message":"Provide { props: { … } } matching the integration'"'"'s auth.custom.props"}'; exit 1; fi
+    printf '%s' '{"status":"success","data":{"success":true}}';;
+  integrations) cat "${dir}/show.out";; esac`);
+  const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'cloudmersive-ocr' }, connectionValues: { app_id: 'cli_a1' } }], VALUE, undefined, { retryDelayMs: 0 });
+  expect(result).toMatchObject({ ok: true, message: 'connected' });
+  expect(JSON.parse(await readFile(join(dir, 'body2'), 'utf8'))).toEqual({ integrationId: 'cloudmersive-ocr', props: { app_secret: VALUE, app_id: 'cli_a1' } });
 });
