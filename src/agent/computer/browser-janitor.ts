@@ -99,7 +99,7 @@ function readFileSyncOr(file: string): string | undefined {
 
 export const recycleFile = (stateDir: string): string => path.join(stateDir, 'computer', 'recycle.json');
 
-interface SavedTab { tab: string; url: string }
+interface SavedTab { tab: string; url: string; egress?: string }
 
 /** The named tabs used within RESTORE_WITHIN_MS that have an address worth reopening. */
 export function tabsToRestore(records: readonly TabRecord[], now: number): SavedTab[] {
@@ -108,7 +108,7 @@ export function tabsToRestore(records: readonly TabRecord[], now: number): Saved
   for (const record of [...records].sort((a, b) => b.lastUsedAt - a.lastUsedAt)) {
     if (!record.tab || record.parked || now - record.lastUsedAt > RESTORE_WITHIN_MS || !/^https?:/i.test(record.url ?? '') || seen.has(record.tab)) continue;
     seen.add(record.tab);
-    saved.push({ tab: record.tab, url: record.url! });
+    saved.push({ tab: record.tab, url: record.url!, ...(record.egress ? { egress: record.egress } : {}) });
   }
   return saved;
 }
@@ -128,15 +128,15 @@ export async function takeRecycle(stateDir: string, now: number = Date.now()): P
 }
 
 /** What the host needs of Chrome: open a page and say its id. */
-interface RestoreHost { openPage(url: string): Promise<string | undefined> }
+interface RestoreHost { openPage(url: string, egress?: string): Promise<string | undefined> }
 
 /** Reopen the saved tabs, each as an unclaimed record for the worker that names that label. */
 export async function restoreTabs(stateDir: string, tabs: readonly SavedTab[], host: RestoreHost, now: number = Date.now()): Promise<number> {
   let count = 0;
   for (const saved of tabs) {
-    const id = await host.openPage(saved.url).catch(quiet('agent/computer/browser-janitor'));
+    const id = await (saved.egress ? host.openPage(saved.url, saved.egress) : host.openPage(saved.url)).catch(quiet('agent/computer/browser-janitor'));
     if (!id) continue;
-    await writeTabRecord(stateDir, { id, tab: saved.tab, ownerPid: 0, owner: 'restored after a browser restart', openedAt: now, lastUsedAt: now, url: saved.url, restoreFor: saved.tab });
+    await writeTabRecord(stateDir, { id, tab: saved.tab, ownerPid: 0, owner: 'restored after a browser restart', openedAt: now, lastUsedAt: now, url: saved.url, restoreFor: saved.tab, ...(saved.egress ? { egress: saved.egress } : {}) });
     count++;
   }
   if (count) lifecycle('browser.restored', { tabs: count });

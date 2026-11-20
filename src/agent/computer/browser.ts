@@ -17,7 +17,8 @@ import { allTabs, closeTabsByLabel, closeTabsOfOwner, readTabRecords, sweepTabs,
 import { sleep } from '../../runtime/sleep.js';
 import { browserProvider } from './settings.js';
 import { browserUseConnection, stopBrowserUse } from './browser-use-cloud.js';
-import { contextEgress, egressOfPage, egressServer } from './egress.js';
+import { contextEgress, egressOfPage, egressServer, pageEgress } from './egress.js';
+import { EgressNotServed, requestHostedContext } from './egress-host.js';
 import { addDeskItem, deskHeldTargets, deskItemAddress, readDeskInfo, type DeskItem, type DeskKind } from './handoff-desk-store.js';
 
 type Connected = { browser: Browser; context: BrowserContext };
@@ -345,8 +346,9 @@ export async function stopCloudBrowser(stateDir: string): Promise<void> {
 
 /** Tab owners bound to a way out other than home, by egress name. Unbound owners use the shared profile's own context, as always. */
 const egressOwners = sharedState('browser-egress-owners', () => new Map<string, string>());
-/** One context per egress per connection to Chrome, made over that connection with the egress's proxy. It does not carry the shared
- * profile's cookies (a vendor signs in again with its saved password). It closes with the connection that made it. */
+/** Contexts this worker made itself, only when no browser host of this build serves egress (egress-host.ts): one per egress per
+ * connection, closed with that connection. The host's own contexts are the rule: they outlive workers, so the loop and its agent share
+ * one sign-in per egress. Neither carries the shared profile's cookies (a vendor signs in again with its saved password). */
 const egressContexts = sharedState('browser-egress-contexts', () => new WeakMap<Browser, Map<string, Promise<{ context: BrowserContext; server: string }>>>());
 
 /** Send this tab owner's pages through `egress` (undefined or `home`: this computer's own connection). Pages it already holds in another
@@ -368,7 +370,7 @@ export function tabEgress(stateDir: string, tab?: string): string | undefined { 
 
 export { egressOfPage };
 
-/** The context for `name` on this connection: reused while its proxy is the egress's current one (an ssh tunnel that died and was
+/** The worker's own context for `name` on this connection (no host serves egress): reused while its proxy is the egress's current one (an ssh tunnel that died and was
  * started again listens on a new port, and pages on the old one could reach nothing). */
 async function egressContext(stateDir: string, connected: Connected, name: string): Promise<BrowserContext> {
   const server = await egressServer(stateDir, name);
@@ -395,12 +397,45 @@ async function egressContext(stateDir: string, connected: Connected, name: strin
   return (await opening).context;
 }
 
-/** Where a tab's pages open: the cloud browser's context, its egress's, or the shared profile's own. */
-async function tabContext(stateDir: string, tab: string | undefined, start: boolean, cloud: boolean): Promise<{ context: BrowserContext; egress?: string }> {
-  const connected = await browserFor(stateDir, start, cloud);
-  const egress = cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab));
-  if (!egress) return { context: connected.context };
-  return { context: await egressContext(stateDir, connected, egress), egress };
+/** Opens a page in a context the browser host owns: Chrome makes the target in that context, and this connection's Playwright files
+ * the page under its default context, where it is picked up by its target id. */
+export async function pageInHostedContext(connected: Connected, browserContextId: string, ms = 15_000): Promise<Page> {
+  const session = await connected.browser.newBrowserCDPSession();
+  const fresh: Page[] = [];
+  const onPage = (page: Page): void => { fresh.push(page); };
+  connected.context.on('page', onPage);
+  try {
+    const before = new Set(connected.context.pages());
+    const { targetId } = await session.send('Target.createTarget', { url: 'about:blank', browserContextId }) as { targetId: string };
+    const ids = new Map<Page, Promise<string | undefined>>();
+    for (const until = Date.now() + ms; Date.now() < until; await sleep(50)) {
+      for (const page of new Set([...fresh, ...connected.context.pages().filter(page => !before.has(page))])) {
+        if (!ids.has(page)) ids.set(page, targetIdOf(page));
+        if (await ids.get(page) === targetId) return page;
+      }
+    }
+    await session.send('Target.closeTarget', { targetId }).catch(quiet('agent/computer/browser'));
+    throw new Error('The egress tab did not open in time.');
+  } finally {
+    connected.context.off('page', onPage);
+    await session.detach().catch(quiet('agent/computer/browser'));
+  }
+}
+
+/** A new page for a tab: in the cloud browser, in its egress's context (the host's; this worker's own only when no host serves
+ * egress), or in the shared profile. */
+async function newTabPage(stateDir: string, connected: Connected, egress: string | undefined): Promise<Page> {
+  if (!egress) return connected.context.newPage();
+  try {
+    const hosted = await requestHostedContext(stateDir, egress);
+    const page = await pageInHostedContext(connected, hosted.id);
+    pageEgress.set(page, egress);
+    return page;
+  } catch (error) {
+    if (!(error instanceof EgressNotServed)) throw error;
+    lifecycle('browser.egress.unserved', { egress });
+    return (await egressContext(stateDir, connected, egress)).newPage();
+  }
 }
 
 /** The tab a chat chose with `switch`, until a new popup is followed or it closes. */
@@ -422,6 +457,10 @@ function mine(stateDir: string, tab?: string): Page | undefined {
 export function adoptPage(stateDir: string, page: Page, tab?: string): void {
   // A popup opened by a cloud tab lives in the cloud browser too.
   if (!cloudPages.has(page) && (owned.get(ownerKey(stateDir, tab)) ?? []).some(other => cloudPages.has(other) && other.context() === page.context())) cloudPages.add(page);
+  // A page an egress-bound tab adopts (its popup, its restored or parked tab) is in that egress's context: Chrome opens a popup where its
+  // opener is, and only same-egress restored tabs are claimed.
+  const bound = egressOwners.get(ownerKey(stateDir, tab));
+  if (bound && !cloudPages.has(page) && !egressOfPage(page)) pageEgress.set(page, bound);
   watchDownloads(page, stateDir);
   watchDialogs(page);
   const key = ownerKey(stateDir, tab);
@@ -459,7 +498,7 @@ async function flushHeld(stateDir: string, page: Page, entry: Held, force: boole
   if (!id) return;
   const record: TabRecord = {
     id, ...(entry.tab ? { tab: entry.tab } : {}), ownerPid: entry.parked ? 0 : process.pid, owner: entry.parked ? `parked by ${ownerLabel()}` : ownerLabel(),
-    openedAt: entry.openedAt, lastUsedAt: entry.lastUsedAt, ...(page.isClosed() ? {} : { url: page.url() }), ...(entry.parked ? { parked: true } : {}),
+    openedAt: entry.openedAt, lastUsedAt: entry.lastUsedAt, ...(page.isClosed() ? {} : { url: page.url() }), ...(entry.parked ? { parked: true } : {}), ...(egressOfPage(page) ? { egress: egressOfPage(page)! } : {}),
   };
   await writeTabRecord(stateDir, record);
 }
@@ -486,9 +525,10 @@ function touchTab(stateDir: string, page: Page): void {
 }
 
 /** A tab the host reopened after a recycle for this label, taken over by the worker that names it. */
-async function claimRestored(stateDir: string, context: BrowserContext, tab: string | undefined): Promise<Page | undefined> {
+async function claimRestored(stateDir: string, context: BrowserContext, tab: string | undefined, egress?: string): Promise<Page | undefined> {
   if (!tab) return undefined;
-  const record = (await readTabRecords(stateDir)).find(item => item.restoreFor === tab && item.ownerPid === 0);
+  // A restored tab goes back to a worker on the same way out (the host restores an egress tab into that egress's context).
+  const record = (await readTabRecords(stateDir)).find(item => item.restoreFor === tab && item.ownerPid === 0 && item.egress === egress);
   if (!record) return undefined;
   for (const page of context.pages()) {
     if (page.isClosed() || await targetIdOf(page) !== record.id) continue;
@@ -524,8 +564,8 @@ export async function closeOwnedPage(stateDir: string, page: Page, tab?: string)
 /** A second tab for this chat (a page to keep while another is read); it becomes the one in front. */
 export async function openNewComputerPage(stateDir: string, tab?: string): Promise<Page> {
   const cloud = await onCloud(stateDir, tab);
-  const { context } = await tabContext(stateDir, tab, true, cloud);
-  const page = await context.newPage();
+  const connected = await browserFor(stateDir, true, cloud);
+  const page = await newTabPage(stateDir, connected, cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab)));
   if (cloud) cloudPages.add(page);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);
@@ -551,11 +591,11 @@ export async function recoverComputerPage(stateDir: string, page: Page, tab?: st
 /** This chat's tab, opened in the shared Chrome the first time it is needed. */
 export async function openComputerPage(stateDir: string, tab?: string): Promise<Page> {
   const cloud = await onCloud(stateDir, tab);
-  const { context, egress } = await tabContext(stateDir, tab, true, cloud);
-  // A tab the host restored lives in the shared profile's context: an egress tab never claims one.
-  const existing = mine(stateDir, tab) ?? (cloud || egress ? undefined : await claimRestored(stateDir, context, tab));
+  const connected = await browserFor(stateDir, true, cloud);
+  const egress = cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab));
+  const existing = mine(stateDir, tab) ?? (cloud ? undefined : await claimRestored(stateDir, connected.context, tab, egress));
   if (existing) { touchTab(stateDir, existing); return existing; }
-  const page = await context.newPage();
+  const page = await newTabPage(stateDir, connected, egress);
   if (cloud) cloudPages.add(page);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);
@@ -565,7 +605,7 @@ export async function openComputerPage(stateDir: string, tab?: string): Promise<
 export async function computerPage(stateDir: string, tab?: string): Promise<Page> {
   const cloud = await onCloud(stateDir, tab);
   const { context } = await browserFor(stateDir, false, cloud);
-  const page = mine(stateDir, tab) ?? (cloud || egressOwners.has(ownerKey(stateDir, tab)) ? undefined : await claimRestored(stateDir, context, tab));
+  const page = mine(stateDir, tab) ?? (cloud ? undefined : await claimRestored(stateDir, context, tab, egressOwners.get(ownerKey(stateDir, tab))));
   if (page) touchTab(stateDir, page);
   if (!page) throw new Error('This chat has no open tab. Open a URL with browser_use first.');
   return page;

@@ -1,5 +1,6 @@
 /** reCAPTCHA's two challenges: the picture grid, answered one outlined square at a time, and the spoken clip,
  * transcribed and typed. (hCaptcha's classic tile grid shares the same reader.) */
+import { egressOfPage } from './egress.js';
 import type { Frame, Page } from 'playwright-core';
 import { cleanTranscript } from './captcha-model.js';
 import { toTarget, visitorClick, type Asks, type Box, type Hands } from './human-check-hands.js';
@@ -135,7 +136,10 @@ export async function solveRecaptchaAudio(page: Page, frame: Frame, box: Box, tr
   }
   if (!state || state.refused || !state.field || !state.src) { trace?.(`audio: not offered here${state?.refused ? ' (Google refused it)' : ''}`); return backToPictures(state); }
   let clip: Buffer | undefined;
-  try { const res = await page.context().request.get(state.src, { timeout: 15_000 }); if (res.ok()) clip = await res.body(); } catch { clip = undefined; }
+  // On an egress the clip is fetched by the challenge frame itself, so it leaves through the same way out (and with the same cookies) as
+  // the challenge: Playwright's request client would fetch it from this computer's own address.
+  if (egressOfPage(page)) clip = await clipInFrame(frame, state.src);
+  else { try { const res = await page.context().request.get(state.src, { timeout: 15_000 }); if (res.ok()) clip = await res.body(); } catch { clip = undefined; } }
   if (!clip || clip.length < 1_000) { trace?.('audio: the clip could not be fetched'); return backToPictures(state); }
   const heard = await transcribe(clip, 'audio/mpeg');
   const words = heard ? cleanTranscript(heard) : '';
@@ -216,4 +220,17 @@ export async function gridRound(hands: Hands, frame: Frame, box: Box): Promise<{
   }
   const verify = (await readLayout(frame, box))?.verify ?? layout.verify;
   return { confirm: verify ? toTarget(verify) : { x: box.x + box.width * 0.7, x2: box.x + box.width * 0.95, y: box.y + box.height - 50, y2: box.y + box.height - 15 } };
+}
+
+/** The spoken clip, fetched inside the challenge frame (same origin as the clip); undefined when it cannot be had. */
+async function clipInFrame(frame: Frame, src: string): Promise<Buffer | undefined> {
+  const data = await frame.evaluate(async (url: string) => {
+    const reply = await fetch(url, { credentials: 'include' });
+    if (!reply.ok) return '';
+    const bytes = new Uint8Array(await reply.arrayBuffer());
+    let text = '';
+    for (let at = 0; at < bytes.length; at += 0x8000) text += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+    return btoa(text);
+  }, src).catch(() => '');
+  return data ? Buffer.from(data, 'base64') : undefined;
 }

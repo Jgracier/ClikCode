@@ -128,3 +128,20 @@ describe('a superseded browser host', () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
+
+describe('egress tabs across a recycle', () => {
+  it('are saved with their egress and reopened into it, as records only a same-egress worker claims', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'cc-janitor-egress-'));
+    try {
+      await mkdir(path.join(dir, 'computer'), { recursive: true });
+      const saved = tabsToRestore([rec('loop-a', { egress: 'prod' }), rec('home-tab')], now);
+      expect(saved).toEqual([{ tab: 'loop-a', url: 'https://x.test/loop-a', egress: 'prod' }, { tab: 'home-tab', url: 'https://x.test/home-tab' }]);
+      const opened: Array<[string, string | undefined]> = [];
+      await restoreTabs(dir, saved, { openPage: async (url, egress) => { opened.push([url, egress]); return `t-${opened.length}`; } }, now);
+      expect(opened).toEqual([['https://x.test/loop-a', 'prod'], ['https://x.test/home-tab', undefined]]);
+      const records = await readTabRecords(dir);
+      expect(records.find(r => r.id === 't-1')).toMatchObject({ restoreFor: 'loop-a', egress: 'prod' });
+      expect(records.find(r => r.id === 't-2')!.egress).toBeUndefined();
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
