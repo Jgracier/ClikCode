@@ -22,13 +22,36 @@ export function basicDestination(id: string, kind: string | undefined, names: re
   return username ? { to: 'clikdeploy-connection-basic', with: { integration: id, username: `secret:${username}` } } : 'no-username';
 }
 
-export async function reuseConnectorCredential(id: string, stateDir: string, signal?: AbortSignal): Promise<boolean | { problem: string }> {
+/** Why a saved credential did not connect, as far as the vendor's answer says. `oauth`: the connector is OAuth now, so a saved key is
+ * not its credential; `rejected`: the vendor refused the key itself (401/403), so the key is dead and a new one is wanted; `unreachable`:
+ * the vendor did not answer, which says nothing about the key; `repair`: anything else (shape, missing values), for an agent. */
+export type ReuseCause = 'oauth' | 'rejected' | 'unreachable' | 'repair';
+export function reuseCause(problem: string): ReuseCause {
+  if (/uses OAuth|oauth\/start/i.test(problem)) return 'oauth';
+  if (/rejected this key \(HTTP 40[13]\)|\b(?:invalid|revoked|expired) (?:api )?key\b/i.test(problem)) return 'rejected';
+  if (/could not reach|no answer within|timed? ?out|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|HTTP 5\d\d/i.test(problem)) return 'unreachable';
+  return 'repair';
+}
+
+/** A key the vendor refused is set aside (kept as <name>-rejected, so nothing is lost) and the next capture makes a fresh one. */
+export async function setAsideRejectedKey(id: string, stateDir: string): Promise<boolean> {
+  const { readNamedSecret, saveNamedSecret, deleteNamedSecret } = await import('./credential-vault.js');
+  const value = await readNamedSecret(stateDir, `${id}/key`);
+  if (!value) return false;
+  await saveNamedSecret(stateDir, `${id}/key-rejected`, value, { vendor: id });
+  return deleteNamedSecret(stateDir, `${id}/key`);
+}
+
+export async function reuseConnectorCredential(id: string, stateDir: string, signal?: AbortSignal): Promise<boolean | { problem: string; cause: ReuseCause }> {
   const { namedSecretNames, readNamedSecret } = await import('./credential-vault.js');
   const names = await namedSecretNames(stateDir);
   if (!names.includes(`${id}/key`) && !(id.startsWith('amazonaws-') && names.includes('aws/clikdeploy-connector-key'))) return false;
   const { liveClient } = await import('./connector-runner-live.js');
   const data = await liveClient(signal).tool('connector_spec_get', { id }) as { spec?: { id?: string; auth?: { kind?: string; signing?: { scheme?: string } }; http?: { baseUrl?: string }; connectionValues?: Record<string, unknown> } };
   if (!data.spec) return false;
+  // An OAuth connector's credential is its consent, not a key: a key saved for it earlier (before the spec moved to OAuth) is never sent.
+  const auth = data.spec.auth as { kind?: string; oauth?: { credentialOwner?: string } } | undefined;
+  if (auth?.kind === 'oauth' && auth.oauth?.credentialOwner !== 'user') return false;
   const { scrubSecrets } = await import('./secret-scrubber.js');
   const problems: string[] = [];
   const { sendToDestinations } = await import('./secret-destinations.js');
@@ -44,5 +67,7 @@ export async function reuseConnectorCredential(id: string, stateDir: string, sig
     if (deliveries.length && deliveries.every(d => d.ok)) return true;
     problems.push(...deliveries.filter(d => !d.ok).map(d => scrubSecrets(d.message).slice(0, 600)));
   }
-  return problems.length ? { problem: problems.join('; ') } : false;
+  if (!problems.length) return false;
+  const problem = problems.join('; ');
+  return { problem, cause: reuseCause(problem) };
 }

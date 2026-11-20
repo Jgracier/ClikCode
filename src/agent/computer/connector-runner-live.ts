@@ -128,6 +128,7 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
   const shotDir = options.screenshotDir ?? (() => mkdtemp(join(tmpdir(), 'clikcode-connector-shots-')));
   return {
     reuseCredential: id => import('./connector-credential-reuse.js').then(m => m.reuseConnectorCredential(id, options.stateDir, options.signal)),
+    setAsideRejectedKey: id => import('./connector-credential-reuse.js').then(m => m.setAsideRejectedKey(id, options.stateDir)),
     async oauthConnect(id): Promise<DriveOutcome> {
       const { oauthConnect, ConsentStop, pageExcerpt } = await import('./oauth-consent.js');
       const { openNewComputerPage, closeOwnedPage, closeComputerPage, releaseComputerBrowser } = await import('./browser.js');

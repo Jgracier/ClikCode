@@ -81,6 +81,30 @@ describe('connectors run', () => {
     expect(d.driven).toEqual([]);
   });
 
+  it('a saved credential the vendor did not answer about waits minutes; a refused key is set aside and a new one captured; an OAuth connector goes on to consent', async () => {
+    const quiet = fakeDriver([]);
+    quiet.driver.reuseCredential = async () => ({ problem: 'Could not reach X (no answer within 8 seconds)', cause: 'unreachable' as const });
+    const waited = await runConnectors(fakeClient([keyAt('slowco')]).client, quiet.driver, quick);
+    expect(waited.outcomes[0]).toMatchObject({ status: 'waiting', retryAfterMs: 10 * 60_000 });
+
+    const dead = fakeDriver([]);
+    let setAside = 0;
+    dead.driver.reuseCredential = async () => ({ problem: 'X rejected this key (HTTP 403).', cause: 'rejected' as const });
+    dead.driver.setAsideRejectedKey = async () => { setAside++; return true; };
+    const fresh = await runConnectors(fakeClient([keyAt('deadkey')], { deadkey: [published('deadkey')] }).client, dead.driver, quick);
+    expect(setAside).toBe(1);
+    expect(dead.driven).toEqual(['keygrab deadkey https://deadkey.example']);
+    expect(fresh.outcomes[0]).toMatchObject({ status: 'published' });
+
+    const oauth = fakeDriver([]);
+    oauth.driver.reuseCredential = async () => ({ problem: 'Integration z uses OAuth — start via /api/connectors/z/oauth/start', cause: 'oauth' as const });
+    let agent = 0; oauth.driver.agentTask = async () => { agent++; return { ok: true }; };
+    const consented = await runConnectors(fakeClient([oauthTask('z')], { z: [published('z')] }).client, oauth.driver, quick);
+    expect(agent).toBe(0);
+    expect(oauth.driven).toEqual(['oauth z']);
+    expect(consented.outcomes[0]).toMatchObject({ status: 'published' });
+  });
+
   it('runs the deterministic plan when qualification is inconclusive, and gives what it read to a later agent as leads', async () => {
     // OAuth: the consent driver runs, no agent is started for the qualifier's doubt.
     const c = fakeClient([oauthTask('research')], { research: [published('research')] });

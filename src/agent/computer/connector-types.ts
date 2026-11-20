@@ -43,7 +43,9 @@ export interface DeployClient {
 }
 /** The browser as the runner sees it. */
 export interface BrowserDriver {
-  reuseCredential?(id: string): Promise<boolean | { problem: string }>;
+  reuseCredential?(id: string): Promise<boolean | { problem: string; cause?: 'oauth' | 'rejected' | 'unreachable' | 'repair' }>;
+  /** Sets a saved key the vendor refused aside, so the next capture makes a fresh one. */
+  setAsideRejectedKey?(id: string): Promise<boolean>;
   oauthConnect(id: string): Promise<DriveOutcome>;
   /** Whether a saved recipe could capture a key for this connector (the address is a hint taken from the task). */
   hasRecipe(id: string, url?: string): Promise<boolean>;

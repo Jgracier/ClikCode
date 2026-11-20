@@ -178,11 +178,19 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
         reusedCredential = true;
         const saved = await driver.reuseCredential(id);
         if (saved && typeof saved === 'object') {
-          const repaired = await viaAgent({ kind: 'unknown', message: saved.problem, url: siteUrl(result.next.task) ?? '', pageText: `A credential is already saved. Diagnose its connection and definition with connector_task; do not create another account or key. ${saved.problem}`, controls: [] }, true);
-          if (repaired?.ok) { result = fix(await client.onboard(id)); continue; }
-          return await handoff(`The saved credential could not connect: ${saved.problem}`);
+          // The vendor did not answer: that says nothing about the key. Back in minutes, not shelved for the cooldown (DynaPictures).
+          if (saved.cause === 'unreachable') return out('waiting', `the vendor did not answer when the saved credential was checked; trying again in 10 minutes: ${cap(say(saved.problem), 160)}`, { retryAfterMs: 10 * 60_000 });
+          // The vendor refused the key itself: it is dead. Set it aside and carry on, so the capture below makes a fresh one; a repair agent
+          // told "do not create another key" could only fail (RentCast, iContact, Airwallex, NachoNacho).
+          if (saved.cause === 'rejected' && driver.setAsideRejectedKey && await driver.setAsideRejectedKey(id).catch(quiet('agent/computer/connector-runner'))) {
+            actions.push(`the saved key was refused by the vendor (${cap(say(saved.problem), 120)}); it is set aside and a new one will be captured`);
+          } else if (saved.cause !== 'oauth') {
+            const repaired = await viaAgent({ kind: 'unknown', message: saved.problem, url: siteUrl(result.next.task) ?? '', pageText: `A credential is already saved. Diagnose its connection and definition with connector_task (the spec's auth, a value the vendor needs beside the key, where the key is sent). ${saved.problem}`, controls: [] }, true);
+            if (repaired?.ok) { result = fix(await client.onboard(id)); continue; }
+            return await handoff(`The saved credential could not connect: ${saved.problem}`);
+          }
         }
-        if (saved) {
+        if (saved === true) {
           actions.push('connected the saved credential without opening signup');
           result = fix(await client.onboard(id));
           continue;
