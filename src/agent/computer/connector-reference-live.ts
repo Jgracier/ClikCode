@@ -42,7 +42,7 @@ export function referencePorts(page: Page): ReferencePorts {
     // A page that never settles (an endless stream, a script that will not yield) is given up on, not waited for.
     open: url => Promise.race([openPage(url), new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), PAGE_MS + 20_000))]),
     async fetch(url) {
-      const response = await page.request.get(url, { timeout: 12_000, maxRedirects: 4 }).catch(() => undefined);
+      const response = await page.request.get(url, { timeout: 12_000, maxRedirects: 4 }).catch(quiet('agent/computer/connector-reference-live'));
       if (!response?.ok()) return undefined;
       const text = await response.text().catch(() => '');
       return text.length > 200 && text.length <= MAX_FILE ? text : undefined;

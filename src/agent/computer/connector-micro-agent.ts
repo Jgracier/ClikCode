@@ -94,7 +94,7 @@ export const STALL_MS = 5 * 60_000;
 export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }, ports: MicroPorts): Promise<DriveOutcome> {
   const before = await ports.recipeStamp().catch(() => '');
   const tab = microTab(id);
-  const businessEmail = await ports.businessEmail?.().catch(() => undefined);
+  const businessEmail = await ports.businessEmail?.().catch(quiet('agent/computer/connector-micro-agent'));
   const ran = await ports.run(microPrompt(id, stop, budget.maxCalls, businessEmail ? { businessEmail } : {}), { tab, ...budget }).catch((error: unknown) => ({ text: '', timedOut: false, calls: 0, error: scrubSecrets(error instanceof Error ? error.message : String(error)) }));
   const err = 'error' in ran ? ran.error : undefined;
   const result = ran.timedOut ? { kind: 'gave-up', why: 'stalled' in ran && ran.stalled ? `the agent stalled: no tool call for ${Math.round(STALL_MS / 1000)}s` : `the agent reached the ${Math.round(budget.maxMs / 60_000)} min ceiling while still working` } as MicroResult : err ? { kind: 'gave-up', why: `the agent could not run: ${err.slice(0, 200)}` } as MicroResult : parseMicroResult(ran.text);

@@ -2,6 +2,7 @@
  * a picture of characters to type, or a challenge box this solver has no special reader for. */
 import type { Page } from 'playwright-core';
 import { spot, toTarget, visitorClick, visitorDrag, within, type Box, type Hands } from './human-check-hands.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 /** Finds a press-and-hold button on the page (runs in the page). */
 export const HOLD_BUTTON = `(() => {
@@ -101,8 +102,8 @@ export async function solveTextCaptcha(page: Page, askText: (image: { mimeType: 
   if (!text) { trace?.('text captcha: the picture could not be read'); return false; }
   trace?.(`text captcha: typing ${text.length} characters`);
   const field = page.locator('[data-clikcode-captcha-field="1"]').first();
-  await field.click({ timeout: 5_000 }).catch(() => undefined);
-  await field.fill('').catch(() => undefined);
+  await field.click({ timeout: 5_000 }).catch(quiet('agent/computer/human-check-inpage'));
+  await field.fill('').catch(quiet('agent/computer/human-check-inpage'));
   for (const char of text) { await page.keyboard.type(char); await sleep(60 + random() * 140); }
   return true;
 }

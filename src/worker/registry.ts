@@ -78,7 +78,7 @@ export function currentWorkerBuild(): string | undefined {
     const stats = statSync(entry);
     let mcp = 'missing';
     try { mcp = createHash('sha256').update(readFileSync(mcpConfigFilePath(stateDirectory()))).digest('hex'); }
-    catch { /* no config yet, or a transient write; the next check sees the completed file */ }
+    catch { /* fail-open-ok: no config yet, or a transient write; the next check sees the completed file */ }
     return `${Math.round(stats.mtimeMs)}:${stats.size}:mcp-${mcp}`;
   } catch {
     return undefined;

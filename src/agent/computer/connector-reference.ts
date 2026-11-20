@@ -4,6 +4,7 @@
  * opened in ClikCode's browser and every file the pages load is looked at; the one that says it is OpenAPI,
  * Swagger or a Postman collection is the reference. Pure rules in this file; the browser is a port
  * (connector-reference-live.ts). */
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 export type ReferenceKind = 'openapi' | 'swagger' | 'postman' | 'readme';
 export interface FoundReference { url: string; kind: ReferenceKind; /** The document itself, when it was read from the page's own traffic. */ document?: string; via: string }
@@ -136,7 +137,7 @@ export async function searchReference(homepage: string, ports: ReferencePorts, b
     const key = url.replace(/\/$/, '').toLowerCase();
     if (tried.has(key) || !left()) return { found: false, links: [], at: url };
     tried.add(key);
-    const page = await ports.open(url).catch(() => undefined);
+    const page = await ports.open(url).catch(quiet('agent/computer/connector-reference'));
     if (!page?.ok) return { found: false, links: [], at: url };
     out.visited.push(page.url);
     for (const file of page.loaded) {
@@ -147,7 +148,7 @@ export async function searchReference(homepage: string, ports: ReferencePorts, b
         let document = text;
         // ReadMe hands a page only its own endpoint (reduce=true); the same address unreduced is the whole API.
         if (!whole && /[?&]reduce=true\b/.test(file.url) && left()) {
-          const all = await ports.fetch(file.url.replace(/([?&])reduce=true\b/, '$1reduce=false')).catch(() => undefined);
+          const all = await ports.fetch(file.url.replace(/([?&])reduce=true\b/, '$1reduce=false')).catch(quiet('agent/computer/connector-reference'));
           const full = all ? embeddedReference(all) : undefined;
           if (full && full.length > document.length) document = full;
         }
@@ -158,7 +159,7 @@ export async function searchReference(homepage: string, ports: ReferencePorts, b
     for (const link of referenceFileLinks(page.links)) {
       if (tried.has(link) || !left()) continue;
       tried.add(link);
-      const text = await ports.fetch(link).catch(() => undefined);
+      const text = await ports.fetch(link).catch(quiet('agent/computer/connector-reference'));
       const kind = text ? referenceKindOf(text) : undefined;
       if (kind && text) { out.reference = { url: link, kind, document: text, via: `${via}: linked from ${page.url}` }; return { found: true, links: page.links, at: page.url }; }
     }
@@ -174,7 +175,7 @@ export async function searchReference(homepage: string, ports: ReferencePorts, b
       const data = page.loaded.map(file => /^(.*\/api-next\/v\d+\/branches\/[^/]+\/reference\/)[^/?]+\?/.exec(file.url)?.[1]).find(Boolean);
       for (const endpoint of data ? readmePages : []) {
         if (!left()) break;
-        const all = await ports.fetch(`${data}${endpoint.split('/').pop()}?reduce=false`).catch(() => undefined);
+        const all = await ports.fetch(`${data}${endpoint.split('/').pop()}?reduce=false`).catch(quiet('agent/computer/connector-reference'));
         const document = all ? embeddedReference(all) : undefined;
         if (document && referenceKindOf(document)) { out.reference = { url: endpoint, kind: referenceKindOf(document)!, document, via: `${via}: the page data of a ReadMe docs site (${page.url})` }; return { found: true, links: page.links, at: page.url }; }
       }

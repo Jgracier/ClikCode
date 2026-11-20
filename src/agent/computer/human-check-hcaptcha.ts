@@ -2,6 +2,7 @@
  * a canvas -- pictures to click a spot on, pieces to drag, things that move -- and is answered here. */
 import type { Frame } from 'playwright-core';
 import { frameShot, spot, toTarget, visitorClick, visitorDrag, within, type Box, type Hands } from './human-check-hands.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 type Target = { x: number; x2: number; y: number; y2: number };
 
@@ -62,7 +63,7 @@ export async function hcaptchaRound(hands: Hands, frame: Frame, box: Box, memo: 
   // A drag that was asked for and not agreed on is a challenge to swap, never one to click: clicking cannot answer it.
   const dragFirst = /\b(?:drag|slide|move the)\b/i.test(instruction);
   const points = dragFirst ? undefined : await asks.points(frames, instruction);
-  const drags = points?.length ? undefined : await asks.drags(picture, instruction).catch(() => undefined);
+  const drags = points?.length ? undefined : await asks.drags(picture, instruction).catch(quiet('agent/computer/human-check-hcaptcha'));
   const submit = async (): Promise<Target> => {
     const button = await frame.evaluate(rectOf('.button-submit')).catch(() => null) as Box | null;
     return button ? inPage(button) : { x: box.x + box.width * 0.8, x2: box.x + box.width * 0.95, y: box.y + box.height - 50, y2: box.y + box.height - 20 };

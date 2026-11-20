@@ -81,7 +81,7 @@ export async function lookAt(page: Page): Promise<KeyView> {
     } catch { /* fail-open-ok: a frame that went away or cannot be read is skipped */ }
   }
   // Whether a human check is in the way is the solver's own answer (every family it knows), not a second guess here.
-  const check = await (await import('./human-check.js')).detectHumanCheck(page).catch(() => undefined);
+  const check = await (await import('./human-check.js')).detectHumanCheck(page).catch(quiet('agent/computer/keygrab-live'));
   return { url: page.url(), text, controls, fields, hasPassword, ...(check ? { captchaFrame: true } : {}) };
 }
 

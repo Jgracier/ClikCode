@@ -2,6 +2,7 @@
  * jigsaw slider is solved by pixels, the board games by rule, and only the icon challenges ask the models. */
 import type { Page } from 'playwright-core';
 import { toTarget, visitorClick, visitorDrag, type Asks, type Box, type Hands } from './human-check-hands.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 /** Where a jigsaw piece fits in its background, by pixels, not by asking a model: the piece's outline (from its
  * transparency) is slid across the background's edge map at the piece's own height, and the offset where the most
@@ -35,7 +36,7 @@ async function gapOffset(page: Page, background: Buffer, piece: Buffer, shown: {
     })()`;
     const found = await blank.evaluate(script).catch(() => null) as number | null;
     return typeof found === 'number' ? found : undefined;
-  } finally { await blank.close().catch(() => undefined); }
+  } finally { await blank.close().catch(quiet('agent/computer/human-check-geetest')); }
 }
 
 /** GeeTest's jigsaw slider: both pictures are fetched, the gap is found by pixels, and the handle is dragged so
@@ -183,7 +184,7 @@ async function refreshGeetest(page: Page, random: () => number, sleep: (ms: numb
  * tab so no site rule gets in the way. The picture as given comes back when that cannot be done. */
 export async function cleanPicture(page: Page, picture: Buffer, mimeType: string): Promise<{ mimeType: string; data: string }> {
   const given = { mimeType, data: picture.toString('base64') };
-  const blank = await page.context().newPage().catch(() => undefined);
+  const blank = await page.context().newPage().catch(quiet('agent/computer/human-check-geetest'));
   if (!blank) return given;
   try {
     const cleaned = await blank.evaluate(`(async () => {
@@ -208,7 +209,7 @@ export async function cleanPicture(page: Page, picture: Buffer, mimeType: string
       return big.toDataURL('image/png').split(',')[1];
     })()`).catch(() => null) as string | null;
     return cleaned ? { mimeType: 'image/png', data: cleaned } : given;
-  } finally { await blank.close().catch(() => undefined); }
+  } finally { await blank.close().catch(quiet('agent/computer/human-check-geetest')); }
 }
 
 /** GeeTest's "select N images with <example>": a 3x3 drawing and a small example picture. The example is taken at

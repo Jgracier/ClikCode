@@ -30,7 +30,7 @@ export async function recordCaptcha(stateDir: string, record: CaptchaRecord): Pr
     const file = captchaLogPath(stateDir);
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     await fs.appendFile(file, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-  } catch { /* a log that cannot be written never fails a sign-up */ }
+  } catch { /* fail-open-ok: a log that cannot be written never fails a sign-up */ }
 }
 
 async function recordsSince(stateDir: string, since: number): Promise<CaptchaRecord[]> {
@@ -39,7 +39,7 @@ async function recordsSince(stateDir: string, since: number): Promise<CaptchaRec
   const out: CaptchaRecord[] = [];
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
-    try { const record = JSON.parse(line) as CaptchaRecord; if (Date.parse(record.at) >= since) out.push(record); } catch { /* a torn line is skipped */ }
+    try { const record = JSON.parse(line) as CaptchaRecord; if (Date.parse(record.at) >= since) out.push(record); } catch { /* fail-open-ok: a torn line is skipped */ }
   }
   return out;
 }
@@ -103,7 +103,7 @@ export async function recordVotes(stateDir: string, votes: ReadonlyArray<{ roste
     }
     await fs.mkdir(path.dirname(votersFile(stateDir)), { recursive: true, mode: 0o700 });
     await fs.writeFile(votersFile(stateDir), `${JSON.stringify(scores, null, 2)}\n`, { mode: 0o600 });
-  } catch { /* a score that cannot be written never fails a sign-up */ }
+  } catch { /* fail-open-ok: a score that cannot be written never fails a sign-up */ }
 }
 
 /** Per kind of question, the models measured on at least 20 answers, best first. The solver asks them in this
@@ -142,7 +142,7 @@ export async function saveSamples(stateDir: string, outcome: string, family: str
     }
     const all = (await fs.readdir(root)).sort();
     for (const old of all.slice(0, Math.max(0, all.length - SAMPLES_KEPT))) await fs.rm(path.join(root, old), { recursive: true, force: true });
-  } catch { /* the answer set never fails a sign-up */ }
+  } catch { /* fail-open-ok: the answer set never fails a sign-up */ }
 }
 
 export interface CaptchaTally { family: string; runs: number; cleared: number; seconds: number }

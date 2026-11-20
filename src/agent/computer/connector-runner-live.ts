@@ -162,7 +162,7 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
     async findReference(id: string, homepage: string) {
       const [{ findReferenceRendered }, memo] = await Promise.all([import('./connector-reference-live.js'), import('./connector-reference-memo.js')]);
       // A site searched this week with nothing found is not searched again: its result is reused (connector-reference-memo.ts).
-      const missed = await memo.recentMiss(options.stateDir, id, homepage).catch(() => undefined);
+      const missed = await memo.recentMiss(options.stateDir, id, homepage).catch(quiet('agent/computer/connector-runner-live'));
       if (missed) return { applied: false, note: `no description file when searched ${missed.at.slice(0, 10)} (not searched again within the week)`, docsUrls: missed.docsUrls };
       const found = await findReferenceRendered(options.stateDir, id, homepage);
       const reference = found.reference;

@@ -233,7 +233,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
       const hard = (async (): Promise<'timeout'> => {
         for (;;) {
           const at = now();
-          const seen = await ports.activity?.(id).catch(() => undefined);
+          const seen = await ports.activity?.(id).catch(quiet('agent/computer/connector-loop'));
           const progressAt = Math.max(began, ctx.progressAt ?? 0, seen ?? 0, ctx.agentSince !== undefined ? at : 0);
           const ceiling = began + allowedMs(ctx, at) - at;
           const idle = progressAt + stallMs + limits.graceMs - at;
