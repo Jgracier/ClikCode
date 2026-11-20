@@ -52,7 +52,9 @@ export function stepClientRefresher(input: {
     const model = live.model ?? null;
     const effort = live.effort ?? session.effort;
     if (model === session.model && effort === session.effort && live.speed === session.speed) return undefined;
-    const before = { model: session.model, effort: session.effort, speed: session.speed };
+    const before = { model: session.model, effort: session.effort, speed: session.speed, source: session.source };
+    // A source is a choice about one model.
+    if (model !== session.model) delete session.source;
     session.model = model;
     session.effort = effort;
     session.speed = live.speed;

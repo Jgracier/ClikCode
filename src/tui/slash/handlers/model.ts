@@ -140,6 +140,10 @@ export const modelHandlers = {
     // it made "Enter a model ID…" able to enter only ids already listed.
     let trusted = words[0] === '--any';
     if (trusted) words.shift();
+    // `--source <id>` (or `auto`): the funded source chosen after the model, the super admin's choice (picker, second step).
+    const sourceAt = words.indexOf('--source');
+    const sourceWord = sourceAt >= 0 ? words[sourceAt + 1] : undefined;
+    if (sourceAt >= 0) words.splice(sourceAt, 2);
     let value = words.join(' ').trim();
     // A model on this computer asked for from any chat (the hosted list's choice): the chat moves to it, once it is there.
     if (value.startsWith('--download ')) return localModelCommand(session, value);
@@ -176,6 +180,14 @@ export const modelHandlers = {
           return;
         }
       }
+      // A source is a choice about one model: this model's source, or the Gateway's routing.
+      if (sourceWord && sourceWord !== 'auto') {
+        if (!chosen?.sources?.some((item) => item.id === sourceWord)) {
+          const offered = chosen?.sources?.map((item) => item.id).join(', ');
+          throw new Error(offered ? `"${sourceWord}" is not a funded source of ${chosen?.id}. Sources: ${offered}.` : `Choosing a source is not available on this account: the Gateway routes ${chosen?.id ?? 'the model'}.`);
+        }
+        session.source = sourceWord;
+      } else delete session.source;
       session.model = selectedModel;
       // The model that answered last was answering the previous choice.
       if (session.reported?.model) delete session.reported.model;

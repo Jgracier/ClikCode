@@ -31,10 +31,12 @@ export function gatewayDefaultEffort(model: string | undefined): GatewayEffort |
 
 /** What the body of every Gateway step adds for these choices. `model`: the model the step will
  * run (the session's pick, else the Gateway's automatic one), for the default effort. */
-export function gatewayStepOptions(session: Pick<HarnessSession, 'effort' | 'speed'>, model?: string): Record<string, unknown> {
+export function gatewayStepOptions(session: Pick<HarnessSession, 'effort' | 'speed'> & { source?: string }, model?: string): Record<string, unknown> {
   const effort = gatewayEffort(session) ?? gatewayDefaultEffort(model);
   return {
     ...(effort ? { reasoning_effort: effort } : {}),
     ...(session.speed === 'fast' ? { speed: 'fast' } : {}),
+    // A chosen source serves the step or the step fails: the Gateway's `provider` object, no fallback to another source.
+    ...(session.source ? { provider: { only: [session.source], allow_fallbacks: false } } : {}),
   };
 }
