@@ -18,6 +18,19 @@ describe('the captcha log', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
+  it("judges Google's refusal per way out: home's refusal says nothing of a tunnel's, and old records without an egress are home's", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
+    const now = Date.parse('2026-11-20T12:00:00Z');
+    await recordCaptcha(dir, { at: new Date(now - 60_000).toISOString(), host: 'a.example', family: 'recaptcha', outcome: 'still-there', seconds: 90, steps: ['pictures', 'refused'] });
+    expect(await recaptchaRefusedRecently(dir, now)).toBe(true);
+    expect(await recaptchaRefusedRecently(dir, now, 'home')).toBe(true);
+    expect(await recaptchaRefusedRecently(dir, now, 'prod')).toBe(false);
+    await recordCaptcha(dir, { at: new Date(now - 60_000).toISOString(), host: 'b.example', family: 'recaptcha', outcome: 'still-there', seconds: 90, steps: ['refused'], egress: 'prod' });
+    expect(await recaptchaRefusedRecently(dir, now, 'prod')).toBe(true);
+    expect(await recaptchaRefusedRecently(dir, now, 'phone')).toBe(false);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   it('counts runs and clears per family over the window, most runs first', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
     const now = Date.parse('2026-11-14T12:00:00Z');

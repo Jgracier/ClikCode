@@ -21,6 +21,8 @@ export interface CaptchaRecord {
    * the user's own Claude or Codex plan, the rest are Gateway credit). */
   asks?: number;
   models?: Record<string, number>;
+  /** The way out the page's traffic left through (egress.ts); absent for home, this computer's own connection. */
+  egress?: string;
 }
 
 export function captchaLogPath(stateDir: string): string { return path.join(stateDir, 'computer', 'captcha-log.jsonl'); }
@@ -69,10 +71,13 @@ export async function shouldHoldOff(stateDir: string, host: string, now = Date.n
 /** How long the reCAPTCHA spoken clip is left alone after Google refused it ("Try again later"). */
 export const RECAPTCHA_REFUSAL_COOLDOWN_MS = 6 * 60 * 60_000;
 
-/** Whether Google refused a reCAPTCHA on this machine within the cooldown: its "Try again later" judges the connection, not one site, so
- * every site's reCAPTCHA leaves the spoken clip (the request that draws the refusal) alone for a while. */
-export async function recaptchaRefusedRecently(stateDir: string, now = Date.now()): Promise<boolean> {
-  return (await recordsSince(stateDir, now - RECAPTCHA_REFUSAL_COOLDOWN_MS)).some(record => record.family === 'recaptcha' && record.steps.includes('refused'));
+/** Whether Google refused a reCAPTCHA on this connection within the cooldown: its "Try again later" judges the connection, not one site, so
+ * every site's reCAPTCHA leaves the spoken clip (the request that draws the refusal) alone for a while. Judged per way out (`egress`,
+ * undefined or `home` for this computer's own connection; records from before egress was kept are home's): a refusal of the home
+ * address says nothing about a tunnel's. */
+export async function recaptchaRefusedRecently(stateDir: string, now = Date.now(), egress?: string): Promise<boolean> {
+  const wanted = egress && egress !== 'home' ? egress : 'home';
+  return (await recordsSince(stateDir, now - RECAPTCHA_REFUSAL_COOLDOWN_MS)).some(record => record.family === 'recaptcha' && record.steps.includes('refused') && (record.egress ?? 'home') === wanted);
 }
 
 /** Sites being left alone right now (three refusals in a row in the last half hour). */
