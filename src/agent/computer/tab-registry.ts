@@ -32,6 +32,8 @@ export interface TabRecord {
   parked?: boolean;
   /** A tab the host reopened after a recycle, for the worker that names this label to claim. */
   restoreFor?: string;
+  /** The egress the page's traffic leaves through (egress.ts); absent for home. A recycle restores it into that egress's context. */
+  egress?: string;
 }
 
 export interface BrowserTarget { id: string; type: string; url: string; title?: string }

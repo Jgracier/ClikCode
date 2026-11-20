@@ -2,6 +2,7 @@
  * thinks it is (location, time zone, language), a PDF of the page, and the site's cookies (names only).
  * Emulation is set over the DevTools protocol on one session per tab; Chrome drops it when that session closes, so
  * it lasts while the tab and this connection do. */
+import { egressOfPage } from './egress.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -142,12 +143,26 @@ export async function siteCookies(page: Page, options: { url?: string; clear?: b
   let site: URL;
   try { site = new URL(url); } catch { throw new Error('Cookies belong to a website: open one first.'); }
   if (!/^https?:$/.test(site.protocol)) throw new Error('Cookies belong to a website: open one first.');
-  const cookies = await page.context().cookies(site.href);
+  const own = await egressCookies(page, site.href);
+  const cookies = own ? own.cookies : await page.context().cookies(site.href);
   if (options.clear) {
-    for (const cookie of cookies) await page.context().clearCookies({ name: cookie.name, domain: cookie.domain, path: cookie.path });
+    for (const cookie of cookies) await (own ? own.remove(cookie) : page.context().clearCookies({ name: cookie.name, domain: cookie.domain, path: cookie.path }));
     return cookies.length ? `Removed ${cookies.length} cookie${cookies.length === 1 ? '' : 's'} for ${site.hostname}. Reload the page; a site that kept you signed in with them will ask again.` : `${site.hostname} had no cookies.`;
   }
   if (!cookies.length) return `${site.hostname} has no cookies.`;
   const rows = cookies.slice(0, 80).map(cookie => `- ${cookie.name} (${cookie.domain}${cookie.path}) expires ${when(cookie.expires)}${cookie.httpOnly ? ', httpOnly' : ''}${cookie.secure ? ', secure' : ''}${cookie.sameSite && cookie.sameSite !== 'None' ? `, SameSite=${cookie.sameSite}` : ''}`);
   return `${cookies.length} cookie${cookies.length === 1 ? '' : 's'} for ${site.hostname} (values are not shown):\n${rows.join('\n')}${cookies.length > 80 ? `\n(… ${cookies.length - 80} more)` : ''}`;
+}
+
+type SiteCookie = { name: string; domain: string; path: string; expires: number; httpOnly: boolean; secure: boolean; sameSite?: string };
+/** An egress page's cookies are in its own context, which Playwright here files under the shared profile's: they are read and removed
+ * through the page's own CDP session, which Chrome scopes to the page's context. Undefined for a home page. */
+async function egressCookies(page: Page, href: string): Promise<{ cookies: SiteCookie[]; remove(cookie: SiteCookie): Promise<void> } | undefined> {
+  if (!egressOfPage(page)) return undefined;
+  const send = async (method: 'Network.getCookies' | 'Network.deleteCookies', params: Record<string, unknown>): Promise<unknown> => {
+    const session = await page.context().newCDPSession(page);
+    try { return await session.send(method, params as never); } finally { await session.detach().catch(quiet('agent/computer/page-environment')); }
+  };
+  const { cookies } = await send('Network.getCookies', { urls: [href] }) as { cookies: SiteCookie[] };
+  return { cookies, remove: async cookie => { await send('Network.deleteCookies', { name: cookie.name, domain: cookie.domain, path: cookie.path }); } };
 }

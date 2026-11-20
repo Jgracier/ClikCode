@@ -8,6 +8,7 @@ import { headlessSetting } from './settings.js';
 import { restoreTabs, startBrowserJanitor, takeRecycle } from './browser-janitor.js';
 import { startHandoffDesk } from './handoff-desk.js';
 import { tailnetAddress } from './tailnet-handoff.js';
+import { startEgressService } from './egress-host.js';
 
 export function computerProfile(stateDir: string): string { return path.join(stateDir, 'computer', 'chrome'); }
 export function computerHostFile(stateDir: string): string { return path.join(stateDir, 'computer', 'host.json'); }
@@ -49,8 +50,10 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   }
   leaveDialogsToWorkers(context);
   const hostFile = computerHostFile(stateDir);
+  // The egress contexts and their tunnels live here, for this Chrome's whole life (egress-host.ts); workers find the socket in host.json.
+  const egress = await startEgressService(stateDir, profile).catch(quiet('agent/computer/browser-host'));
   await writeHostStatus(stateDir, { pid: process.pid, state: 'running' });
-  const record = JSON.stringify({ pid: process.pid });
+  const record = JSON.stringify({ pid: process.pid, ...(egress ? { egressSocket: egress.socket } : {}) });
   try {
     await fs.writeFile(hostFile, record, { mode: 0o600 });
     // Closing a Chrome that is already gone never fires 'close', so a stop is bounded: the process ends either way.
@@ -60,7 +63,12 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     };
     // Tabs a recycle saved come back, then the janitor closes tabs nobody holds and recycles an oversized browser.
     await restoreTabs(stateDir, await takeRecycle(stateDir), {
-      async openPage(url) {
+      async openPage(url, egressName) {
+        // A tab that left through an egress comes back in that egress's context.
+        if (egressName) {
+          if (!egress) return undefined;
+          return egress.contexts.openPage(egressName, url);
+        }
         const page = await context.newPage();
         const session = await context.newCDPSession(page);
         try {
@@ -91,6 +99,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     await new Promise<void>(resolve => (context as unknown as { once(event: 'close', callback: () => void): void }).once('close', resolve));
     stopJanitor();
     await desk?.stop().catch(quiet('agent/computer/browser-host'));
+    await egress?.stop().catch(quiet('agent/computer/browser-host'));
     process.off('SIGTERM', stop);
     process.off('SIGINT', stop);
   } finally {

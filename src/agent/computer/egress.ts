@@ -20,8 +20,14 @@ import { egressList, HOME_EGRESS, type EgressEntry } from './settings.js';
 /** Which egress each browser context made for one leaves through (browser.ts sets it when it makes the context). */
 export const contextEgress = sharedState('browser-context-egress', () => new WeakMap<object, string>());
 
+/** Pages a worker opened in a context the browser host owns (egress-host.ts): over a worker's CDP connection Playwright files them under
+ * the default context, so the page itself carries its egress. */
+export const pageEgress = sharedState('browser-page-egress', () => new WeakMap<object, string>());
+
 /** The egress a page's traffic leaves through; undefined for home (and for the cloud browser). */
 export function egressOfPage(page: { context(): object }): string | undefined {
+  const own = pageEgress.get(page);
+  if (own) return own;
   try { return contextEgress.get(page.context()); } catch { return undefined; }
 }
 
