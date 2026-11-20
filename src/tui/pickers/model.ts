@@ -355,7 +355,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
       }
     }
     // The super admin chooses a source after the model: the funded providers that serve it. Everyone else is routed.
-    const source = selectedModel?.sources?.length ? await chooseModelSource(rl, selectedModel) : undefined;
+    const source = selectedModel && (selectedModel.sources?.length ?? 0) > 1 ? await chooseModelSource(rl, selectedModel) : undefined;
     if (source === null) continue;
     await aiSessionCommand(id, `/model ${selected.id}${source ? ` --source ${source}` : ''}`);
     return;
