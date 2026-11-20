@@ -14,6 +14,20 @@ export function computerHostFile(stateDir: string): string { return path.join(st
 
 export { BROWSER_CHANNELS, launchFirst } from './browser-launch.js';
 
+/** Set by hiddenDisplayCommand when the host runs inside xvfb-run. */
+export const VIRTUAL_DISPLAY_ENV = 'CLIKCODE_BROWSER_VIRTUAL_DISPLAY';
+
+/** Chrome's own arguments for the host. FedCm off: Google's sign-in button then uses its popup, not a browser-drawn dialog that no page tool
+ * can see or press. Playwright's default --enable-automation (left out by the caller) and Chrome's port-0 debugging each advertise WebDriver
+ * to sites; the private CDP connection stays, the signal to page JavaScript goes. On a virtual display Chrome is told to use X11 (else it
+ * finds the user's Wayland compositor) and to draw WebGL through EGL on the machine's GPU: on Xvfb it otherwise reports the software
+ * "SwiftShader" renderer, the classic headless-server tell, where EGL reports the real card (measured 2026-11-20: "AMD Radeon 780M"). */
+export function hostChromeArgs(options: { headless: boolean; virtualDisplay: boolean }): string[] {
+  return ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--disable-blink-features=AutomationControlled', '--disable-features=FedCm',
+    ...(options.headless ? ['--window-size=1440,900'] : []),
+    ...(options.virtualDisplay && !options.headless ? ['--ozone-platform=x11', '--use-gl=angle', '--use-angle=gl-egl'] : [])];
+}
+
 export async function runComputerHost(stateDir: string): Promise<void> {
   const profile = computerProfile(stateDir);
   await fs.mkdir(profile, { recursive: true, mode: 0o700 });
@@ -25,12 +39,8 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   try {
     context = await launchComputerBrowser(chromium, profile, {
       headless, viewport: null, acceptDownloads: true,
-      // FedCm: Google's sign-in button then uses its popup, not a browser-drawn dialog that no page tool can see or press.
-      // Playwright's default --enable-automation and Chrome's port-0 debugging
-      // each advertise WebDriver to sites. Keep the private CDP connection, but
-      // don't expose that signal to ordinary page JavaScript.
       ignoreDefaultArgs: ['--enable-automation'],
-      args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--disable-blink-features=AutomationControlled', '--disable-features=FedCm', ...(headless ? ['--window-size=1440,900'] : [])],
+      args: hostChromeArgs({ headless, virtualDisplay: process.platform === 'linux' && process.env[VIRTUAL_DISPLAY_ENV] === '1' }),
     }, stateDir);
   } catch (error) {
     // The worker that started this process cannot see its output: leave the reason where it will look.
