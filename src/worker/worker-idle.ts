@@ -297,7 +297,7 @@ export function createIdleControl(ctx: WorkerContext) {
     })().catch(quiet('worker/worker-idle')).finally(() => { capCheck = undefined; });
     return capCheck;
   };
-  return { heldReason, retireBlocker, retireIfFree, leaveIfStaleBuild, leaveIfOverCap, noteIdle, scheduleIdleExit, vendorUsed };
+  return { heldReason, retireBlocker, quietLeft, retireIfFree, leaveIfStaleBuild, leaveIfOverCap, noteIdle, scheduleIdleExit, vendorUsed };
 }
 
 export type IdleControl = ReturnType<typeof createIdleControl>;

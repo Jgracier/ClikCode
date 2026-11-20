@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:net';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -47,6 +47,28 @@ describe('worker registry', () => {
     const config = mcpConfigFilePath(root!);
     await writeFile(config, JSON.stringify({ mcpServers: { brain: { url: 'http://localhost:4021/sse' } } }));
     expect(currentWorkerBuild()).not.toBe(before);
+  });
+
+  it('names the build by the entry\'s content: a rewrite of the same program is not a new build', async () => {
+    // A reinstall, or a build of identical code from another checkout, rewrites the entry: its modification time
+    // changes and nothing else. That used to replace every worker on the machine, repeatedly.
+    await isolatedHome();
+    const entry = join(root!, 'entry.js');
+    const before = process.env.CLIKCODE_WORKER_ENTRY;
+    process.env.CLIKCODE_WORKER_ENTRY = entry;
+    try {
+      await writeFile(entry, '// ClikCode (program aaaa). Written by scripts/build.mjs\nawait import("./cli.js");\n');
+      const first = currentWorkerBuild();
+      expect(first).toBeDefined();
+      await writeFile(entry, '// ClikCode (program aaaa). Written by scripts/build.mjs\nawait import("./cli.js");\n');
+      await utimes(entry, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+      expect(currentWorkerBuild(), 'same content, newer mtime').toBe(first);
+      // The same size with different content is a different program.
+      await writeFile(entry, '// ClikCode (program bbbb). Written by scripts/build.mjs\nawait import("./cli.js");\n');
+      expect(currentWorkerBuild(), 'different content, same size').not.toBe(first);
+    } finally {
+      if (before === undefined) delete process.env.CLIKCODE_WORKER_ENTRY; else process.env.CLIKCODE_WORKER_ENTRY = before;
+    }
   });
 
   it('lists every worker record and skips owner files', async () => {

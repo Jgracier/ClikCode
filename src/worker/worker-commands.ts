@@ -91,6 +91,18 @@ export function createCommandHandler(ctx: WorkerContext) {
       sendEvent(socket, { type: 'retire-declined', reason: blocker });
       return;
     }
+    // Not held by anything right now is not the same as quiet: between one turn and the next (a tool result and the model's
+    // next request, a background turn ending as the next notification arrives) nothing holds the worker for an instant, and a
+    // retire that lands there cuts the conversation off. The worker's own build watch waits RETIRE_QUIET_MS for that reason;
+    // an ask from a window or a sweep of every stale worker (retireStaleWorkers) waits the same. It is declined, the worker
+    // goes once quiet, and the asker keeps it meanwhile. A chat moved to another machine has nothing running here to protect.
+    const quietFor = moved ? 0 : ctx.idle.quietLeft();
+    if (quietFor > 0) {
+      ctx.retireWhenIdle = true;
+      ctx.idle.retireIfFree();
+      sendEvent(socket, { type: 'retire-declined', reason: 'it was active a moment ago' });
+      return;
+    }
     // Told before it goes, so an asker that never attached still hears it.
     const reason = moved ? MOVED_REASON : 'replaced by a newer ClikCode build';
     if (presented !== undefined) sendEvent(socket, { type: 'shutdown', reason });

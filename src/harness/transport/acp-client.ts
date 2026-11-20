@@ -723,8 +723,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   protected pendingCount(): number {
     // Cleared at each answer (see `ended` above): between turns only tools a
     // background turn is following count, and the work the vendor's own
-    // level says still runs.
-    return this.background ? this.work.total() : 0;
+    // level says still runs. The vendor's own list of backgrounded tasks (a
+    // shell, a Monitor, an agent: `task_started` until its `task_notification`)
+    // is counted whatever the turn state: it outlives the turn, and a worker
+    // that did not see it replaced itself under a Monitor that was running.
+    return (this.background ? this.work.total() : 0) + this.vendorTasks.running().length;
   }
 
   protected interrupt(turn: ActiveTurn, live: LiveAgent): boolean {
