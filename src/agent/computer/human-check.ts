@@ -19,6 +19,7 @@ import { boxOf, fitPuzzle, frameShot, gatewayAsks, spot, visitorClick, within, t
 import { hcaptchaRound, type HcaptchaMemo } from './human-check-hcaptcha.js';
 import { HOLD_BUTTON, KNOWN_BOX, POW_STATE, SLIDER, TEXT_CAPTCHA, markGone, solveChallengeBox, solvePressHold, solveSlider, solveTextCaptcha, waitProofOfWork } from './human-check-inpage.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
+import { egressOfPage } from './egress.js';
 
 export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose' | 'pow' | 'box' | 'awswaf';
 export interface HumanCheckResult {
@@ -224,13 +225,14 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   const order = await log.voterOrder(deps.stateDir);
   // Google answers a request for the spoken clip with "Try again later" once it judges the connection to be sending automated queries, and that
   // ends the widget. After one such refusal the clip is not asked for again for a while: the pictures alone keep the widget alive.
-  const audio = await log.recaptchaRefusedRecently(deps.stateDir) ? 'refused' as const : 'untried' as const;
+  const egress = egressOfPage(page);
+  const audio = await log.recaptchaRefusedRecently(deps.stateDir, Date.now(), egress) ? 'refused' as const : 'untried' as const;
   const result = await solveShownCheck(page, { ...deps, audio, trace: line => { const step = log.stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } }, memo, { meter, order });
   const family = log.familyOf(result.widget, steps);
   // A `none` with nothing asked and nothing done is "no check was on the page", not a run of a family: recording it
   // as one made the tally count pages the solver never saw a check on (23 of 29 "unknown" runs were these).
   if (result.outcome === 'none' && !steps.length) return result;
-  await log.recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family, outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps, ...(memo.kinds.length ? { kinds: memo.kinds } : {}), ...(meter.asks ? { asks: meter.asks, models: meter.models } : {}) });
+  await log.recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family, outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps, ...(memo.kinds.length ? { kinds: memo.kinds } : {}), ...(meter.asks ? { asks: meter.asks, models: meter.models } : {}), ...(egress ? { egress } : {}) });
   // What the site accepted is the nearest thing to a marked answer sheet: the voters are scored on it.
   if (result.outcome === 'cleared') await log.recordVotes(deps.stateDir, meter.votes);
   await log.saveSamples(deps.stateDir, result.outcome, family, meter.samples);
@@ -243,7 +245,7 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
 export async function passHumanCheck(page: Page, deps: SolveDeps & { solve?: boolean } = {}): Promise<HumanCheckResult> {
   const pressed = await pressHumanCheck(page, deps.sleep ? { sleep: deps.sleep } : {});
   if (pressed.outcome === 'cleared') {
-    if (deps.stateDir) { let host = ''; try { host = new URL(page.url()).host; } catch { host = ''; } await (await import('./captcha-log.js')).recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family: pressed.widget ?? 'unknown', outcome: 'cleared', seconds: 0, steps: ['press'] }); }
+    if (deps.stateDir) { let host = ''; try { host = new URL(page.url()).host; } catch { host = ''; } await (await import('./captcha-log.js')).recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family: pressed.widget ?? 'unknown', outcome: 'cleared', seconds: 0, steps: ['press'], ...(egressOfPage(page) ? { egress: egressOfPage(page) } : {}) }); }
     return pressed;
   }
   if (deps.solve === false) return pressed;
