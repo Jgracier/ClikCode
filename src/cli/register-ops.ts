@@ -38,6 +38,11 @@ export function registerOperatorCommands(program: Command, computer: Command): v
   connectors.command('qualify').description('Render each vendor\'s sign-up, pricing and developer pages (20 s a page, in its own named tab) and classify walls from the rendered text: JSON {id, lane auto|human|dead, kinds, evidence}')
     .option('--ids <a,b,c>', 'vendors to check').option('--next <n>', 'the next N vendors waiting for an agent').option('--parallel <n>', 'vendors at once, 1-4 (default 1)').option('--report', 'write the verdict into the work item note at ClikDeploy').option('--dump <dir>', 'save each rendered page\'s text there, to see what the verdict was read from')
     .action(async (flags: import('../commands/connectors.js').ConnectorsQualifyFlags) => (await import('../commands/connectors.js')).connectorsQualify(flags));
+  const credential = connectors.command('credential').description("The connector loop's own ClikDeploy key (agent @connector-loop: connector tools only, no daily authenticator unlock), kept in the ClikCode vault");
+  credential.command('prepare').description('Make a new key, save it in the vault, and print only its SHA-256 for admin_connector_loop_credential_issue').option('--platform <origin>', 'ClikDeploy origin (default https://clikdeploy.com)')
+    .action(async (flags: { platform?: string }) => (await import('../commands/connector-credential.js')).connectorCredentialPrepare(flags));
+  credential.command('status').description('Whether the loop has its own key and whether ClikDeploy accepts it').action(async () => (await import('../commands/connector-credential.js')).connectorCredentialStatus());
+  credential.command('forget').description("Remove the key from this computer: the loop goes back to the person's CLI key").action(async () => (await import('../commands/connector-credential.js')).connectorCredentialForget());
   connectors.command('agent-mcp', { hidden: true }).requiredOption('--tab <name>').requiredOption('--max-calls <n>').option('--counter <file>').option('--connector <id>')
     .action(async (flags: { tab: string; maxCalls: string; counter?: string; connector?: string }) => {
       const { agentMcpServe } = await import('../agent/computer/connector-micro-agent-mcp.js');

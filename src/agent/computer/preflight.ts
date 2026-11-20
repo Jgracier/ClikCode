@@ -163,9 +163,12 @@ export async function postToClikDeploy(result: PreflightResult, signal?: AbortSi
   if (!Array.isArray(listed)) return 'not posted: could not ask ClikDeploy which tools exist';
   if (!listed.some(tool => tool.name === 'connector_preflight')) return 'not posted: ClikDeploy has no connector_preflight tool yet';
   const { clikdeploy: _skip, ...body } = result;
-  const sent = await runCli('clikdeploy', ['tools', 'run', 'connector_preflight', '--args-json', JSON.stringify(body), '--confirm'], { signal, timeoutMs: 30_000 });
-  const reply = firstJsonObject<{ status?: string; message?: string }>(sent.text);
-  return sent.code === 0 && reply?.status !== 'error' ? 'posted' : `not posted: ${(reply?.message ?? sent.text.trim() ?? 'no answer').split('\n')[0]!.slice(0, 160)}`;
+  // A write: with the connector loop's own key when one is saved (no daily unlock), else the person's CLI.
+  const { clikdeployToolText } = await import('./connector-runner-live.js');
+  const sent = await clikdeployToolText('connector_preflight', body, { ...(signal ? { signal } : {}), timeoutMs: 30_000 }).catch((error: unknown) => JSON.stringify({ status: 'error', message: oneLine(error) }));
+  const reply = firstJsonObject<{ status?: string; message?: string; error?: { message?: string }; data?: { approvalRequired?: boolean; message?: string } }>(sent);
+  if (reply?.data?.approvalRequired) return `not posted: held for a person's approval (${String(reply.data.message ?? '').slice(0, 120)})`;
+  return reply && reply.status !== 'error' ? 'posted' : `not posted: ${(reply?.error?.message ?? reply?.message ?? (sent.trim() || 'no answer')).split('\n')[0]!.slice(0, 160)}`;
 }
 
 /** The real run: ClikCode's Chrome, the installed release, ClikDeploy. */

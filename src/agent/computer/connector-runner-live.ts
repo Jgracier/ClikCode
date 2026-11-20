@@ -1,4 +1,5 @@
-/** The real ports of the connector runner: ClikDeploy through its CLI (the saved admin key is its own sign-in), the ClikCode browser
+/** The real ports of the connector runner: ClikDeploy through the connector loop's own key for connector tools when one is saved
+ * (connector-loop-key.ts), else through its CLI (the saved admin key is its own sign-in), the ClikCode browser
  * through the consent driver and the saved signup recipes. Nothing here prints or logs a key. The arguments (ids, plain-words reasons and notes) hold no secret, so they go on the command line: clikdeploy 1.0.34 cannot read them from stdin. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { mkdtemp } from 'node:fs/promises';
@@ -8,6 +9,7 @@ import type { Page } from 'playwright-core';
 import type { BrowserDriver, DeployClient, DriveOutcome, OnboardResult, StopInfo } from './connector-runner.js';
 import { runCli } from './run-cli.js';
 import { scrubSecrets } from './secret-scrubber.js';
+import { callWithLoopKey, connectorLoopKey, CONNECTOR_LOOP_TOOLS } from './connector-loop-key.js';
 
 export const WORKER = 'cc-runner';
 
@@ -53,22 +55,35 @@ function findResults(value: unknown): { results: OnboardResult[]; skipped: Array
   return { results: (found?.results as OnboardResult[] | undefined) ?? [], skipped: (found?.skipped as Array<{ id: string; why: string }> | undefined) ?? [] };
 }
 
+/**
+ * One ClikDeploy tool call, as `clikdeploy tools run` answers it. A connector tool goes with the loop's OWN key when one is saved
+ * (connector-loop-key.ts: no daily authenticator unlock, connector tools only); everything else, or with no key saved, goes through
+ * the person's CLI as before.
+ */
+export async function clikdeployToolText(name: string, args: Record<string, unknown>, options: { timeoutMs?: number; signal?: AbortSignal; confirm?: boolean } = {}): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 90_000;
+  if (CONNECTOR_LOOP_TOOLS.has(name)) {
+    const loop = await connectorLoopKey().catch(() => undefined);
+    if (loop) return callWithLoopKey(loop, name, args, { timeoutMs, ...(options.signal ? { signal: options.signal } : {}) });
+  }
+  const json = JSON.stringify(args);
+  // A whole API description does not fit in a process argument: it goes through a private file instead.
+  let file: string | undefined;
+  if (json.length > 90_000) {
+    const { writeFile } = await import('node:fs/promises');
+    file = join(await mkdtemp(join(tmpdir(), 'clikcode-args-')), 'args.json');
+    await writeFile(file, json, { mode: 0o600 });
+  }
+  let run: Awaited<ReturnType<typeof runCli>>;
+  try { run = await runCli('clikdeploy', ['tools', 'run', name, ...(file ? ['--args-file', file] : ['--args-json', json]), ...(options.confirm === false ? [] : ['--confirm'])], { ...(options.signal ? { signal: options.signal } : {}), timeoutMs, maxChars: 8_000_000 }); }
+  finally { if (file) { const { rm } = await import('node:fs/promises'); const { dirname } = await import('node:path'); await rm(dirname(file), { recursive: true, force: true }).catch(quiet('agent/computer/connector-runner-live')); } }
+  if (run.missing) throw new Error('The clikdeploy command is not installed on this computer.');
+  return run.text;
+}
+
 export function liveClient(signal?: AbortSignal): DeployClient {
-  const call = async (name: string, args: Record<string, unknown>, timeoutMs = 90_000): Promise<unknown> => {
-    const json = JSON.stringify(args);
-    // A whole API description does not fit in a process argument: it goes through a private file instead.
-    let file: string | undefined;
-    if (json.length > 90_000) {
-      const [{ mkdtemp, writeFile }, { tmpdir }, { join }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path')]);
-      file = join(await mkdtemp(join(tmpdir(), 'clikcode-args-')), 'args.json');
-      await writeFile(file, json, { mode: 0o600 });
-    }
-    let run: Awaited<ReturnType<typeof runCli>>;
-    try { run = await runCli('clikdeploy', ['tools', 'run', name, ...(file ? ['--args-file', file] : ['--args-json', json]), '--confirm'], { ...(signal ? { signal } : {}), timeoutMs, maxChars: 8_000_000 }); }
-    finally { if (file) { const { rm } = await import('node:fs/promises'); const { dirname } = await import('node:path'); await rm(dirname(file), { recursive: true, force: true }).catch(quiet('agent/computer/connector-runner-live')); } }
-    if (run.missing) throw new Error('The clikdeploy command is not installed on this computer.');
-    return unwrapTool(run.text);
-  };
+  const call = async (name: string, args: Record<string, unknown>, timeoutMs = 90_000): Promise<unknown> =>
+    unwrapTool(await clikdeployToolText(name, args, { timeoutMs, ...(signal ? { signal } : {}) }));
   const withLease = async (id: string, run: () => Promise<unknown>): Promise<void> => {
     try { await run(); } catch (error) {
       if (!needsLease(error)) throw error;
