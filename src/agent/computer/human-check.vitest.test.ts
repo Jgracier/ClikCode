@@ -91,7 +91,7 @@ const gridLayout = () => ({
 /** The fake page, with frames that answer the layout reader. */
 function gridPage(onDown: (state: { clicks: Array<[number, number]>; answered: boolean }) => void) {
   const made = solverPage([puzzle()]);
-  const frame = { url: () => puzzle().src, parentFrame: () => null, evaluate: async (script: unknown) => typeof script === 'string' && script.includes('rc-imageselect') ? gridLayout() : true, frameElement: async () => ({ boundingBox: async () => puzzle().box, screenshot: async () => Buffer.from('jpeg-bytes') }) };
+  const frame = { url: () => puzzle().src, parentFrame: () => null, evaluate: async (script: unknown) => typeof script === 'string' && script.includes('rc-imageselect') ? gridLayout() : String(script).includes('rc-doscaptcha') ? false : true, frameElement: async () => ({ boundingBox: async () => puzzle().box, screenshot: async () => Buffer.from('jpeg-bytes') }) };
   const page = made.page as unknown as { frames: () => unknown[]; mouse: { down: () => Promise<void>; up: () => Promise<void> } };
   page.frames = () => [frame];
   const down = page.mouse.down;
@@ -133,6 +133,18 @@ describe('the puzzle solver', () => {
     expect(seen[0]).toBe(Buffer.from('jpeg-bytes').toString('base64'));
     expect(Math.abs(state.clicks[0]![0] - 280)).toBeLessThan(5);
     expect(Math.abs(state.clicks[0]![1] - 410)).toBeLessThan(5);
+  });
+
+  it("ends at Google's \"Try again later\" page instead of showing it to the voters as a challenge to click", async () => {
+    const made = solverPage([puzzle()]);
+    const frame = { url: () => puzzle().src, parentFrame: () => null, evaluate: async (script: unknown) => String(script).includes('rc-doscaptcha-header') ? true : null, frameElement: async () => ({ boundingBox: async () => puzzle().box, screenshot: async () => Buffer.from('jpeg-bytes') }) };
+    (made.page as unknown as { frames: () => unknown[] }).frames = () => [frame];
+    let pointed = 0;
+    const lines: string[] = [];
+    expect(await solveHumanCheck(made.page, { ...noWait, asks: { points: async () => { pointed++; return [{ x: 0.5, y: 0.5 }]; } }, trace: line => lines.push(line) })).toEqual({ outcome: 'still-there', widget: 'recaptcha' });
+    expect(pointed).toBe(0);
+    expect(made.state.clicks).toEqual([]);
+    expect(lines).toEqual(['Google refused: try again later (automated queries)']);
   });
 
   it('gives up on a challenge nobody can read after three looks, without clicking anything', async () => {

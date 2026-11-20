@@ -259,7 +259,10 @@ export function agreedInOrder(answers: Array<Point[] | undefined>, radius = 0.09
 // ── the questions ───────────────────────────────────────────────────────────────────────────────────────────────
 
 /** One square asked about: the whole challenge with that square outlined in red, the task, and the grid size. */
-export interface TileQuestion { image: ImageInput; instruction: string; target: string; size: number }
+export interface TileQuestion { image: ImageInput; instruction: string; target: string; size: number;
+  /** The widget said a matching square is still unselected ("Please select all matching images"): one voter seeing the target is
+   * enough, and every voter is waited for. The majority missed that square last time, so the majority cannot be what decides. */
+  lenient?: boolean }
 
 export function tileQuestionText(question: Pick<TileQuestion, 'instruction' | 'target' | 'size'>): string {
   const whole = question.size >= 4
@@ -273,11 +276,12 @@ const yesNo = (text: string): boolean | undefined => /\byes\b/i.test(text) ? tru
  * no answer at all is "no"). One square at a time, outlined in the whole picture, reads far better than asking for
  * a list of squares: the model sees the context and judges one place. */
 export async function askTileMatch(question: TileQuestion, options: AskOptions = {}): Promise<boolean | undefined> {
-  const polled = await poll({ roster: 'tile', system: 'You answer image-selection questions with one word: yes or no.', text: tileQuestionText(question), images: [question.image], parse: yesNo, maxOutputTokens: 300, enough: got => sharedBy(got, 2) }, options);
+  const enough = question.lenient ? (got: Array<boolean | undefined>) => got.includes(true) : (got: Array<boolean | undefined>) => sharedBy(got, 2);
+  const polled = await poll({ roster: 'tile', system: 'You answer image-selection questions with one word: yes or no.', text: tileQuestionText(question), images: [question.image], parse: yesNo, maxOutputTokens: 300, enough }, options);
   if (!polled) return undefined;
   const votes = polled.answers.filter((v): v is boolean => v !== undefined);
   if (!votes.length) return undefined;
-  const yes = votes.filter(Boolean).length * 2 > votes.length;
+  const yes = question.lenient ? votes.includes(true) : votes.filter(Boolean).length * 2 > votes.length;
   credit(polled, options, answer => answer === yes);
   return yes;
 }
