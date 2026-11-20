@@ -292,14 +292,14 @@ describe('what a vote costs and who sided with the answer', () => {
 });
 
 describe('who sits in a vote', () => {
-  it('fills a roster whose own models the Gateway does not list with general vision stand-ins, so three still vote', async () => {
-    const { seatOrder } = await import('./captcha-model.js');
-    // The list of 2026-11-20: none of the click roster but gpt-5.2.
-    const vision = ['qwen3-vl', 'claude-haiku-4-5', 'gpt-5.2', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-4o', 'gemini-2.5-flash'];
-    expect(seatOrder('click', vision).map(seat => seat.id)).toEqual(['gpt-5.2', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-4o', 'gemini-2.5-flash', 'qwen3-vl']);
-    // The roster's own models, when listed, still come first and keep their order; a stand-in already on the roster is not seated twice.
-    expect(seatOrder('tile', [...vision, 'gemini-3-flash']).map(seat => seat.id).slice(0, 4)).toEqual(['gpt-4.1-mini', 'gemini-3-flash', 'gpt-5.2', 'gpt-4.1']);
-    // Measured order leads, and a family renamed in the list still matches its roster name.
-    expect(seatOrder('order', ['claude-sonnet-5', 'gpt-5.2'], ['gpt-5.2']).map(seat => [seat.name, seat.id])).toEqual([['gpt-5.2', 'gpt-5.2'], ['claude-sonnet-5-5', 'claude-sonnet-5']]);
+  it('seats only the subscription models a roster names, best first, and never a paid stand-in', async () => {
+    const { seatOrder, STAND_INS } = await import('./captcha-model.js');
+    expect(STAND_INS).toEqual([]);
+    // What a subscription serves on the Gateway (the caller passes only subscription and free vision models).
+    const vision = ['gpt-5.6-luna', 'gpt-6-sol', 'gpt-6.1-terra', 'gpt-5.6-terra', 'qwen4-max'];
+    expect(seatOrder('tile', vision).map(seat => seat.id)).toEqual(['gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-5.6-terra']);
+    expect(seatOrder('click', vision).map(seat => seat.id).slice(0, 2)).toEqual(['gpt-6-sol', 'gpt-6.1-terra']);
+    // A paid model in the list is never seated (it is not in any roster and there are no stand-ins).
+    expect(seatOrder('tile', [...vision, 'gpt-4.1-mini']).map(seat => seat.id)).not.toContain('gpt-4.1-mini');
   });
 });

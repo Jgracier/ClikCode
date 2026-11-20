@@ -15,14 +15,14 @@ import type { ImageInput, ModelClient } from '../model-client.js';
  * (2026-11-14, hand-checked answers), best first. The first three the account's Gateway lists are asked; the
  * rest stand in when one of them cannot answer (a provider out of credit or overloaded). */
 export const ROSTERS = {
-  /** Is the outlined square part of the target? (reCAPTCHA grids, GeeTest example matching) */
-  tile: ['gpt-4.1-mini', 'gemini-3-flash', 'claude-sonnet-5-5', 'gemini-2.5-pro', 'claude-haiku-5-5', 'gpt-5.2', 'qwen3-vl-235b-a22b'],
+  /** Is the outlined square part of the target? (reCAPTCHA grids, GeeTest example matching): many quick asks, the fast models first. */
+  tile: ['gpt-6-luna', 'gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.3-codex'],
   /** Where should one click? (hCaptcha riddles, unknown challenge boxes) */
-  click: ['gemini-3-flash', 'claude-sonnet-5-5', 'gpt-5.2', 'claude-opus-5-5'],
+  click: ['gpt-6-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
   /** Matching, ordering and choosing among options (GeeTest icons, hCaptcha drags, Arkose picks). */
-  order: ['claude-sonnet-5-5', 'claude-opus-5-5', 'gemini-3-flash', 'gpt-5.2', 'gemini-2.5-pro'],
+  order: ['gpt-6-sol', 'gpt-6.1-terra', 'gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'gpt-5.6-luna'],
   /** Reading distorted characters. */
-  text: ['gemini-3-flash', 'claude-sonnet-5-5', 'gpt-4.1-mini', 'claude-opus-5-5', 'gpt-5.2', 'qwen3-vl-235b-a22b'],
+  text: ['gpt-6-luna', 'gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-5.6-terra'],
 } as const;
 export type Roster = keyof typeof ROSTERS;
 const VOTERS = 3;
@@ -53,7 +53,8 @@ async function gatewayClient(model: string): Promise<ModelClient> {
   const Conf = (await import('conf')).default;
   const { baseUrl, apiKey } = gatewayConnection(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
   // Each voter is named explicitly: `auto` can land on a text-only provider that refuses the picture.
-  return gatewayModelClient({ baseUrl, apiKey, vision: true, model });
+  // On the subscriptions lane: captcha votes are internal work and never spend paid (unsubsidized) Gateway usage.
+  return gatewayModelClient({ baseUrl, apiKey, vision: true, model, subscriptions: true });
 }
 
 export interface Voter { name: string; client: ModelClient }
@@ -67,12 +68,9 @@ const REFUSAL = /\bI(?:'m| am)? (?:cannot|can't|can not|won't|will not|am unable
 /** Whether a model is sitting out right now (it failed or declined lately). */
 export const isBenched = (name: string, now = Date.now()): boolean => (benched.get(name) ?? 0) > now;
 
-/** General vision models that stand in when a roster's own models cannot be had, best first. On 2026-11-20 the Gateway listed none of
- * gemini-3-flash, claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5 or gemini-2.5-pro, so the tile vote had two voters (gpt-4.1-mini,
- * gpt-5.2) and the click vote one (gpt-5.2, plus the user's own plan): 23 of 26 hCaptcha challenges on the demo ended "no agreed answer".
- * Measured that day on hand-labelled reCAPTCHA squares, among the models that answered: gpt-4.1-mini 32 of 34 right, gpt-4o 13 of 15,
- * gpt-4.1 11 of 11, gemini-2.5-flash 10 of 10 (the rest of their asks were refused by the Gateway: unavailable or rate limited). */
-export const STAND_INS = ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o', 'gemini-2.5-flash', 'gpt-5-mini', 'o4-mini', 'qwen3-vl', 'llama-4-maverick', 'nova-pro'] as const;
+/** No paid stand-ins: a voter is only ever a model the Gateway serves from a subscription (or its free tier). The paid stand-ins of
+ * 2026-11-20 (gpt-4.1-mini, gpt-4o, gemini-2.5-flash, ...) spent unsubsidized usage; the owner's rule is that internal work never does. */
+export const STAND_INS = [] as readonly string[];
 
 /** Who may sit in a roster's vote, best first, as the Gateway lists them now: models measured on this machine first (in their measured
  * order), then the roster's own order, then the stand-ins. A roster name stands for whatever the Gateway lists under it now
@@ -98,7 +96,8 @@ async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> 
   const now = options.now ?? Date.now;
   if (!cachedVision || now() - cachedVision.at > VISION_TTL_MS) {
     const { gatewayModels } = await import('../../gateway/models.js');
-    cachedVision = { ids: (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id), at: now() };
+    // Only what a subscription (or the free tier) serves: a paid model is never seated, whatever a roster names.
+    cachedVision = { ids: (await gatewayModels()).models.filter(model => model.vision === true && (model.access === 'subscription' || model.access === 'free')).map(model => model.id), at: now() };
   }
   const vision = cachedVision.ids;
   const preferred = seatOrder(roster, vision, options.order?.[roster] ?? []);
