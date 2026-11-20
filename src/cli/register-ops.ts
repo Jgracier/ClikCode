@@ -31,9 +31,9 @@ export function registerOperatorCommands(program: Command, computer: Command): v
   connectors.command('qualify').description('Render each vendor\'s sign-up, pricing and developer pages (20 s a page, in its own named tab) and classify walls from the rendered text: JSON {id, lane auto|human|dead, kinds, evidence}')
     .option('--ids <a,b,c>', 'vendors to check').option('--next <n>', 'the next N vendors waiting for an agent').option('--parallel <n>', 'vendors at once, 1-4 (default 1)').option('--report', 'write the verdict into the work item note at ClikDeploy').option('--dump <dir>', 'save each rendered page\'s text there, to see what the verdict was read from')
     .action(async (flags: import('../commands/connectors.js').ConnectorsQualifyFlags) => (await import('../commands/connectors.js')).connectorsQualify(flags));
-  connectors.command('agent-mcp', { hidden: true }).requiredOption('--tab <name>').requiredOption('--max-calls <n>').option('--counter <file>').option('--connector <id>')
-    .action(async (flags: { tab: string; maxCalls: string; counter?: string; connector?: string }) => {
-      await serveThenExit((signal) => agentMcpServe({ tab: flags.tab, ...(flags.connector ? { connector: flags.connector } : {}), maxCalls: Number(flags.maxCalls), ...(flags.counter ? { counter: flags.counter } : {}) }, signal));
+  connectors.command('agent-mcp', { hidden: true }).requiredOption('--tab <name>').requiredOption('--max-calls <n>').option('--counter <file>').option('--connector <id>').option('--egress <name>')
+    .action(async (flags: { tab: string; maxCalls: string; counter?: string; connector?: string; egress?: string }) => {
+      await serveThenExit((signal) => agentMcpServe({ tab: flags.tab, ...(flags.connector ? { connector: flags.connector } : {}), maxCalls: Number(flags.maxCalls), ...(flags.counter ? { counter: flags.counter } : {}), ...(flags.egress ? { egress: flags.egress } : {}) }, signal));
     });
   connectors.command('resume <id>').description('Carry on with a connector whose keygrab could not finish: reattach to its parked hidden tab, optionally press one thing or go to one address, and continue getting the API key')
     .option('--click <text>', 'Press the control with this visible text first')
