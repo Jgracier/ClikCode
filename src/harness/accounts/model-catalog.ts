@@ -422,7 +422,10 @@ async function discoverModelCatalog(
     if (!offline && !outcome.signedOut) await recordBackgroundOutcome(held, 'failed');
     return result;
   }
-  if (!offline) await recordBackgroundOutcome(held, 'ok');
+  // Held off, nothing was asked: what is on disk stands in, and is not
+  // remembered as the vendor's answer.
+  if (offline) return result;
+  await recordBackgroundOutcome(held, 'ok');
   await rememberCatalog(harness, account, fingerprint, result);
   return result;
 }
@@ -679,7 +682,7 @@ const PRINTED_MODEL_LIST: Readonly<Record<NonNullable<AiLocalHarnessDefinition['
     // The model the vendor itself is set to (`model` in ~/.config/opencode/opencode.json), while it still offers it. Not read, a chat
     // started on whichever model sorts first (OpenCode's free `big-pickle`, on an account whose Go plan it never used).
     if (profileRoot) {
-      const raw = await readFile(join(profileRoot, '.config', harness.command, `${harness.command}.json`), 'utf8').catch(() => undefined);
+      const raw = await readFile(join(profileRoot, '.config', harness.command, `${harness.command}.json`), 'utf8').catch(quiet('harness/accounts/model-catalog'));
       let set: unknown;
       try { set = raw ? (JSON.parse(raw) as { model?: unknown }).model : undefined; } catch { set = undefined; } // fail-open-ok: a damaged config names no model
       if (typeof set === 'string' && verbose.models.includes(set)) d.configured ??= set;

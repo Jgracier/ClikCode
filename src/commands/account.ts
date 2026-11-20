@@ -49,13 +49,14 @@ const ACCOUNT_LIMIT_NOTE = 'At an account\'s usage limit, ClikCode moves the cha
 /** How long the list waits for the probes it starts before it shows what it has. */
 const ACCOUNT_LIST_PROBE_WAIT_MS = 1_500;
 
-/** The vendor keeps its sign-in in files it names (catalog `authFiles`) and
- * has no status command: an account recorded as ready whose files are gone is
- * signed out, whatever it was when ClikCode last saw it. */
+/** The vendor keeps its sign-in where the catalog says (`authFiles`, a key
+ * variable, a macOS Keychain item): an account recorded as ready whose
+ * credential is gone is signed out, whatever it was when ClikCode last saw
+ * it. The same evidence the background gate reads (vendor-probe.ts). */
 export async function accountSignedOutOnDisk(account: AiHarnessAccount): Promise<boolean> {
   if (account.authKind !== 'vendor-cli' || account.status !== 'ready') return false;
   const harness = localHarnessForProvider(account.provider);
-  if (!harness || harness.statusArgv || !hasAuthEvidence(harness)) return false;
+  if (!harness || !hasAuthEvidence(harness)) return false;
   return !await authEvidencePresent(harness, profileEnvironment(harness, account));
 }
 
