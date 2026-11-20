@@ -192,6 +192,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   remoteMachineName?: string;
   /** An open list, drawn over the chat just above the footer (frame-flush.ts). Empty when none. */
   pickerOverlay: string[] = [];
+  /** The command menu's chosen row while a turn runs (waiting-keys.ts). */
+  waitingPaletteSelected = 0;
+  /** Runs a bare picker command (`/model`, `/effort` …) typed mid-turn, here and now: its picker opens over the running turn,
+   * which keeps streaming, and its choice applies at the turn's next model call. Set by the interactive loop. */
+  pickDuringTurn?: (line: string) => Promise<void>;
   /** How many live rows at the bottom are the footer. The overlay sits above them and never on them. */
   chromeRows = 0;
   usageResetLabel?: string;

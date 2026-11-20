@@ -101,9 +101,9 @@ export function submitWaiting(this: TerminalHarnessPrompter, text: string, allow
   // a line the router decides is really conversation comes back 'queued'.
   const asCommand = allowCommand && Boolean(commandLineTypedDuringTurn(text)) && Boolean(turn.command);
   const submit = asCommand ? turn.command! : turn.submit;
-  // No selection mid-turn -- the arrows scroll the answer -- so a partly
-  // typed value means the best match: `/model op` applies opus.
-  const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
+  // The row chosen with Up and Down, else the best match: `/model op` applies opus.
+  const line = asCommand ? completedCommandLine(text, this.paletteCommands, this.waitingPaletteSelected) : text;
+  this.waitingPaletteSelected = 0;
   const localId = ++this.waitingSubmissionId;
   // The window names the message, so its row and its saved copy are one thing by identity from the first moment.
   const id = randomUUID();

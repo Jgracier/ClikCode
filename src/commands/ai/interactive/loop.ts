@@ -80,6 +80,17 @@ export class ChatLoop {
       refreshUsage: this.refreshUsage, beginBuildReplace: this.beginBuildReplace, releaseWindow: this.releaseWindow } = w);
     this.lastSeen = w.session;
     this.transportSessionId = w.ref.id;
+    // A bare `/model`, `/effort` … typed or chosen while a turn runs: its picker opens now, over the turn (turn-bridge.ts).
+    if (this.terminal) this.terminal.pickDuringTurn = async (line) => {
+      const { terminal, rl, config, beginBuildReplace } = this;
+      const host = createSlashHost({
+        config, rl, terminal,
+        runTurn: (targetId, promptText) => this.runInteractiveTurn(targetId, promptText, { echo: false }),
+        openConversationPicker: () => openConversationPicker({ rl, terminal, beginBuildReplace, dispatch: (id, command) => dispatchLine(host, id, command) }, this.id),
+      });
+      const outcome = await dispatchLine(host, this.id, line);
+      if (outcome.notice) terminal?.activity(outcome.notice);
+    };
   }
 
   /** The conversation this window is on: shared with the setup's timers. */
