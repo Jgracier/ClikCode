@@ -67,6 +67,29 @@ const REFUSAL = /\bI(?:'m| am)? (?:cannot|can't|can not|won't|will not|am unable
 /** Whether a model is sitting out right now (it failed or declined lately). */
 export const isBenched = (name: string, now = Date.now()): boolean => (benched.get(name) ?? 0) > now;
 
+/** General vision models that stand in when a roster's own models cannot be had, best first. On 2026-11-20 the Gateway listed none of
+ * gemini-3-flash, claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5 or gemini-2.5-pro, so the tile vote had two voters (gpt-4.1-mini,
+ * gpt-5.2) and the click vote one (gpt-5.2, plus the user's own plan): 23 of 26 hCaptcha challenges on the demo ended "no agreed answer".
+ * Measured that day on hand-labelled reCAPTCHA squares, among the models that answered: gpt-4.1-mini 32 of 34 right, gpt-4o 13 of 15,
+ * gpt-4.1 11 of 11, gemini-2.5-flash 10 of 10 (the rest of their asks were refused by the Gateway: unavailable or rate limited). */
+export const STAND_INS = ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o', 'gemini-2.5-flash', 'gpt-5-mini', 'o4-mini', 'qwen3-vl', 'llama-4-maverick', 'nova-pro'] as const;
+
+/** Who may sit in a roster's vote, best first, as the Gateway lists them now: models measured on this machine first (in their measured
+ * order), then the roster's own order, then the stand-ins. A roster name stands for whatever the Gateway lists under it now
+ * (src/gateway/model-names.ts): its list renames families, and a name matched exactly silently dropped every Claude voter from the
+ * rosters on 2026-11-17. The voter keeps the wanted name (for scores and benching); the client asks for the listed one. */
+export function seatOrder(roster: Roster, vision: readonly string[], measured: readonly string[] = []): Array<{ name: string; id: string }> {
+  const listed: readonly string[] = ROSTERS[roster];
+  const wanted = [...measured.filter(name => listed.includes(name)), ...listed.filter(name => !measured.includes(name)), ...STAND_INS.filter(name => !listed.includes(name))];
+  const seen = new Set<string>();
+  const out: Array<{ name: string; id: string }> = [];
+  for (const name of wanted) {
+    const id = listedModel(name, vision);
+    if (id && !seen.has(id)) { seen.add(id); out.push({ name, id }); }
+  }
+  return out;
+}
+
 /** The voters for a kind of question, best first: the roster's models the account has (those not sitting out
  * first), else its first vision model alone. The first three vote; the rest stand in for one that fails. */
 async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> {
@@ -78,19 +101,7 @@ async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> 
     cachedVision = { ids: (await gatewayModels()).models.filter(model => model.vision === true).map(model => model.id), at: now() };
   }
   const vision = cachedVision.ids;
-  const measured = options.order?.[roster] ?? [];
-  const listed: readonly string[] = ROSTERS[roster];
-  // Models measured on this machine go first, in their measured order; the rest keep the roster's order. A roster name stands for
-  // whatever the Gateway lists under it now (src/gateway/model-names.ts): its list renames families, and a name matched exactly
-  // silently dropped every Claude voter from the rosters on 2026-11-17. The voter keeps the roster's name (for scores and benching);
-  // the client asks for the listed one.
-  const wanted = [...measured.filter(name => listed.includes(name)), ...listed.filter(name => !measured.includes(name))];
-  const seen = new Set<string>();
-  const preferred: Array<{ name: string; id: string }> = [];
-  for (const name of wanted) {
-    const id = listedModel(name, vision);
-    if (id && !seen.has(id)) { seen.add(id); preferred.push({ name, id }); }
-  }
+  const preferred = seatOrder(roster, vision, options.order?.[roster] ?? []);
   const fit = preferred.filter(model => (benched.get(model.name) ?? 0) <= now());
   const ordered = preferred.length ? [...fit, ...preferred.filter(model => !fit.includes(model))] : vision.slice(0, 1).map(id => ({ name: id, id }));
   const gateway = await Promise.all(ordered.map(async model => ({ name: model.name, client: await gatewayClient(model.id) })));

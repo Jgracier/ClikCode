@@ -290,3 +290,16 @@ describe('what a vote costs and who sided with the answer', () => {
     expect(codex.at(-1)).toBe('Q');
   });
 });
+
+describe('who sits in a vote', () => {
+  it('fills a roster whose own models the Gateway does not list with general vision stand-ins, so three still vote', async () => {
+    const { seatOrder } = await import('./captcha-model.js');
+    // The list of 2026-11-20: none of the click roster but gpt-5.2.
+    const vision = ['qwen3-vl', 'claude-haiku-4-5', 'gpt-5.2', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-4o', 'gemini-2.5-flash'];
+    expect(seatOrder('click', vision).map(seat => seat.id)).toEqual(['gpt-5.2', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-4o', 'gemini-2.5-flash', 'qwen3-vl']);
+    // The roster's own models, when listed, still come first and keep their order; a stand-in already on the roster is not seated twice.
+    expect(seatOrder('tile', [...vision, 'gemini-3-flash']).map(seat => seat.id).slice(0, 4)).toEqual(['gpt-4.1-mini', 'gemini-3-flash', 'gpt-5.2', 'gpt-4.1']);
+    // Measured order leads, and a family renamed in the list still matches its roster name.
+    expect(seatOrder('order', ['claude-sonnet-5', 'gpt-5.2'], ['gpt-5.2']).map(seat => [seat.name, seat.id])).toEqual([['gpt-5.2', 'gpt-5.2'], ['claude-sonnet-5-5', 'claude-sonnet-5']]);
+  });
+});
