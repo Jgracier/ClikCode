@@ -11,7 +11,7 @@ type Tile = PuzzleLayout['tiles'][number];
 
 /** A nine-square grid. `swapAfterReads`: how many layout reads a clicked "none left" square stays marked as waiting for its picture.
  * Each picture taken says which square was outlined and which picture it held, so the fake voters can answer by picture. */
-function fakeGrid(options: { dynamic: boolean; said?: 'more' | 'wrong'; swapAfterReads?: number; selected?: number[] }) {
+function fakeGrid(options: { dynamic: boolean; said?: 'more' | 'wrong'; swapAfterReads?: number; selected?: number[]; selectionUnread?: boolean }) {
   const tiles: Tile[] = Array.from({ length: 9 }, (_, i) => ({ x: 10 + (i % 3) * 100, y: 100 + Math.floor(i / 3) * 100, width: 100, height: 100, key: `k${i}`, selected: options.selected?.includes(i) ?? false }));
   const swapping = new Map<number, number>();
   const state = { reads: 0, reloads: 0, verifyAt: undefined as undefined | { x: number; y: number }, mouse: { x: 0, y: 0 }, outlined: -1, clicked: [] as number[] };
@@ -30,7 +30,8 @@ function fakeGrid(options: { dynamic: boolean; said?: 'more' | 'wrong'; swapAfte
     if (index < 0) return;
     state.clicked.push(index);
     if (options.dynamic) { tiles[index] = { ...tiles[index]!, replacing: true }; swapping.set(index, options.swapAfterReads ?? 1); }
-    else tiles[index] = { ...tiles[index]!, selected: !tiles[index]!.selected };
+    // A grid whose selected look this reader cannot see (hCaptcha's) still changes its picture's key on a click.
+    else tiles[index] = options.selectionUnread ? { ...tiles[index]!, key: `${tiles[index]!.key}*` } : { ...tiles[index]!, selected: !tiles[index]!.selected };
   };
   const frame = {
     evaluate: async (script: unknown) => {
@@ -94,5 +95,13 @@ describe('after the widget said a matching square was left out', () => {
       expect(seen.some(q => q.lenient)).toBe(false);
       expect(grid.state.reloads).toBe(0);
     }
+  });
+});
+
+describe('a grid that keeps its squares', () => {
+  it('clicks each match once, even when it cannot read the selected look and the pictures change', async () => {
+    const grid = fakeGrid({ dynamic: false, selectionUnread: true });
+    expect(await gridRound(hands(grid.page, voters(['k6', 'k7', 'k6*', 'k7*'])), grid.frame, box)).toMatchObject({ confirm: { x: 300 } });
+    expect(grid.state.clicked).toEqual([6, 7]);
   });
 });

@@ -193,12 +193,13 @@ export async function gridRound(hands: Hands, frame: Frame, box: Box): Promise<{
     trace?.(`${current.tiles.length} squares, "${current.instruction}" pass ${pass + 1}${lenient && pass === 0 ? ' (a match was left out: one voter is enough)' : ''}: asked ${pending.length} [${pending.join(',')}], picked [${hits.join(',')}] (pictures ${Math.round(timing.shotsMs / 100) / 10}s, answers ${Math.round(timing.asksMs / 100) / 10}s)`);
     for (const index of hits) { const at = current.tiles[index]; if (at) await visitorClick(page.mouse, toTarget(at), random, sleep); }
     if (!hits.length) break;
-    // A "click until none are left" grid does not keep a clicked square selected: it fades a new picture into it.
-    // That, not the wording of the instruction (which comes in the visitor's language), is how one is told apart.
-    // Only a grid of nine separate photos is ever one of those; a single photo cut into sixteen never is.
+    // A "click until none are left" grid does not keep a clicked square selected: it marks it as waiting and fades a new picture into it.
+    // That mark (reCAPTCHA's own markup), not the wording of the instruction (which comes in the visitor's language), is how one is told
+    // apart. A square that merely does not read as selected is not one: hCaptcha's nine-square grid was taken for one on the demo
+    // (2026-11-20) and its two answers were clicked on and off eight times. Only nine separate photos are ever one; sixteen never are.
     if (!current.dynamic && current.tiles.length !== 9) break;
     const clicked = current.dynamic ? undefined : await readLayout(frame, box);
-    if (!current.dynamic && !hits.some(index => clicked?.tiles[index] && !clicked.tiles[index]!.selected)) break;
+    if (!current.dynamic && !hits.some(index => clicked?.tiles[index]?.replacing)) break;
     // Ask only about the squares that changed, once their new pictures are in.
     const next = await afterReplacement(frame, box, current, hits, random, sleep);
     if (!next) break;
