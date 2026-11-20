@@ -355,6 +355,31 @@ describe('session worker (real spawned process, real socket)', () => {
     expect(await workerIsReachable(record.socketPath, 200)).toBe(false);
   }, 20_000);
 
+  it('declines a retire question while it is still active, keeps serving, and goes once quiet', async () => {
+    // The ask comes from a window or from a sweep of every stale worker (retireStaleWorkers), not from the worker's own
+    // watch: it used to leave the instant nothing was running, which is also the instant between one turn and the next.
+    const before = process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS;
+    process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS = '2500';
+    try {
+      const session = await isolatedSession();
+      const client = await WorkerClient.attach(session.id);
+      spawnedClients.push(client);
+      await client.initialSnapshot;
+      const record = (await readWorkerRecord(session.id))!;
+      // The window coming and going is activity: the quiet time starts now.
+      client.close();
+      const events = await exchange(session.id, (token) => [{ type: 'retire', token }], 1_000);
+      expect(events.some((event) => event.type === 'shutdown')).toBe(false);
+      expect(events.some((event) => event.type === 'retire-declined')).toBe(true);
+      expect(await workerIsReachable(record.socketPath, 200)).toBe(true);
+      // Quiet for its time, it goes without being asked again.
+      for (let waited = 0; waited < 8_000 && await workerIsReachable(record.socketPath, 200); waited += 200) await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(await workerIsReachable(record.socketPath, 200)).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS; else process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS = before;
+    }
+  }, 30_000);
+
   it('rejects a retire question with the wrong token, and the worker stays', async () => {
     const session = await isolatedSession();
     const client = await WorkerClient.attach(session.id);

@@ -56,30 +56,43 @@ export interface WorkerRuntimeRecord {
   runningTurn?: { since: string };
 }
 
-/** What identifies the worker runtime: the entry file it loads, by
- * modification time and size, plus the shared MCP config it provisions
- * into vendor sessions. Changing that config retires idle workers just like
- * replacing the entry file, so a new MCP server is available on the next turn.
+/** What identifies the worker runtime: the content of the entry file it loads, plus the shared MCP config it provisions
+ * into vendor sessions. Changing that config retires idle workers just like replacing the entry file, so a new MCP
+ * server is available on the next turn.
  *
- * Not the version string -- the whole problem is two processes running
- * different code with the SAME version between two releases. Not a content
- * hash either: this is checked on every attach, and mtime+size answers the
- * only question being asked (is this the same file as the one I would spawn)
- * without reading three megabytes to do it.
+ * Not the version string -- the whole problem is two processes running different code with the SAME version between
+ * two releases. Not the file's modification time either: that changes whenever the file is written, and a reinstall of
+ * the same program, or a build from another checkout of identical code, rewrote it and replaced every worker for
+ * nothing (three rounds in two minutes on 2026-11-20). The built entry is a few hundred bytes that name the program
+ * (scripts/build.mjs writes its content id into it), so its content says whether the program is the same. A file too
+ * large to be that stub is compared by modification time and size, as before, rather than read on every check.
  *
- * Both sides stat the same path deliberately: the worker's own entry IS the
- * script a client would spawn, so a test pointing CLIKCODE_WORKER_ENTRY at a
- * real build still compares like with like. Undefined when the entry cannot
- * be stat'd at all, and an unknown build never retires anything. */
+ * Both sides read the same path deliberately: the worker's own entry IS the script a client would spawn, so a test
+ * pointing CLIKCODE_WORKER_ENTRY at a real build still compares like with like. Undefined when the entry cannot be
+ * read at all, and an unknown build never retires anything. */
+const ENTRY_CONTENT_LIMIT_BYTES = 1024 * 1024;
+const entryIds = new Map<string, { stamp: string; id: string }>();
+function entryIdentity(entry: string): string {
+  const stats = statSync(entry);
+  const stamp = `${Math.round(stats.mtimeMs)}:${stats.size}`;
+  if (stats.size > ENTRY_CONTENT_LIMIT_BYTES) return stamp;
+  // Read again only when the file changed: the watch looks every few seconds in every worker.
+  const known = entryIds.get(entry);
+  if (known?.stamp === stamp) return known.id;
+  const id = `${createHash('sha256').update(readFileSync(entry)).digest('hex').slice(0, 24)}:${stats.size}`;
+  entryIds.set(entry, { stamp, id });
+  return id;
+}
+
 export function currentWorkerBuild(): string | undefined {
   const entry = process.env.CLIKCODE_WORKER_ENTRY ?? process.argv[1];
   if (!entry) return undefined;
   try {
-    const stats = statSync(entry);
+    const identity = entryIdentity(entry);
     let mcp = 'missing';
     try { mcp = createHash('sha256').update(readFileSync(mcpConfigFilePath(stateDirectory()))).digest('hex'); }
     catch { /* fail-open-ok: no config yet, or a transient write; the next check sees the completed file */ }
-    return `${Math.round(stats.mtimeMs)}:${stats.size}:mcp-${mcp}`;
+    return `${identity}:mcp-${mcp}`;
   } catch {
     return undefined;
   }

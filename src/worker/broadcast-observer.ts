@@ -185,8 +185,9 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   detach(socket: Socket): void {
-    this.lastActivityAt = Date.now();
-    this.clients.delete(socket);
+    // Only a window going counts: a connection that never attached (a liveness probe, the retire question, a warm) is not
+    // activity, and counted it kept a worker that was being replaced from ever being quiet while anything looked at it.
+    if (this.clients.delete(socket)) this.lastActivityAt = Date.now();
     if (this.turnSender === socket) this.turnSender = undefined;
     // Its window closed mid sign-in: a window still showing the conversation runs it.
     for (const [id] of this.pendingSignIns) this.releaseSignIn(id, socket);
