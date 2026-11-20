@@ -89,3 +89,81 @@ export async function captchaSolvingAllowed(stateDir: string): Promise<boolean> 
 export async function setCaptchaSolving(stateDir: string, allowed: boolean): Promise<void> {
   await writeSettings(stateDir, { solveCaptchas: allowed });
 }
+
+// ── egress: the network ways out a browser tab can leave through ──
+
+/** A way out to the internet other than this computer's own connection. `ssh`: ClikCode keeps an `ssh -D` SOCKS tunnel to that
+ * host up and sends the tab's traffic through it (an alias from ~/.ssh/config, or user@host). `proxy`: a SOCKS or HTTP proxy used as is. */
+export interface EgressEntry { name: string; ssh?: string; proxy?: string }
+/** This computer's own connection: always first, never stored. */
+export const HOME_EGRESS = 'home';
+
+const EGRESS_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
+/** An ssh destination, never an option: letters, digits, dot, dash, underscore and one optional user@. */
+const SSH_TARGET = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const PROXY_URL = /^(?:socks5|socks4|http|https):\/\/(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):\d{1,5}\/?$/;
+
+/** Why an egress entry cannot be used, or undefined when it can. */
+export function egressProblem(entry: { name?: unknown; ssh?: unknown; proxy?: unknown }): string | undefined {
+  if (typeof entry.name !== 'string' || !EGRESS_NAME.test(entry.name)) return 'An egress name is lower-case letters, digits and dashes (at most 32).';
+  if (entry.name === HOME_EGRESS) return '"home" is this computer\'s own connection; it is always there and needs no entry.';
+  const hasSsh = entry.ssh !== undefined, hasProxy = entry.proxy !== undefined;
+  if (hasSsh === hasProxy) return 'Give an egress either ssh (an ssh host) or proxy (socks5://host:port or http://host:port), not both.';
+  if (hasSsh && (typeof entry.ssh !== 'string' || !SSH_TARGET.test(entry.ssh))) return 'ssh is a host from ~/.ssh/config or user@host (letters, digits, dot, dash, underscore).';
+  if (hasProxy) {
+    if (typeof entry.proxy !== 'string' || !PROXY_URL.test(entry.proxy)) return 'proxy is socks5://host:port, socks4://host:port, http://host:port or https://host:port.';
+    const port = Number(/:(\d+)\/?$/.exec(entry.proxy)?.[1]);
+    if (!(port >= 1 && port <= 65535)) return 'The proxy port is 1 to 65535.';
+  }
+  return undefined;
+}
+
+/** The valid entries of a stored egress list, in order, first of each name only. */
+export function parseEgress(value: unknown): EgressEntry[] {
+  if (!Array.isArray(value)) return [];
+  const out: EgressEntry[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as { name?: unknown; ssh?: unknown; proxy?: unknown };
+    if (egressProblem(raw) || out.some(entry => entry.name === raw.name)) continue;
+    out.push({ name: raw.name as string, ...(raw.ssh !== undefined ? { ssh: raw.ssh as string } : { proxy: (raw.proxy as string).replace(/\/$/, '') }) });
+  }
+  return out;
+}
+
+/** The configured ways out (home not included). */
+export async function egressSetting(stateDir: string): Promise<EgressEntry[]> {
+  try { return parseEgress((JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { egress?: unknown }).egress); }
+  catch { return []; }
+}
+
+/** Every way out in the order they are tried: home first, then the configured ones. */
+export async function egressList(stateDir: string): Promise<EgressEntry[]> {
+  return [{ name: HOME_EGRESS }, ...await egressSetting(stateDir)];
+}
+
+/** Adds an egress, or replaces the one of the same name in place. */
+export async function addEgress(stateDir: string, entry: EgressEntry): Promise<EgressEntry[]> {
+  const problem = egressProblem(entry);
+  if (problem) throw new Error(problem);
+  const clean: EgressEntry = { name: entry.name, ...(entry.ssh !== undefined ? { ssh: entry.ssh } : { proxy: entry.proxy!.replace(/\/$/, '') }) };
+  const after = await updateJsonFile(computerSettingsPath(stateDir), objectOrEmpty, current => {
+    const list = parseEgress(current.egress);
+    const at = list.findIndex(item => item.name === clean.name);
+    if (at >= 0) list[at] = clean; else list.push(clean);
+    return { ...current, egress: list };
+  });
+  return parseEgress(after.egress);
+}
+
+/** Removes an egress by name; false when there was none. */
+export async function removeEgress(stateDir: string, name: string): Promise<boolean> {
+  let removed = false;
+  await updateJsonFile(computerSettingsPath(stateDir), objectOrEmpty, current => {
+    const list = parseEgress(current.egress);
+    const kept = list.filter(item => item.name !== name);
+    removed = kept.length !== list.length;
+    return removed ? { ...current, egress: kept } : undefined;
+  });
+  return removed;
+}

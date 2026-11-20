@@ -524,3 +524,32 @@ export async function computerCards(setting: string | undefined): Promise<void> 
     : 'Cards: every use needs your approval in a private prompt, and none in an unattended run. Turn on the standing rule with: clikcode computer cards usage-only\n');
   for (const use of uses) process.stdout.write(`  ${use.at.slice(0, 16)}  ${use.host}  ${use.card}  ${use.why}\n`);
 }
+
+/** `clikcode computer egress list|add|remove|check`: the network ways out a vendor's browser work can leave through (agent/computer/egress.ts).
+ * Home is this computer's own connection and always first; a vendor stopped by a captcha wall is tried again through the next one. */
+export async function computerEgress(action: 'list' | 'add' | 'remove' | 'check', name?: string, options: { ssh?: string; proxy?: string } = {}): Promise<void> {
+  const dir = stateDirectory();
+  const { addEgress, egressList, removeEgress } = await import('../agent/computer/settings.js');
+  const describe = (entry: { name: string; ssh?: string; proxy?: string }): string => entry.ssh ? `ssh tunnel through ${entry.ssh}` : entry.proxy ? `proxy ${entry.proxy}` : 'this computer\'s own connection';
+  if (action === 'add') {
+    if (!name) throw new Error('Name the egress: clikcode computer egress add <name> --ssh <host> (or --proxy socks5://host:port)');
+    await addEgress(dir, { name, ...(options.ssh !== undefined ? { ssh: options.ssh } : {}), ...(options.proxy !== undefined ? { proxy: options.proxy } : {}) });
+  } else if (action === 'remove') {
+    if (!name) throw new Error('Name the egress to remove: clikcode computer egress remove <name>');
+    if (!await removeEgress(dir, name)) throw new Error(`No egress is named "${name}".`);
+  }
+  if (action === 'check') {
+    const { checkEgress, tunnelManager } = await import('../agent/computer/egress.js');
+    try {
+      const results = await checkEgress(dir);
+      if (isJsonDefaultMode()) return emitResult({ computer: { egressCheck: results } });
+      for (const row of results) process.stdout.write(`${row.name.padEnd(12)} ${row.ok ? `ok  ${row.ip}` : `failed: ${row.error}`}  (${row.via}, ${(row.ms / 1000).toFixed(1)}s)\n`);
+      if (results.some(row => !row.ok)) process.exitCode = 1;
+    } finally { tunnelManager(dir).closeAll(); }
+    return;
+  }
+  const list = await egressList(dir);
+  if (isJsonDefaultMode()) return emitResult({ computer: { egress: list } });
+  process.stdout.write(`Ways out, in the order a vendor stopped by a captcha is tried:\n${list.map((entry, index) => `  ${index + 1}. ${entry.name}: ${describe(entry)}`).join('\n')}\n`);
+  if (list.length === 1) process.stdout.write('Only home is set up. Add one with: clikcode computer egress add <name> --ssh <host>\n');
+}
