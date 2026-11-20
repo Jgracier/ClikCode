@@ -63,7 +63,7 @@ function findResults(value: unknown): { results: OnboardResult[]; skipped: Array
 export async function clikdeployToolText(name: string, args: Record<string, unknown>, options: { timeoutMs?: number; signal?: AbortSignal; confirm?: boolean } = {}): Promise<string> {
   const timeoutMs = options.timeoutMs ?? 90_000;
   if (CONNECTOR_LOOP_TOOLS.has(name)) {
-    const loop = await connectorLoopKey().catch(() => undefined);
+    const loop = await connectorLoopKey().catch(quiet('agent/computer/connector-runner-live'));
     if (loop) return callWithLoopKey(loop, name, args, { timeoutMs, ...(options.signal ? { signal: options.signal } : {}) });
   }
   const json = JSON.stringify(args);
