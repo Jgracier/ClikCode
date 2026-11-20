@@ -354,7 +354,21 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
         else if (answer !== 'start') continue;
       }
     }
-    await aiSessionCommand(id, `/model ${selected.id}`);
+    // The super admin chooses a source after the model: the funded providers that serve it. Everyone else is routed.
+    const source = selectedModel?.sources?.length ? await chooseModelSource(rl, selectedModel) : undefined;
+    if (source === null) continue;
+    await aiSessionCommand(id, `/model ${selected.id}${source ? ` --source ${source}` : ''}`);
     return;
   }
+}
+
+/** The sources of a model, for the super admin: the Gateway's routing first, then each funded source with its tier.
+ * `undefined` = the Gateway routes; `null` = back to the models. */
+async function chooseModelSource(rl: HarnessPrompter, model: GatewayModelList['models'][number]): Promise<string | undefined | null> {
+  const picked = await chooseOption(rl, `Choose a source for ${gatewayModelLabel(model)}`, [
+    { label: 'Automatic', detail: '· the Gateway routes it', value: 'auto' },
+    ...(model.sources ?? []).map((source) => ({ label: source.id, detail: `· ${source.access}`, value: source.id })),
+  ]);
+  if (picked === undefined || picked === null) return null;
+  return picked === 'auto' ? undefined : picked;
 }

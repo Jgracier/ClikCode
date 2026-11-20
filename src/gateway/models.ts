@@ -38,6 +38,9 @@ interface GatewayModel {
   /** Which tier the Gateway serves it from right now. Sent to the super admin
    * only: everyone else sees the model alone. */
   access?: GatewayAccess;
+  /** The funded sources that can serve it, in the order the Gateway tries them. Sent to the super admin only: they choose one after
+   * the model. Everyone else is routed by the Gateway and never sees one. */
+  sources?: Array<{ id: string; access: GatewayAccess }>;
   /** One of the user's own models: one they run on ClikDeploy compute (GPUs they rent, or their own
    * server), not charged per token. `asleep` and `starting` ones are chosen like any other: the first
    * message waits for the model to come up (agent/turn-recovery.ts startMayContinue).
@@ -286,7 +289,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     if (!raw || typeof raw !== 'object') continue;
     const entry = raw as {
       id?: unknown; owned_by?: unknown; root?: unknown; type?: unknown; access?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
-      capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown }; pricing?: Record<string, unknown>; tags?: unknown;
+      capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown }; pricing?: Record<string, unknown>; tags?: unknown; sources?: unknown;
       deployment?: { state?: unknown; modelId?: unknown; detail?: unknown };
     };
     if (typeof entry.id !== 'string' || !entry.id) continue;
@@ -319,6 +322,15 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
       id: entry.id,
       ...(typeof entry.owned_by === 'string' && entry.owned_by && entry.owned_by !== 'clikdeploy' ? { maker: entry.owned_by } : {}),
       ...(typeof entry.access === 'string' && ACCESS.has(entry.access) ? { access: entry.access as GatewayAccess } : {}),
+      ...(Array.isArray(entry.sources)
+        ? (() => {
+            const sources = entry.sources.flatMap((item): Array<{ id: string; access: GatewayAccess }> => {
+              const source = item as { id?: unknown; access?: unknown } | null;
+              return typeof source?.id === 'string' && source.id && typeof source.access === 'string' && ACCESS.has(source.access) ? [{ id: source.id, access: source.access as GatewayAccess }] : [];
+            });
+            return sources.length ? { sources } : {};
+          })()
+        : {}),
       ...(Array.isArray(entry.tags) && entry.tags.some((tag) => typeof tag === 'string') ? { tags: entry.tags.filter((tag): tag is string => typeof tag === 'string') } : {}),
       ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
       ...(entry.capabilities?.vision === true ? { vision: true } : {}),

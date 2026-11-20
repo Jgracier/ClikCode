@@ -290,3 +290,23 @@ it('excludes every explicit non-chat type and never calls an unknown deployment 
   expect(gatewayModelDetail(list.models[2])).toContain('failed: GPU refused');
   expect(gatewayModelDetail(list.models[2])).not.toContain('running');
 });
+
+describe('sources of a model', () => {
+  it('reads the funded sources the Gateway lists for the super admin, and none for anyone else', async () => {
+    const { fromOpenAIModelList } = await import('./models.js');
+    const list = fromOpenAIModelList([
+      { id: 'qwen4-max', owned_by: 'alibaba', access: 'free', sources: [{ id: 'nous', access: 'free' }, { id: 'openrouter', access: 'paid' }, { id: 7 }, { id: 'x', access: 'bogus' }] },
+      { id: 'glm-5', owned_by: 'zai' },
+    ]);
+    expect(list.models[0]?.sources).toEqual([{ id: 'nous', access: 'free' }, { id: 'openrouter', access: 'paid' }]);
+    expect(list.models[1]).not.toHaveProperty('sources');
+  });
+});
+
+describe('a chosen source', () => {
+  it('rides every step as the only provider, with no fallback, and is absent when the Gateway routes', async () => {
+    const { gatewayStepOptions } = await import('./options.js');
+    expect(gatewayStepOptions({ effort: '', source: 'nous' })).toMatchObject({ provider: { only: ['nous'], allow_fallbacks: false } });
+    expect(gatewayStepOptions({ effort: '' })).not.toHaveProperty('provider');
+  });
+});

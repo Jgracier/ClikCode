@@ -127,6 +127,9 @@ export interface HarnessSession {
   /** ClikDeploy Gateway only: `fast` asks to be served by the fastest
    * measured provider of the model rather than the cheapest (/fast). */
   speed?: 'fast';
+  /** ClikDeploy Gateway, super admin only: the one funded source (provider id) that serves this chat's model, chosen after the model
+   * in /model. Absent = the Gateway routes. A different model clears it: a source is a choice about one model. */
+  source?: string;
   /** ClikCode's own agent: plan mode -- research only, no edits or commands,
    * until the user approves the plan it proposes (exit_plan_mode), which turns
    * it off. Absent = off. Vendor harnesses keep theirs in harnessOptions. */
