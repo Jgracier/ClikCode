@@ -3,6 +3,7 @@
 import type { Frame, Page } from 'playwright-core';
 import { cleanTranscript } from './captcha-model.js';
 import { toTarget, visitorClick, type Asks, type Box, type Hands } from './human-check-hands.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 /** A challenge as the widget itself lays it out: the instruction, the target word, each square's place on the page
  * (frame offset added), a key per square that changes when the widget swaps its picture, and the confirm button. */
@@ -79,7 +80,7 @@ async function outlinedShot(frame: Frame, layout: PuzzleLayout, index: number): 
     if (layout.region) return await frame.page().screenshot({ type: 'jpeg', quality: 88, timeout: 8_000, clip: layout.region });
     return await (await frame.frameElement()).screenshot({ type: 'jpeg', quality: 88, timeout: 8_000 }) as Buffer;
   } catch { return undefined; }
-  finally { await frame.evaluate(unmark).catch(() => undefined); }
+  finally { await frame.evaluate(unmark).catch(quiet('agent/computer/human-check-grid')); }
 }
 
 /** Ask about each listed square and return the indices that hold the target. The pictures are taken one after
@@ -91,7 +92,7 @@ export async function matchingTiles(frame: Frame, layout: PuzzleLayout, indices:
   for (const index of indices) { const shot = await outlinedShot(frame, layout, index); if (shot) shots.push([index, shot]); }
   timing.shotsMs = Date.now() - at; at = Date.now();
   const answers = await Promise.all(shots.map(async ([index, shot]) => {
-    const yes = await askTile({ image: { mimeType: 'image/jpeg', data: shot.toString('base64') }, instruction: layout.instruction, target: layout.target, size }).catch(() => undefined);
+    const yes = await askTile({ image: { mimeType: 'image/jpeg', data: shot.toString('base64') }, instruction: layout.instruction, target: layout.target, size }).catch(quiet('agent/computer/human-check-grid'));
     return yes ? index : -1;
   }));
   timing.asksMs = Date.now() - at;

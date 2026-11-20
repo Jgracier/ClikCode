@@ -18,6 +18,7 @@ import { gridRound, readLayout, solveRecaptchaAudio } from './human-check-grid.j
 import { boxOf, fitPuzzle, frameShot, gatewayAsks, spot, visitorClick, within, type Asks, type Box, type Hands } from './human-check-hands.js';
 import { hcaptchaRound, type HcaptchaMemo } from './human-check-hcaptcha.js';
 import { HOLD_BUTTON, KNOWN_BOX, POW_STATE, SLIDER, TEXT_CAPTCHA, markGone, solveChallengeBox, solvePressHold, solveSlider, solveTextCaptcha, waitProofOfWork } from './human-check-inpage.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose' | 'pow' | 'box' | 'awswaf';
 export interface HumanCheckResult {
@@ -105,7 +106,7 @@ async function puzzleByMarkup(frame: Frame): Promise<HumanCheckWidget | undefine
     if (document.querySelector('.task-image') && (document.querySelector('.prompt-text') || document.querySelector('.button-submit'))) return 'hcaptcha';
     if (document.querySelector('td.rc-imageselect-tile')) return 'recaptcha';
     return null;
-  })()`).catch(() => undefined) as Promise<HumanCheckWidget | undefined>;
+  })()`).catch(quiet('agent/computer/human-check')) as Promise<HumanCheckWidget | undefined>;
 }
 
 /** The page holds an accepted answer (the hidden field each widget fills in once it is satisfied). */

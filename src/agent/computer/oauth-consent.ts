@@ -545,7 +545,7 @@ async function driveConsent(connector: string, firstPage: Page, options: OAuthCo
         captchaTried = true;
         const { captchaSolvingAllowed } = await import('./settings.js');
         const { passHumanCheck } = await import('./human-check.js');
-        const passed = await passHumanCheck(page, { stateDir: options.stateDir, solve: await captchaSolvingAllowed(options.stateDir) }).catch(() => undefined);
+        const passed = await passHumanCheck(page, { stateDir: options.stateDir, solve: await captchaSolvingAllowed(options.stateDir) }).catch(quiet('agent/computer/oauth-consent'));
         if (passed?.outcome === 'cleared') { stopSeen = 0; continue; }
         why = stopReason(text, hasPassword, hasCode);
       }

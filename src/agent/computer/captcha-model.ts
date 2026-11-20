@@ -98,7 +98,7 @@ async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> 
   // before it is waited for) and stands in last on reading text; it never takes the many yes/no asks of a grid.
   if (roster === 'tile') return gateway;
   const { subscriptionVoter } = await import('./captcha-subscription.js');
-  const own = await subscriptionVoter(now).catch(() => undefined);
+  const own = await subscriptionVoter(now).catch(quiet('agent/computer/captcha-model'));
   if (!own) return gateway;
   return HARD.has(roster) ? [...gateway.slice(0, VOTERS - 1), own, ...gateway.slice(VOTERS - 1)] : [...gateway, own];
 }
