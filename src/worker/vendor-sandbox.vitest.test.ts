@@ -55,14 +55,15 @@ describe('vendor-sandbox', () => {
     expect(run.stdout).toBe('{"accessToken":"x"}');
   }, 30_000);
 
-  it('says what to do for a harness that declares no sign-in files, and links a home-relative --link', () => {
+  it('links a home-relative --link beside the harness\'s own sign-in files', () => {
     const out = scratchDir();
     const real = join(out, 'real');
     mkdirSync(join(real, '.config', 'x'), { recursive: true });
     writeFileSync(join(real, '.config', 'x', 'auth.json'), 'ok');
     const probe = `process.stdout.write(require('fs').readFileSync(process.env.HOME + '/.config/x/auth.json', 'utf8'))`;
     const run = spawnSync('node', [script, '--auth', 'goose', '--link', '.config/x/auth.json', '--', 'node', '-e', probe], { env: { ...process.env, HOME: real, TMPDIR: out }, encoding: 'utf8' });
-    expect(run.stderr).toMatch(/goose declares no sign-in files.*--link <~\/path>/);
+    // Every catalog harness now declares where it keeps its sign-in (Goose: its config.yaml).
+    expect(run.stderr).not.toMatch(/declares no sign-in files/);
     expect(run.stdout).toBe('ok');
   }, 30_000);
 });

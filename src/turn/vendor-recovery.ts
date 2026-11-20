@@ -29,11 +29,11 @@ export function echoesRefusal(text: string, failure: unknown): boolean {
 
 type Failed = AttemptRecord & { failure: Error; failureKind: AccountFailureKind };
 
-/** Reactive counterpart to aiHarnessSelect's proactive login check: a
- * harness with no statusArgv gets no pre-turn "are you logged in?" probe at
- * all (harnessNeedsLogin returns false without one), so its first real
- * failure signal is the turn itself erroring out. The account is marked
- * signed out by accounts.after, if signing in here does not fix it. */
+/** Reactive counterpart to aiHarnessSelect's proactive login check, which
+ * only reads the credential files on disk (harnessNeedsLogin): a credential
+ * that is there but expired or revoked first shows as the turn itself
+ * erroring out. The account is marked signed out by accounts.after, if
+ * signing in here does not fix it. */
 async function retryAfterSignIn(ctx: VendorTurnContext, failed: Failed): Promise<boolean> {
   if (!await signInForTurn(ctx, failed.environment)) return false;
   // The failed reply may already be on screen; the retry replaces it.
