@@ -32,7 +32,7 @@ it('deletes only a newly created probe session, also when metadata processing fa
     const result = await queryAcp(binary, [], {}, async (request) => {
       await acpDiscoverySession(request);
       throw new Error('bad metadata');
-    }, 1000, {discovery:harness});
+    }, 1000, {gate:{inert:'test agent'}, discovery:harness});
     expect(result).toBeUndefined();
     const calls = (await readFile(log,'utf8')).trim().split('\n').map((line)=>JSON.parse(line));
     expect(calls.map((call)=>call.method)).toEqual(['initialize','session/new','session/delete']);
@@ -43,14 +43,14 @@ it('deletes only a newly created probe session, also when metadata processing fa
 it('bounds a silent metadata request and releases its process', async () => {
   await fake(async (binary) => {
     const start=Date.now();
-    expect(await queryAcp(binary, [], {}, (request)=>request('silent'), 100)).toBeUndefined();
+    expect(await queryAcp(binary, [], {}, (request)=>request('silent'), 100, {gate:{inert:'test agent'}})).toBeUndefined();
     expect(Date.now()-start).toBeLessThan(3000);
   });
 });
 
 it('imports all replayed messages without creating or deleting the adopted thread', async () => {
   await fake(async (binary, log, home) => {
-    const harness={command:'fake-probe',binary,acp:{argv:[]}} as unknown as AiLocalHarnessDefinition;
+    const harness={command:'fake-probe',binary,signInOptional:true,acp:{argv:[]}} as unknown as AiLocalHarnessDefinition;
     const messages=await readAcpTranscript(harness,'existing',home);
     expect(messages).toHaveLength(260);
     expect(messages[0]).toEqual({role:'user',content:'0'});

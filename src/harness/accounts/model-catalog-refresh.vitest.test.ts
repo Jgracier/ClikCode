@@ -7,6 +7,12 @@ vi.mock('./acp-query.js', async (original) => ({
   queryAcp,
 }));
 
+// These fakes keep no credential: the background gate is not what is tested here.
+vi.mock('./vendor-probe.js', async (original) => ({
+  ...(await original<typeof import('./vendor-probe.js')>()),
+  mayRunInBackground: async () => true,
+}));
+
 const { nativeModelCatalog, recordLiveModelCatalog, resetModelCatalogMemo, resolveNativeModel } = await import('./model-catalog.js');
 
 afterEach(() => {

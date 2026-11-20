@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
+import { VENDOR_IMPORT_DEADLINE_MS, vendorCommandText } from '../../../harness/accounts/vendor-probe.js';
 import type { CanonicalRecord } from '../../canonical.js';
 import type { NativeThreadWriteContext, NativeThreadWriter, NativeThreadWritten } from '../stores.js';
 import { claudeThreadJsonl } from './claude-thread.js';
@@ -48,9 +48,9 @@ export async function importClaudeThread(
       sessionId, cwd: context.workspace, model: null, version: CLAUDE_THREAD_VERSION,
       ...(spec.toolCalls ? { toolCalls: spec.toolCalls } : {}),
     }), { mode: 0o600 });
-    const output = await captureNativeHarnessOutput(
-      context.harness, spec.argv(file), context.environment, undefined, context.workspace,
-    );
+    const output = await vendorCommandText({
+      gate: context.harness, argv: spec.argv(file), environment: context.environment, deadlineMs: VENDOR_IMPORT_DEADLINE_MS, cwd: context.workspace,
+    });
     const nativeId = spec.parse(output);
     return nativeId ? { nativeId, ...(spec.transport ? { transport: spec.transport } : {}) } : undefined;
   } finally {

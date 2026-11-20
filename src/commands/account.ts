@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import chalk from 'chalk';
 import { emitResult } from '../cli/structured-output.js';
 import type { HarnessPrompter } from '../harness/prompter.js';
-import { captureNativeHarnessOutput } from '../harness/transport/native/command.js';
+import { INERT_DEADLINE_MS, PROBE_DEADLINE_MS, vendorCommandText } from '../harness/accounts/vendor-probe.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/native/install-route.js';
 import { loginNativeHarness, withSignInScreen } from '../harness/transport/native/login.js';
@@ -135,7 +135,7 @@ export async function aiDoctor(): Promise<void> {
     // The probe reports the first line of output; where that is noise rather
     // than a version, read the version from the output itself.
     if (inspection.installed && inspection.version && !/\d+\.\d+/.test(inspection.version)) {
-      const found = versionFromOutput(await captureNativeHarnessOutput(harness, harness.versionArgv ?? ['--version'], {}).catch(() => ''));
+      const found = versionFromOutput(await vendorCommandText({ gate: { inert: 'version' }, binary: harness.binary, argv: harness.versionArgv ?? ['--version'], environment: {}, deadlineMs: INERT_DEADLINE_MS }).catch(() => ''));
       if (found) inspection.version = found;
     }
     return {
@@ -468,17 +468,23 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
   const state = await readState({ transcripts: [] });
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
   if (!harness.statusArgv && !hasAuthEvidence(harness)) throw new Error(`${harness.displayName} does not publish a non-destructive account-status command`);
+  // What is on disk decides first. The vendor's own status command is asked
+  // only where a credential is there to describe (who, which plan) -- run on
+  // a profile with none, a status command can start a sign-in (Cursor's
+  // `status`), and a sign-in is only ever the user adding an account.
   let nativeStatus: string;
-  if (harness.statusArgv) {
+  if (hasAuthEvidence(harness) && !await authEvidencePresent(harness, environment)) {
+    nativeStatus = 'not signed in';
+  } else if (harness.statusArgv) {
     try {
-      nativeStatus = (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim();
+      nativeStatus = (await vendorCommandText({ gate: harness, argv: harness.statusArgv, environment, deadlineMs: PROBE_DEADLINE_MS })).trim();
     } catch (error) {
       // Codex (and similar) exit non-zero when signed out and put the reason
       // on stderr; that text is the status answer.
       nativeStatus = (error instanceof Error ? error.message : String(error)).trim();
     }
   } else {
-    nativeStatus = await authEvidencePresent(harness, environment) ? 'signed in' : 'not signed in';
+    nativeStatus = 'signed in';
   }
   // Keep the account registry in step with the explicit check. Before this,
   // `accounts status` showed the vendor's current answer but left `ready` /
@@ -556,50 +562,18 @@ export async function signOutAccount(labelOrId: string): Promise<AiHarnessAccoun
   return account;
 }
 
-const loginStatusCache = new Map<string, { at: number; needsLogin: boolean }>();
-const LOGIN_STATUS_TTL_MS = 60_000;
-
-export function clearLoginStatusCache(harnessCommand?: string): void {
-  if (harnessCommand) {
-    for (const key of loginStatusCache.keys()) {
-      if (key.startsWith(`${harnessCommand}:`)) loginStatusCache.delete(key);
-    }
-  } else {
-    loginStatusCache.clear();
-  }
-}
-
-/** No status command and no credential location declared: there is no
- * reliable signal, so assume logged in rather than force a prompt on a user
- * who already authenticated outside ClikCode. A non-zero exit is treated as logged-out unconditionally (true for
- * every status command checked against real output: Codex, Claude Code); an
- * explicit `loggedIn`/`isAuthenticated: false` in a JSON body catches the ones
- * that report failure with exit 0 instead (Cursor Agent). */
+/** Whether an account in this profile needs a sign-in, read from what is on
+ * disk: a key in its environment or saved in its profile, the credential
+ * file (or macOS Keychain item) the catalog names. The vendor is never run
+ * to find out -- a status command run signed out can start the vendor's own
+ * sign-in (Cursor's `status`), and this is asked when ClikCode opens. A
+ * vendor that declares nothing to read is taken as signed in: there is no
+ * signal, and its first turn says otherwise. */
 export async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>): Promise<boolean> {
-  // No status command: the credential the vendor keeps on disk, or an API-key
-  // variable, is the answer. Cheap enough to read every time, and never stale
-  // after a sign-in the way a cached answer would be.
   // A key pasted at sign-in, saved in the profile, is its sign-in.
   if (keyVariables(harness).some((name) => environment[name]?.trim())) return false;
-  if (!harness.statusArgv) return hasAuthEvidence(harness) ? !await authEvidencePresent(harness, environment) : false;
-  const envKey = Object.entries(environment).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(';');
-  const cacheKey = `${harness.command}:${envKey}`;
-  const cached = loginStatusCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < LOGIN_STATUS_TTL_MS) {
-    return cached.needsLogin;
-  }
-  let stdout: string;
-  try {
-    stdout = await captureNativeHarnessOutput(harness, harness.statusArgv, environment);
-  } catch {
-    // fail-open-ok: an unverified account must authenticate before it can be selected safely.
-    loginStatusCache.set(cacheKey, { at: Date.now(), needsLogin: true });
-    return true;
-  }
-  const signedIn = nativeStatusSignedIn(stdout);
-  const needsLogin = signedIn === false;
-  loginStatusCache.set(cacheKey, { at: Date.now(), needsLogin });
-  return needsLogin;
+  if (!hasAuthEvidence(harness)) return false;
+  return !await authEvidencePresent(harness, environment);
 }
 
 function requireAuthKind(value: string): AiHarnessAuthKind {

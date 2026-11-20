@@ -6,7 +6,8 @@ import {
   EMPTY_LISTING_TTL_MS, SEEN_LISTING_TTL_MS, discoveryCacheChanged, freshListing, lastSeenListing, loadDiscoveryCache, rememberListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache,
 } from './cache.js';
 import { discoverNativeSessions } from './cli-listing.js';
-import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
+import { harnessBinaryIdentity } from '../../harness/transport/native/version-memo.js';
 
 /**
  * Vendor `sessions list` commands cost a subprocess each and mostly find
@@ -182,7 +183,8 @@ describe('a vendor CLI listing', () => {
     await writeFile(join(bin, name), output === undefined ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\ncat <<'JSON'\n${output}\nJSON\n`);
     await chmod(join(bin, name), 0o755);
     process.env.PATH = `${bin}:${savedPath}`;
-    return { command: name, binary: name, session: { discoverArgv: ['list'], discoverFormat: 'json' } } as unknown as AiLocalHarnessDefinition;
+    // Signs in to nothing, so the background gate lets it run.
+    return { command: name, binary: name, signInOptional: true, session: { discoverArgv: ['list'], discoverFormat: 'json' } } as unknown as AiLocalHarnessDefinition;
   }
 
   it('reads Kiro CLI\'s per-folder envelopes, with each session\'s folder', async () => {
@@ -201,16 +203,59 @@ describe('a vendor CLI listing', () => {
     ]);
   });
 
-  it('is asked once when several windows find it expired at the same moment', async () => {
+  it('is asked once when several windows find it expired at the same moment, with no lock held across the CLI', async () => {
     const log = join(home, 'asked.log');
     const harness = await fakeCli('slow-fake', '[]');
-    await writeFile(join(home, 'bin', 'slow-fake'), `#!/bin/sh\necho asked >> ${log}\nsleep 0.3\necho '[{"id":"s1"}]'\n`);
-    // Another window: its own module instance, so only the file lock stands between them.
+    await writeFile(join(home, 'bin', 'slow-fake'), `#!/bin/sh\necho asked >> ${log}\nsleep 1\necho '[{"id":"s1"}]'\n`);
+    // What it listed last time, long expired.
+    await rememberListing('slow-fake', home, undefined, [{ nativeId: 's0' }], Date.now() - SEEN_LISTING_TTL_MS - 1);
+    // Another window: its own module instance, so only the claim on disk stands between them.
     vi.resetModules();
     const other = await import('./cli-listing.js');
-    const answers = await Promise.all([discoverNativeSessions(harness, {}, home), other.discoverNativeSessions(harness, {}, home), discoverNativeSessions(harness, {}, home)]);
-    for (const answer of answers) expect(answer).toEqual([{ nativeId: 's1' }]);
+    const mine = discoverNativeSessions(harness, {}, home);
+    // The same window asking again shares the run in flight.
+    const again = discoverNativeSessions(harness, {}, home);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The other window does not wait on the CLI (nor on a lock it holds): it
+    // reads the last answer while the claimer asks.
+    const started = Date.now();
+    expect(await other.discoverNativeSessions(harness, {}, home)).toEqual([{ nativeId: 's0' }]);
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(await mine).toEqual([{ nativeId: 's1' }]);
+    expect(await again).toEqual([{ nativeId: 's1' }]);
     expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it('starts nothing for a profile with no sign-in, and marks its account as needing one', async () => {
+    const log = join(home, 'asked.log');
+    const open = await fakeCli('kiro-signed-out', '[]');
+    // Kiro CLI's listing, run signed out, opened its sign-in in the browser.
+    await writeFile(join(home, 'bin', 'kiro-signed-out'), `#!/bin/sh\necho asked >> ${log}\nxdg-open https://app.kiro.dev/signin\n`);
+    const harness = { ...open, signInOptional: undefined, authFiles: [{ path: `${home}/kiro-auth.sqlite3` }] } as unknown as AiLocalHarnessDefinition;
+    const account = { id: 'kiro-1', status: 'ready' } as AiHarnessAccount;
+    expect(await discoverNativeSessions(harness, {}, home, undefined, account)).toEqual([]);
+    expect(account.status).toBe('needs_login');
+    await expect(readFile(log, 'utf8')).rejects.toThrow();
+  });
+
+  it('holds a failing CLI off longer after each failure in a row', async () => {
+    const log = join(home, 'asked.log');
+    const harness = await fakeCli('failing-fake', undefined);
+    await writeFile(join(home, 'bin', 'failing-fake'), `#!/bin/sh\necho asked >> ${log}\nexit 1\n`);
+    const build = await harnessBinaryIdentity('failing-fake');
+    await rememberListing('failing-fake', home, undefined, [{ nativeId: 'f1' }], Date.now() - SEEN_LISTING_TTL_MS - 1, build);
+    const start = Date.now();
+    expect(await discoverNativeSessions(harness, {}, home)).toEqual([{ nativeId: 'f1' }]);
+    // Past a list's own two minutes, still held: a first failure holds five.
+    expect(await freshListing('failing-fake', home, undefined, start + SEEN_LISTING_TTL_MS + 1_000, build)).toEqual([{ nativeId: 'f1' }]);
+    expect(await freshListing('failing-fake', home, undefined, start + 5 * 60_000 + 2_000, build)).toBeUndefined();
+    expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(1);
+    // A second failure in a row holds ten.
+    await rememberListing('failing-fake', home, undefined, [{ nativeId: 'f1' }], start - 6 * 60_000, build, { failures: 1 });
+    expect(await discoverNativeSessions(harness, {}, home)).toEqual([{ nativeId: 'f1' }]);
+    const second = Date.now();
+    expect(await freshListing('failing-fake', home, undefined, second + 9 * 60_000, build)).toEqual([{ nativeId: 'f1' }]);
+    expect(await freshListing('failing-fake', home, undefined, second + 10 * 60_000 + 2_000, build)).toBeUndefined();
   });
 
   it('asks a listing that covers every folder once, not once per folder', async () => {

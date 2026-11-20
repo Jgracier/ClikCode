@@ -81,7 +81,9 @@ export function copilotQuotaReading(result: unknown, now = Date.now()): UsageRea
 /** One JSON-RPC request over the Content-Length framing the Copilot SDK
  * server speaks (not ACP's newline framing). */
 function contentLengthRequest(binary: string, argv: readonly string[], environment: Environment, method: string, params: Json): Promise<Json | undefined> {
-  return queryJsonRpc({ binary, argv, environment, deadlineMs: PROBE_DEADLINE_MS, label: 'copilot', framing: 'content-length' },
+  const harness = localHarnessForCommand('copilot');
+  if (!harness) return Promise.resolve(undefined);
+  return queryJsonRpc({ gate: harness, binary, argv, environment, deadlineMs: PROBE_DEADLINE_MS, label: 'copilot', framing: 'content-length' },
     (peer) => peer.request(method, params));
 }
 
@@ -163,7 +165,7 @@ export async function antigravityUsageReading(environment: Environment): Promise
     // run signed out starts its own sign-in.
     const harness = localHarnessForCommand('antigravity');
     if (!token && harness && await mayRunSignInCapable(harness, environment)) {
-      await probeCommand(harness.binary, ['models'], environment);
+      await probeCommand(harness, ['models'], environment);
       token = await antigravityAccessToken(environment);
     }
     if (!token) return undefined;
@@ -223,10 +225,11 @@ export function kimiWebEndpoint(banner: string): { url: string; token: string } 
 }
 
 export async function kimiUsageReading(environment: Environment): Promise<UsageReading | undefined> {
-  const binary = await resolveBinaryPath(catalogBinary('kimi', 'kimi'));
-  if (!binary) return undefined;
+  const harness = localHarnessForCommand('kimi');
+  const binary = harness ? await resolveBinaryPath(harness.binary) : undefined;
+  if (!harness || !binary) return undefined;
   // Port 0: never collides with a `kimi web` the user is running.
-  return probeVendor({ binary, argv: ['web', '--no-open', '--port', '0'], environment, deadlineMs: PROBE_DEADLINE_MS }, async (child, signal) => {
+  return probeVendor({ gate: harness, binary, argv: ['web', '--no-open', '--port', '0'], environment, deadlineMs: PROBE_DEADLINE_MS }, async (child, signal) => {
     const endpoint = await new Promise<{ url: string; token: string } | undefined>((resolve) => {
       let banner = '';
       child.stdout!.setEncoding('utf8');
@@ -315,7 +318,7 @@ export async function cursorUsageReading(environment: Environment): Promise<Usag
       // out can start one.
       const harness = localHarnessForCommand('cursor');
       if (!harness || !await mayRunSignInCapable(harness, environment)) return undefined;
-      await probeCommand(harness.binary, ['status'], environment);
+      await probeCommand(harness, ['status'], environment);
       response = await ask('GetCurrentPeriodUsage');
     }
     if (!response?.ok) return undefined;
@@ -487,7 +490,7 @@ export async function kiroUsageReading(environment: Environment): Promise<UsageR
     const reading = kiroQuotaReading(answer.data);
     const plan = (answer.data as Json | undefined)?.planName;
     return reading && typeof plan === 'string' ? { ...reading, plan: { name: plan } } : reading;
-  }, undefined, { discovery: harness }).catch(quiet('harness/accounts/cli-usage-probes'));
+  }, undefined, { gate: harness, discovery: harness }).catch(quiet('harness/accounts/cli-usage-probes'));
 }
 
 // ---------------------------------------------------------------- Command Code
@@ -541,7 +544,7 @@ export function kiloProfileLabel(output: string): string | undefined {
 async function captureLabel(command: string, argv: readonly string[], environment: Environment, parse: (output: string) => string | undefined): Promise<string | undefined> {
   try {
     const harness = localHarnessForCommand(command);
-    const output = harness ? await probeCommand(harness.binary, argv, environment) : undefined;
+    const output = harness ? await probeCommand(harness, argv, environment) : undefined;
     return output === undefined ? undefined : parse(output);
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
 }
@@ -564,7 +567,7 @@ export function auggieUsageLabel(raw: string): string | undefined {
 
 export async function auggieUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   const harness = localHarnessForCommand('auggie');
-  const raw = harness ? await probeCommand(harness.binary, ['account', 'status', '--json'], environment) : undefined;
+  const raw = harness ? await probeCommand(harness, ['account', 'status', '--json'], environment) : undefined;
   if (raw === undefined) return undefined;
   const label = auggieUsageLabel(raw);
   if (label === undefined) return undefined;
@@ -590,7 +593,7 @@ export function kiloProfileReading(output: string): { windows: []; label: string
 export async function kiloUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   try {
     const harness = localHarnessForCommand('kilo');
-    const output = harness ? await probeCommand(harness.binary, ['profile'], environment) : undefined;
+    const output = harness ? await probeCommand(harness, ['profile'], environment) : undefined;
     return output === undefined ? undefined : kiloProfileReading(output);
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
 }

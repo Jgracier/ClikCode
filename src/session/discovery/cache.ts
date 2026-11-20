@@ -1,6 +1,7 @@
 /** Discovery is a lot of stat calls, and /resume has to open now. This is
  * the on-disk record of what was found last time, per directory. */
 
+import { backoffMs } from '../../harness/accounts/background-outcome.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -40,6 +41,12 @@ interface CachedListing {
    * recent. The clock remains for the one change no file shows: a session
    * started in another terminal. */
   build?: string;
+  /** Not an answer but a claim: one process is asking the CLI now, and
+   * every other one reads `sessions` (the last answer) until it lands or
+   * LISTING_LEASE_MS passes (the claimer died). */
+  lease?: true;
+  /** Failed asks in a row: each holds the next one off longer (backoffMs). */
+  failures?: number;
 }
 
 interface DiscoveryCacheFile {
@@ -139,22 +146,54 @@ function listingKey(command: string, workspace: string | undefined, profile: str
   return `${command}\u0000${workspace ?? ''}\u0000${profile ?? ''}`;
 }
 
+/** How long a claim to ask the CLI holds: past the listing's own deadline
+ * and its process group's kill, so a live claimer is never overtaken. */
+export const LISTING_LEASE_MS = 90_000;
+
 function listingLifetime(entry: CachedListing): number {
-  return entry.sessions.length ? SEEN_LISTING_TTL_MS : EMPTY_LISTING_TTL_MS;
+  if (entry.lease) return LISTING_LEASE_MS;
+  const answered = entry.sessions.length ? SEEN_LISTING_TTL_MS : EMPTY_LISTING_TTL_MS;
+  return entry.failures ? Math.max(answered, backoffMs(entry.failures)) : answered;
 }
 
 /** Keep what a vendor CLI listed, empty or not. Read, changed and written
  * back in one go, so an answer another process wrote meanwhile is kept. */
 export async function rememberListing(
   command: string, workspace: string | undefined, profile: string | undefined, sessions: readonly DiscoveredNativeSession[], now = Date.now(), build?: string,
+  /** `failures`: this is the last answer standing in for a failed ask. */
+  extra: { failures?: number } = {},
 ): Promise<void> {
   // Under a lock: two windows remembering at once each read the file without the other's answer,
   // and the last write dropped the first.
   await withCacheLock('native-listings.json', async () => {
     const file = await readListings();
-    file.seen[listingKey(command, workspace, profile)] = { at: now, sessions: [...sessions], ...(build ? { build } : {}) };
-    const newest = Object.entries(file.seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN);
-    await listings.write({ v: 1, seen: Object.fromEntries(newest) });
+    file.seen[listingKey(command, workspace, profile)] = { at: now, sessions: [...sessions], ...(build ? { build } : {}), ...(extra.failures ? { failures: extra.failures } : {}) };
+    await writeListings(file);
+  });
+}
+
+async function writeListings(file: ListingCacheFile): Promise<void> {
+  const newest = Object.entries(file.seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN);
+  await listings.write({ v: 1, seen: Object.fromEntries(newest) });
+}
+
+/** Either the answer is still fresh (`fresh`), or this process now holds the
+ * claim to ask the CLI (`claimed`, with the last answer and how many asks
+ * failed before). The lock is held only to read and write the claim -- never
+ * across the CLI itself, which may take its whole deadline. */
+export async function claimListing(
+  command: string, workspace: string | undefined, profile: string | undefined, now = Date.now(), build?: string,
+): Promise<{ fresh: DiscoveredNativeSession[] } | { claimed: { last: DiscoveredNativeSession[]; failures: number } }> {
+  return withCacheLock('native-listings.json', async () => {
+    const file = await readListings();
+    const key = listingKey(command, workspace, profile);
+    const entry = file.seen[key];
+    if (entry && entry.build === build && now - entry.at < listingLifetime(entry)) return { fresh: entry.sessions };
+    const last = entry?.sessions ?? [];
+    const failures = entry?.failures ?? 0;
+    file.seen[key] = { at: now, sessions: [...last], ...(build ? { build } : {}), lease: true, ...(failures ? { failures } : {}) };
+    await writeListings(file);
+    return { claimed: { last, failures } };
   });
 }
 

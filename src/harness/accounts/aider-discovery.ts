@@ -21,7 +21,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AiLocalHarnessDefinition, ModelCatalogConnect } from '../definition.js';
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { PROBE_DEADLINE_MS, vendorCommandText } from './vendor-probe.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
@@ -113,7 +113,7 @@ export async function discoverAiderModels(
           continue;
         }
       }
-      const printed = await captureNativeHarnessOutput(harness, ['--no-git', '--list-models', provider.prefix], environment, undefined, scratch).catch(() => '');
+      const printed = await vendorCommandText({ gate: harness, argv: ['--no-git', '--list-models', provider.prefix], environment, deadlineMs: PROBE_DEADLINE_MS, cwd: scratch }).catch(() => '');
       models.push(...aiderListedModels(printed, provider.prefix));
     }
   } finally {

@@ -1,6 +1,6 @@
 import { access, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { spawnPortable } from '../transport/spawn.js';
+import { KEYRING_DEADLINE_MS, runVendorCommand } from './vendor-probe.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 
 const IDENTITY_SCRIPT = String.raw`
@@ -88,31 +88,19 @@ async function runVibePython(script: string, profilePath?: string): Promise<stri
     const python = pythonExecutable(await realpath(binary));
     if (!python) return undefined;
     await access(python);
-    const result = await new Promise<string | undefined>((resolve) => {
-      const child = spawnPortable(python, ['-c', script], {
-        stdio: ['ignore', 'pipe', 'ignore'],
-        env: { ...process.env, ...(profilePath ? { VIBE_HOME: profilePath } : {}) },
-      });
-      let output = '';
-      let settled = false;
-      const finish = (value?: string): void => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      child.stdout?.setEncoding('utf8');
-      child.stdout?.on('data', (chunk: string) => {
-        if (output.length < 4096) output += chunk;
-      });
-      child.once('error', () => finish());
-      child.once('close', (code) => {
-        if (code !== 0) return finish();
-        try {
-          const parsed = JSON.parse(output.trim()) as { email?: unknown };
-          finish(typeof parsed.email === 'string' ? parsed.email : undefined);
-        } catch { finish(); }
-      });
+    // Bounded and headless (vendor-probe.ts). The keyring is what is read, so
+    // the session bus stays; no display does, so no unlock prompt can show.
+    const outcome = await runVendorCommand({
+      gate: { inert: 'keyring read', keyring: true }, binary: python, argv: ['-c', script],
+      environment: profilePath ? { VIBE_HOME: profilePath } : {}, deadlineMs: KEYRING_DEADLINE_MS,
     });
+    let result: string | undefined;
+    if (outcome.status === 'ok') {
+      try {
+        const parsed = JSON.parse(outcome.value.stdout.trim()) as { email?: unknown };
+        result = typeof parsed.email === 'string' ? parsed.email : undefined;
+      } catch { result = undefined; } // fail-open-ok: no readable answer names no one
+    }
     return result;
   } catch {
     return undefined;

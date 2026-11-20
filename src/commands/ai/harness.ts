@@ -57,17 +57,13 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   const selectedUsable = selected?.provider === harness.provider
     && turnBackendForAccount(selected) === 'vendor' && accountCanTakeTurn(selected);
   // Tracks whether the account below is being minted right now, not found
-  // pre-existing -- needed because harnessNeedsLogin returns false
-  // unconditionally for any harness with no statusArgv (Gemini, Antigravity,
-  // Amp: nothing to scriptably ask "are you logged in?" at all), so a
-  // brand-new placeholder account for one of those would otherwise be
-  // marked 'ready' and never get a single chance at the login/suspend
-  // handoff -- the real mechanism behind "Antigravity CLI does not publish
-  // an isolated configuration-root contract" surfacing at /add-account
-  // time instead: the placeholder had already silently claimed the one
-  // available account slot for a harness with no profileEnv, with the user
-  // never having had a real opportunity to authenticate it in the first
-  // place.
+  // pre-existing: a brand-new placeholder account is ready only once what is
+  // on disk says so (harnessNeedsLogin reads the credential files; nothing
+  // here runs the vendor). Marked ready without that, it never got a chance
+  // at the login handoff -- the mechanism behind "Antigravity CLI does not
+  // publish an isolated configuration-root contract" at /add-account time:
+  // the placeholder had silently claimed the one account slot of a harness
+  // with no profileEnv before the user ever signed in.
   let accountJustCreated = false;
   if (!selectedUsable) {
     const accounts = state.accounts.filter((account) => account.provider === harness.provider && turnBackendForAccount(account) === 'vendor');
@@ -125,7 +121,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     const shouldCheckLogin = !account
       || account.status !== 'ready'
       || (accountJustCreated && !harness.signInOptional && (freshInstall
-        || (!harness.statusArgv && !hasAuthEvidence(harness))
+        || !hasAuthEvidence(harness)
         || await harnessNeedsLogin(harness, environment)));
     if (shouldCheckLogin && !signIn) {
       account ??= state.accounts.find((item) => item.provider === harness.provider && turnBackendForAccount(item) === 'vendor');

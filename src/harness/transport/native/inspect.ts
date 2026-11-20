@@ -2,7 +2,7 @@
  * cached, because a picker asks this about every harness at once. */
 
 import { quiet } from '../../../runtime/lifecycle-log.js';
-import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
+import { runVendorProcess } from '../../accounts/vendor-probe.js';
 import { binaryFingerprint, harnessBinaryIdentity, rememberVersion, rememberedVersion, resetVersionMemo, saveVersionMemo } from './version-memo.js';
 import { resolveBinaryPath } from './binary.js';
 import { ensureHarnessInstalled, type HarnessInstallReporter } from './install.js';
@@ -106,36 +106,28 @@ async function inspectNativeHarnessUncached(
   fingerprint?: { path: string; mtimeMs: number; size: number },
 ): Promise<NativeHarnessInspection> {
   if (!(fingerprint ?? await binaryOnPath(spec.binary))) return { installed: false };
-  return new Promise((resolve) => {
-    const child = spawn(spec.binary, [...(spec.versionArgv ?? ['--version'])], {
-      stdio: ['ignore', 'pipe', 'pipe'], env: process.env,
-    });
+  // The background runner (vendor-probe.ts): its own process group, ended
+  // whole at the deadline, with no terminal, display or browser to reach.
+  const outcome = await runVendorProcess({
+    gate: { inert: 'version probe' }, binary: spec.binary, argv: spec.versionArgv ?? ['--version'], environment: {}, deadlineMs: timeoutMs,
+  }, (child) => new Promise<NativeHarnessInspection>((resolve) => {
     let text = '';
-    let settled = false;
-    const finish = (result: NativeHarnessInspection): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
     const collect = (chunk: Buffer | string): void => {
       if (text.length < 4096) text += String(chunk);
     };
     child.stdout!.on('data', collect);
     child.stderr!.on('data', collect);
-    child.once('error', (error) => finish({ installed: true, error: error.message }));
-    // `close`: exit can fire before the pipes drain (see captureNativeHarnessOutput).
+    // `close`: exit can fire before the pipes drain.
     child.once('close', (code, signal) => {
       const version = text.trim().split(/\r?\n/).find(Boolean)?.trim();
-      if (code === 0) finish({ installed: true, ...(version ? { version } : {}) });
-      else finish({ installed: true, ...(version ? { version } : {}), error: signal ? `version probe stopped (${signal})` : `version probe exited ${code ?? 1}` });
+      if (code === 0) resolve({ installed: true, ...(version ? { version } : {}) });
+      else resolve({ installed: true, ...(version ? { version } : {}), error: signal ? `version probe stopped (${signal})` : `version probe exited ${code ?? 1}` });
     });
-    const timer = setTimeout(() => {
-      terminatePortable(child);
-      finish({ installed: true, error: 'version probe timed out' });
-    }, timeoutMs);
-    timer.unref();
-  });
+  }));
+  if (outcome.status === 'ok') return outcome.value;
+  if (outcome.status === 'missing') return { installed: false };
+  if (outcome.status === 'failed' && outcome.reason === 'timeout') return { installed: true, error: 'version probe timed out' };
+  return { installed: true, error: outcome.status === 'failed' ? (outcome.detail ?? outcome.reason) : outcome.status };
 }
 
 /** Install the harness if it is missing (install.ts), and forget what was

@@ -1,5 +1,5 @@
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogConnect } from '../definition.js';
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { PROBE_DEADLINE_MS, vendorCommandText } from './vendor-probe.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 
 /** What an installed OpenClaw can run, read from OpenClaw itself.
@@ -80,8 +80,8 @@ export async function discoverOpenClawModels(
 ): Promise<OpenClawInventory | undefined> {
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const [catalogJson, pluginsJson] = await Promise.all([
-    captureNativeHarnessOutput(harness, ['models', 'list', '--all', '--refresh', '--json'], environment).catch(() => ''),
-    captureNativeHarnessOutput(harness, ['plugins', 'list', '--json'], environment).catch(() => ''),
+    vendorCommandText({ gate: harness, argv: ['models', 'list', '--all', '--refresh', '--json'], environment, deadlineMs: PROBE_DEADLINE_MS }).catch(() => ''),
+    vendorCommandText({ gate: harness, argv: ['plugins', 'list', '--json'], environment, deadlineMs: PROBE_DEADLINE_MS }).catch(() => ''),
   ]);
   return openClawInventory(catalogJson, pluginsJson);
 }

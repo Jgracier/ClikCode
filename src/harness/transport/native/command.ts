@@ -1,6 +1,6 @@
 /** Running one vendor command and keeping what it printed. */
 
-import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
+import { killProcessTreePortable, spawnPortable as spawn, terminatePortable } from '../spawn.js';
 import { forwardParentSignals } from '../parent-signals.js';
 import { NativeHarnessSpec, binaryOnPath } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
@@ -43,24 +43,46 @@ export async function captureNativeHarness(spec: NativeHarnessSpec, args: readon
   return value.split(/\s+/)[0];
 }
 
-/** Capture documented listing/helper output without invoking a shell. */
-/** `stdinText` answers a vendor that asks a question. With stdin ignored a
- *  prompt reads EOF and takes its default, which for Hermes' "Save config
- *  anyway? [y/N]" is No -- so `mcp add` exited 0 having written nothing. */
+/** Bound on a helper's output held in memory (a runaway guard, not a size
+ * budget: OpenClaw's `plugins list --json` is ~105 KiB). */
 const CAPTURE_LIMIT_BYTES = 2 * 1024 * 1024;
 /** Bound on a helper's stderr held in memory (a runaway guard); the end is kept. */
 const STDERR_KEEP = 256 * 1024;
+/** The clock a helper gets when its caller names none. */
+export const NATIVE_HELPER_TIMEOUT_MS = 120_000;
 
-export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs?: number, cwd?: string, stdinText?: string, signal?: AbortSignal): Promise<string> {
-  // `timeoutMs` undefined or 0 is NO clock: the helper ends when the vendor
-  // exits or errors, or when `signal` aborts (the user's cancel).
-  // Never an install: this runs for probes (status, models, sessions, usage)
-  // of harnesses nobody chose just now, and choosing is what installs one.
-  // Everything that runs a harness because the user asked for it installed
-  // it first (install.ts).
+/** A vendor command run because the user asked for it -- a step of a turn
+ * (creating the vendor's session), of a sign-in (storing a pasted key), of a
+ * sign-out -- with its output kept. Nothing ClikCode runs on its own comes
+ * here: background runs go through vendor-probe.ts, which refuses a profile
+ * with no sign-in (a test holds the list of callers). Headless: stdin is
+ * `stdinText` or nothing, the process leads its own group, and the clock
+ * (`timeoutMs`, default NATIVE_HELPER_TIMEOUT_MS), `signal` or ClikCode's own
+ * exit ends the whole group.
+ *
+ * `stdinText` answers a vendor that asks a question. With stdin ignored a
+ * prompt reads EOF and takes its default, which for Hermes' "Save config
+ * anyway? [y/N]" is No -- so `mcp add` exited 0 having written nothing. */
+export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs: number = NATIVE_HELPER_TIMEOUT_MS, cwd?: string, stdinText?: string, signal?: AbortSignal): Promise<string> {
+  // Never an install: everything that runs a harness because the user asked
+  // for it installed it first (install.ts).
   if (!await binaryOnPath(spec.binary)) throw Object.assign(new Error(notInstalledMessage(spec.displayName, spec.binary)), { code: 'ENOENT' });
+  const detached = process.platform !== 'win32';
   return new Promise((resolve, reject) => {
-    const child = spawn(spec.binary, [...args], { stdio: [stdinText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], env: { ...process.env, ...envOverrides }, ...(cwd ? { cwd } : {}) });
+    const child = spawn(spec.binary, [...args], { stdio: [stdinText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], env: { ...process.env, ...envOverrides }, detached, windowsHide: true, ...(cwd ? { cwd } : {}) });
+    const stop = (): void => {
+      killProcessTreePortable(child, 'SIGTERM', detached);
+      const pid = child.pid;
+      if (!detached || !pid) return;
+      setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* fail-open-ok: gone */ } }, 2_000).unref();
+    };
+    // Its own group no longer hears the terminal's signals: ClikCode's
+    // SIGTERM/SIGHUP or exit ends it. Not SIGINT: a listener there would keep
+    // Ctrl+C from ending ClikCode.
+    const unsignal = forwardParentSignals(() => stop(), ['SIGTERM', 'SIGHUP']);
+    const onExit = (): void => { if (detached && child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* fail-open-ok: gone */ } } };
+    process.once('exit', onExit);
+    const unforward = (): void => { unsignal(); process.off('exit', onExit); };
     if (stdinText !== undefined) {
       child.stdin?.on('error', () => undefined);
       child.stdin?.end(stdinText);
@@ -70,13 +92,14 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
     let exceededLimit = false;
     let settled = false;
     const onAbort = (): void => {
-      terminatePortable(child);
+      stop();
       finish(new Error(`${spec.displayName} helper cancelled`));
     };
     let timer: NodeJS.Timeout | undefined;
     const finish = (error?: Error): void => {
       if (settled) return;
       settled = true;
+      unforward();
       if (timer) clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
       if (error) reject(error);
@@ -93,7 +116,7 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
       // `plugins list --json` is ~105 KiB and was cut off at the old 64 KiB.
       if (stdout.length > CAPTURE_LIMIT_BYTES) {
         exceededLimit = true;
-        terminatePortable(child);
+        stop();
       }
     });
     // The newest output is kept: the cause is where the process stopped, not where it started.
@@ -107,8 +130,8 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
       if (code !== 0) return finish(new Error(`${spec.binary} ${killedBy ? `stopped (${killedBy})` : `exited ${code ?? 1}`}${failureText(stderr) ? `: ${failureText(stderr)}` : ''}`));
       finish();
     });
-    timer = timeoutMs ? setTimeout(() => {
-      terminatePortable(child);
+    timer = timeoutMs > 0 ? setTimeout(() => {
+      stop();
       finish(new Error(`${spec.displayName} helper timed out`));
     }, timeoutMs) : undefined;
     timer?.unref();

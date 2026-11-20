@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import * as zlib from 'node:zlib';
 import type { AiLocalHarnessDefinition } from '../../../harness/definition.js';
 const capture = vi.hoisted(() => vi.fn());
-vi.mock('../../../harness/transport/native/command.js', async (original) => ({
-  ...await original<typeof import('../../../harness/transport/native/command.js')>(), captureNativeHarnessOutput: capture,
+vi.mock('../../../harness/accounts/vendor-probe.js', async (original) => ({
+  ...await original<typeof import('../../../harness/accounts/vendor-probe.js')>(), vendorCommandText: capture,
 }));
 import { aiderTranscript, piTranscript, readAmpTranscript, readAntigravityTranscript, readOpenClawTranscript } from './stored-transcripts.js';
 const golden = (name: string) => readFile(fileURLToPath(new URL(`./__golden__/${name}`, import.meta.url)), 'utf8');
@@ -31,7 +31,7 @@ it('follows Pi parent links instead of importing a discarded sibling branch', ()
 it('uses the selected Amp account environment for the official JSON export', async () => {
   capture.mockResolvedValue(JSON.stringify({messages:[{role:'user',content:[{type:'text',text:'old prompt'}]},{role:'assistant',content:[{type:'text',text:'old answer'}]}]}));
   expect(await readAmpTranscript(harness,'T-id','/workspace',{HOME:'/profile'})).toEqual([{role:'user',content:'old prompt'},{role:'assistant',content:'old answer'}]);
-  expect(capture).toHaveBeenCalledWith(harness,['threads','export','T-id'],{HOME:'/profile'},undefined,'/workspace');
+  expect(capture).toHaveBeenCalledWith({gate:harness,argv:['threads','export','T-id'],environment:{HOME:'/profile'},deadlineMs:expect.any(Number),cwd:'/workspace'});
 });
 
 it('reads the observed Antigravity protobuf store without writing it', async () => {

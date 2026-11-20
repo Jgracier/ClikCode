@@ -1,6 +1,6 @@
 /** The vendor's own session manager, listed for `/sessions`. */
 
-import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
+import { PROBE_DEADLINE_MS, isSignedOutRefusal, vendorCommandText } from '../../harness/accounts/vendor-probe.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { localHarnessCapabilityManifest } from '../../runtime/lazy-bridge.js';
 import { turnEnvironment } from '../../turn/turn-environment.js';
@@ -13,6 +13,8 @@ export async function nativeManagerListing(state: HarnessState, session: Harness
   if (!manager) throw new Error(`${harness.displayName} does not publish a ${name} manager.`);
   if (!manager.listArgv) throw new Error(`${harness.displayName} manages ${manager.label} only in its own interactive UI; open it from the interactive ClikCode session.`);
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  const text = await captureNativeHarnessOutput(harness, manager.listArgv, turnEnvironment(harness, account), undefined, session.workspace);
+  // Headless and behind the sign-in gate: a signed-out vendor is told so, never started into its own sign-in.
+  const text = await vendorCommandText({ gate: harness, argv: manager.listArgv, environment: turnEnvironment(harness, account), deadlineMs: PROBE_DEADLINE_MS, cwd: session.workspace })
+    .catch((error: unknown) => { throw isSignedOutRefusal(error) ? new Error(`${harness.displayName} is not signed in. Sign in with /login first.`) : error; });
   return { label: manager.label, text: text.trim() || 'No entries.' };
 }

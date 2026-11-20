@@ -14,11 +14,11 @@
  * and Windows (Credential Manager) are not read for the same reason. */
 
 import { quiet } from '../../runtime/lifecycle-log.js';
-import { execFile } from 'node:child_process';
 import { createDecipheriv } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { KEYRING_DEADLINE_MS, runVendorCommand } from './vendor-probe.js';
 
 /** `value` as an email address, trimmed, when it is one: what every identity reader takes for one (vendor-identity.ts and
  * api-key-identity.ts import it; it lives in this leaf module so neither imports the other for it). */
@@ -66,11 +66,14 @@ for item in items:
 
 function keyringKey(): Promise<Buffer | undefined> {
   if (process.platform !== 'linux') return Promise.resolve(undefined);
-  return new Promise((resolve) => {
-    execFile('python3', ['-c', SECRET_SERVICE_LOOKUP], { windowsHide: true }, (error, stdout) => {
-      const key = !error && stdout.trim() ? Buffer.from(stdout.trim(), 'base64') : undefined;
-      resolve(key?.length === 32 ? key : undefined);
-    });
+  // Bounded and headless (vendor-probe.ts): the session bus stays, as the
+  // keyring is what is read; no display does, so no unlock prompt can show.
+  return runVendorCommand({
+    gate: { inert: 'keyring read', keyring: true }, binary: 'python3', argv: ['-c', SECRET_SERVICE_LOOKUP], environment: {}, deadlineMs: KEYRING_DEADLINE_MS,
+  }).then((outcome) => {
+    const stdout = outcome.status === 'ok' ? outcome.value.stdout.trim() : '';
+    const key = stdout ? Buffer.from(stdout, 'base64') : undefined;
+    return key?.length === 32 ? key : undefined;
   });
 }
 

@@ -27,7 +27,11 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'clikcode-handoff-replay-'));
   const bin = join(root, 'bin');
   await mkdir(bin, { recursive: true });
-  await mkdir(join(root, 'home'), { recursive: true });
+  await mkdir(join(root, 'home', '.aider'), { recursive: true });
+  // The sign-in Aider keeps on disk: an account with none is never started
+  // in the background, and is marked as needing one. No provider key in it,
+  // so no model list is fetched.
+  await writeFile(join(root, 'home', '.aider', 'oauth-keys.env'), '# signed in\n');
   promptLog = join(root, 'prompts.jsonl');
   // Aider's text output. It records the message it was asked and answers.
   await writeFile(join(bin, 'aider'), `#!/usr/bin/env node

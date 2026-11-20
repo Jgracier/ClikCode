@@ -5,12 +5,12 @@
  * Proved against a real executable on a real PATH rather than a mock, since
  * the whole point is what a stat of the actual file says. */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chmod, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectNativeHarness, inspectNativeHarnessForPicker } from './transport/native/inspect.js';
 import { nativeModelCatalog, nativeModelLabel, nativeModelCatalogForPicker, resetModelCatalogMemo } from './accounts/model-catalog.js';
-import { clearLoginStatusCache, harnessNeedsLogin } from '../commands/account.js';
+import { harnessNeedsLogin } from '../commands/account.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
 import { readFile } from 'node:fs/promises';
 
@@ -128,18 +128,23 @@ describe('model catalog persistence and stale-while-revalidate', () => {
     }
   });
 
-  it('caches harnessNeedsLogin and clears via clearLoginStatusCache', async () => {
-    clearLoginStatusCache();
-    const harness = { command: 'noharness', statusArgv: ['login', 'status'] } as unknown as AiLocalHarnessDefinition;
-    // Calling with non-existent command fails to open/runs and returns true (fail-open)
-    const result1 = await harnessNeedsLogin(harness, {});
-    expect(result1).toBe(true);
-
-    // Second call should return cached result
-    const result2 = await harnessNeedsLogin(harness, {});
-    expect(result2).toBe(true);
-
-    clearLoginStatusCache('noharness');
+  it('decides harnessNeedsLogin from the credential on disk, never by running the vendor', async () => {
+    // A status command that would be run here (and could start a sign-in) leaves a mark.
+    const root = await mkdtemp(join(tmpdir(), 'needs-login-'));
+    const marker = join(root, 'ran');
+    const binary = join(root, 'vendor');
+    await writeFile(binary, `#!/bin/sh\ntouch ${marker}\necho '{"loggedIn":true}'\n`, { mode: 0o755 });
+    const harness = {
+      command: 'needs-login-fake', binary, statusArgv: ['status'], loginArgv: ['login'],
+      authFiles: [{ path: '${FAKE_PROFILE}/auth.json' }],
+    } as unknown as AiLocalHarnessDefinition;
+    expect(await harnessNeedsLogin(harness, { FAKE_PROFILE: root })).toBe(true);
+    await writeFile(join(root, 'auth.json'), '{"token":"t"}');
+    expect(await harnessNeedsLogin(harness, { FAKE_PROFILE: root })).toBe(false);
+    // A key in the profile's environment is a sign-in of its own.
+    expect(await harnessNeedsLogin({ ...harness, authEnv: ['FAKE_KEY'] } as AiLocalHarnessDefinition, { FAKE_PROFILE: join(root, 'none'), FAKE_KEY: 'k' })).toBe(false);
+    await expect(stat(marker)).rejects.toThrow();
+    await rm(root, { recursive: true, force: true });
   });
 });
 
