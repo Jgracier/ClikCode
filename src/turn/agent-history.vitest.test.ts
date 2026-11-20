@@ -170,12 +170,12 @@ describe('what the agent\'s memory is told', () => {
   afterEach(() => { rmSync(stateDir, { recursive: true, force: true }); });
   const session = (messages: TranscriptMessage[], extra: Partial<HarnessSession> = {}): HarnessSession => onAgent(stateDir, messages, extra);
 
-  it('writes a turn as the request, then the answer with its calls as lines', () => {
+  it('writes a turn as the request with its calls as a user-side note, then the answer in its own words', () => {
     const [turnOne] = canonicalRecord(session(turn('Fix it', 'Done.', claude, 'Edit a.ts'))).turns;
     expect(agentItemsFromTurn(turnOne!)).toEqual([
-      { type: 'text', role: 'user', text: 'Fix it' },
-      // The call began where the answer began, so it comes first.
-      { type: 'text', role: 'assistant', text: '[Tool calls: Edit a.ts]\n\nDone.' },
+      // The calls are told on the user side: a weak model copies a line it finds in its own past answers.
+      { type: 'text', role: 'user', text: "Fix it\n\n(ClikCode note, not the user's words: answering this, the assistant ran Edit a.ts.)" },
+      { type: 'text', role: 'assistant', text: 'Done.' },
     ]);
   });
 
