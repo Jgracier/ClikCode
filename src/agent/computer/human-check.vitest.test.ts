@@ -1,7 +1,7 @@
 /** One press on a checkbox-style human check, and the solver that answers the puzzle behind it. */
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
-import { detectHumanCheck, pressHumanCheck, solveHumanCheck } from './human-check.js';
+import { detectHumanCheck, passHumanCheck, pressHumanCheck, settledPast, solveHumanCheck } from './human-check.js';
 
 type FakeFrame = { src: string; box: { x: number; y: number; width: number; height: number } | null };
 function fakePage(frames: FakeFrame[], onClick: (state: { frames: FakeFrame[]; answered: boolean; url: string }) => void) {
@@ -34,11 +34,16 @@ describe('the human-check checkbox', () => {
     expect(state.clicks).toHaveLength(1);
   });
 
-  it('counts a whole-page check that moves on or removes itself as cleared', async () => {
+  it('counts a whole-page check that moves on or removes itself as cleared, once the page has stayed free of it', async () => {
     const gone = fakePage([{ src: 'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/x', box: { x: 40, y: 200, width: 300, height: 65 } }], s => { s.frames = []; });
     expect(await pressHumanCheck(gone.page, noSleep)).toEqual({ outcome: 'cleared', widget: 'turnstile' });
-    const moved = fakePage([{ src: 'https://newassets.hcaptcha.com/captcha/v1/x/static/hcaptcha.html#frame=checkbox&id=1', box: { x: 40, y: 200, width: 303, height: 78 } }], s => { s.url = 'https://vendor.example/welcome'; });
+    const moved = fakePage([{ src: 'https://newassets.hcaptcha.com/captcha/v1/x/static/hcaptcha.html#frame=checkbox&id=1', box: { x: 40, y: 200, width: 303, height: 78 } }], s => { s.url = 'https://vendor.example/welcome'; s.frames = []; });
     expect(await pressHumanCheck(moved.page, noSleep)).toEqual({ outcome: 'cleared', widget: 'hcaptcha' });
+  });
+
+  it('does not call a changed address passed while the box is still there unanswered', async () => {
+    const rewritten = fakePage([{ src: 'https://newassets.hcaptcha.com/captcha/v1/x/static/hcaptcha.html#frame=checkbox&id=1', box: { x: 40, y: 200, width: 303, height: 78 } }], s => { s.url = 'https://vendor.example/signup?__cf_chl_rt_tk=abc'; });
+    expect(await pressHumanCheck(rewritten.page, noSleep)).toEqual({ outcome: 'still-there', widget: 'hcaptcha', seen: 'the hcaptcha check is asking again' });
   });
 
   it('says so when the press changed nothing, and when there is no checkbox', async () => {
@@ -353,5 +358,104 @@ describe('hCaptcha challenge kinds', () => {
     const { promptKind } = await import('./human-check-hcaptcha.js');
     expect(promptKind('Drag the 3 segments to complete the line!')).toBe(promptKind('Drag the 2 segments to complete the line'));
     expect(promptKind('Please click on the object that is different from the others in the picture')).toBe('please click on the object that');
+  });
+});
+
+// ── past the check, or only answered ─────────────────────────────────────────────────────────────────────────
+
+/** A page whose every look is scripted: `at(look)` says what the document is at that moment. One look is one read of the whole-page
+ * script, which every watch makes first. */
+type Moment = { whole?: 'cloudflare' | 'loading' | 'unreadable'; box?: boolean; answered?: boolean; title?: string };
+function scriptedPage(at: (look: number, pressed: number) => Moment) {
+  const state = { looks: 0, pressed: 0, url: 'https://pay.example/checkout' };
+  const now = (): Moment => at(state.looks, state.pressed);
+  const turnstile = { url: () => 'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/x', parentFrame: () => null, evaluate: async () => null, frameElement: async () => ({ boundingBox: async () => ({ x: 40, y: 200, width: 300, height: 65 }) }) };
+  const page = {
+    url: () => state.url,
+    title: async () => now().title ?? (now().whole === 'cloudflare' ? 'Just a moment...' : 'Checkout'),
+    frames: () => (now().box ? [turnstile] : []),
+    evaluate: async (script: unknown) => {
+      if (typeof script !== 'string') return now().answered ?? false;
+      if (!script.includes('_cf_chl_opt')) return null;
+      state.looks++;
+      const whole = now().whole;
+      if (whole === 'unreadable') throw new Error('Execution context was destroyed');
+      return whole === 'cloudflare' ? 'whole-page:cloudflare' : whole === 'loading' ? 'page:loading' : 'page:ready';
+    },
+    mouse: { move: async () => undefined, click: async () => { state.pressed++; } },
+  };
+  return { page: page as unknown as Page, state };
+}
+const instant = async (): Promise<void> => undefined;
+
+describe('whether the page is past the check', () => {
+  it('is not past a whole-page check that took the press, filled its token and rewrote its address, but is still the page', async () => {
+    // Cloudflare's interstitial after the press: the box is ticked and the token field is filled, and the challenge page stays.
+    const { page, state } = scriptedPage((_look, pressed) => ({ whole: 'cloudflare', box: true, answered: pressed > 0 }));
+    const result = await pressHumanCheck(page, { sleep: instant, waitMs: 2_000 });
+    expect(result).toEqual({ outcome: 'still-there', widget: 'turnstile', seen: 'the page is still the site\'s verification page ("Just a moment...")' });
+    expect(state.pressed).toBe(1);
+    // The whole way (press, then the solver) says the same, and never "cleared".
+    const again = await passHumanCheck(page, { sleep: instant, waitMs: 2_000 });
+    expect(again.outcome).toBe('still-there');
+    expect(again.seen).toContain('still the site\'s verification page');
+  });
+
+  it('is not past a check whose box goes away for a moment and is then issued again', async () => {
+    // While it decides the box is gone (two looks); then the same challenge is back, unanswered.
+    let goneSince: number | undefined;
+    const { page } = scriptedPage((look, pressed) => {
+      if (!pressed) return { whole: 'cloudflare', box: true };
+      goneSince ??= look;
+      return { whole: 'cloudflare', box: look - goneSince >= 2 };
+    });
+    const result = await pressHumanCheck(page, { sleep: instant, waitMs: 2_000 });
+    expect(result).toEqual({ outcome: 'still-there', widget: 'turnstile', seen: 'the turnstile check is asking again' });
+  });
+
+  it('is not past an embedded widget that reported success and then lost its answer', async () => {
+    const { page } = scriptedPage(look => ({ box: true, answered: look <= 3 }));
+    expect(await settledPast(page, instant)).toEqual({ past: 'challenge', seen: 'the turnstile check is asking again' });
+  });
+
+  it('is past an embedded widget that keeps its answer through the settle', async () => {
+    const { page, state } = scriptedPage(() => ({ box: true, answered: true }));
+    expect(await settledPast(page, instant)).toEqual({ past: 'passed' });
+    // Not on the first look: the page was watched for the whole settle.
+    expect(state.looks).toBeGreaterThanOrEqual(6);
+  });
+
+  it('is past a whole-page check once the real page has replaced it and stayed', async () => {
+    // The press is taken, the challenge page navigates (unreadable, then loading), and the site's own page is there.
+    let since: number | undefined;
+    const { page } = scriptedPage((look, pressed) => {
+      if (!pressed) return { whole: 'cloudflare', box: true };
+      since ??= look;
+      const step = look - since;
+      return step < 2 ? { whole: 'cloudflare', box: true, answered: true } : step < 3 ? { whole: 'unreadable' } : step < 4 ? { whole: 'loading' } : {};
+    });
+    expect(await pressHumanCheck(page, { sleep: instant, waitMs: 2_000 })).toEqual({ outcome: 'cleared', widget: 'turnstile' });
+  });
+
+  it('starts the settle again when the challenge page comes back after a reload', async () => {
+    // Free of any check for four looks (a reload under way), then the challenge page again: never six clean looks in a row.
+    const { page } = scriptedPage(look => (look % 6 < 4 ? {} : { whole: 'cloudflare' }));
+    expect(await settledPast(page, instant)).toEqual({ past: 'blocked', seen: 'the page is still the site\'s verification page ("Just a moment...")' });
+  });
+
+  it('still names a whole-page check that holds a token as a check in the way', async () => {
+    const blocked = scriptedPage(() => ({ whole: 'cloudflare', box: true, answered: true }));
+    expect(await detectHumanCheck(blocked.page)).toEqual({ widget: 'turnstile', stage: 'checkbox' });
+    const embedded = scriptedPage(() => ({ box: true, answered: true }));
+    expect(await detectHumanCheck(embedded.page)).toBeUndefined();
+  });
+
+  it('does not report an answer the solver got accepted while the verification page stays', async () => {
+    const { page } = scriptedPage(() => ({ whole: 'cloudflare', answered: true }));
+    const traced: string[] = [];
+    const result = await solveHumanCheck(page, { sleep: instant, waitMs: 2_000, trace: line => traced.push(line) });
+    expect(result.outcome).toBe('still-there');
+    expect(result.seen).toContain('still the site\'s verification page');
+    expect(traced.some(line => line.startsWith('answer accepted, but the page is still'))).toBe(true);
   });
 });

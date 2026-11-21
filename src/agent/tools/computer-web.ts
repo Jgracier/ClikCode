@@ -581,7 +581,7 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
         return { output: checked.outcome === 'cleared' && checked.widget === 'text' ? 'The characters in the captcha picture were read and typed into its field. Send the form; if the site says the code was wrong, run human_check again on the new picture.'
           : checked.outcome === 'cleared' ? 'The human check was passed. Observe the page and carry on.'
           : checked.outcome === 'puzzle' ? `The check asks for a puzzle, and captcha solving is ${inCloud ? 'not run in the managed cloud browser' : 'turned off (clikcode computer captcha on)'}. ${next}`
-          : checked.outcome === 'still-there' ? `The check was tried and did not clear (${checked.widget ?? 'unknown kind'}). Observe the page and run human_check once more if a challenge is showing (a fresh one is often easier); after that, ${next.charAt(0).toLowerCase()}${next.slice(1)}`
+          : checked.outcome === 'still-there' ? `The check was tried and did not clear (${checked.widget ?? 'unknown kind'}${checked.seen ? `: ${checked.seen}` : ''}). Observe the page and run human_check once more if a challenge is showing (a fresh one is often easier); after that, ${next.charAt(0).toLowerCase()}${next.slice(1)}`
           : 'No human check is on this page. Observe it: a whole-page check may still be loading, or the block is something else.' };
       }
       if (args.action === 'cloud') {

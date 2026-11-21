@@ -23,9 +23,12 @@ import { egressOfPage } from './egress.js';
 
 export type HumanCheckWidget = 'recaptcha' | 'turnstile' | 'hcaptcha' | 'text' | 'slider' | 'hold' | 'geetest' | 'arkose' | 'pow' | 'box' | 'awswaf';
 export interface HumanCheckResult {
-  /** cleared: the check accepted the answer. puzzle: it asked for more than a press. still-there: tried, nothing changed. none: no check on the page. */
+  /** cleared: the page is past the check (confirmed by `settledPast`, never by the widget's word alone). puzzle: it asked for more than a
+   * press. still-there: tried, and the check is still in the way. none: no check on the page. */
   outcome: 'cleared' | 'puzzle' | 'still-there' | 'none';
   widget?: HumanCheckWidget;
+  /** For a check that looked answered but is still in the way: what the page showed. */
+  seen?: string;
 }
 
 const CHECKBOX: Array<[HumanCheckWidget, RegExp]> = [
@@ -139,10 +142,71 @@ const IN_PAGE = `(() => {
 
 /** A page that says in its title that it is checking the visitor: a challenge still loading, or an interstitial that lets the
  * visitor through by itself (AWS WAF's "Human Verification", Cloudflare's "Just a moment"). Waited on, never given up on. */
-const VERIFYING_TITLE = /human verification|verifying you are human|confirm you are human|checking your browser|just a moment|one moment|security check/i;
+const VERIFYING_TITLE = /human verification|verifying you are human|confirm you are human|checking your browser|just a moment|one moment|security check(?!up)/i;
 const verificationPending = async (page: Page): Promise<boolean> => {
   try { return VERIFYING_TITLE.test(await page.title()); } catch { return false; }
 };
+
+// ── is the page past the check? ──
+// A widget's own word is not the answer. Cloudflare's whole-page check ("Just a moment…", "Verify you are human") fills its token field,
+// rewrites its address and redraws its box while it decides, and then often issues the challenge again: each of those used to be read
+// as "passed" while the visitor was still on the check page (a payment page, 2026-11-21: reported passed, never left the check, and a
+// reload did not help). So an answer is only a candidate until the page has been watched for a short while with no check on it.
+
+/** Runs in the page: whether this document is a whole-page check, by its own structure. Cloudflare's challenge page sets
+ * `window._cf_chl_opt`, posts `#challenge-form` and loads its orchestrator from /cdn-cgi/challenge-platform/…/orchestrate/. */
+const WHOLE_PAGE = `(() => {
+  if (document.readyState === 'loading') return 'page:loading';
+  if (typeof window._cf_chl_opt !== 'undefined' || document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running, #challenge-error-text, script[src*="/cdn-cgi/challenge-platform/"][src*="/orchestrate/"]')) return 'whole-page:cloudflare';
+  return 'page:ready';
+})()`;
+
+/** One look at the document: `check` when it is a whole-page check (by structure, or a title that says the visitor is being verified),
+ * `unreadable` while it is loading or between two documents, else `clear`. */
+async function wholePageLook(page: Page): Promise<'check' | 'clear' | 'unreadable'> {
+  let read: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // A page in the middle of a navigation answers only once its next document is there: that wait is bounded.
+    read = await Promise.race([page.evaluate(WHOLE_PAGE), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('no answer')), 2_500); })]);
+  } catch { return 'unreadable'; }
+  finally { clearTimeout(timer); }
+  if (read === 'page:loading') return 'unreadable';
+  if (typeof read === 'string' && read.startsWith('whole-page:')) return 'check';
+  return await verificationPending(page) ? 'check' : 'clear';
+}
+
+/** How long the page must stay free of any check before an answer counts, and how long it is watched for that. */
+const LOOK_EVERY_MS = 500, SETTLE_LOOKS = 6, WATCH_LOOKS = 30, ASKING_LOOKS = 4;
+
+/** Watches the page after an answer. `passed`: for the whole settle no whole-page check and no challenge was on it (an embedded widget
+ * holding its answer counts as no challenge; one that redraws without it does not). `challenge`: a check is plainly asking again.
+ * `blocked`: the watch ended with the page still on its check, or never readable. */
+export async function settledPast(page: Page, sleep: (ms: number) => Promise<void> = realSleep): Promise<{ past: 'passed' | 'challenge' | 'blocked'; seen?: string }> {
+  let clean = 0, asking = 0, seen = '';
+  for (let look = 0; look < WATCH_LOOKS; look++) {
+    if (look) await sleep(LOOK_EVERY_MS);
+    const whole = await wholePageLook(page);
+    const check = whole === 'unreadable' ? undefined : await detectHumanCheck(page);
+    // A widget that holds its answer is not asking; one that was redrawn or issued again has lost it.
+    const asks = check ? !await humanCheckAnswered(page) : false;
+    if (whole === 'clear' && !asks) {
+      if (++clean >= SETTLE_LOOKS) return { past: 'passed' };
+      asking = 0;
+      continue;
+    }
+    clean = 0;
+    if (check && asks) {
+      seen = `the ${check.widget} check is asking again`;
+      if (++asking >= ASKING_LOOKS) return { past: 'challenge', seen };
+      continue;
+    }
+    // A whole-page check that holds an answer and is still the page is deciding (or has stopped): waited on, not answered a second time.
+    asking = 0;
+    seen = whole === 'check' ? `the page is still the site's verification page${await page.title().then(title => title ? ` ("${title.slice(0, 80)}")` : '', () => '')}` : 'the page did not finish loading';
+  }
+  return { past: 'blocked', seen };
+}
 
 /** The one answer to "is a human check in this visitor's way?", for every caller: the browser tool, the connector
  * runner and the sign-up qualifier. `stage` says how far along it is: a box to press, a puzzle that is up, or a
@@ -150,14 +214,27 @@ const verificationPending = async (page: Page): Promise<boolean> => {
 export async function detectHumanCheck(page: Page): Promise<{ widget: HumanCheckWidget; stage: 'checkbox' | 'puzzle' | 'page' } | undefined> {
   const puzzle = await findPuzzle(page);
   if (puzzle) return { widget: puzzle.widget, stage: 'puzzle' };
-  if (await humanCheckAnswered(page)) return undefined;
+  // A whole-page check that holds a token and is still the page has not let the visitor through.
+  if (await humanCheckAnswered(page) && await wholePageLook(page) !== 'check') return undefined;
   const checkbox = await findCheckbox(page);
   if (checkbox) return { widget: checkbox.widget, stage: 'checkbox' };
   const drawn = await page.evaluate(IN_PAGE).catch(() => null) as HumanCheckWidget | null;
   return drawn ? { widget: drawn, stage: 'page' } : undefined;
 }
 
+/** The one press, and whether the page is past the check afterwards. */
 export async function pressHumanCheck(page: Page, deps: { sleep?: (ms: number) => Promise<void>; waitMs?: number } = {}): Promise<HumanCheckResult> {
+  const pressed = await pressOnce(page, deps);
+  if (pressed.outcome !== 'cleared') return pressed;
+  const { past, seen } = await settledPast(page, deps.sleep ?? realSleep);
+  if (past === 'passed') return pressed;
+  if (await findPuzzle(page)) return { outcome: 'puzzle', ...(pressed.widget ? { widget: pressed.widget } : {}) };
+  return { outcome: 'still-there', ...(pressed.widget ? { widget: pressed.widget } : {}), ...(seen ? { seen } : {}) };
+}
+
+/** The press itself. Its `cleared` is a candidate only -- the widget took the press, or the box went away -- and every caller confirms
+ * it with `settledPast` before saying so. */
+async function pressOnce(page: Page, deps: { sleep?: (ms: number) => Promise<void>; waitMs?: number } = {}): Promise<HumanCheckResult> {
   const sleep = deps.sleep ?? realSleep;
   const up = await findPuzzle(page);
   if (up) return { outcome: 'puzzle', widget: up.widget };
@@ -173,7 +250,8 @@ export async function pressHumanCheck(page: Page, deps: { sleep?: (ms: number) =
     await sleep(500);
     if (await findPuzzle(page)) return { outcome: 'puzzle', widget: found.widget };
     if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: found.widget };
-    // A whole-page check ("Just a moment…") has no answer field: it lets the visitor through by moving on or removing itself.
+    // A whole-page check ("Just a moment…") lets the visitor through by moving on or removing itself. A changed address or a missing
+    // box is where that starts, and also what a check looks like while it redraws: the caller watches what the page settles on.
     if (page.url() !== startUrl || !await findCheckbox(page)) return { outcome: 'cleared', widget: found.widget };
   }
   return { outcome: 'still-there', widget: found.widget };
@@ -252,7 +330,7 @@ export async function passHumanCheck(page: Page, deps: SolveDeps & { solve?: boo
   const solved = await solveHumanCheck(page, deps);
   // The press met a check but the solver then found none to answer (the challenge closed or changed in between): that is a
   // check that was tried and not passed, never "a puzzle nobody tried".
-  if (solved.outcome === 'none' && pressed.outcome !== 'none') return { outcome: 'still-there', ...(pressed.widget ? { widget: pressed.widget } : {}) };
+  if (solved.outcome === 'none' && pressed.outcome !== 'none') return { outcome: 'still-there', ...(pressed.widget ? { widget: pressed.widget } : {}), ...(pressed.seen ? { seen: pressed.seen } : {}) };
   return { ...solved, ...(solved.widget ?? pressed.widget ? { widget: solved.widget ?? pressed.widget } : {}) } as HumanCheckResult;
 }
 
@@ -276,7 +354,23 @@ async function inPageStep(hands: Hands, memo: { tries: number; held: boolean; ho
   return undefined;
 }
 
+/** Answers what is shown until the page is past it. An answer the widget accepted is confirmed on the page (`settledPast`); when the
+ * check asks again instead, the new challenge is answered too, three times at most. */
 async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMemo, asking: Pick<AskOptions, 'meter' | 'order'> = {}): Promise<HumanCheckResult> {
+  const budgetMs = deps.waitMs ?? 240_000;
+  const began = Date.now();
+  for (let attempt = 1; ; attempt++) {
+    const result = await answerShownCheck(page, { ...deps, waitMs: Math.max(0, budgetMs - (Date.now() - began)) }, hcaptcha, asking);
+    if (result.outcome !== 'cleared') return result;
+    const { past, seen } = await settledPast(page, deps.sleep ?? realSleep);
+    if (past === 'passed') return result;
+    deps.trace?.(`answer accepted, but ${seen || 'the check is still in the way'}`);
+    if (past === 'blocked' || attempt >= 3 || deps.signal?.aborted || Date.now() - began >= budgetMs) return { ...result, outcome: 'still-there', ...(seen ? { seen } : {}) };
+  }
+}
+
+/** One run at the check that is shown. Its `cleared` is a candidate only: the widget holds an answer or went away. */
+async function answerShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMemo, asking: Pick<AskOptions, 'meter' | 'order'> = {}): Promise<HumanCheckResult> {
   const sleep = deps.sleep ?? realSleep;
   const random = deps.random ?? Math.random;
   const hands: Hands = { page, random, sleep, asks: { ...gatewayAsks(deps.signal, asking), ...deps.asks }, ...(deps.trace ? { trace: deps.trace } : {}) };
@@ -296,7 +390,7 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
       // presses it again. Up to three presses; the answer field says whether any of them was accepted.
       if (await findCheckbox(page) && repressed < 3) {
         repressed++;
-        const pressed = await pressHumanCheck(page, { waitMs: 8_000, sleep });
+        const pressed = await pressOnce(page, { waitMs: 8_000, sleep });
         widget ??= pressed.widget;
         // A press the check took (it let the visitor through, or the page moved on) is the answer: nothing is left to solve.
         if (pressed.outcome === 'cleared') return ended('cleared');
@@ -321,7 +415,7 @@ async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMe
         continue;
       }
       // Nothing more to try. A check still in the way was tried and not passed; none at all is none.
-      const stuck = !inPage.held && !await detectHumanCheck(page) && await verificationPending(page);
+      const stuck = !inPage.held && !await detectHumanCheck(page) && await wholePageLook(page) === 'check';
       // A page that never stopped verifying: what it says is written down, since this state could not be reproduced on demand.
       if (stuck) deps.trace?.(`still on a verifying page "${await page.title().catch(() => '')}": ${String(await page.evaluate(`(document.body && document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 160)`).catch(() => '')).slice(0, 160)}`);
       return ended(inPage.held || stuck || await detectHumanCheck(page) ? 'still-there' : 'none');
