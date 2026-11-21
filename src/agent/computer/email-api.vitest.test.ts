@@ -12,12 +12,16 @@ let dir: string;
 let server: http.Server;
 let endpoints: GoogleEndpoints;
 let refreshes = 0;
+let pageSize = 100;
+let stallListing = false;
 let messages: { id: string; internalDate: string; from: string; subject: string; html: string }[] = [];
 const b64 = (text: string): string => Buffer.from(text).toString('base64url');
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'email-api-'));
   refreshes = 0;
+  pageSize = 100;
+  stallListing = false;
   messages = [];
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
@@ -36,8 +40,11 @@ beforeEach(async () => {
     if (url.pathname === '/gmail/profile') return json({ emailAddress: 'me@example.com' });
     if (url.pathname === '/gmail-other/profile') return json({ emailAddress: 'other@example.com' });
     if (url.pathname === '/gmail/messages') {
+      if (stallListing) return;
       const q = url.searchParams.get('q') ?? '';
-      return json({ messages: messages.filter(m => !q.includes('from:(') || q.includes(m.from)).map(m => ({ id: m.id })) });
+      const matching = messages.filter(m => !q.includes('from:(') || q.includes(m.from));
+      const offset = Number(url.searchParams.get('pageToken') ?? 0);
+      return json({ messages: matching.slice(offset, offset + pageSize).map(m => ({ id: m.id })), ...(offset + pageSize < matching.length ? { nextPageToken: String(offset + pageSize) } : {}) });
     }
     const match = /^\/gmail\/messages\/(.+)$/.exec(url.pathname);
     if (match) {
@@ -194,3 +201,26 @@ describe('the words of a message', () => {
     expect(mailText('', '<p>Hello</p>')).toBe('Hello');
   });
 });
+
+it('finds verification mail beyond the first Gmail page', async () => {
+  await connect();
+  pageSize = 20;
+  messages = Array.from({ length: 21 }, (_, i) => ({ id: String(i), internalDate: String(Date.now()), from: i === 20 ? 'accounts@acme.io' : 'news@unrelated.io', subject: i === 20 ? 'Verification' : 'Newsletter', html: i === 20 ? 'Your code is 482913' : 'Weekly news' }));
+  expect(await waitForEmail(dir, { site: 'https://acme.io', endpoints, timeoutMs: 3000 })).toMatchObject({ id: '20' });
+});
+
+it('cancels an in-flight Gmail request when the caller stops', async () => {
+  await connect();
+  stallListing = true;
+  const controller = new AbortController();
+  const pending = waitForEmail(dir, { site: 'https://acme.io', endpoints, signal: controller.signal });
+  const reason = new Error('Vendor run stopped');
+  controller.abort(reason);
+  await expect(pending).rejects.toBe(reason);
+});
+
+it('bounds a stalled Gmail request by the verification wait, not the fetch timeout', async () => {
+  await connect();
+  stallListing = true;
+  await expect(waitForEmail(dir, { site: 'https://acme.io', endpoints, timeoutMs: 100 })).rejects.toThrow(/No email matched/);
+}, 1000);

@@ -180,13 +180,13 @@ async function exchange(stateDir: string, client: Client, code: string, verifier
   return email;
 }
 
-async function accessToken(stateDir: string, endpoints: GoogleEndpoints, address?: string): Promise<string> {
+async function accessToken(stateDir: string, endpoints: GoogleEndpoints, address?: string, signal?: AbortSignal): Promise<string> {
   const email = await pickMailbox(stateDir, { address });
   const hit = cached.get(cacheKey(stateDir, email));
   if (hit && hit.expires > Date.now()) return hit.token;
   const saved = (await allStored(stateDir)).find(s => norm(s.email) === norm(email))!;
   const client = await emailClient(stateDir);
-  const res = await fetch(endpoints.token, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, signal: AbortSignal.timeout(20_000),
+  const res = await fetch(endpoints.token, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
     body: new URLSearchParams({ client_id: client.clientId, client_secret: client.clientSecret, refresh_token: saved.refreshToken, grant_type: 'refresh_token' }) });
   const body = await res.json().catch(() => ({})) as { access_token?: string; expires_in?: number; error?: string };
   if (!res.ok || !body.access_token) {
@@ -280,43 +280,67 @@ export async function waitForEmail(stateDir: string, query: { address?: string; 
   const endpoints = query.endpoints ?? GOOGLE;
   const since = query.since ?? Date.now() - 15 * 60_000;
   const q = [query.from ? `from:(${query.from})` : '', query.subject ? `subject:(${query.subject})` : '', `after:${Math.floor(since / 1000) - 1}`].filter(Boolean).join(' ');
-  const deadline = Date.now() + (query.timeoutMs ?? 90_000);
-  for (;;) {
-    query.signal?.throwIfAborted();
-    const token = await accessToken(stateDir, endpoints, address);
-    const headers = { authorization: `Bearer ${token}` };
-    const list = await fetch(`${endpoints.gmail}/messages?${new URLSearchParams({ q, maxResults: query.site ? '20' : '5', ...(query.spam ? { includeSpamTrash: 'true' } : {}) })}`, { headers, signal: AbortSignal.timeout(20_000) });
-    if (!list.ok) throw new Error(`Gmail would not list messages (HTTP ${list.status}).`);
-    const ids = ((await list.json()) as { messages?: { id: string }[] }).messages ?? [];
-    let found: FoundEmail[] = [];
-    for (const { id } of ids) {
-      if (query.consume && await isClaimed(stateDir, id)) continue;
-      const res = await fetch(`${endpoints.gmail}/messages/${id}?format=full`, { headers, signal: AbortSignal.timeout(20_000) });
-      if (!res.ok) continue;
-      const message = await res.json() as { internalDate?: string; payload?: Part & { headers?: { name: string; value: string }[] } };
-      const header = (name: string): string => message.payload?.headers?.find(h => h.name.toLowerCase() === name)?.value ?? '';
-      const html = collect(message.payload, 'text/html').join('\n');
-      const plain = collect(message.payload, 'text/plain').join('\n');
-      found.push({ id, from: header('from'), subject: header('subject'), text: mailText(plain, html), links: [...new Set([...hrefs(html), ...textLinks(plain)])], anchors: anchors(html), receivedAt: Number(message.internalDate ?? 0), mailbox: address });
+  const timeoutMs = query.timeoutMs ?? 90_000;
+  const deadline = Date.now() + timeoutMs;
+  const timeout = (): Error => new Error(`No email matched ${query.site ? `an email for ${vendorOf(query.site)}` : q} within ${Math.round(timeoutMs / 1000)} seconds.`);
+  const budget = AbortSignal.timeout(Math.max(1, timeoutMs));
+  const signal = query.signal ? AbortSignal.any([query.signal, budget]) : budget;
+  const readMessages = new Map<string, FoundEmail>();
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const token = await accessToken(stateDir, endpoints, address, signal);
+      const headers = { authorization: `Bearer ${token}` };
+      let found: FoundEmail[] = [];
+      let pageToken: string | undefined;
+      const pages = new Set<string>();
+      do {
+        signal.throwIfAborted();
+        const list = await fetch(`${endpoints.gmail}/messages?${new URLSearchParams({ q, maxResults: '100', ...(pageToken ? { pageToken } : {}), ...(query.spam ? { includeSpamTrash: 'true' } : {}) })}`, { headers, signal });
+        if (!list.ok) throw new Error(`Gmail would not list messages (HTTP ${list.status}).`);
+        const page = await list.json() as { messages?: { id: string }[]; nextPageToken?: string };
+        for (const { id } of page.messages ?? []) {
+          // Gmail message IDs are scoped to their mailbox, not the whole install.
+          const claimId = `${norm(address)}:${id}`;
+          if (query.consume && (await isClaimed(stateDir, claimId) || await isClaimed(stateDir, id))) continue;
+          const prior = readMessages.get(id);
+          if (prior) { found.push(prior); continue; }
+          const res = await fetch(`${endpoints.gmail}/messages/${encodeURIComponent(id)}?format=full`, { headers, signal });
+          if (!res.ok) throw new Error(`Gmail would not read a message (HTTP ${res.status}).`);
+          const message = await res.json() as { internalDate?: string; payload?: Part & { headers?: { name: string; value: string }[] } };
+          const header = (name: string): string => message.payload?.headers?.find(h => h.name.toLowerCase() === name)?.value ?? '';
+          const html = collect(message.payload, 'text/html').join('\n');
+          const plain = collect(message.payload, 'text/plain').join('\n');
+          found.push({ id, from: header('from'), subject: header('subject'), text: mailText(plain, html), links: [...new Set([...hrefs(html), ...textLinks(plain)])], anchors: anchors(html), receivedAt: Number(message.internalDate ?? 0), mailbox: address });
+          readMessages.set(id, found[found.length - 1]!);
+        }
+        pageToken = page.nextPageToken;
+        if (pageToken && pages.has(pageToken)) throw new Error('Gmail repeated a message page token.');
+        if (pageToken) pages.add(pageToken);
+      } while (pageToken);
+      found = found.filter(mail => mail.receivedAt >= since && (!query.accept || query.accept(mail)));
+      if (query.site) {
+        // A vendor that sends through an unrelated mail service names itself only deeper in the body: look further
+        // there when this is the only real (non-marketing) email that arrived since the request.
+        const widen = found.filter(mail => !isMarketing(mail)).length === 1;
+        const scored = found.map(mail => ({ mail, ...senderMatch(mail, query.site!, { widen }) })).filter(item => item.tier > 0);
+        const best = Math.min(...scored.map(item => item.tier), 9);
+        found = scored.filter(item => item.tier === best).map(item => item.mail);
+        // Two different senders both fit this site: that is another agent's mail or a lookalike, and a guess here types a wrong code.
+        const senders = new Set(found.map(mail => /@([^>\s]+)/.exec(mail.from.toLowerCase())?.[1] ?? mail.from));
+        if (senders.size > 1) throw new EmailAmbiguous(`Emails from ${[...senders].slice(0, 3).join(' and ')} both fit ${vendorOf(query.site)}; not choosing between them.`);
+      }
+      // Newest first: a resend from the same sender replaces the older code.
+      for (const mail of found.sort((a, b) => b.receivedAt - a.receivedAt)) {
+        if (!query.consume || await claimMessage(stateDir, `${norm(address)}:${mail.id}`)) return mail;
+      }
+      if (Date.now() >= deadline) throw timeout();
+      await sleep(Math.min(query.pollMs ?? 3_000, Math.max(0, deadline - Date.now())));
     }
-    found = found.filter(mail => mail.receivedAt >= since && (!query.accept || query.accept(mail)));
-    if (query.site) {
-      // A vendor that sends through an unrelated mail service names itself only deeper in the body: look further
-      // there when this is the only real (non-marketing) email that arrived since the request.
-      const widen = found.filter(mail => !isMarketing(mail)).length === 1;
-      const scored = found.map(mail => ({ mail, ...senderMatch(mail, query.site!, { widen }) })).filter(item => item.tier > 0);
-      const best = Math.min(...scored.map(item => item.tier), 9);
-      found = scored.filter(item => item.tier === best).map(item => item.mail);
-      // Two different senders both fit this site: that is another agent's mail or a lookalike, and a guess here types a wrong code.
-      const senders = new Set(found.map(mail => /@([^>\s]+)/.exec(mail.from.toLowerCase())?.[1] ?? mail.from));
-      if (senders.size > 1) throw new EmailAmbiguous(`Emails from ${[...senders].slice(0, 3).join(' and ')} both fit ${vendorOf(query.site)}; not choosing between them.`);
-    }
-    // Newest first: a resend from the same sender replaces the older code.
-    for (const mail of found.sort((a, b) => b.receivedAt - a.receivedAt)) {
-      if (!query.consume || await claimMessage(stateDir, mail.id)) return mail;
-    }
-    if (Date.now() >= deadline) throw new Error(`No email matched ${query.site ? `an email for ${vendorOf(query.site)}` : q} within ${Math.round((query.timeoutMs ?? 90_000) / 1000)} seconds.`);
-    await sleep(query.pollMs ?? 3_000);
+  } catch (error) {
+    if (query.signal?.aborted) throw query.signal.reason;
+    if (budget.aborted) throw timeout();
+    throw error;
   }
 }
 
@@ -331,19 +355,28 @@ const OWN_MAILBOX_MS = 20_000;
 export async function findEmail(stateDir: string, query: Parameters<typeof waitForEmail>[1] & { hints?: readonly (string | undefined)[]; ownMs?: number }): Promise<FoundEmail & { mailbox: string }> {
   const chosen = await pickMailbox(stateDir, { address: query.address, hints: query.hints });
   const others = query.address ? [] : (await allStored(stateDir)).map(s => s.email).filter(email => norm(email) !== norm(chosen));
-  const total = query.timeoutMs ?? 90_000, own = query.ownMs ?? OWN_MAILBOX_MS;
+  const total = query.timeoutMs ?? 90_000;
+  const deadline = Date.now() + total;
+  // Always reserve time for the remaining mailboxes, even for short verification waits.
+  const own = Math.min(query.ownMs ?? OWN_MAILBOX_MS, Math.max(1, Math.floor(total / 2)));
   const attempt = (address: string, timeoutMs: number, signal?: AbortSignal) => waitForEmail(stateDir, { ...query, address, timeoutMs, signal }) as Promise<FoundEmail & { mailbox: string }>;
-  if (!others.length || total <= own) return attempt(chosen, total, query.signal);
+  if (!others.length) return attempt(chosen, total, query.signal);
+  let primaryError: unknown;
   try { return await attempt(chosen, own, query.signal); }
-  catch (error) { if (!(error instanceof Error) || !/^No email matched/.test(error.message)) throw error; }
+  catch (error) {
+    if (query.signal?.aborted) throw error;
+    if (error instanceof EmailAmbiguous) throw error;
+    primaryError = error;
+  }
   const stop = new AbortController();
   const signal = query.signal ? AbortSignal.any([query.signal, stop.signal]) : stop.signal;
   try {
-    return await Promise.any([chosen, ...others].map(address => attempt(address, total - own, signal)));
+    const addresses = primaryError instanceof Error && /^No email matched/.test(primaryError.message) ? [chosen, ...others] : others;
+    return await Promise.any(addresses.map(address => attempt(address, Math.max(1, deadline - Date.now()), signal)));
   } catch (error) {
     if (query.signal?.aborted) throw error;
     const inner = error instanceof AggregateError ? error.errors : [error];
-    const other = inner.find(e => e instanceof Error && !/^No email matched/.test(e.message));
+    const other = [primaryError, ...inner].find(e => e instanceof Error && !/^No email matched/.test(e.message));
     if (other) throw other;
     throw new Error(`No email matched ${query.site ? `an email for ${vendorOf(query.site)}` : [query.from, query.subject].filter(Boolean).join(' ')} within ${Math.round(total / 1000)} seconds in ${[chosen, ...others].join(', ')}.`);
   } finally { stop.abort(); }
