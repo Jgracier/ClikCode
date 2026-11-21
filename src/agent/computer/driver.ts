@@ -9,6 +9,8 @@ import { permissionsNotice } from './driver-results.js';
 import { ensureDesktopDriverService } from './driver-macos-session.js';
 import { sharedState } from './shared-state.js';
 
+export type WindowObservation = { snapshot?: string; unaddressable?: boolean };
+
 /** Cua keeps a window's element snapshots in the driver process, so the process must be the same one from an observe to
  * the action that uses its tokens. A reloaded copy of this module (hot-tools.ts) therefore finds the connection here
  * instead of starting a second driver that has never seen the window. */
@@ -16,8 +18,9 @@ const state = sharedState('computer-driver', () => ({
   pending: undefined as Promise<McpClient> | undefined,
   connected: undefined as McpClient | undefined,
   fields: undefined as Map<string, ReadonlySet<string>> | undefined,
-  /** The latest snapshot of each observed window, by `pid:window_id`. They die with the driver process. */
-  snapshots: new Map<string, string>(),
+  /** What the latest observe of each window gave, by `pid:window_id`: its snapshot, or none when Cua issued no tokens
+   * for it. It dies with the driver process. */
+  observed: new Map<string, WindowObservation>(),
 }));
 
 /** Where `clikcode computer driver install` puts cua-driver: its own versioned layout, so PATH is not needed. */
@@ -57,7 +60,7 @@ function start(): Promise<McpClient> {
     state.connected = client;
     state.fields = undefined;
     // A new driver process knows none of the old one's snapshots.
-    state.snapshots.clear();
+    state.observed.clear();
     process.once('exit', () => client.killNow());
     return client;
   }).finally(() => { state.pending = undefined; });
@@ -66,15 +69,14 @@ function start(): Promise<McpClient> {
 
 const windowKey = (pid: number, windowId: number): string => `${pid}:${windowId}`;
 
-/** Remembers the snapshot a window observe made (or forgets the window when it made none). */
-export function rememberSnapshot(pid: number, windowId: number, snapshot: string | undefined): void {
-  if (snapshot) state.snapshots.set(windowKey(pid, windowId), snapshot);
-  else state.snapshots.delete(windowKey(pid, windowId));
+/** Remembers what a window observe gave: the snapshot its rows belong to, or that Cua issued no tokens for it. */
+export function rememberObservation(pid: number, windowId: number, observation: WindowObservation): void {
+  state.observed.set(windowKey(pid, windowId), observation);
 }
 
-/** The snapshot of the latest observe of this window by the running driver; undefined when it has not been observed. */
-export function latestSnapshot(pid: number, windowId: number): string | undefined {
-  return state.connected && !state.connected.closed ? state.snapshots.get(windowKey(pid, windowId)) : undefined;
+/** The latest observe of this window by the running driver; undefined when it has not been observed. */
+export function latestObservation(pid: number, windowId: number): WindowObservation | undefined {
+  return state.connected && !state.connected.closed ? state.observed.get(windowKey(pid, windowId)) : undefined;
 }
 
 /** A Wayland session: Cua's native Wayland backend finds windows through the accessibility bus and acts

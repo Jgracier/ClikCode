@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   backgroundOnly, backgroundOnlyNotice, foregroundUnavailableNotice, friendlyDriverError, macosAccessibilityNotice, macosPermissionsPendingNotice, noWindowFrameNotice, macosScreenRecordingNotice,
   clipboardReply, permissionsNotice, scrubClipboard, summarizeApps, windowsElevatedNotice,
-  driverElementToken, inToolWords, noObservationNotice, observedSnapshot, staleTokenNotice, withTokenLine,
+  driverElementToken, inToolWords, noElementTokensNotice, noObservationNotice, observedSnapshot, staleTokenNotice, unaddressableObservation, withTokenLine,
 } from './driver-results.js';
 
 const app = (name: string, extra: Record<string, unknown> = {}) => ({ name, pid: 0, running: false, bundle_id: null, kind: null, windows: [], ...extra });
@@ -140,6 +140,16 @@ describe('element tokens of a window observe', () => {
     expect(observedSnapshot({ content: (withId as { content: never }).content } as never)).toBe('s0000002a');
     expect(observedSnapshot(noId)).toBeUndefined();
     expect(observedSnapshot({ structuredContent: { snapshot_id: 'get_window_state' } } as never)).toBeUndefined();
+  });
+
+  it('knows a read of the whole app, which has no tokens, from an ordinary one', () => {
+    // cua-driver 0.38.0 and 0.56.8, GNOME Wayland, a Chrome process with five windows.
+    const appWide = { content: (noId as { content: never }).content, structuredContent: { pid: 2954614, degraded: true, degraded_reason: 'accessibility_window_identity_unproven: tree is application-scoped; exact-window element tokens and bounds are unavailable' } } as never;
+    expect(unaddressableObservation(appWide)).toBe(true);
+    expect(unaddressableObservation(withId)).toBe(false);
+    // A driver that names no snapshot and reports nothing wrong (another platform or release) is left as it is.
+    expect(unaddressableObservation(noId)).toBe(false);
+    expect(noElementTokensNotice).not.toMatch(/get_window_state|get_desktop_state|type_text/);
   });
 
   it('turns a bare row of the latest observe into the token the driver accepts, and leaves a full token alone', () => {

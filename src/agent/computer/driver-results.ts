@@ -99,6 +99,16 @@ export function observedSnapshot(result: McpCallResult): string | undefined {
 }
 const SNAPSHOT_ID = /^s[0-9a-f]{8}$/;
 
+/** A window read Cua could not tie to that one window: it walked the whole app and issued no snapshot, so no row of it
+ * is a token (cua-driver 0.38 to 0.56 on GNOME Wayland, whenever the app has more than one window open:
+ * `degraded_reason: accessibility_window_identity_unproven`). */
+export function unaddressableObservation(result: McpCallResult): boolean {
+  const structured = result.structuredContent as { degraded?: unknown; degraded_reason?: unknown } | undefined;
+  return structured?.degraded === true && /identity_unproven|application-scoped/i.test(String(structured.degraded_reason ?? '')) && !observedSnapshot(result);
+}
+
+export const noElementTokensNotice = 'No element_token works in this window right now: Cua could not tell its elements from those of the app\'s other windows (on Wayland this happens while the app has more than one window open), so it read the whole app and the rows are numbered for reading only. To act here, observe with no pid for a screenshot of the whole desktop and click, type or scroll by its x and y with no pid (that needs a model that sees images, and the window on screen). The rows become usable again once the app has a single window: observe the window again then.';
+
 /** The element_token Cua wants. An observe prints rows as `[77]` and the token as `<snapshot>:77`; a model that passes
  * the bare row means that row of the window's latest observe, so it gets that observe's snapshot. Anything else
  * (a full token, another platform's handle) goes through as it is. */
