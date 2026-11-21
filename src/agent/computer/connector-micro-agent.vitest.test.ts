@@ -296,3 +296,11 @@ describe('the micro-task and the egress', () => {
     expect(seen).toEqual(['prod', undefined, undefined]);
   });
 });
+
+it('an unavailable recovery agent never inherits a human sign-in wall', async () => {
+  const p = ports('');
+  p.run = async () => { throw new Error('subscription is unavailable'); };
+  const result = await runMicroTask('acme', { ...stop, kind: 'password', human: { kind: 'worker-setup', reasonCode: 'sign-in-needed' } }, { maxCalls: 25, maxMs: 60000 }, p);
+  expect(result).toMatchObject({ ok: false, stop: { kind: 'unknown', agentUnavailable: true, message: expect.stringContaining('the agent could not run') } });
+  if (!result.ok) expect(result.stop.human).toBeUndefined();
+});

@@ -739,3 +739,15 @@ describe('a human step sent to ClikDeploy', () => {
     expect((c.reports[0] as { humanStep: { instructions: string } }).humanStep.instructions.length).toBeLessThanOrEqual(300);
   });
 });
+
+it.each(['oauth', 'app-registration', 'spec-fix'])('retries %s recovery when the agent cannot run, without recording a vendor wall', async kind => {
+  const task: OnboardResult = kind === 'oauth' ? oauthTask('acme') : kind === 'app-registration'
+    ? { id: 'acme', state: 'attention', stage: 'connect', reason: 'register an app', attention: { kind: 'app-registration' }, next: { kind: 'none', task: 'register an app' } }
+    : { id: 'acme', state: 'needs-agent', stage: 'proof', reason: 'auth probe ended path-wrong', next: { kind: 'agent', task: 'Fix auth probe path-wrong' } };
+  const c = fakeClient([task]);
+  const d = fakeDriver([{ ok: false, stop: stop({ kind: 'password' }) }]);
+  d.driver.agentTask = async () => ({ ok: false, stop: stop({ agentUnavailable: true, message: 'the agent could not run: account unavailable' }) });
+  const { outcomes } = await runConnectors(c.client, d.driver, quick);
+  expect(outcomes[0]).toMatchObject({ status: 'handoff', summary: expect.stringContaining('the agent could not run') });
+  expect(c.reports).toEqual([]);
+});

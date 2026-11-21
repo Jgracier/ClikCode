@@ -107,6 +107,7 @@ export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCall
     if (kind) return { ok: false, agentCalls: ran.calls, stop: { kind: WALL_TO_STOP[result.wall] ?? 'unknown', message: `${result.wall}: ${result.why}`, url: stop.url, pageText: stop.pageText, controls: stop.controls, human: { kind, ...(stop.url ? { url: stop.url } : {}), instructions: `${result.wall}: ${result.why}`.slice(0, 300), reasonCode: result.wall } } };
   }
   const why = result.kind === 'gave-up' ? result.why : 'the agent reported a wall it could not name';
+  if (err) return { ok: false, agentCalls: ran.calls, stop: { ...stop, kind: 'unknown', human: undefined, agentUnavailable: true, message: `the agent could not run: ${err}`.slice(0, 300) } };
   return { ok: false, agentCalls: ran.calls, stop: { ...stop, message: `the agent micro-task did not finish (${ran.calls} calls): ${why}`.slice(0, 300) } };
 }
 

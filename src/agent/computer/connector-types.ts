@@ -18,6 +18,7 @@ export interface OnboardResult {
 /** Where a browser step stopped, as data. */
 export interface StopInfo {
   kind: 'captcha' | 'mfa' | 'payment' | 'password' | 'unrecognized-client' | 'choice' | 'unknown';
+  /** The recovery agent could not start; retry the work rather than reporting a vendor wall. */ agentUnavailable?: boolean;
   message: string; url: string; pageText: string; controls: string[]; screenshot?: string;
   /** Set when the browser work already knows this is a wall only a person clears (keygrab does). */ human?: HumanStep;
   /** What keygrab did, newest last. */ trail?: string[];

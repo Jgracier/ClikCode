@@ -12,6 +12,8 @@ import { CLOUD_VENDOR, WAIT_LIMIT_MS, docsToSpecPrompt, isSpecFix, narrowTask, o
 import { hostOf, humanStepFor } from './connector-walls.js';
 
 // The runner's parts moved to connector-types.ts, connector-tasks.ts and connector-walls.ts; what other files import from here stays.
+class AgentUnavailableError extends Error {}
+
 export type { HumanKind, HumanStep, OnboardResult, StopInfo, DriveOutcome, DeployClient, BrowserDriver, VendorOutcome } from './connector-types.js';
 export { BACKOFF_HOURS } from './keygrab-park.js';
 export { docsToSpecPrompt, oauthAppTask, otherUrls, planFor, referenceTask, resumeCommand, siteUrl, narrowTask } from './connector-tasks.js';
@@ -124,6 +126,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     try { done = await gate(() => driver.agentTask!(id, stop, { maxCalls: options.agentCalls ?? 25, maxMs: options.agentMs ?? Math.max(30_000, maxMs - elapsed()) })); }
     finally { options.onAgent?.(false); }
     if (options.agentMs) agentSpent += now() - agentBegan;
+    if (!done.ok && done.stop.agentUnavailable) throw new AgentUnavailableError(done.stop.message);
     if (done.ok && done.recipe) recipeSaved = true;
     return done;
   };
@@ -384,6 +387,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
         }
       }
     } catch (error) {
+      if (error instanceof AgentUnavailableError) return await handoff(error.message);
       return out('error', `${plan.do} failed: ${cap(say(error instanceof Error ? error.message : String(error)), 200)}`);
     }
   }
