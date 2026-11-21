@@ -282,10 +282,22 @@ describe('the route a connector agent runs on', () => {
     const route = chatRoute({ accounts, sessions: [chat('2026-11-18T10:00:00Z', 'codex', 'codex-b'), chat('2026-11-18T12:00:00Z', 'claude', 'claude-a', 'opus')] });
     expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'opus' });
   });
-  it('does not fall back to another account when the chat\'s has no usage left', () => {
+  it('moves to another signed-in account of the same vendor when the chat\'s has no usage left, as a chat turn does', () => {
+    const spent = [account('codex-a', 'openai', 'CODEX_HOME', 'exhausted'), account('claude-a', 'anthropic', 'CLAUDE_CONFIG_DIR'), account('codex-b', 'openai', 'CODEX_HOME')];
+    const route = chatRoute({ accounts: spent, sessions: [chat('2026-11-18T12:00:00Z', 'codex', 'codex-a', 'gpt-test')] });
+    expect(route).toMatchObject({ harness: 'codex', account: { id: 'codex-b' }, model: 'gpt-test', movedFrom: 'codex-a@example.com' });
+  });
+  it('never moves to another vendor, and says the usage is out when no account of the chat\'s vendor is left', () => {
     const spent = [account('claude-a', 'anthropic', 'CLAUDE_CONFIG_DIR', 'exhausted'), account('codex-b', 'openai', 'CODEX_HOME')];
     const route = chatRoute({ accounts: spent, sessions: [chat('2026-11-18T12:00:00Z', 'claude', 'claude-a')] });
     expect(route).toEqual({ error: expect.stringContaining('has no usage left now') });
+  });
+  it('does not go back to an account this hand-off already tried', () => {
+    const two = [account('codex-a', 'openai', 'CODEX_HOME'), account('codex-b', 'openai', 'CODEX_HOME')];
+    const sessions = [chat('2026-11-18T12:00:00Z', 'codex', 'codex-a')];
+    const now = Date.now();
+    expect(chatRoute({ accounts: two, sessions }, now, undefined, new Map([['codex-a', now]]))).toMatchObject({ account: { id: 'codex-b' } });
+    expect(chatRoute({ accounts: two, sessions }, now, undefined, new Map([['codex-a', now], ['codex-b', now]]))).toEqual({ error: expect.stringContaining('has no usage left now') });
   });
   it('says so when the chat runs on a harness a connector agent cannot use', () => {
     expect(chatRoute({ accounts, sessions: [chat('2026-11-18T12:00:00Z', 'opencode', 'claude-a')] })).toEqual({ error: expect.stringContaining('run on opencode') });

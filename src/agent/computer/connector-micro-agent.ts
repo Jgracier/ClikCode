@@ -3,8 +3,11 @@
  * The prompt is the screen as the runner saw it plus one goal. On success the agent has captured the key (unseen) and saved a recipe, so
  * the next vendor on that host needs no agent. */
 import type { AiHarnessAccount } from '../../harness/definition.js';
-import type { HarnessSession } from '../../session/model.js';
+import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
+import { matchesVendorTurn, nextUsableFailoverAccount } from '../../turn/account-routing.js';
+import { classifyAccountFailure } from '../../turn/failover.js';
+import { storeQuotaRefusal } from '../../turn/account-outcome.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
@@ -123,10 +126,12 @@ export function microAccount(accounts: readonly AiHarnessAccount[]): AiHarnessAc
 const CHAT_HARNESSES = { claude: 'claude', codex: 'codex' } as const;
 type ChatHarness = keyof typeof CHAT_HARNESSES;
 
-/** What the user is chatting on right now -- the harness, the signed-in account and the model of their most recent chat -- which is
- * what a connector agent runs on: the same subscription doing the same kind of work, never Gateway credit and never another account.
- * An error says why it cannot, in words for the outcome (the loop retries an agent that could not run, it is no vendor wall). */
-export function chatRoute(state: { sessions: readonly HarnessSession[]; accounts: readonly AiHarnessAccount[] }, now = Date.now(), sessionId?: string): { harness: ChatHarness; account: AiHarnessAccount; model?: string } | { error: string } {
+/** What the user is chatting on right now -- the harness, the signed-in account and the model of their chat -- which is what a
+ * connector agent runs on: the same subscription doing the same kind of work, never Gateway credit. When that account has no usage
+ * left the route moves the way a chat turn does (nextUsableFailoverAccount: another signed-in account of the same vendor, most room
+ * first), so a spent account does not stall the line for hours (231 hand-offs on 2026-11-21). `attempted`: accounts this hand-off
+ * already tried, and when. An error says why no account can run it, in words for the outcome (the loop retries, it is no vendor wall). */
+export function chatRoute(state: { sessions: readonly HarnessSession[]; accounts: readonly AiHarnessAccount[] }, now = Date.now(), sessionId?: string, attempted: ReadonlyMap<string, number> = new Map()): { harness: ChatHarness; account: AiHarnessAccount; model?: string; movedFrom?: string } | { error: string } {
   const chats = [...state.sessions].filter(session => session.route === 'local' && session.nativeHarness && session.accountId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   if (!chats.length) return { error: 'No chat with a signed-in harness was found to run the connector agent on.' };
@@ -139,8 +144,12 @@ export function chatRoute(state: { sessions: readonly HarnessSession[]; accounts
   const harness = chat.nativeHarness as string;
   const account = state.accounts.find(item => item.id === chat.accountId);
   if (!account?.nativeProfile) return { error: `The current chat's ${harness} account is not signed in on this computer.` };
-  if (!accountCanTakeTurn(account, now)) return { error: `The current chat's ${harness} account (${account.label}) has no usage left now.` };
-  return { harness: harness as ChatHarness, account, ...(chat.model ? { model: chat.model } : {}) };
+  const model = chat.model ? { model: chat.model } : {};
+  if (accountCanTakeTurn(account, now) && !attempted.has(account.id)) return { harness: harness as ChatHarness, account, ...model };
+  const next = nextUsableFailoverAccount(state as unknown as HarnessState, account,
+    candidate => matchesVendorTurn(candidate) && candidate.authKind === 'vendor-cli' && candidate.nativeProfile !== undefined, new Map([...attempted, [account.id, now]]), now, chat.model ?? undefined);
+  if (!next) return { error: `The current chat's ${harness} account (${account.label}) has no usage left now, and no other signed-in ${harness} account can take the work.` };
+  return { harness: harness as ChatHarness, account: next, ...model, movedFrom: account.label };
 }
 
 export function livePorts(stateDir: string): MicroPorts {
@@ -156,10 +165,15 @@ export function livePorts(stateDir: string): MicroPorts {
     async run(prompt, options) {
       const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);
       const { readState } = await import('../../session/state/read.js');
-      const route = chatRoute(await readState({ transcripts: [] }), Date.now(), sessionId);
+      // A vendor that refuses the account for usage before the agent did anything is the chat's own failover case: the refusal is
+      // stored on the account (as a chat turn stores it) and the hand-off goes to the next account, each tried once.
+      const attempted = new Map<string, number>();
+      for (;;) {
+      const route = chatRoute(await readState({ transcripts: [] }), Date.now(), sessionId, attempted);
       if ('error' in route) throw new Error(route.error);
       const { account, model } = route;
-      lifecycle('connector.agent.route', { harness: route.harness, accountId: account.id, model, initiatingSession: sessionId });
+      attempted.set(account.id, Date.now());
+      lifecycle('connector.agent.route', { harness: route.harness, accountId: account.id, model, initiatingSession: sessionId, ...(route.movedFrom ? { movedFrom: route.movedFrom } : {}) });
       const useCodex = route.harness === 'codex';
       const dir = await mkdtemp(join(tmpdir(), 'clikcode-micro-'));
       const counter = join(dir, 'calls');
@@ -184,7 +198,8 @@ export function livePorts(stateDir: string): MicroPorts {
         const child = spawn(useCodex ? 'codex' : 'claude', args, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
         let text = '', timedOut = false, stalled = false;
         child.stdout!.on('data', c => { text = (text + String(c)).slice(-20_000); });
-        child.stderr!.on('data', quiet('agent/computer/connector-micro-agent'));
+        let diagnostics = '';
+        child.stderr!.on('data', c => { diagnostics = (diagnostics + String(c)).slice(-4_000); });
         const kill = (): void => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); } };
         const timer = setTimeout(() => { timedOut = true; kill(); }, options.maxMs);
         // Working is a tool call now and then: each one moves the stall deadline. Only an agent that has stopped calling is cut off.
@@ -199,8 +214,18 @@ export function livePorts(stateDir: string): MicroPorts {
         clearTimeout(timer); clearInterval(watch);
         if (useCodex) text = await readFile(final, 'utf8').catch(() => '');
         const calls = parseInt(await readFile(counter, 'utf8').catch(() => '0'), 10) || 0;
+        if (code !== 0 && !timedOut && calls === 0) {
+          // With no tool call made, what the vendor printed is its own refusal, not the agent's prose.
+          const said = `${diagnostics}\n${text}`;
+          if (classifyAccountFailure(new Error(said), { stderrText: said }) === 'quota-exhausted') {
+            await storeQuotaRefusal(account.id, new Error(said)).catch(quiet('agent/computer/connector-micro-agent'));
+            lifecycle('connector.agent.usage-refused', { harness: route.harness, accountId: account.id });
+            continue;
+          }
+        }
         return { text, timedOut, ...(stalled ? { stalled } : {}), calls, ...(code !== 0 && !timedOut ? { error: `the agent could not run: ${useCodex ? 'Codex' : 'Claude Code'} (${account.label}) exited ${code}` } : {}) };
       } finally { await rm(dir, { recursive: true, force: true }).catch(quiet('agent/computer/connector-micro-agent')); }
+      }
     },
   };
 }
