@@ -1,4 +1,4 @@
-/** The phone link as an agent gets it: the `handoff` action of browser_use, twice, with a phone-shaped Chrome on the link. The page
+/** The handoff link as an agent gets it: the `handoff` action of browser_use, twice, with a phone-shaped Chrome on the link. The page
  * holds what a CAPTCHA does: a press-and-hold button, an image grid and a field, all inside a frame from another site.
  * Opt in with CLIKCODE_COMPUTER_SMOKE=1 (and CLIKCODE_BROWSER_HOST_ENTRY=<built dist/index.js> from a source checkout). */
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -47,7 +47,8 @@ document.getElementById('answer').addEventListener('input', e => parent.postMess
     const ctx = { stateDir } as never;
     const first = await browserUseTool.run({ action: 'handoff' } as never, ctx);
     expect(first.isError).not.toBe(true);
-    const link = /http:\/\/\S+\/[\w-]{32}\//.exec(first.output)?.[0] ?? '';
+    // A link of the tool's own is the random path; one through the desk goes on to the tab's item (without that it is the desk's list).
+    const link = /http:\/\/\S+?\/[\w-]{32}\/(?:t\/[\w-]+\/)?/.exec(first.output)?.[0] ?? '';
     expect(link).not.toBe('');
     const waiting = browserUseTool.run({ action: 'handoff' } as never, ctx);
 
