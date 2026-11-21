@@ -165,7 +165,7 @@ it.skipIf(!smoke)('acts on anything by reference, several steps at a time, and f
     const stopped = await run({ action: 'steps', steps: [{ do: 'click', target: 'e99999' }, { do: 'click', target: refOf(fresh, 'button', 'Save') }] });
     expect(stopped.isError).toBe(true);
     expect(stopped.output).toContain('Step 1 (click e99999) failed');
-    expect(stopped.output).toContain('the page has changed since it was read');
+    expect(stopped.output).toContain('the page removed or replaced that element after it was read');
     expect(stopped.output).toContain('Page: ');
 
     // A wait that runs out is the page's answer, not a failed tool: the batch stops there and the rest is said not to have run.
