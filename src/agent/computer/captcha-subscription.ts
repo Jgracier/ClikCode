@@ -46,7 +46,7 @@ const extension = (image: ImageInput): string => /png/.test(image.mimeType) ? 'p
 export function subscriptionArgs(command: 'claude' | 'codex', prompt: string, files: string[], dir: string, config: string, final: string): string[] {
   return command === 'codex'
     ? ['exec', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only', '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"', ...files.flatMap(file => ['-i', file]), '-o', final, prompt]
-    : ['-p', prompt, '--model', process.env.CLIKCODE_CAPTCHA_SUBSCRIPTION_MODEL || 'haiku', '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', 'Read', '--allowedTools', 'Read', '--permission-mode', 'dontAsk', '--no-session-persistence'];
+    : ['-p', prompt, '--model', process.env.CLIKCODE_CAPTCHA_SUBSCRIPTION_MODEL || 'claude-haiku-5-5', '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', 'Read', '--allowedTools', 'Read', '--permission-mode', 'dontAsk', '--no-session-persistence'];
 }
 
 /** A voter on the user's subscription, or undefined when it is switched off (CLIKCODE_CAPTCHA_SUBSCRIPTION=0) or
