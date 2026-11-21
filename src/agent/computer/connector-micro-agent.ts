@@ -125,6 +125,8 @@ export function microAccount(accounts: readonly AiHarnessAccount[]): AiHarnessAc
 /** The harnesses a connector agent can be run headless on, by the command that runs them. */
 const CHAT_HARNESSES = { claude: 'claude', codex: 'codex' } as const;
 type ChatHarness = keyof typeof CHAT_HARNESSES;
+/** The model a connector agent runs on under Claude Code (the captcha tile voter is Haiku 5.5, captcha-subscription.ts). */
+export const CLAUDE_AGENT_MODEL = 'claude-sonnet-5-5';
 
 /** What the user is chatting on right now -- the harness, the signed-in account and the model of their chat -- which is what a
  * connector agent runs on: the same subscription doing the same kind of work, never Gateway credit. When that account has no usage
@@ -144,7 +146,9 @@ export function chatRoute(state: { sessions: readonly HarnessSession[]; accounts
   const harness = chat.nativeHarness as string;
   const account = state.accounts.find(item => item.id === chat.accountId);
   if (!account?.nativeProfile) return { error: `The current chat's ${harness} account is not signed in on this computer.` };
-  const model = chat.model ? { model: chat.model } : {};
+  // On Claude Code the agent's model is fixed, not the chat's: a chat on the largest model spent the subscription on browser steps.
+  const picked = harness === 'claude' ? process.env.CLIKCODE_CONNECTOR_AGENT_MODEL || CLAUDE_AGENT_MODEL : chat.model;
+  const model = picked ? { model: picked } : {};
   if (accountCanTakeTurn(account, now) && !attempted.has(account.id)) return { harness: harness as ChatHarness, account, ...model };
   const next = nextUsableFailoverAccount(state as unknown as HarnessState, account,
     candidate => matchesVendorTurn(candidate) && candidate.authKind === 'vendor-cli' && candidate.nativeProfile !== undefined, new Map([...attempted, [account.id, now]]), now, chat.model ?? undefined);

@@ -280,7 +280,7 @@ describe('the route a connector agent runs on', () => {
   });
   it('is the harness, account and model of the most recent chat', () => {
     const route = chatRoute({ accounts, sessions: [chat('2026-11-18T10:00:00Z', 'codex', 'codex-b'), chat('2026-11-18T12:00:00Z', 'claude', 'claude-a', 'opus')] });
-    expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'opus' });
+    expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'claude-sonnet-5-5' });
   });
   it('moves to another signed-in account of the same vendor when the chat\'s has no usage left, as a chat turn does', () => {
     const spent = [account('codex-a', 'openai', 'CODEX_HOME', 'exhausted'), account('claude-a', 'anthropic', 'CLAUDE_CONFIG_DIR'), account('codex-b', 'openai', 'CODEX_HOME')];
@@ -304,7 +304,7 @@ describe('the route a connector agent runs on', () => {
   });
   it('skips a newer chat on a harness that cannot run headless for the most recent Claude Code or Codex chat', () => {
     const route = chatRoute({ accounts, sessions: [chat('2026-11-18T10:00:00Z', 'claude', 'claude-a', 'opus'), chat('2026-11-18T12:00:00Z', 'copilot', 'claude-a')] });
-    expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'opus' });
+    expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'claude-sonnet-5-5' });
   });
 });
 
