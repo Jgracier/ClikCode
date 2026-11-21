@@ -2,12 +2,12 @@
  * one exact window (for example a browser popup or native dialog that the page
  * tools cannot reach) when a pid and window id are given. */
 import { defineTool, type ToolDefinition } from '../tool-contract.js';
-import { callComputerDriver, driverNotice, driverPermissionNotice, driverSupports } from '../computer/driver.js';
+import { callComputerDriver, driverNotice, driverPermissionNotice, driverSupports, latestSnapshot, rememberSnapshot } from '../computer/driver.js';
 import { formatMcpResult } from '../mcp/tools.js';
 import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { credentialOnScreen } from '../computer/sensitive-fields.js';
 import { computerDriverAction, DESKTOP_ACTIONS, type DesktopArgs } from '../computer/driver-actions.js';
-import { backgroundOnly, backgroundOnlyNotice, clipboardReply, friendlyDriverError, summarizeApps } from '../computer/driver-results.js';
+import { backgroundOnly, backgroundOnlyNotice, clipboardReply, driverElementToken, friendlyDriverError, inToolWords, observedSnapshot, summarizeApps, withTokenLine } from '../computer/driver-results.js';
 
 export { computerDriverAction, backgroundOnly, backgroundOnlyNotice };
 
@@ -30,12 +30,12 @@ const describeAction = (args: DesktopArgs): string => {
 
 export const computerDesktopTool = defineTool<DesktopArgs>({
   name: 'computer_use', class: 'exec',
-  description: 'Control the local desktop (Linux, macOS, Windows) through cua-driver. Use it for what page tools cannot reach: a browser popup window, a native permission or file dialog, or any other app. `windows` lists windows and `apps` the graphical apps (with `query` it also searches installed ones); `launch_app` opens one by name (or opens urls). Then `observe` and act: click, double_click, right_click, drag (x, y to to_x, to_y), type, key, hotkey, scroll, or `invoke_menu` with a menu path, which is exact and needs no pixels. `zoom` crops a window region (x, y to to_x, to_y) for a closer look; `set_window_frame` moves and sizes a window; `screen_size` gives the display size. With no pid and window_id an action works on the primary desktop by screenshot coordinates; with both (from `windows`) it works on that one window and prefers a fresh element_token. Always observe first; coordinates and tokens expire. On Linux Wayland a window observe may come back without a screenshot: act on its element_token, which works without one. Actions run in the background by default and do not move the user\'s focus. If one is refused because the window must be in front (keys, hotkeys, scrolling and clicks sometimes are, notably on Wayland), you may retry that same action once with delivery "foreground", which briefly takes focus from the user and puts it back; do that only when the user can spare it, never by default. `bring_to_front` leaves a window in front, which also takes focus. `clipboard_read` returns the user\'s clipboard text, which is private: call it only when the user asked you to use what they copied; `clipboard_write` replaces it. Observing the desktop, zooming, or observing the ClikCode browser window is refused while a typed password, code or card number is in a tab on screen. Never type credentials.',
+  description: 'Control the local desktop (Linux, macOS, Windows) through cua-driver. Use it for what page tools cannot reach: a browser popup window, a native permission or file dialog, or any other app. `windows` lists windows and `apps` the graphical apps (with `query` it also searches installed ones); `launch_app` opens one by name (or opens urls). Then `observe` and act: click, double_click, right_click, drag (x, y to to_x, to_y), type, key, hotkey, scroll, or `invoke_menu` with a menu path, which is exact and needs no pixels. `zoom` crops a window region (x, y to to_x, to_y) for a closer look; `set_window_frame` moves and sizes a window; `screen_size` gives the display size. With no pid and window_id an action works on the primary desktop by screenshot coordinates; with both (from `windows`) it works on that one window and prefers an element_token: observing a window prints its elements as rows `[N]` and, on its second line, the token of a row (the observation id, a colon, the row number); pass that token, or just the row number for the latest observation of that window. Always observe first; coordinates and tokens expire when the window is observed again. On Linux Wayland a window observe may come back without a screenshot: act on its element_token, which works without one. Actions run in the background by default and do not move the user\'s focus. If one is refused because the window must be in front (keys, hotkeys, scrolling and clicks sometimes are, notably on Wayland), you may retry that same action once with delivery "foreground", which briefly takes focus from the user and puts it back; do that only when the user can spare it, never by default. `bring_to_front` leaves a window in front, which also takes focus. `clipboard_read` returns the user\'s clipboard text, which is private: call it only when the user asked you to use what they copied; `clipboard_write` replaces it. Observing the desktop, zooming, or observing the ClikCode browser window is refused while a typed password, code or card number is in a tab on screen. Never type credentials.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: [...DESKTOP_ACTIONS] },
     pid: { type: 'integer', minimum: 1, description: 'Process id from windows, to act on one window.' },
     window_id: { type: 'integer', minimum: 0, description: 'Exact window id from windows, with pid.' },
-    element_token: { type: 'string', description: 'With a window: target from the latest observe.' },
+    element_token: { type: 'string', description: 'With a window: an element of its latest observe, as the token that observe names (such as "s0000002a:77") or the bare row number ("77").' },
     x: { type: 'number', description: 'Screenshot x coordinate (desktop or window). For drag and zoom the start or top-left corner; for set_window_frame the left edge.' },
     y: { type: 'number', description: 'Screenshot y coordinate (desktop or window). For drag and zoom the start or top-left corner; for set_window_frame the top edge.' },
     to_x: { type: 'number', description: 'drag: where to release. zoom: the bottom-right corner.' },
@@ -63,16 +63,24 @@ export const computerDesktopTool = defineTool<DesktopArgs>({
     if (picture && await credentialOnScreen(ctx.stateDir, args.pid)) return { output: privateNotice, isError: true };
     if (args.action === 'zoom' && ctx.acceptsImages !== true) return { output: needsImages, isError: true };
     try {
-      const request = computerDriverAction(args);
+      const windowed = args.pid !== undefined && args.window_id !== undefined;
+      // A bare row number from the tree means that row of this window's latest observe.
+      const request = computerDriverAction(windowed && args.element_token ? { ...args, element_token: driverElementToken(args.element_token, latestSnapshot(args.pid!, args.window_id!)) } : args);
       const withImage = ctx.acceptsImages === true && picture;
       const driverArgs: Record<string, unknown> = request.name === 'get_window_state' ? { ...request.args, include_screenshot: withImage } : { ...request.args };
       // Older cua-driver releases do not know the tree-walk budget; they keep their own default.
       if (request.name === 'get_window_state' && !(await driverSupports('get_window_state', 'timeout_ms'))) delete driverArgs['timeout_ms'];
       const raw = await callComputerDriver(request.name, driverArgs, ctx.signal);
-      let result = formatMcpResult(raw, withImage);
+      let result = friendlyDriverError(backgroundOnly(formatMcpResult(raw, withImage), args.delivery === 'foreground'));
+      // Cua names its own tools in what it says; the clipboard and the app list are the user's words, not Cua's.
+      result = { ...result, output: inToolWords(result.output) };
+      if (request.name === 'get_window_state' && !raw.isError) {
+        const snapshot = observedSnapshot(raw);
+        rememberSnapshot(args.pid!, args.window_id!, snapshot);
+        result = { ...result, output: withTokenLine(result.output, snapshot) };
+      }
       if (args.action === 'apps' && !raw.isError) result = { ...result, output: summarizeApps(raw, args.query) ?? result.output };
-      if (args.action === 'clipboard_read' && !raw.isError) result = { ...result, output: clipboardReply(raw, result.output) };
-      result = friendlyDriverError(backgroundOnly(result, args.delivery === 'foreground'));
+      if (args.action === 'clipboard_read' && !raw.isError) result = { ...result, output: clipboardReply(raw, formatMcpResult(raw).output) };
       if (args.action !== 'windows') return result;
       const notices = (await Promise.all([driverNotice(), driverPermissionNotice()])).filter((notice): notice is string => Boolean(notice));
       return notices.length ? { ...result, output: `${notices.join('\n')}\n\n${result.output}` } : result;

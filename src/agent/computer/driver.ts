@@ -7,10 +7,18 @@ import { delimiter, join } from 'node:path';
 import { McpClient, type McpCallResult } from '../mcp/client.js';
 import { permissionsNotice } from './driver-results.js';
 import { ensureDesktopDriverService } from './driver-macos-session.js';
+import { sharedState } from './shared-state.js';
 
-let pending: Promise<McpClient> | undefined;
-let connected: McpClient | undefined;
-let fields: Map<string, ReadonlySet<string>> | undefined;
+/** Cua keeps a window's element snapshots in the driver process, so the process must be the same one from an observe to
+ * the action that uses its tokens. A reloaded copy of this module (hot-tools.ts) therefore finds the connection here
+ * instead of starting a second driver that has never seen the window. */
+const state = sharedState('computer-driver', () => ({
+  pending: undefined as Promise<McpClient> | undefined,
+  connected: undefined as McpClient | undefined,
+  fields: undefined as Map<string, ReadonlySet<string>> | undefined,
+  /** The latest snapshot of each observed window, by `pid:window_id`. They die with the driver process. */
+  snapshots: new Map<string, string>(),
+}));
 
 /** Where `clikcode computer driver install` puts cua-driver: its own versioned layout, so PATH is not needed. */
 export function driverHome(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
@@ -39,19 +47,34 @@ export function driverMcpArgs(platform: NodeJS.Platform = process.platform): str
 }
 
 function start(): Promise<McpClient> {
-  if (connected && !connected.closed) return Promise.resolve(connected);
-  if (pending) return pending;
+  if (state.connected && !state.connected.closed) return Promise.resolve(state.connected);
+  if (state.pending) return state.pending;
   const command = driverCommand();
-  pending = ensureDesktopDriverService(command).then(() => McpClient.connect(
+  state.pending = ensureDesktopDriverService(command).then(() => McpClient.connect(
     { name: 'clikcode-computer', transport: 'stdio', command, args: driverMcpArgs(), env: driverEnv() },
     { timeoutMs: 15_000 },
   )).then((client) => {
-    connected = client;
-    fields = undefined;
+    state.connected = client;
+    state.fields = undefined;
+    // A new driver process knows none of the old one's snapshots.
+    state.snapshots.clear();
     process.once('exit', () => client.killNow());
     return client;
-  }).finally(() => { pending = undefined; });
-  return pending;
+  }).finally(() => { state.pending = undefined; });
+  return state.pending;
+}
+
+const windowKey = (pid: number, windowId: number): string => `${pid}:${windowId}`;
+
+/** Remembers the snapshot a window observe made (or forgets the window when it made none). */
+export function rememberSnapshot(pid: number, windowId: number, snapshot: string | undefined): void {
+  if (snapshot) state.snapshots.set(windowKey(pid, windowId), snapshot);
+  else state.snapshots.delete(windowKey(pid, windowId));
+}
+
+/** The snapshot of the latest observe of this window by the running driver; undefined when it has not been observed. */
+export function latestSnapshot(pid: number, windowId: number): string | undefined {
+  return state.connected && !state.connected.closed ? state.snapshots.get(windowKey(pid, windowId)) : undefined;
 }
 
 /** A Wayland session: Cua's native Wayland backend finds windows through the accessibility bus and acts
@@ -116,13 +139,13 @@ export async function callComputerDriver(
 export async function driverSupports(tool: string, field: string): Promise<boolean> {
   try {
     const client = await start();
-    if (!fields) {
+    if (!state.fields) {
       const tools = await client.listTools(15_000);
-      fields = new Map(tools.map((info) => {
+      state.fields = new Map(tools.map((info) => {
         const properties = (info as { inputSchema?: { properties?: Record<string, unknown> } }).inputSchema?.properties;
         return [info.name, new Set(Object.keys(properties ?? {}))] as const;
       }));
     }
-    return fields.get(tool)?.has(field) === true;
+    return state.fields.get(tool)?.has(field) === true;
   } catch { return false; }
 }

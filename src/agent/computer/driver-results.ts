@@ -86,6 +86,58 @@ export const noWindowFrameNotice = 'x and y in a window need a screenshot of it 
 export const windowsElevatedNotice = 'Windows refused the input: the target window most likely runs as administrator (elevated), and a program that is not elevated, as ClikCode is, cannot drive it. Ask the user to close it and open it again without "Run as administrator", or to start ClikCode elevated.';
 const windowsSessionNotice = 'cua-driver is running in Windows session 0 (a service or SSH session) where there is no desktop to read. Start it from the user\'s signed-in desktop session (`schtasks /Run /TN cua-driver-serve`), then try again.';
 
+export const noObservationNotice = 'There is no current observation of this window to take that element from. Observe it first (action observe with this pid and window_id), then pass an element_token from that output.';
+export const staleTokenNotice = 'That element_token is from an older observation of this window. Observe the window again (action observe with this pid and window_id) and use an element_token from the new output.';
+
+/** The snapshot a window observe made: Cua names it in its structured result, and in the first line of its text. */
+export function observedSnapshot(result: McpCallResult): string | undefined {
+  const structured = (result.structuredContent as { snapshot_id?: unknown } | undefined)?.snapshot_id;
+  if (typeof structured === 'string' && SNAPSHOT_ID.test(structured)) return structured;
+  const text = (result.content ?? []).find((part): part is { type: 'text'; text: string } => part.type === 'text' && typeof (part as { text?: unknown }).text === 'string')?.text ?? '';
+  const printed = /^[^\n]*\bsnapshot_id=(\S+)/.exec(text)?.[1];
+  return printed && SNAPSHOT_ID.test(printed) ? printed : undefined;
+}
+const SNAPSHOT_ID = /^s[0-9a-f]{8}$/;
+
+/** The element_token Cua wants. An observe prints rows as `[77]` and the token as `<snapshot>:77`; a model that passes
+ * the bare row means that row of the window's latest observe, so it gets that observe's snapshot. Anything else
+ * (a full token, another platform's handle) goes through as it is. */
+export function driverElementToken(token: string, snapshot: string | undefined): string {
+  const row = /^\s*\[?(\d+)\]?\s*$/.exec(token)?.[1];
+  return row !== undefined && snapshot ? `${snapshot}:${row}` : token;
+}
+
+/** What a window observe says about tokens when Cua's text did not (its header names the snapshot only in some releases). */
+export function withTokenLine(output: string, snapshot: string | undefined): string {
+  if (!snapshot || output.includes(`${snapshot}:`)) return output;
+  const [head, ...rest] = output.split('\n');
+  return [head, `element_token for row [N] = ${snapshot}:N (row [1] is "${snapshot}:1")`, ...rest].join('\n');
+}
+
+/** Cua's text names its own tools and arguments. The model has this tool's actions instead, so advice it could not
+ * follow ("call get_window_state", "type_text", "pass a larger max_elements") is put in those words. Rows of a tree
+ * or a window list are left alone: they quote the screen, not Cua. */
+const DRIVER_WORDS: Array<[RegExp, string]> = [
+  [/Tree truncated at max_elements=\d+/g, 'Tree truncated'],
+  [/Pass a larger `?max_elements`?,? or (narrow with )?`?query`? ?\/ ?`?max_depth`?( to reach the rest)?/gi, 'Observe again with a query that matches what you need'],
+  [/re-read with a larger max_elements \(or a query that matches the target\)/gi, 'observe again with a query that matches the target'],
+  [/\bget_window_state\(([^)]*)\)/g, 'observe with $1'],
+  [/\bcall get_window_state again\b/gi, 'observe the window again'],
+  [/\bget_window_state\b/g, 'observe (with pid and window_id)'],
+  [/\bget_desktop_state\b/g, 'observe (with no pid)'],
+  [/\bclick\/type_text\b/g, 'click and type'],
+  [/\btype_text(_chars)?\b/g, 'type'],
+  [/\bpress_key\b/g, 'key'],
+  [/\blist_windows\b/g, 'windows'],
+  [/\blist_apps\b/g, 'apps'],
+  [/\bget_screen_size\b/g, 'screen_size'],
+  [/\bdelivery_mode\b/g, 'delivery'],
+];
+
+export function inToolWords(output: string): string {
+  return output.split('\n').map((line) => /^\s*(- |window_id=\d)/.test(line) ? line : DRIVER_WORDS.reduce((text, [from, to]) => text.replace(from, to), line)).join('\n');
+}
+
 /** An error Cua gave in its own words, replaced by what to do about it. The first lines of Cua's text stay, because
  * these patterns come from its documentation and a wrong guess must not hide the real cause. */
 export function friendlyDriverError<T extends Reply>(result: T, platform: NodeJS.Platform = process.platform): T {
@@ -99,6 +151,10 @@ export function friendlyDriverError<T extends Reply>(result: T, platform: NodeJS
   }
   // Cua's own wording names its internal tool (get_window_state), which the model does not have.
   if (/No screenshot frame for window/i.test(said)) return { ...result, output: noWindowFrameNotice };
+  if (/is a row number, (and pid \d+ has no current snapshot|not a token)/i.test(said)) return { ...result, output: noObservationNotice };
+  if (/stale_element_token|element_token is stale/i.test(said)) return { ...result, output: staleTokenNotice };
+  const beyond = /element_token \S*?(\d+) is out of range: snapshot \S+ has rows \[0\] to \[(\d+)\]/i.exec(said);
+  if (beyond) return { ...result, output: `Row ${beyond[1]} is not in the latest observation of this window, which printed rows [0] to [${beyond[2]}]. Use a row it printed, or observe the window again with a query that matches the target.` };
   if (platform === 'win32') {
     if (/session ?0|SessionId[: ]+0/i.test(said)) return withCause(windowsSessionNotice);
     if (/access is denied|UIPI|elevated|integrity level|0x80070005/i.test(said)) return withCause(windowsElevatedNotice);

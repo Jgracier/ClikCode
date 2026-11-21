@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   backgroundOnly, backgroundOnlyNotice, foregroundUnavailableNotice, friendlyDriverError, macosAccessibilityNotice, macosPermissionsPendingNotice, noWindowFrameNotice, macosScreenRecordingNotice,
   clipboardReply, permissionsNotice, scrubClipboard, summarizeApps, windowsElevatedNotice,
+  driverElementToken, inToolWords, noObservationNotice, observedSnapshot, staleTokenNotice, withTokenLine,
 } from './driver-results.js';
 
 const app = (name: string, extra: Record<string, unknown> = {}) => ({ name, pid: 0, running: false, bundle_id: null, kind: null, windows: [], ...extra });
@@ -125,5 +126,74 @@ describe('driver errors', () => {
     expect(permissionsNotice('{"daemon_running":true,"status":"unknown"}', 'darwin')).toBe(macosPermissionsPendingNotice);
     expect(friendlyDriverError({ output: 'permissions_pending: macOS Accessibility or Screen Recording permission is still pending; no action started', isError: true }, 'darwin').output).toContain(macosPermissionsPendingNotice);
     expect(permissionsNotice('{"accessibility":false}', 'linux')).toBeUndefined();
+  });
+});
+
+/** What cua-driver 0.38 really prints on Linux (GNOME Wayland), captured from the driver. */
+describe('element tokens of a window observe', () => {
+  const tree = '- [0] frame "Billing - Google Chrome" [actions=[doDefault,showContextMenu]]\n  - [77] page tab "Amazon Web Services" [actions=[doDefault,showContextMenu]]';
+  const withId = { content: [{ type: 'text', text: `window_id=193265467392 pid=2948997 elements=187 walk_ms=439 snapshot_id=s0000002a\nelement_token for row [N] = s0000002a:N (row [1] is "s0000002a:1")\n\n${tree}` }], structuredContent: { snapshot_id: 's0000002a', pid: 2948997 } } as never;
+  const noId = { content: [{ type: 'text', text: `window_id=193265467392 pid=2948997 elements=187 walk_ms=439\n\n${tree}` }], structuredContent: { pid: 2948997 } } as never;
+
+  it('finds the snapshot in the structured result or the header, and none when the read made none', () => {
+    expect(observedSnapshot(withId)).toBe('s0000002a');
+    expect(observedSnapshot({ content: (withId as { content: never }).content } as never)).toBe('s0000002a');
+    expect(observedSnapshot(noId)).toBeUndefined();
+    expect(observedSnapshot({ structuredContent: { snapshot_id: 'get_window_state' } } as never)).toBeUndefined();
+  });
+
+  it('turns a bare row of the latest observe into the token the driver accepts, and leaves a full token alone', () => {
+    const accepted = /^s[0-9a-f]{8}:[0-9]+$/; // the pattern of cua-driver's own element_token argument
+    expect(driverElementToken('77', 's0000002a')).toBe('s0000002a:77');
+    expect(driverElementToken('[77]', 's0000002a')).toBe('s0000002a:77');
+    expect(driverElementToken('77', 's0000002a')).toMatch(accepted);
+    expect(driverElementToken('s00000029:77', 's0000002a')).toBe('s00000029:77');
+    expect(driverElementToken('AXButton-opaque', 's0000002a')).toBe('AXButton-opaque');
+    expect(driverElementToken('77', undefined)).toBe('77');
+  });
+
+  it('prints a token the click path accepts, adding the line when the driver text has only the header', () => {
+    const printed = (withId as { content: Array<{ text: string }> }).content[0]!.text;
+    expect(withTokenLine(printed, 's0000002a')).toBe(printed);
+    const added = withTokenLine('window_id=1 pid=2 elements=3 walk_ms=4 snapshot_id=s0000002a\n\n- [0] frame "x"', 's0000002a').split('\n');
+    expect(added[1]).toBe('element_token for row [N] = s0000002a:N (row [1] is "s0000002a:1")');
+    const example = /row \[1\] is "([^"]+)"/.exec(added[1]!)![1]!;
+    expect(driverElementToken(example, undefined)).toMatch(/^s[0-9a-f]{8}:[0-9]+$/);
+    expect(withTokenLine('window_id=1 pid=2 elements=3 walk_ms=4', undefined)).toBe('window_id=1 pid=2 elements=3 walk_ms=4');
+  });
+});
+
+describe('cua\'s own tool names never reach the model', () => {
+  const INTERNAL = /get_window_state|get_desktop_state|type_text|press_key|list_windows|list_apps|delivery_mode|max_elements/;
+
+  it('rewrites the token refusals into this tool\'s actions', () => {
+    const none = friendlyDriverError({ output: 'element_token "77" is a row number, and pid 2948997 has no current snapshot. Call get_window_state, then pass "<snapshot_id>:77".', isError: true }, 'linux');
+    expect(none.output).toBe(noObservationNotice);
+    expect(friendlyDriverError({ output: 'element_token "77" is a row number, not a token. Pass the full token, <snapshot_id>:77; or add window_id.', isError: true }, 'linux').output).toBe(noObservationNotice);
+    const stale = friendlyDriverError({ output: 'element_token is stale; call get_window_state again to refresh; current snapshots for pid 2954614: s00000002 (window 193633583104)', isError: true }, 'linux');
+    expect(stale.output).toBe(staleTokenNotice);
+    const beyond = friendlyDriverError({ output: 'element_token s00000001:999 is out of range: snapshot s00000001 has rows [0] to [166] only (167 element(s)). Row numbers belong to one read: a read with a smaller max_elements, max_depth or another query can stop before row [999]. Use a row printed in s00000001, or re-read with a larger max_elements (or a query that matches the target) and use that read\'s rows.', isError: true }, 'linux');
+    expect(beyond.output).toContain('Row 999 is not in the latest observation');
+    expect(beyond.output).toContain('rows [0] to [166]');
+    for (const reply of [none, stale, beyond]) { expect(reply.output).not.toMatch(INTERNAL); expect(reply.output).toContain('observe'); }
+  });
+
+  it('puts every other mention in this tool\'s words', () => {
+    const said = [
+      '→ get_window_state(pid, window_id) lists clickable elements; click/type_text take the same pid (+ window_id for x,y).',
+      'Menu opened (popup: window_id=9, bounds x=1 y=2); call get_window_state(pid=4, window_id=9) to index its items and click them by element_token.',
+      'Typed 3 character(s); the write may not have committed. Confirm with get_window_state or a screenshot.',
+      'Tree truncated at max_elements=1500 (12 more node(s) not shown). Pass a larger max_elements, or query/max_depth to reach the rest.',
+      'Use press_key or type_text; list_windows and list_apps show targets; get_desktop_state for pixels; Retry with delivery_mode:"foreground".',
+    ];
+    for (const line of said) expect(inToolWords(line), line).not.toMatch(INTERNAL);
+    expect(inToolWords(said[0]!)).toBe('→ observe with pid, window_id lists clickable elements; click and type take the same pid (+ window_id for x,y).');
+    expect(inToolWords(said[1]!)).toContain('observe with pid=4, window_id=9');
+    expect(inToolWords(said[3]!)).toContain('Observe again with a query');
+  });
+
+  it('leaves what the screen says alone: tree rows and window titles', () => {
+    const rows = '- [3] link "type_text docs"\n  - [4] text "get_window_state"\n  window_id=7 pid=9 "list_windows - Editor" 10x10+0+0 app=code';
+    expect(inToolWords(rows)).toBe(rows);
   });
 });
