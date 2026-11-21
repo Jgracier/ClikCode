@@ -126,13 +126,15 @@ type ChatHarness = keyof typeof CHAT_HARNESSES;
 /** What the user is chatting on right now -- the harness, the signed-in account and the model of their most recent chat -- which is
  * what a connector agent runs on: the same subscription doing the same kind of work, never Gateway credit and never another account.
  * An error says why it cannot, in words for the outcome (the loop retries an agent that could not run, it is no vendor wall). */
-export function chatRoute(state: { sessions: readonly HarnessSession[]; accounts: readonly AiHarnessAccount[] }, now = Date.now()): { harness: ChatHarness; account: AiHarnessAccount; model?: string } | { error: string } {
+export function chatRoute(state: { sessions: readonly HarnessSession[]; accounts: readonly AiHarnessAccount[] }, now = Date.now(), sessionId?: string): { harness: ChatHarness; account: AiHarnessAccount; model?: string } | { error: string } {
   const chats = [...state.sessions].filter(session => session.route === 'local' && session.nativeHarness && session.accountId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   if (!chats.length) return { error: 'No chat with a signed-in harness was found to run the connector agent on.' };
   // The most recent chat on a harness that can run headless: a newer chat on Copilot or OpenCode left every hand-off unable to start
   // (27 on 2026-11-18) although a Claude Code chat on the user's own account was right behind it.
-  const chat = chats.find(session => (session.nativeHarness as string) in CHAT_HARNESSES);
+  const chat = sessionId ? chats.find(session => session.id === sessionId) : chats.find(session => (session.nativeHarness as string) in CHAT_HARNESSES);
+  if (sessionId && !chat) return { error: `The connector's initiating chat (${sessionId}) is missing or has no signed-in local harness; no other chat will be used.` };
+  if (chat && !(chat.nativeHarness as string in CHAT_HARNESSES)) return { error: `The connector's initiating chat runs on ${chat.nativeHarness}; connector agents run on Claude Code or Codex.` };
   if (!chat) return { error: `The recent chats run on ${chats[0]!.nativeHarness}; connector agents run on Claude Code or Codex.` };
   const harness = chat.nativeHarness as string;
   const account = state.accounts.find(item => item.id === chat.accountId);
@@ -142,6 +144,8 @@ export function chatRoute(state: { sessions: readonly HarnessSession[]; accounts
 }
 
 export function livePorts(stateDir: string): MicroPorts {
+  // A background service binds its initiating conversation explicitly. Other windows must not change its route.
+  const sessionId = process.env.CLIKCODE_CONNECTOR_SESSION_ID ?? process.env.CLIKCODE_SESSION_ID;
   return {
     async businessEmail() {
       const { emailStatus } = await import('./email-api.js');
@@ -152,7 +156,7 @@ export function livePorts(stateDir: string): MicroPorts {
     async run(prompt, options) {
       const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);
       const { readState } = await import('../../session/state/read.js');
-      const route = chatRoute(await readState({ transcripts: [] }));
+      const route = chatRoute(await readState({ transcripts: [] }), Date.now(), sessionId);
       if ('error' in route) throw new Error(route.error);
       const { account, model } = route;
       const useCodex = route.harness === 'codex';

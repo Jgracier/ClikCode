@@ -267,6 +267,17 @@ describe('the route a connector agent runs on', () => {
   const chat = (updatedAt: string, nativeHarness: string, accountId: string, model?: string) => ({ id: updatedAt, route: 'local', nativeHarness, accountId, updatedAt, ...(model ? { model } : {}) }) as never;
   const accounts = [account('claude-a', 'anthropic', 'CLAUDE_CONFIG_DIR'), account('codex-b', 'openai', 'CODEX_HOME')];
 
+  it('uses the initiating conversation even when another window has newer activity', () => {
+    const sessions = [chat('2026-11-18T10:00:00Z', 'codex', 'codex-b', 'gpt-test'), chat('2026-11-18T12:00:00Z', 'claude', 'claude-a', 'opus')];
+    expect(chatRoute({ accounts, sessions }, Date.now(), '2026-11-18T10:00:00Z')).toMatchObject({ harness: 'codex', model: 'gpt-test', account: { id: 'codex-b' } });
+  });
+  it('does not substitute a different conversation when the bound one is missing', () => {
+    expect(chatRoute({ accounts, sessions: [chat('2026-11-18T12:00:00Z', 'claude', 'claude-a')] }, Date.now(), 'missing')).toEqual({ error: expect.stringContaining('no other chat will be used') });
+  });
+  it('does not substitute a different harness when the bound chat cannot run headless', () => {
+    const sessions = [chat('2026-11-18T10:00:00Z', 'codex', 'codex-b'), chat('2026-11-18T12:00:00Z', 'copilot', 'claude-a')];
+    expect(chatRoute({ accounts, sessions }, Date.now(), '2026-11-18T12:00:00Z')).toEqual({ error: expect.stringContaining('initiating chat runs on copilot') });
+  });
   it('is the harness, account and model of the most recent chat', () => {
     const route = chatRoute({ accounts, sessions: [chat('2026-11-18T10:00:00Z', 'codex', 'codex-b'), chat('2026-11-18T12:00:00Z', 'claude', 'claude-a', 'opus')] });
     expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'opus' });
