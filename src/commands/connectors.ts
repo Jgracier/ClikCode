@@ -98,6 +98,19 @@ async function reportQualify(client: import('../agent/computer/connector-runner.
   await client.note(r.id, `clikcode connectors qualify: lane ${r.lane}${r.kinds.length ? `, ${r.kinds.join('/')}` : ''}. ${why}`.slice(0, 3900));
 }
 
+/** A supervisor may repeat SIGTERM while stopping a service. Only a second interactive Ctrl+C forces unfinished work to exit. */
+export function connectorShutdown(notify: () => void, force: () => void): { requested: () => boolean; signal: (kind: 'SIGINT' | 'SIGTERM') => void } {
+  let stopping = false;
+  return {
+    requested: () => stopping,
+    signal: kind => {
+      if (stopping) { if (kind === 'SIGINT') force(); return; }
+      stopping = true;
+      notify();
+    },
+  };
+}
+
 export interface ConnectorsLoopFlags { parallel?: string; maxSteps?: string; maxMinutes?: string; maxCalls?: string; maxHours?: string; cooldownHours?: string; agentMinutes?: string; agentCalls?: string }
 
 /** `clikcode connectors run --loop`: the daemon. Takes due vendors from the queue until --max-hours, never needing a person. */
@@ -117,14 +130,15 @@ export async function connectorsLoop(flags: ConnectorsLoopFlags): Promise<void> 
     maxHoursMs: (number(flags.maxHours, 'max-hours', 1, 168) ?? d.maxHoursMs / 3_600_000) * 3_600_000,
     cooldownMs: (number(flags.cooldownHours, 'cooldown-hours', 1, 168) ?? d.cooldownMs / 3_600_000) * 3_600_000,
   };
-  let stop = false;
-  const onSignal = (): void => { if (stop) process.exit(130); stop = true; process.stderr.write('Stopping: finishing the vendors in progress (press again to quit now).\n'); };
-  process.on('SIGINT', onSignal);
-  process.on('SIGTERM', onSignal);
+  const shutdown = connectorShutdown(() => process.stderr.write('Stopping: finishing the vendors in progress (Ctrl+C again to quit now).\n'), () => process.exit(130));
+  const onInt = (): void => shutdown.signal('SIGINT');
+  const onTerm = (): void => shutdown.signal('SIGTERM');
+  process.on('SIGINT', onInt);
+  process.on('SIGTERM', onTerm);
   await live.rotateLoopLog();
-  const ports = live.livePorts(runnerLive.liveClient(), stateDirectory(), { stopRequested: () => stop });
+  const ports = live.livePorts(runnerLive.liveClient(), stateDirectory(), { stopRequested: shutdown.requested });
   ports.log(`${new Date().toISOString()} loop started: parallel ${limits.parallel}, ${limits.maxSteps} steps, ${limits.maxMs / 60_000} min and ${limits.maxCalls} calls a vendor, ${limits.maxHoursMs / 3_600_000} h`);
-  const summary = await loop.runLoop(ports, limits);
+  const summary = await loop.runLoop(ports, limits).finally(() => { process.off('SIGINT', onInt); process.off('SIGTERM', onTerm); });
   ports.log(`${new Date().toISOString()} loop ended: ${JSON.stringify(summary)}`);
   await (await import('../agent/computer/browser.js')).releaseComputerBrowser(stateDirectory()).catch(quiet('commands/connectors'));
   if (isJsonDefaultMode()) emitResult({ connectors: { loop: summary } });
