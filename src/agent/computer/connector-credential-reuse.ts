@@ -23,13 +23,13 @@ export function basicDestination(id: string, kind: string | undefined, names: re
 }
 
 /** Why a saved credential did not connect, as far as the vendor's answer says. `oauth`: the connector is OAuth now, so a saved key is
- * not its credential; `rejected`: the vendor refused the key itself (401/403), so the key is dead and a new one is wanted; `unreachable`:
- * the vendor did not answer, which says nothing about the key; `repair`: anything else (shape, missing values), for an agent. */
+ * not its credential; `rejected`: the vendor rejected authentication (401 or an explicit invalid/expired key), so a new key is wanted; `unreachable`:
+ * the vendor did not answer, which says nothing about the key; `repair`: anything else (shape, missing values, or a 403 that may be missing permissions), for an agent. */
 export type ReuseCause = 'oauth' | 'rejected' | 'unreachable' | 'repair';
 export function reuseCause(problem: string): ReuseCause {
   if (/uses OAuth|oauth\/start/i.test(problem)) return 'oauth';
-  if (/rejected this key \(HTTP 40[13]\)|\b(?:invalid|revoked|expired) (?:api )?key\b/i.test(problem)) return 'rejected';
-  if (/could not reach|no answer within|timed? ?out|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|HTTP 5\d\d/i.test(problem)) return 'unreachable';
+  if (/rejected this key \(HTTP 401\)|\b(?:invalid|revoked|expired) (?:api )?key\b/i.test(problem)) return 'rejected';
+  if (/could not reach|no answer within|timed? ?out|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|HTTP (?:429|5\d\d)|too many requests|rate[- ]limit/i.test(problem)) return 'unreachable';
   return 'repair';
 }
 

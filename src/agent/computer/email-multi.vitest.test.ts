@@ -12,6 +12,7 @@ const ME = 'me@example.com', WORK = 'work@clikdeploy.com';
 type Msg = { id: string; internalDate: string; from: string; subject: string; html: string };
 let dir: string, server: http.Server, endpoints: GoogleEndpoints;
 let boxes: Record<string, Msg[]>;
+let brokenMailbox: string | undefined;
 const owner = (bearer: string): string => (bearer.includes('rt2') || bearer.includes('at2') ? WORK : ME);
 const b64 = (text: string): string => Buffer.from(text).toString('base64url');
 const mail = (id: string, code: string): Msg => ({ id, internalDate: String(Date.now()), from: 'noreply@acme.io', subject: 'Your code', html: `<p>Your verification code is ${code}</p>` });
@@ -19,6 +20,7 @@ const mail = (id: string, code: string): Msg => ({ id, internalDate: String(Date
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'email-multi-'));
   boxes = { [ME]: [], [WORK]: [] };
+  brokenMailbox = undefined;
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     const json = (value: unknown, status = 200): void => { res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value)); };
@@ -34,6 +36,7 @@ beforeEach(async () => {
     }
     const mailbox = owner(req.headers.authorization ?? '');
     if (url.pathname === '/gmail/profile') return json({ emailAddress: mailbox });
+    if (url.pathname === '/gmail/messages' && mailbox === brokenMailbox) return json({ error: 'invalid_token' }, 401);
     if (url.pathname === '/gmail/messages') return json({ messages: boxes[mailbox]!.map(m => ({ id: m.id })) });
     const found = /^\/gmail\/messages\/(.+)$/.exec(url.pathname);
     const m = found && boxes[mailbox]!.find(x => x.id === found[1]);
@@ -124,4 +127,25 @@ describe('several mailboxes', () => {
     expect((await emailStatus(dir)).mailboxes.map(m => m.email)).toEqual([ME]);
     expect(await disconnectEmail(dir, WORK)).toBe(false);
   });
+});
+
+it('searches other connected mailboxes even when the total wait is shorter than the preferred wait', async () => {
+  await connect('me'); await connect('work');
+  boxes[WORK] = [mail('short', '482913')];
+  expect(await findEmail(dir, { ...query, timeoutMs: 600 })).toMatchObject({ id: 'short', mailbox: WORK });
+});
+
+it('a failed preferred mailbox does not hide a code in a healthy connected mailbox', async () => {
+  await connect('me'); await connect('work');
+  brokenMailbox = ME;
+  boxes[WORK] = [mail('healthy', '482913')];
+  expect(await findEmail(dir, { ...query, timeoutMs: 1000 })).toMatchObject({ id: 'healthy', mailbox: WORK });
+});
+
+it('consumes mailbox-local message IDs independently across accounts', async () => {
+  await connect('me'); await connect('work');
+  boxes[ME] = [mail('same-id', '111111')]; boxes[WORK] = [mail('same-id', '222222')];
+  expect(await findEmail(dir, { ...query, address: ME, consume: true, timeoutMs: 1000 })).toMatchObject({ mailbox: ME });
+  expect(await findEmail(dir, { ...query, address: WORK, consume: true, timeoutMs: 1000 })).toMatchObject({ mailbox: WORK });
+  await expect(findEmail(dir, { ...query, address: WORK, consume: true, timeoutMs: 100 })).rejects.toThrow(/No email matched/);
 });

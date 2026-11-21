@@ -27,7 +27,12 @@ describe('the form a saved key is connected in', () => {
 describe('why a saved credential did not connect', () => {
   it('tells a dead key, an OAuth connector and a vendor that did not answer apart from a repair', async () => {
     const { reuseCause } = await import('./connector-credential-reuse.js');
-    expect(reuseCause('NOT connected: RentCast rejected this key (HTTP 403).')).toBe('rejected');
+    expect(reuseCause('NOT connected: Vendor rejected this key (HTTP 401).')).toBe('rejected');
+    // Forbidden does not establish that a key is invalid; rotating it cannot fix missing scopes or vendor restrictions.
+    expect(reuseCause('NOT connected: RentCast rejected this key (HTTP 403).')).toBe('repair');
+    expect(reuseCause('HTTP 403: insufficient scope')).toBe('repair');
+    expect(reuseCause('HTTP 403: expired API key')).toBe('rejected');
+    expect(reuseCause('HTTP 429: too many requests')).toBe('unreachable');
     expect(reuseCause('NOT connected: Integration kiwify uses OAuth — start via /api/connectors/kiwify/oauth/start')).toBe('oauth');
     expect(reuseCause('NOT connected: Could not reach DynaPictures to check this key (no answer within 8 seconds); try again.')).toBe('unreachable');
     expect(reuseCause('NOT connected: The base URL needs a value for apiId, stage')).toBe('repair');
