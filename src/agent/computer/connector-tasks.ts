@@ -33,7 +33,8 @@ export function siteUrl(task: string): string | undefined {
 /** For a judgement task (its `call` is a connector_work_report): the report that blocks the item, with its reason ready. Any other task's `orElse` is only a way out, never run. */
 export function blockedCall(next: Next): AgentCall | undefined {
   if (next.kind !== 'agent' || next.call?.tool !== 'connector_work_report') return undefined;
-  return [next.call, next.orElse].find(c => c?.tool === 'connector_work_report' && c.args.outcome === 'blocked');
+  // orElse is conditional on the assigned work failing; it is never evidence that the work has already failed.
+  return next.call.args.outcome === 'blocked' ? next.call : undefined;
 }
 
 export function waitMs(task: string, fallback = 5_000): number {
@@ -118,6 +119,10 @@ export function planFor(result: OnboardResult, recipe: boolean): Plan {
   if (next.kind === 'human') return { do: 'human', humanStep: { ...next.humanStep, reasonCode: next.humanStep.reasonCode || next.humanStep.kind } };
   if (WALL_STATES.has(result.state)) return { do: 'handoff', why: 'ClikDeploy says a person is needed but gave no step' };
   const call = next.call;
+  if (call?.tool === 'connector_work_report' && call.args.outcome === 'retry') {
+    const delay = call.args.retryAfterMs;
+    return { do: 'retry', ms: typeof delay === 'number' && Number.isFinite(delay) ? Math.min(3_600_000, Math.max(1_000, delay)) : 300_000, why: typeof call.args.reason === 'string' ? call.args.reason : result.reason || next.task };
+  }
   if (call?.tool === 'oauth_connect') return { do: 'oauth' };
   // A judgement task whose answer is a report the task already spells out: the runner makes the blocked report itself.
   const blocked = blockedCall(next);

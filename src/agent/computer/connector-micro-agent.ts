@@ -6,7 +6,7 @@ import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import type { DriveOutcome, HumanStep, StopInfo } from './connector-runner.js';
 
@@ -159,6 +159,7 @@ export function livePorts(stateDir: string): MicroPorts {
       const route = chatRoute(await readState({ transcripts: [] }), Date.now(), sessionId);
       if ('error' in route) throw new Error(route.error);
       const { account, model } = route;
+      lifecycle('connector.agent.route', { harness: route.harness, accountId: account.id, model, initiatingSession: sessionId });
       const useCodex = route.harness === 'codex';
       const dir = await mkdtemp(join(tmpdir(), 'clikcode-micro-'));
       const counter = join(dir, 'calls');

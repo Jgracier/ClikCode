@@ -180,6 +180,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     const recipe = result.next && result.next.kind === 'agent' && !result.next.call && !/oauth_connect/i.test(result.next.task) ? await driver.hasRecipe(id, siteUrl(result.next.task)) : false;
     const plan = planFor(result, recipe);
     steps++;
+    if (plan.do === 'retry') return out('waiting', plan.why, { retryAfterMs: plan.ms });
     try {
       if (!reusedCredential && driver.reuseCredential && (plan.do === 'capture' || plan.do === 'oauth' || /^(auth|connect|credential)$/.test(result.stage))) {
         reusedCredential = true;
@@ -476,6 +477,7 @@ function describePlan(plan: Plan): string {
     case 'report': return 'report the item blocked with the reason ClikDeploy wrote (it becomes attention on the list)';
     case 'specfix': return 'spec-fix: report attention kind platform-gap owner builder, and write a hand-off file for an agent that can patch the spec';
     case 'tool': return `call ${plan.call.tool} until it stops running; call onboard again`;
+    case 'retry': return `retry in ${plan.ms / 1000}s: ${plan.why}`;
     case 'wait': return `wait ${plan.ms / 1000}s, call onboard again`;
     case 'human': return `record the human step (${plan.humanStep.kind})`;
     case 'done': return `nothing to do (${plan.status})`;

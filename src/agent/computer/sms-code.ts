@@ -139,21 +139,44 @@ export async function askTwilio(stateDir: string, sms: TwilioSms, sinceUnixSecon
 export async function waitForTextedCode(stateDir: string, options: { since: number; seconds?: number; from?: string; signal?: AbortSignal; sleep?: (ms: number) => Promise<void>; ask?: typeof askMessages; askTwilio?: (sms: TwilioSms, since: number) => Promise<{ rows: string } | { error: string }> }): Promise<TextedCode | { error: string }> {
   const [target, twilio] = await Promise.all([smsSource(stateDir), twilioSms(stateDir)]);
   if (!target && !twilio) return { error: 'No phone is set up to read text messages: run clikcode computer sms twilio:+<number> (a Twilio number) or clikcode computer sms <user@host> (a Mac with Text Message Forwarding).' };
-  const ask = options.ask ?? askMessages;
-  const fromTwilio = options.askTwilio ?? ((sms: TwilioSms, since: number) => askTwilio(stateDir, sms, since, options.signal));
-  const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
-  const deadline = Date.now() + Math.min(Math.max(options.seconds ?? 90, 5), 180) * 1000;
-  // A text can be stamped a little before the page's own clock says it asked.
+  const stop = new AbortController();
+  const seconds = Math.min(Math.max(options.seconds ?? 90, 5), 180);
+  const budget = AbortSignal.timeout(seconds * 1000);
+  const signals = [stop.signal, budget, ...(options.signal ? [options.signal] : [])];
+  const signal = AbortSignal.any(signals);
+  const sleep = options.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const since = Math.floor(options.since / 1000) - 20;
   const names = [twilio?.number, target].filter(Boolean).join(' or ');
-  for (;;) {
-    const answers = await Promise.all([twilio ? fromTwilio(twilio, since) : undefined, target ? ask(target, since, options.signal) : undefined]);
-    const read = answers.filter((a): a is { rows: string } => !!a && !('error' in a));
-    // Every source failed: say why (the first reason), instead of waiting out the clock on nothing.
-    if (!read.length) return answers.find((a): a is { error: string } => !!a && 'error' in a) ?? { error: 'No text source answered.' };
-    const found = read.map(a => codeFromRows(a.rows, options.from)).filter((f): f is TextedCode => !!f).sort((a, b) => b.at - a.at)[0];
-    if (found) return found;
-    if (Date.now() >= deadline || options.signal?.aborted) return { error: `No texted code arrived on ${names} in time${options.from ? ` from ${options.from}` : ''}.${target ? ' Check that the iPhone forwards texts to that Mac (Settings > Messages > Text Message Forwarding).' : ''}` };
-    await sleep(4_000);
+  let onAbort!: () => void;
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
+  });
+  const poll = async (ask: () => Promise<{ rows: string } | { error: string }>): Promise<TextedCode> => {
+    for (;;) {
+      signal.throwIfAborted();
+      const answer = await Promise.race([ask(), interrupted]);
+      if ('error' in answer) throw new Error(answer.error);
+      const found = codeFromRows(answer.rows, options.from);
+      if (found) return found;
+      await Promise.race([sleep(4_000), interrupted]);
+    }
+  };
+  // Each source polls independently: a sleeping Mac cannot delay a code available through Twilio, or vice versa.
+  const readers: Array<Promise<TextedCode>> = [];
+  if (twilio) readers.push(poll(() => options.askTwilio ? options.askTwilio(twilio, since) : askTwilio(stateDir, twilio, since, signal)));
+  if (target) readers.push(poll(() => (options.ask ?? askMessages)(target, since, signal)));
+  try {
+    return await Promise.race([Promise.any(readers), interrupted]);
+  } catch (error) {
+    if (options.signal?.aborted) return { error: 'Texted-code wait was cancelled.' };
+    if (!budget.aborted && error instanceof AggregateError) {
+      const first = error.errors[0];
+      return { error: first instanceof Error ? first.message : 'No text source answered.' };
+    }
+    return { error: `No texted code arrived on ${names} in time${options.from ? ` from ${options.from}` : ''}.${target ? ' Check that the iPhone forwards texts to that Mac (Settings > Messages > Text Message Forwarding).' : ''}` };
+  } finally {
+    stop.abort();
+    signal.removeEventListener('abort', onAbort);
   }
 }

@@ -104,6 +104,7 @@ export interface HandoffRequest {
 export type Plan =
   | { do: 'done'; status: 'published' | 'blocked' }
   | { do: 'wait'; ms: number }
+  | { do: 'retry'; ms: number; why: string }
   | { do: 'oauth' }
   | { do: 'tool'; call: AgentCall }
   | { do: 'capture'; url?: string; generic?: boolean; alternates?: string[] }

@@ -494,12 +494,18 @@ describe('judgement tasks and spec fixes', () => {
     expect(c.reports).toEqual([{ id: 'firebaseappcheck', outcome: 'blocked', reason: 'App Check needs a project-level decision' }]);
     expect(c.notes).toEqual([]);
   });
-  it('takes the blocked call from orElse, and the reason from the task when the call has none', async () => {
+  it('does not execute a conditional blocked fallback when the primary call asks for retry', async () => {
     const r = judgement('x');
     r.next = { kind: 'agent', task: 't', call: { tool: 'connector_work_report', args: { id: 'x', outcome: 'retry' } }, orElse: { tool: 'connector_work_report', args: { id: 'x', outcome: 'blocked' } } };
     const c = fakeClient([r]);
-    await runConnectors(c.client, fakeDriver([]).driver, quick);
-    expect(c.reports[0]).toMatchObject({ id: 'x', outcome: 'blocked', reason: 'proof and checklist gaps need judgement' });
+    const d = fakeDriver([]);
+    d.driver.agentTask = async () => { throw new Error('retry must not use an agent'); };
+    d.driver.reuseCredential = async () => { throw new Error('retry must not probe credentials again'); };
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(outcomes[0]).toMatchObject({ status: 'waiting', retryAfterMs: 300000 });
+    expect(c.reports).toEqual([]);
+    expect(c.notes).toEqual([]);
+    expect(d.driven).toEqual([]);
   });
   it('reports a spec-fix task as platform-gap owned by a builder and writes a flagged hand-off file', async () => {
     const r: OnboardResult = { id: 'nytimes-movie-reviews', state: 'needs-agent', stage: 'auth', reason: 'the auth probe ended path-wrong', next: { kind: 'agent', task: `Connector "nytimes-movie-reviews": ${'a long task '.repeat(60)} the auth probe ended path-wrong` }, evidence: ['one', 'two', 'three', 'four'], attention: { kind: 'platform-gap' } };
