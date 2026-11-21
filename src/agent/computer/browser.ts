@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { computerHostFile, computerProfile, VIRTUAL_DISPLAY_ENV } from './browser-host.js';
-import { hostStatusFile, installingMessage, liveHostStatus, readHostStatus } from './browser-launch.js';
+import { desktopSession, hostStatusFile, installingMessage, liveHostStatus, readHostStatus } from './browser-launch.js';
 import { BROWSER_HOST_UNIT, browserHostLaunch } from './browser-host-scope.js';
 import { sharedState } from './shared-state.js';
 import { pidIsAlive, tryLease } from '../../session/store/locks.js';
@@ -15,7 +15,7 @@ import { watchDialogs } from './page-dialogs.js';
 import { watchConsole } from './console-log.js';
 import { allTabs, closeTabsByLabel, closeTabsOfOwner, readTabRecords, sweepTabs, writeTabRecord, type TabRecord } from './tab-registry.js';
 import { sleep } from '../../runtime/sleep.js';
-import { browserProvider } from './settings.js';
+import { browserDisplay, browserProvider, type BrowserDisplay } from './settings.js';
 import { browserUseConnection, stopBrowserUse } from './browser-use-cloud.js';
 import { contextEgress, egressOfPage, egressServer, pageEgress } from './egress.js';
 import { EgressNotServed, requestHostedContext } from './egress-host.js';
@@ -131,7 +131,10 @@ async function startHost(stateDir: string): Promise<Connected> {
       const entry = process.env.CLIKCODE_BROWSER_HOST_ENTRY || process.argv[1];
       if (!entry) throw new Error('ClikCode could not start its browser host.');
       const hostArgs = [process.execPath, entry, 'computer-host', stateDir];
-      const plain = hiddenDisplayCommand(hostArgs);
+      const plain = hiddenDisplayCommand(hostArgs, process.env, process.platform, undefined, {
+        display: await browserDisplay(stateDir),
+        onFallback: () => lifecycle('browser.host.display', { wanted: 'visible', used: 'hidden', why: 'no desktop session' }),
+      });
       // In a systemd unit of its own, with limits: it belongs to no worker, so it outlives this one and the next adopts it.
       const own = browserHostLaunch(plain, { platform: process.platform, env: process.env, cgroup: await fs.readFile('/proc/self/cgroup', 'utf8').catch(() => ''), uid: process.getuid?.() ?? 0, cwd: process.cwd(), busExists: existsSync });
       await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser'));
@@ -455,8 +458,37 @@ function mine(stateDir: string, tab?: string): Page | undefined {
   return stack.at(-1);
 }
 
+/** Who holds each page, so a tab that page opens goes to the same chat whenever it opens. */
+const holders = sharedState('browser-holders', () => new WeakMap<Page, { stateDir: string; tab?: string }>());
+/** Tabs a chat's own pages opened that the chat has not been told about yet. */
+const arrived = sharedState('browser-arrived', () => new Map<string, Page[]>());
+
+/** A tab one of this chat's pages opened is this chat's from the moment it opens: a window that opens a moment after the click that
+ * asked for it (the button fetches first) used to belong to no one, so no chat could read it, switch to it or close it. */
+function followOpenedTabs(page: Page): void {
+  page.on('popup', popup => {
+    const holder = holders.get(page);
+    if (!holder) return;
+    const key = ownerKey(holder.stateDir, holder.tab);
+    // A tab the chat has let go of (closed, parked) no longer speaks for it.
+    if (!(owned.get(key) ?? []).includes(page)) return;
+    adoptPage(holder.stateDir, popup, holder.tab);
+    arrived.set(key, [...(arrived.get(key) ?? []), popup]);
+  });
+}
+
+/** The tabs this chat's pages opened since it last asked, still open, oldest first. `take` (the default) marks them as told. */
+export function arrivedPages(stateDir: string, tab?: string, take = true): Page[] {
+  const key = ownerKey(stateDir, tab);
+  const pages = (arrived.get(key) ?? []).filter(page => !page.isClosed());
+  if (take) arrived.delete(key);
+  return pages;
+}
+
 /** Make `page` this chat's tab (a popup the chat's own page opened). */
 export function adoptPage(stateDir: string, page: Page, tab?: string): void {
+  if (!holders.has(page)) followOpenedTabs(page);
+  holders.set(page, { stateDir, ...(tab ? { tab } : {}) });
   // A popup opened by a cloud tab lives in the cloud browser too.
   if (!cloudPages.has(page) && (owned.get(ownerKey(stateDir, tab)) ?? []).some(other => cloudPages.has(other) && other.context() === page.context())) cloudPages.add(page);
   // A page an egress-bound tab adopts (its popup, its restored or parked tab) is in that egress's context: Chrome opens a popup where its
@@ -774,14 +806,24 @@ export async function throwawayComputerPage(stateDir: string): Promise<Page> {
   return context.newPage();
 }
 
-/** On Linux the browser runs on its own virtual display so its windows never take focus from the user's
- * screen. Handoff and screenshots go over CDP and are unaffected. CLIKCODE_BROWSER_VISIBLE=1 shows it.
+/** On Linux the browser runs on its own virtual display so its windows never take focus from the user's screen; the live views (show,
+ * handoff) and screenshots go over CDP and are unaffected. `display: 'visible'` (the account setting, `clikcode computer display visible`)
+ * or CLIKCODE_BROWSER_VISIBLE=1 starts it on the desktop the user is sitting at instead; with no desktop to be found it stays hidden and
+ * `onFallback` is told.
  * Chrome on Linux picks Wayland whenever it can reach a compositor -- through WAYLAND_DISPLAY, or the default `wayland-0` socket when that
  * is unset -- so xvfb-run alone left its window on the user's GNOME desktop (seen 2026-11-20: the host's Chrome connected to wayland-0
  * with DISPLAY=:99 set). WAYLAND_DISPLAY is removed and the host is told it is on a virtual display (it then asks Chrome for X11). */
-export function hiddenDisplayCommand(command: string[], env = process.env, platform = process.platform, hasXvfb = () => whichSync('xvfb-run')): string[] {
+export function hiddenDisplayCommand(command: string[], env = process.env, platform = process.platform, hasXvfb = () => whichSync('xvfb-run'), options: { display?: BrowserDisplay; socketExists?: (file: string) => boolean; onFallback?: () => void } = {}): string[] {
   // Headless needs no display, virtual or real.
-  if (platform !== 'linux' || env.CLIKCODE_BROWSER_VISIBLE === '1' || /^(?:1|true|yes|on)$/i.test(env.CLIKCODE_BROWSER_HEADLESS ?? '') || !hasXvfb()) return command;
+  if (platform !== 'linux' || /^(?:1|true|yes|on)$/i.test(env.CLIKCODE_BROWSER_HEADLESS ?? '')) return command;
+  if (env.CLIKCODE_BROWSER_VISIBLE === '1' || options.display === 'visible') {
+    const session = desktopSession({ env, platform, ...(options.socketExists ? { socketExists: options.socketExists } : {}) });
+    // A desktop found by its socket is named for the host, which otherwise sees no display and runs headless. A host started from inside
+    // another host's virtual display must not be told it is on one.
+    if (session) return Object.keys(session).length ? ['env', '-u', VIRTUAL_DISPLAY_ENV, ...Object.entries(session).map(([name, value]) => `${name}=${value}`), ...command] : command;
+    options.onFallback?.();
+  }
+  if (!hasXvfb()) return command;
   return ['env', '-u', 'WAYLAND_DISPLAY', `${VIRTUAL_DISPLAY_ENV}=1`, 'xvfb-run', '-a', '-s', '-screen 0 1440x900x24', ...command];
 }
 

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
 import { passHumanCheck } from '../computer/human-check.js';
-import { adoptPage, allTabs, closeComputerPage, computerPage, moveTabToCloud, moveTabToLocal, tabIsInCloud, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
+import { adoptPage, allTabs, arrivedPages, closeComputerPage, ownedPages, computerPage, moveTabToCloud, moveTabToLocal, tabIsInCloud, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
 import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, listTabs, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
 import { COMPUTER_OFF, captchaSolvingAllowed, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
@@ -41,7 +41,9 @@ import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
 import { declaredAuthKind, declaredConnectionValues, destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
-import { ACTIONABLE, condenseSnapshot } from './snapshot-condense.js';
+import { ACTIONABLE, collapseRepeats, condenseSnapshot } from './snapshot-condense.js';
+import { REF, rememberRefs, resolveRef } from '../computer/page-refs.js';
+import { chooseOption } from '../computer/page-choose.js';
 import { followPopup, SIGN_IN_CLICK } from '../computer/google-popup.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { emailConnected, emailStatus, findEmail, loginAddresses } from '../computer/email-api.js';
@@ -78,7 +80,6 @@ function webAddress(value: string | undefined): string {
   return parsed.href;
 }
 
-const REF = /^(?:f\d+)?e\d+$/;
 const isStandardKey = (key: string): boolean => (PROFILE_KEYS as readonly string[]).includes(key);
 
 /** Whether a value is on the page now, in any frame: in its text, a field, or its markup (a data attribute, a hidden input). */
@@ -99,13 +100,7 @@ export async function pageHolds(page: Page, value: string): Promise<boolean> {
 export async function locate(page: Page, target: string | undefined): Promise<Locator> {
   const wanted = target?.trim();
   if (!wanted) throw new Error('Say what to act on: a [ref=…] from the page view, or its visible text.');
-  if (REF.test(wanted)) {
-    const byRef = page.locator(`aria-ref=${wanted}`);
-    // A reference from before a reload or a frame change makes Playwright throw ("Invalid frame in aria-ref selector") instead of
-    // counting zero: that is the same fact, said the same way, with the way out.
-    if (await byRef.count().catch(() => 0)) return byRef;
-    throw new Error(`Nothing on the page has the reference ${wanted}: the page has changed since it was read (sign-in pages reload their frames). Observe the page again, or name the control by its visible text ("Password", "Sign in").`);
-  }
+  if (REF.test(wanted)) return resolveRef(page, wanted);
   // The page first, then each frame in it (a sign-up form or sign-in button inside an iframe, same-origin or not).
   const scopes: Array<Page | Frame> = [page, ...page.frames().filter(frame => frame !== page.mainFrame() && frame.url() && frame.url() !== 'about:blank')];
   for (const scope of scopes) {
@@ -168,6 +163,7 @@ function visibleText(): string {
 
 const indentOf = (line: string): number => line.length - line.trimStart().length;
 const BEHIND_DIALOG_LINES = 40;
+const OPEN_CAP = 12_000;
 const OVERLAY = /^\s*- (?:dialog|alertdialog|menu|listbox)\b/;
 const EDGE = /^\s*- (?:banner|contentinfo)\b/;
 /** A site's own side menu: dozens of links that change nothing about the task. Short ones (a breadcrumb) stay. */
@@ -180,20 +176,7 @@ const LONG_MENU_LINES = 25;
  * `full` keeps the header, footer and side menus and allows a longer view. */
 /** A dropdown with hundreds of options (a country list) costs a page of text and says nothing: keep the chosen one and the first few, and count the rest. */
 export function collapseOptions(snapshot: string, keep = 6): string {
-  const lines = snapshot.split('\n');
-  const out: string[] = [];
-  for (let at = 0; at < lines.length;) {
-    if (!/^\s*- option "/.test(lines[at]!)) { out.push(lines[at]!); at++; continue; }
-    let end = at;
-    while (end < lines.length && /^\s*- option "/.test(lines[end]!) && indentOf(lines[end]!) === indentOf(lines[at]!)) end++;
-    const run = lines.slice(at, end);
-    if (run.length <= keep + 1) { out.push(...run); at = end; continue; }
-    const chosen = run.filter(line => /\[selected\]/.test(line));
-    const shown = new Set([...run.slice(0, keep), ...chosen]);
-    out.push(...run.filter(line => shown.has(line)), `${' '.repeat(indentOf(run[0]!))}- (… ${run.length - shown.size} more options; choose one by its text)`);
-    at = end;
-  }
-  return out.join('\n');
+  return collapseRepeats(snapshot.split('\n'), { keep, minRun: keep + 2, optionsOnly: true }).join('\n');
 }
 
 export function arrangeSnapshot(snapshot: string, full = false): string {
@@ -206,7 +189,7 @@ export function arrangeSnapshot(snapshot: string, full = false): string {
   let folded = false;
   for (let at = 0; at < lines.length;) {
     const line = lines[at]!;
-    if (OVERLAY.test(line)) { const to = end(at); const base = indentOf(line); overlays.push(...lines.slice(at, to).map(item => item.slice(base))); at = to; continue; }
+    if (OVERLAY.test(line)) { const to = end(at); const base = indentOf(line); overlays.push(...collapseRepeats(lines.slice(at, to).map(item => item.slice(base)))); at = to; continue; }
     if (!full && hasMain && (EDGE.test(line) || (SIDE_MENU.test(line) && end(at) - at > LONG_MENU_LINES))) { folded = true; at = end(at); continue; }
     kept.push(line); at++;
   }
@@ -228,16 +211,27 @@ export function arrangeSnapshot(snapshot: string, full = false): string {
     const controls = middle.filter(row => ACTIONABLE.test(row));
     body = [...rows.slice(0, head), `- (… ${middle.length - controls.length} lines trimmed from the middle of a long page (text and links only; its forms and buttons are kept); scroll, or observe with full: true …)`, ...controls.slice(0, 120), ...rows.slice(tail)].join('\n');
   }
-  return [overlays.length ? `Open now (dialogs and menus):\n${overlays.join('\n')}\n` : '', body, folded ? '- (header, footer and long side menus folded away; observe with full: true to see them)' : ''].filter(Boolean).join('\n');
+  // What is open is shown before the page, and whole, up to a limit: a list no folding could shorten must not cost a page of text on every call.
+  let open = overlays.join('\n');
+  if (!full && open.length > OPEN_CAP) {
+    const rows = open.slice(0, OPEN_CAP).split('\n').slice(0, -1);
+    open = [...rows, `- (… ${overlays.length - rows.length} more lines of what is open; observe with find: "words" for a part of it, or full: true for all of it)`].join('\n');
+  }
+  return [open ? `Open now (dialogs and menus):\n${open}\n` : '', body, folded ? '- (header, footer and long side menus folded away; observe with full: true to see them)' : ''].filter(Boolean).join('\n');
 }
 
-/** Only the lines that mention `text`, each under the lines that contain it: for a page too long to read whole. */
+/** Only the lines that mention `text`, each under the lines that contain it: for a page too long to read whole.
+ * The words as a phrase first; when no line holds the phrase, any line that holds one of its words. */
 export function findInSnapshot(snapshot: string, text: string): string {
   const lines = snapshot.split('\n');
-  const wanted = text.toLowerCase();
+  const lower = lines.map(line => line.toLowerCase());
+  const phrase = text.trim().toLowerCase();
+  const words = phrase.split(/\s+/).filter(word => word.length > 1);
+  const whole = lower.some(line => line.includes(phrase));
+  const mentions = (line: string): boolean => whole || words.length < 2 ? line.includes(phrase) : words.some(word => line.includes(word));
   const keep = new Set<number>();
   lines.forEach((line, at) => {
-    if (!line.toLowerCase().includes(wanted)) return;
+    if (!mentions(lower[at]!)) return;
     keep.add(at);
     let depth = indentOf(line);
     for (let up = at - 1; up >= 0 && depth > 0; up--) if (indentOf(lines[up]!) < depth) { keep.add(up); depth = indentOf(lines[up]!); }
@@ -288,9 +282,10 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
   const codes = hideRecoveryCodes(keys.text);
   const shown = codes.hidden ? `${codes.text}\n\n[${codes.hidden} backup codes hidden. Save them all without reading them: capture_secret with target "backup codes".]` : codes.text;
   const hidden = keys.hidden;
+  rememberRefs(page, shown);
   if (find?.trim()) {
     const found = findInSnapshot(shown, find.trim());
-    return { output: `Page: ${displayUrl(page.url())}\n\n${found ? `Lines mentioning "${find.trim()}" (with the elements around them):\n${found.slice(0, 12_000)}` : `Nothing on the page mentions "${find.trim()}". Try observe with full: true.`}` };
+    return { output: `Page: ${displayUrl(page.url())}\n\n${found ? `Lines mentioning "${find.trim()}"${/\s/.test(find.trim()) && !shown.toLowerCase().includes(find.trim().toLowerCase()) ? ' (no line has the whole phrase; these have one of its words)' : ''}, with the elements around them:\n${found.slice(0, 12_000)}` : `Nothing on the page mentions "${find.trim()}". Try observe with full: true.`}` };
   }
   const before = lastSeen.get(page);
   lastSeen.set(page, { url: page.url(), shown });
@@ -447,6 +442,9 @@ export const computerWebTool = defineTool<WebArgs>({
     return runInOrder(args, hostCtx);
   },
 });
+
+/** What still makes sense when a new tab has just taken the front: looking at it, going somewhere, or picking another tab. */
+const AFTER_NEW_TAB = new Set(['open', 'observe', 'screenshot', 'console', 'cookies', 'switch']);
 
 function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult> {
   return inOrder(args.tab ? `${hostCtx.stateDir}#${args.tab}` : hostCtx.stateDir, async (): Promise<ToolRunResult> => {
@@ -625,6 +623,13 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       if (args.action === 'downloads') return { output: await describeDownloads(ctx.stateDir, ctx.sessionId) };
       if (args.action === 'open') webAddress(args.url);
       const page = args.action === 'open' && args.new_tab ? await openNewComputerPage(ctx.stateDir, args.tab) : args.action === 'open' || args.action === 'open_email_link' || args.action === 'email_connect' || args.action === 'oauth_connect' ? await openComputerPage(ctx.stateDir, args.tab) : await computerPage(ctx.stateDir, args.tab);
+      // A tab this chat's page opened after the last call ended (a window that opens a moment late) is in front now. What the agent
+      // is about to do was meant for the page before it, so it is told, and shown the new page, instead of acting on the wrong one.
+      const late = arrivedPages(ctx.stateDir, args.tab).includes(page) ? `A new tab opened after the last action and is now the page in front: ${displayUrl(page.url())} (tabs lists this chat's tabs; switch goes back to another).` : undefined;
+      if (late && !AFTER_NEW_TAB.has(args.action)) {
+        const view = await observeComputerPage(page, false).catch(quiet('agent/tools/computer-web'));
+        return { output: `${late}\nThe ${args.action} was not done: it was meant for the page before. This is the page now.${view ? `\n\n${view.output}` : ''}` };
+      }
       bindDownloads(page, ctx.stateDir, ctx.sessionId);
       // A box the page raised and nobody answered holds the whole page: say so before anything touches it.
       bindDialogs(page, DIALOG_AWARE.has(args.action));
@@ -645,7 +650,8 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
         const withPicture = !done.isError && args.with_screenshot && ctx.acceptsImages === true && args.action !== 'screenshot' && !ended.isClosed() ? await withScreenshot(done, ended) : done;
         const shown = withPicture.isError ? withPicture : await withSignInHints(withPicture, ended, ctx.stateDir);
         const noted = withDialogNotices(shown, page);
-        return leftBehind ? { ...noted, output: `${leftBehind}\n\n${noted.output}` } : noted;
+        const lead = [late, leftBehind].filter(Boolean).join('\n\n');
+        return lead ? { ...noted, output: `${lead}\n\n${noted.output}` } : noted;
       } finally { ctx.signal?.removeEventListener('abort', onAbort); bindDialogs(page, true); }
     } catch (error) {
       // A sign-in's own errors may echo what was typed, so only its planned messages are shown; a capture's are always the real reason.
@@ -879,17 +885,8 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
       return fillTarget(page, await locate(page, step.target), step.text, step.target);
     }
     case 'choose': {
-      // A dropdown that is not a <select>: open it, type to narrow the list, take the option that says this.
       if (!step.text) throw new Error('Choose needs the option text.');
-      const target = await locate(page, step.target);
-      if (await target.evaluate(element => (element as unknown as { tagName: string }).tagName).catch(() => '') === 'SELECT') { await target.selectOption({ label: step.text }, { timeout: 10_000 }).catch(() => target.selectOption(step.text!, { timeout: 10_000 })); return `Chose "${step.text}".`; }
-      await clickOrHint(target);
-      await page.keyboard.insertText(step.text).catch(quiet('agent/tools/computer-web'));
-      await page.waitForTimeout(250);
-      const option = page.getByRole('option', { name: step.text, exact: true }).or(page.getByRole('option', { name: new RegExp(step.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })).first();
-      if (await option.count().catch(() => 0)) await option.click({ timeout: 5_000 });
-      else await page.keyboard.press('Enter');
-      return `Chose "${step.text}".`;
+      return chooseOption(page, await locate(page, step.target), step.text, control => clickOrHint(control));
     }
     case 'press':
       await page.keyboard.press(checkKey(step.key));
@@ -1266,10 +1263,8 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
     // A later fill of the same batch still carries a generated password the site has since refused: it gets the current one.
     const held = generatedFor(current);
     const step = planned.do === 'fill' && held && planned.text && held.past.has(planned.text) ? { ...planned, text: held.password } : planned;
-    // Only a tab the chat's own page opens is followed; another chat's tabs are not this chat's business.
-    const popups: Page[] = [];
-    const onPopup = (popup: Page): void => { popups.push(popup); };
-    current.on('popup', onPopup);
+    // A tab the chat's own page opens is the chat's as it opens (browser.ts); what opened before this step was reported with the step before.
+    arrivedPages(ctx.stateDir, tab);
     let halted = false;
     try {
       // Steps are journaled for an automatic recipe (see recipe-recorder.ts); a replay is not journaled again.
@@ -1282,7 +1277,7 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
       }
       if (typeof done === 'string') notes.push(done); else { notes.push(done.note); halted = true; }
       // A sign-in button often fetches before it opens its window: give it a moment to show up.
-      if (step.do === 'click' && !popups.length && SIGN_IN_CLICK.test(`${before?.label ?? ''} ${step.target ?? ''}`)) await current.waitForEvent('popup', { timeout: 4_000 }).catch(quiet('agent/tools/computer-web'));
+      if (step.do === 'click' && !arrivedPages(ctx.stateDir, tab, false).length && SIGN_IN_CLICK.test(`${before?.label ?? ''} ${step.target ?? ''}`)) await current.waitForEvent('popup', { timeout: 4_000 }).catch(quiet('agent/tools/computer-web'));
       // A box the step raised holds the page: nothing can be read from it until the agent answers.
       if (step.do === 'press' || step.do === 'choose' || step.do === 'upload') await current.waitForTimeout(150);
       const waiting = pendingDialogNote(current);
@@ -1305,7 +1300,8 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
     } catch (error) {
       // The page closing itself (a sign-in popup that finished) is read from the page, not from an error message.
       if (current.isClosed()) {
-        const live = current.context().pages().filter(item => !item.isClosed()).at(-1);
+        // The chat's own tab that is in front now, never just any tab of the shared browser: those are other chats'.
+        const live = ownedPages(ctx.stateDir, tab).current;
         if (live) { current = live; adoptPage(ctx.stateDir, current, tab); halted = true; notes.push(`Step ${index + 1} (${step.do}): the tab closed itself, so this is the page that is open now.`); }
       }
       if (!halted) {
@@ -1314,14 +1310,15 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
         return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
       }
     }
-    finally { current.off('popup', onPopup); }
-    const next = popups.filter(popup => !popup.isClosed()).at(-1);
+    const next = arrivedPages(ctx.stateDir, tab).at(-1);
     if (next) {
       // Google's account chooser in a popup: the account is chosen and consent pressed, and the page that opened it carries on.
       const followed = await followPopup(current, next, { email: await profileEmail(ctx.stateDir), signal: ctx.signal }).catch(quiet('agent/tools/computer-web'));
       if (followed?.note) notes.push(followed.note);
       const landed = followed?.page ?? next;
-      if (landed !== current) { current = landed; adoptPage(ctx.stateDir, current, tab); }
+      // Where the chat is now is the tab in front: the popup, or the page that opened it once a sign-in window has closed.
+      current = landed;
+      adoptPage(ctx.stateDir, current, tab);
       await settle(current);
       if (!followed?.note) notes.push(`A new tab opened and is now the page: ${displayUrl(current.url())}`);
     }

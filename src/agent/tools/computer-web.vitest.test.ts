@@ -67,6 +67,15 @@ describe('findInSnapshot', () => {
     expect(findInSnapshot(page, 'compute admin')).toBe(['- generic [ref=e1]:', '  - main [ref=e2]:', '    - dialog "Add role" [ref=e3]:', '      - listbox [ref=e4]:', '        - option "Compute Admin" [ref=e5]'].join('\n'));
     expect(findInSnapshot(page, 'nothing like this')).toBe('');
   });
+  it('falls back to any of the words when no line holds them as a phrase', () => {
+    const found = findInSnapshot(page, 'run other');
+    expect(found).toContain('option "Cloud Run Admin"');
+    expect(found).toContain('button "Other"');
+    expect(found).not.toContain('Compute Admin');
+    // The phrase wins when a line has it: a word of it elsewhere is not shown.
+    expect(findInSnapshot(page, 'cloud run')).not.toContain('button "Other"');
+    expect(findInSnapshot(page, 'zz qq')).toBe('');
+  });
 });
 
 describe('browser_use labels and plan text', () => {
@@ -125,6 +134,19 @@ describe('displayUrl', () => {
     expect(displayUrl('https://app.example.com/cb?code=abc123&page=2')).toBe('https://app.example.com/cb?code=…&page=2');
     expect(displayUrl(`https://app.example.com/#access_token=${long}`)).toBe('https://app.example.com/#…');
     expect(displayUrl('https://console.example.com/iam/api-keys')).toBe('https://console.example.com/iam/api-keys');
+  });
+});
+
+describe('arrangeSnapshot with a long list open', () => {
+  it('shows the open list folded, not every row of it', () => {
+    const rows = Array.from({ length: 250 }, (_, i) => `      - generic [ref=e${i * 2 + 10}]:\n        - button "Country ${i}" [ref=e${i * 2 + 11}]`).join('\n');
+    const out = arrangeSnapshot(`- generic [ref=e1]:\n  - main [ref=e2]:\n    - dialog [ref=e3]:\n${rows}\n    - button "Save" [ref=e900]`);
+    expect(out).toContain('Open now (dialogs and menus):');
+    expect(out).toContain('button "Country 5"');
+    expect(out).not.toContain('button "Country 6"');
+    expect(out).toContain('244 more like these; choose one by its text');
+    expect(out).toContain('button "Save"');
+    expect(out.length).toBeLessThan(1_500);
   });
 });
 

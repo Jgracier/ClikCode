@@ -76,6 +76,50 @@ export function capSections(lines: readonly string[]): { lines: string[]; cut: n
   return { lines: out, cut };
 }
 
+const CHOICE_MARK = /\[(?:selected|checked|active)\]/;
+/** A block that holds a box to type in is a form row, not a choice: a form of twenty alike fields is never folded. */
+const TYPED = /^\s*- '?(?:textbox|searchbox|combobox|spinbutton|slider)\b/;
+const OPTION_ROW = /^\s*- '?option\b/;
+/** What kind of thing a line is, without what it says: its depth under the block, its role and its states that do not vary by row. */
+const shapeOf = (line: string, base: number): string => `${indentOf(line) - base}${line.trim().replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/ \[(?:ref|cursor|active|selected|checked|expanded|pressed)[^\]]*\]/g, '').replace(/: .*$/, ':').replace(/^- '/, '- ').replace(/'$/, '')}`;
+
+/** A long run of sibling blocks that are all the same kind of thing (the countries of a country list, each drawn as a button
+ * and a separator; two hundred options) says one thing two hundred times. The first few stay, with any that is chosen, and the
+ * rest are counted. `optionsOnly`: fold only runs of `option` rows, for the body of a page, where alike rows may be its content. */
+export function collapseRepeats(lines: readonly string[], opts: { keep?: number; minRun?: number; optionsOnly?: boolean } = {}): string[] {
+  const keep = opts.keep ?? 6;
+  const minRun = opts.minRun ?? 10;
+  const out: string[] = [];
+  const walk = (from: number, to: number): void => {
+    for (let at = from; at < to;) {
+      const end = Math.min(blockEnd(lines, at), to);
+      const base = indentOf(lines[at]!);
+      const shape = (start: number, stop: number): string => lines.slice(start, stop).map(line => shapeOf(line, base)).join('\n');
+      // Only what could be folded is compared with its neighbours: a long table is not measured row against row for nothing.
+      const eligible = opts.optionsOnly ? OPTION_ROW.test(lines[at]!) : !lines.slice(at, end).some(line => TYPED.test(line));
+      const blocks: Array<[number, number]> = [[at, end]];
+      if (eligible) {
+        const first = shape(at, end);
+        for (let next = end; next < to && indentOf(lines[next]!) === base;) {
+          const stop = Math.min(blockEnd(lines, next), to);
+          if (shape(next, stop) !== first) break;
+          blocks.push([next, stop]); next = stop;
+        }
+      }
+      // A short run is shown whole, block by block, and each block is looked into for a long run of its own.
+      if (blocks.length < minRun) { out.push(lines[at]!); walk(at + 1, end); at = end; continue; }
+      let left = 0;
+      blocks.forEach(([start, stop], index) => {
+        if (index < keep || lines.slice(start, stop).some(line => CHOICE_MARK.test(line))) out.push(...lines.slice(start, stop)); else left++;
+      });
+      if (left) out.push(`${' '.repeat(base)}- (… ${left} more ${OPTION_ROW.test(lines[at]!) ? 'options' : 'like these'}; choose one by its text)`);
+      at = blocks.at(-1)![1];
+    }
+  };
+  walk(0, lines.length);
+  return out;
+}
+
 /** The whole pass, for a page shown without `full`. */
 export function condenseSnapshot(snapshot: string): string {
   const deduped = dedupeLinks(snapshot.split('\n'));

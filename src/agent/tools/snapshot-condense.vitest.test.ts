@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { arrangeSnapshot } from './computer-web.js';
-import { capSections, dedupeLinks, shortenText } from './snapshot-condense.js';
+import { capSections, collapseRepeats, dedupeLinks, shortenText } from './snapshot-condense.js';
 
 const link = (name: string, ref: number, url: string, indent = 6): string => `${' '.repeat(indent)}- link "${name}" [ref=e${ref}] [cursor=pointer]:\n${' '.repeat(indent + 2)}- /url: ${url}`;
 
@@ -68,5 +68,40 @@ describe('condenseSnapshot', () => {
     const page = signupPage();
     expect(arrangeSnapshot(page, true)).toContain('Footer link 79');
     expect(arrangeSnapshot(page)).not.toContain('Footer link 79');
+  });
+});
+
+describe('collapseRepeats', () => {
+  /** A country picker drawn the way a design system draws it: each country a wrapper holding a button and a separator. */
+  const countries = (count: number, picked = -1): string[] => Array.from({ length: count }, (_, i) => [
+    `    - generic [ref=e${i * 3 + 10}]:`,
+    `      - button "Country ${i}"${i === picked ? ' [active]' : ''} [ref=e${i * 3 + 11}]`,
+    `      - separator [aria-hidden] [ref=e${i * 3 + 12}]`,
+  ]).flat();
+
+  it('folds a long run of alike blocks to its first few and the chosen one, and counts the rest', () => {
+    const shown = collapseRepeats(['- dialog [ref=e1]:', '  - searchbox "search" [ref=e2]', '  - generic [ref=e3]:', ...countries(250, 180), '    - button "Last, drawn alone" [ref=e999]']);
+    expect(shown.join('\n')).toContain('button "Country 0"');
+    expect(shown.join('\n')).toContain('button "Country 180" [active]');
+    expect(shown.join('\n')).not.toContain('"Country 100"');
+    expect(shown).toContain('    - (… 243 more like these; choose one by its text)');
+    expect(shown.at(-1)).toBe('    - button "Last, drawn alone" [ref=e999]');
+    expect(shown.length).toBeLessThan(30);
+  });
+
+  it('leaves a short run, and a form of alike fields, whole', () => {
+    const few = ['- dialog:', ...countries(9)];
+    expect(collapseRepeats(few)).toEqual(few);
+    const form = ['- dialog:', ...Array.from({ length: 20 }, (_, i) => `  - textbox "Field ${i}" [ref=e${i}]`)];
+    expect(collapseRepeats(form)).toEqual(form);
+  });
+
+  it('in a page body folds only option rows', () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `  - button "Row ${i}" [ref=e${i}]`);
+    expect(collapseRepeats(['- main:', ...rows], { optionsOnly: true })).toEqual(['- main:', ...rows]);
+    const options = Array.from({ length: 40 }, (_, i) => `  - option "Option ${i}"`);
+    const folded = collapseRepeats(['- combobox "Plan":', ...options], { optionsOnly: true, minRun: 8 });
+    expect(folded).toHaveLength(8);
+    expect(folded.at(-1)).toBe('  - (… 34 more options; choose one by its text)');
   });
 });
