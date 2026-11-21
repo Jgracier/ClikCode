@@ -1,5 +1,5 @@
 /** Texted one-time codes read from a Mac's Messages database. */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -100,3 +100,27 @@ describe('a Twilio number as the sign-up phone', () => {
     expect(neither).toMatchObject({ error: expect.stringMatching(/Twilio said 401|Mac is asleep/) });
   });
 });
+
+it('does not wait for a hung Mac when Twilio already has the code', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-sms-'));
+  onTestFinished(() => fs.rm(dir, { recursive: true, force: true }));
+  await setSmsSource(dir, 'user@mac');
+  await setTwilioSms(dir, { number: '+17192497747', account: 'AC' + 'a'.repeat(32) });
+  let macSignal: AbortSignal | undefined;
+  const at = Math.floor(Date.now() / 1000);
+  const result = await waitForTextedCode(dir, { since: Date.now(), ask: async (_target, _since, signal) => { macSignal = signal; return new Promise(() => undefined); }, askTwilio: async () => ({ rows: `${at}\u001f22395\u001fYour code is 482913` }) });
+  expect(result).toMatchObject({ code: '482913' });
+  expect(macSignal?.aborted).toBe(true);
+}, 1000);
+
+it('keeps polling Twilio while the Mac request remains hung', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-sms-'));
+  onTestFinished(() => fs.rm(dir, { recursive: true, force: true }));
+  await setSmsSource(dir, 'user@mac');
+  await setTwilioSms(dir, { number: '+17192497747', account: 'AC' + 'a'.repeat(32) });
+  let calls = 0;
+  const at = Math.floor(Date.now() / 1000);
+  const result = await waitForTextedCode(dir, { since: Date.now(), sleep: async () => undefined, ask: async () => new Promise(() => undefined), askTwilio: async () => ({ rows: ++calls < 3 ? '' : `${at}\u001f22395\u001fYour code is 482913` }) });
+  expect(result).toMatchObject({ code: '482913' });
+  expect(calls).toBe(3);
+}, 1000);
