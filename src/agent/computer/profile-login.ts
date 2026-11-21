@@ -6,10 +6,14 @@ import type { LoginField } from './login-fields.js';
 import { defaultProfile, listProfiles, PASSWORD_SECRET, readProfileSecret } from './profiles.js';
 import { registerSecret } from './secret-scrubber.js';
 
-const ACCOUNT_KEYS = new Set(['email', 'username', 'accountId']);
+/** The boxes the profile's email answers. An account ID, tenant or workspace box is not one: the profile holds no such thing. */
+const EMAIL_KEYS = new Set(['email', 'username']);
 
 export async function profileLoginAnswers(stateDir: string, fields: readonly LoginField[], label?: string): Promise<Record<string, string> | undefined> {
   if (!fields.length || fields.some(field => field.transient || field.kind === 'choice')) return undefined;
+  // The email is one answer for one box. A form with several account boxes (an account ID beside a username) wants things the
+  // profile does not hold, and the same email in each would be a failed sign-in: it is left to the private prompt.
+  if (fields.filter(field => field.kind !== 'password' && field.key !== 'password').length > 1) return undefined;
   // The default profile (Personal) first: listProfiles sorts by label, which would put an admin profile such as "ClikDeploy" ahead of it.
   const listed = await listProfiles(stateDir);
   // A profile the caller NAMED (an AWS root account, say) answers before the default one: its email and its password go together,
@@ -27,7 +31,7 @@ export async function profileLoginAnswers(stateDir: string, fields: readonly Log
       if (!password) return undefined;
       registerSecret(password);
       answers[field.key] = password;
-    } else if (ACCOUNT_KEYS.has(field.key) && email) answers[field.key] = email;
+    } else if (EMAIL_KEYS.has(field.key) && email) answers[field.key] = email;
     else return undefined;
   }
   return answers;

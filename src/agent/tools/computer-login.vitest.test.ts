@@ -14,6 +14,10 @@ const browser = vi.hoisted(() => {
   let rejectAt = -1;
   let rejections = 0;
   let finishUrl = 'https://mail.google.com/mail/u/0/';
+  /** A whole one-page form shown instead of Google's steps: [type, name, label] per box. */
+  let form: [string, string, string][] | undefined;
+  /** Every button the sign-in looked for or pressed. */
+  const pressed: string[] = [];
   const field = (type: string, name: string, label: string, autocomplete = type === 'password' ? 'current-password' : 'username') => ({
     type, name, id: name, autocomplete, required: true, placeholder: '', labels: [],
     getAttribute: (attribute: string) => attribute === 'aria-label' ? label : null,
@@ -29,24 +33,27 @@ const browser = vi.hoisted(() => {
     waitForTimeout: async () => {},
     locator: (selector: string) => ({
       count: async () => selector.includes('password') ? Number(step === 1) : Number(step < 2),
-      evaluateAll: async (callback: (nodes: unknown[]) => unknown) => callback(step >= last() ? [] : [
+      evaluateAll: async (callback: (nodes: unknown[]) => unknown) => callback(step >= last() ? [] : form ? form.map(([type, name, label]) => field(type, name, label, '')) : [
         step === 0 ? field('text', 'identifier', 'Email or phone') : step === 1 ? field('password', 'password', 'Password')
           : field('text', 'totp', 'Enter the 6-digit code', 'one-time-code')]),
       nth: () => ({
+        evaluateHandle: async () => { pressed.push('submit lookup'); return { asElement: () => null }; },
+        click: async () => { pressed.push('click'); },
         fill: async (value: string) => { filled.push(value); },
         press: async (key: string) => {
           filled.push(key);
           if (step === rejectAt) { rejections++; return; }
-          if (advance) step = emailOnly && step === 0 ? last() : step + 1;
+          if (advance) step = (emailOnly && step === 0) || form ? last() : step + 1;
         },
       }),
       fill: async (value: string) => { filled.push(value); },
       press: async (key: string) => { filled.push(key); },
+      click: async () => { pressed.push('click'); },
     }),
-    getByRole: () => ({ count: async () => 0 }),
+    getByRole: () => ({ count: async () => 0, first: () => ({ click: async () => { pressed.push('click'); } }), click: async () => { pressed.push('click'); } }),
   };
-  return { filled, page,
-    reset: () => { step = 0; advance = true; emailOnly = false; mfa = false; rejectAt = -1; rejections = 0; finishUrl = 'https://mail.google.com/mail/u/0/'; },
+  return { filled, pressed, page, showForm: (boxes: [string, string, string][]) => { form = boxes; },
+    reset: () => { form = undefined; pressed.length = 0; step = 0; advance = true; emailOnly = false; mfa = false; rejectAt = -1; rejections = 0; finishUrl = 'https://mail.google.com/mail/u/0/'; },
     stopAdvancing: () => { advance = false; }, rejectPassword: () => { rejectAt = 1; }, rejectCode: () => { mfa = true; rejectAt = 2; },
     requireMfa: () => { mfa = true; }, reuseSession: () => { emailOnly = true; }, signedIn: () => { step = last(); },
     requireVerification: () => { finishUrl = 'https://accounts.google.com/v3/signin/challenge/dp'; } };
@@ -271,4 +278,79 @@ it('says why when there is nothing to sign in to, without quoting the page', asy
   const result = await computerWebTool.run({ action: 'login' }, person({}));
   expect(result.isError).toBe(true);
   expect(result.output).toBe('No sign-in form is visible. If a verification or CAPTCHA is showing, use handoff.');
+});
+
+const IAM_FORM: [string, string, string][] = [['text', 'account', 'Account ID or alias'], ['text', 'username', 'IAM username'], ['password', 'password', 'Password']];
+
+it('refuses the AWS IAM user form for a saved root login: types nothing, presses nothing, asks nothing, and says which fields and what to do', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-iam-'));
+  const id = await seed('root@example.com', 'pw-root');
+  browser.showForm(IAM_FORM);
+  const asked: { key: string; kind: string }[][] = [];
+  const result = await computerWebTool.run({ action: 'login' }, person({ username: 'other@example.com', password: 'pw-other' }, asked));
+  expect(result.isError).toBe(true);
+  expect(result.output).toContain('Nothing was typed or pressed');
+  expect(result.output).toContain('"Account ID or alias"');
+  expect(result.output).toContain('different kind of sign-in');
+  expect(result.output).not.toMatch(/root@example|pw-root/);
+  expect(browser.filled).toEqual([]);
+  expect(browser.pressed).toEqual([]);
+  expect(asked).toEqual([]);
+  // Nothing was sent, so the saved login is not marked as refused.
+  expect((await savedLoginsForSite(stateDir, GOOGLE))[0]).toMatchObject({ id, rejected: false });
+});
+
+it('does not answer the IAM form from the autofill profile when no login is saved: the person is asked for each field', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-iam-new-'));
+  const { saveProfile, saveProfileSecret } = await import('../computer/profiles.js');
+  const profile = await saveProfile(stateDir, { label: 'Personal', fields: { email: 'me@example.com' } });
+  await saveProfileSecret(stateDir, profile.id, 'password', 'profile-pw');
+  browser.showForm(IAM_FORM);
+  const asked: string[][] = [];
+  const answers: Record<string, string> = { accountId: '123456789012', username: 'deploy', password: 'pw-iam' };
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: string }[]) => { asked.push(fields.map(field => field.key)); return Object.fromEntries(fields.map(field => [field.key, answers[field.key]!])); } } as unknown as ToolContext;
+  expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
+  expect(asked).toEqual([['accountId', 'username', 'password']]);
+  expect(browser.filled).toEqual(['123456789012', 'deploy', 'pw-iam', 'Enter']);
+  expect(browser.filled).not.toContain('me@example.com');
+  const [saved] = await savedLoginsForSite(stateDir, GOOGLE);
+  expect(await savedLoginFields(stateDir, GOOGLE, saved!.id)).toEqual(answers);
+
+  // The login saved from that form fits it, and signs in next time with nothing asked.
+  browser.reset(); browser.showForm(IAM_FORM); browser.filled.length = 0; asked.length = 0;
+  expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
+  expect(asked).toEqual([]);
+  expect(browser.filled).toEqual(['123456789012', 'deploy', 'pw-iam', 'Enter']);
+});
+
+it('stops when the person gives one value for two account fields', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-twice-'));
+  browser.showForm(IAM_FORM);
+  const result = await computerWebTool.run({ action: 'login' }, { stateDir, requestPrivateLogin: async () => ({ accountId: 'same@example.com', username: 'same@example.com', password: 'pw' }) } as unknown as ToolContext);
+  expect(result.isError).toBe(true);
+  expect(result.output).toContain('same value was given for two different account fields');
+  expect(browser.filled).toEqual([]);
+});
+
+it('still fills a one-page email and password form from the saved login', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-plain-'));
+  await seed('one@example.com', 'pw-one');
+  browser.showForm([['email', 'email', 'Email address'], ['password', 'password', 'Password']]);
+  const asked: { key: string; kind: string }[][] = [];
+  const result = await computerWebTool.run({ action: 'login' }, person({}, asked));
+  expect(result.isError).toBeUndefined();
+  expect(asked).toEqual([]);
+  expect(browser.filled).toEqual(['one@example.com', 'pw-one', 'Enter']);
+});
+
+it('fills a username and password form with the saved username', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-user-'));
+  await seed('ada', 'pw-ada');
+  browser.showForm([['text', 'username', 'Username'], ['password', 'password', 'Password']]);
+  const asked: { key: string; kind: string }[][] = [];
+  const result = await computerWebTool.run({ action: 'login' }, person({}, asked));
+  expect(result.isError).toBeUndefined();
+  expect(asked).toEqual([]);
+  expect(browser.filled).toEqual(['ada', 'pw-ada', 'Enter']);
+  expect(JSON.stringify(result)).not.toMatch(/pw-ada/);
 });

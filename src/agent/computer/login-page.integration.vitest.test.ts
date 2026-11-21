@@ -17,6 +17,10 @@ const page = (title: string, body: string): string => `<!doctype html><title>${t
 const form = (action: string, label: string, name: string, type: string, autocomplete: string, error: boolean): string => page(label,
   `<form method="post" action="${action}">${error ? '<p>That did not work. Try again.</p>' : ''}<label>${label}<input name="${name}" type="${type}" autocomplete="${autocomplete}"></label></form>`);
 
+/** Counts presses per control (kept across a navigation), read back with `hits`. */
+const COUNTED = '<script>function hit(name) { const all = JSON.parse(sessionStorage.hits || "{}"); all[name] = (all[name] || 0) + 1; sessionStorage.hits = JSON.stringify(all) }</script>';
+const hits = (tab: Page): Promise<Record<string, number>> => tab.evaluate(() => JSON.parse((globalThis as unknown as { sessionStorage: { hits?: string } }).sessionStorage.hits || '{}') as Record<string, number>);
+
 let server: Server | undefined;
 let browser: Browser | undefined;
 let base = '';
@@ -55,6 +59,24 @@ beforeAll(async () => {
     else if (url.pathname === '/signin/challenge/totp') send(form('/signin/challenge/totp', 'Enter the 6-digit code', 'totp', 'text', 'one-time-code', error));
     else if (url.pathname === '/embedded') send(page('Embedded', '<h1>Pay</h1><iframe src="/signin/identifier" width="400" height="200"></iframe>'));
     else if (url.pathname === '/signin/jsform') send(page('JS form', '<label>Email or phone<input name="identifier" type="text" autocomplete="username"></label><button type="button" onclick="location=\'/signin/pwd\'">Next</button>'));
+    // AWS's IAM user page in shape: a header button that is a submit button, an account box beside a username box, and other ways in.
+    else if (url.pathname === '/signin/iam') send(page('IAM', `${COUNTED}<header><button type="submit" onclick="hit('feedback')">Provide feedback</button></header>
+      <label>Account ID or alias<input name="account" type="text"></label><label>IAM username<input name="username" type="text"></label>
+      <label>Password<input name="password" type="password"></label>
+      <button type="submit" onclick="hit('signin')">Sign in</button><button type="button" onclick="hit('root')">Sign in using root user email</button><button type="button" onclick="hit('create')">Create a new AWS account</button>`))
+    // Enter does nothing here, and the page's first submit button is not the sign-in's.
+    else if (url.pathname === '/signin/busy') send(page('Busy', `${COUNTED}<header><button type="submit" onclick="hit('feedback')">Provide feedback</button></header>
+      <div><label>Email or phone<input name="identifier" type="text" autocomplete="username"></label>
+      <button type="button" onclick="hit('next'); location='/signin/pwd'">Next</button><button type="button" onclick="hit('root')">Sign in using root user email</button></div>`))
+    // The same, with nothing that is plainly this box's own button: nothing is pressed.
+    else if (url.pathname === '/signin/unclear') send(page('Unclear', `${COUNTED}<header><button type="submit" onclick="hit('feedback')">Provide feedback</button></header>
+      <div><label>Email or phone<input name="identifier" type="text" autocomplete="username"></label>
+      <button type="button" onclick="hit('root')">Sign in using root user email</button><button type="button" onclick="hit('sso')">Sign in with SSO</button></div>`))
+    // Enter is taken and refused in place: the page says so and keeps its form.
+    else if (url.pathname === '/signin/inplace') send(page('In place', `${COUNTED}<p id="said"></p>
+      <label>Email<input name="email" type="email" onkeydown="if (event.key === 'Enter') hit('enter')"></label>
+      <label>Password<input name="password" type="password" onkeydown="if (event.key === 'Enter') { hit('enter'); said.textContent = 'Authentication failed' }"></label>
+      <button type="button" onclick="hit('signin')">Sign in</button>`))
     else if (url.pathname === '/signin/late') send(page('Late', '<div id="m"></div><script>setTimeout(() => { document.getElementById("m").innerHTML = `<form method="post" action="/signin/identifier"><label>Email or phone<input name="identifier" type="text" autocomplete="username"></label></form>` }, 2500)</script>'));
     else if (request.headers['sec-fetch-dest'] === 'iframe') send(page('Done', '<script>top.location = "/home"</script>'));
     else send(page('Home', '<h1>Welcome</h1>'));
@@ -212,3 +234,48 @@ it.skipIf(!enabled)('uses a complete saved login without asking about an incompl
   expect(received).toEqual(['/signin/identifier=ready@example.com', '/signin/pwd=correct-ready']);
   await result.page.context().close();
 });
+
+it.skipIf(!enabled)('refuses an account ID and IAM username form for a saved email login, with nothing typed and nothing pressed', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-iam-'));
+  const id = await saveLoginFields(stateDir, `${base}/`, { username: 'root@example.com', password: 'correct-one' });
+  const context = await browser!.newContext({ ignoreHTTPSErrors: true });
+  const tab = await context.newPage();
+  await tab.goto(`${base}/signin/iam`);
+  let asked = 0;
+  await expect(loginComputerPage({ stateDir, page: tab, ask: async () => { asked++; return { accountId: 'guess@example.com' }; } }))
+    .rejects.toThrow(/Nothing was typed or pressed\. This page asks for "Account ID or alias".*new_account/);
+  expect(asked).toBe(0);
+  expect(await tab.locator('input').evaluateAll(inputs => inputs.map(input => (input as unknown as { value: string }).value))).toEqual(['', '', '']);
+  expect(await hits(tab)).toEqual({});
+  expect(received).toEqual([]);
+  expect((await savedLoginsForSite(stateDir, `${base}/`))[0]).toMatchObject({ id, rejected: false });
+  await context.close();
+}, 60_000);
+
+it.skipIf(!enabled)('presses only the button beside the box it filled, never the page\'s first submit button or another way in', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-busy-'));
+  const context = await browser!.newContext({ ignoreHTTPSErrors: true });
+  const tab = await context.newPage();
+  await tab.goto(`${base}/signin/busy`);
+  const answers: Record<string, string> = { username: 'one@example.com', password: 'correct-one' };
+  const outcome = await loginComputerPage({ stateDir, page: tab, ask: async (_site, fields) => Object.fromEntries(fields.map(field => [field.key, answers[field.key]!])) });
+  expect(outcome).toBe('signed_in');
+  expect(await hits(tab)).toEqual({ next: 1 });
+  await context.close();
+}, 60_000);
+
+it.skipIf(!enabled)('presses nothing when no button is plainly the form\'s own', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-unclear-'));
+  const result = await signIn({ username: 'one@example.com', password: 'correct-one' }, { start: '/signin/unclear' });
+  expect(result.outcome).toBe('unverified');
+  expect(await hits(result.page)).toEqual({});
+  await result.page.context().close();
+}, 60_000);
+
+it.skipIf(!enabled)('does not press the button after Enter was taken and refused in place: the answers are sent once', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-inplace-'));
+  const result = await signIn({ email: 'one@example.com', password: 'wrong' }, { start: '/signin/inplace' });
+  expect(result.outcome).toBe('unverified');
+  expect(await hits(result.page)).toEqual({ enter: 1 });
+  await result.page.context().close();
+}, 60_000);

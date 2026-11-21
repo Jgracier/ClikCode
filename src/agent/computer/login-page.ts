@@ -6,7 +6,7 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page } from 'playwright-core';
 import { loginLabel, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected } from './credential-vault.js';
 import { LoginError } from './login-error.js';
-import { loginFields, loginScope, uniqueLabels, type LoginField } from './login-fields.js';
+import { loginFields, loginScope, savedLoginValues, uniqueLabels, type LoginField } from './login-fields.js';
 /** Paths that mean a sign-in or verification step. */
 const AUTH_PATH = /(?:^|\/)(?:login|signin|sign-in|auth|oauth|authenticate|challenge|verify|verification|mfa|otp|2fa|2sv|two-factor|sso|saml)(?:\/|$)/i;
 
@@ -73,12 +73,47 @@ async function progress(page: Page, before: string, signal?: AbortSignal, nudge?
   return false;
 }
 
-/** Enter did nothing: some forms only submit from their button. */
-async function pressSubmit(page: Page): Promise<void> {
-  const scope = await loginScope(page);
-  const button = scope.locator('button[type="submit"]:visible, input[type="submit"]:visible').first();
-  if (await button.count()) { await button.click({ timeout: 3_000 }); return; }
-  await scope.getByRole('button', { name: /^(sign in|log in|login|next|continue|submit|verify|confirm)\b/i }).first().click({ timeout: 3_000 });
+/** The visible words of the sign-in page (never a typed value: those are not part of a page's text). Undefined when unreadable. */
+async function pageWords(page: Page): Promise<string | undefined> {
+  try { return await (await loginScope(page)).locator('body').innerText({ timeout: 2_000 }); }
+  catch { return undefined; } // Mid-navigation, or a page that cannot be read: not known to be unchanged, so nothing is pressed.
+}
+
+type ButtonNode = {
+  tagName: string; type?: string; value?: string; innerText?: string; parentElement: ButtonNode | null; form?: ButtonNode | null;
+  getAttribute(name: string): string | null; getClientRects(): { length: number };
+  querySelectorAll(selector: string): Iterable<ButtonNode>;
+};
+
+/** Finds the submit control that belongs to the box just filled, in the page. Runs in the browser.
+ * Inside a <form>: its one submit button, or with several, the one named exactly like a submit. With no <form> (a
+ * script-driven page): the one button named exactly like a submit in the nearest container around the box that has any.
+ * Anything less certain returns nothing: a page's other buttons (a header's "Provide feedback", "Sign in using root
+ * user email", "Create account") are never the sign-in's to press. */
+function ownSubmitControl(node: unknown): unknown {
+  const SUBMIT_NAME = /^(?:sign in|log in|login|next|continue|submit|verify|confirm)$/i;
+  const box = node as ButtonNode;
+  const shown = (button: ButtonNode): boolean => button.getClientRects().length > 0;
+  const named = (button: ButtonNode): boolean => SUBMIT_NAME.test((button.innerText || button.value || button.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim());
+  const only = (buttons: ButtonNode[]): ButtonNode | null => buttons.length === 1 ? buttons[0]! : null;
+  const buttonsIn = (container: ButtonNode): ButtonNode[] => [...container.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]')].filter(shown);
+  if (box.form) {
+    const all = buttonsIn(box.form);
+    const submits = all.filter(button => button.tagName === 'INPUT' ? button.type === 'submit' : button.tagName === 'BUTTON' && button.type === 'submit');
+    return only(submits) ?? only(all.filter(named));
+  }
+  for (let container = box.parentElement; container; container = container.parentElement) {
+    const candidates = buttonsIn(container).filter(named);
+    if (candidates.length) return only(candidates);
+  }
+  return null;
+}
+
+/** Enter did nothing: some forms only submit from their button. Presses the button of the form that holds box `index`, and no other. */
+async function pressSubmit(page: Page, index: number): Promise<void> {
+  const box = (await loginScope(page)).locator('input:visible').nth(index);
+  const button = (await box.evaluateHandle(ownSubmitControl)).asElement();
+  if (button) await button.click({ timeout: 3_000 });
 }
 
 /** No website-independent signal proves authentication. A move away from an
@@ -200,9 +235,11 @@ export async function loginComputerPage(input: {
       step--; // The page may have moved while the picker was open: read it again.
       continue;
     }
+    // The saved login answers the form's account boxes only where it holds what they ask for; a form it does not fit is refused here, untouched.
+    const known: Record<string, string> = { ...savedLoginValues(fields, saved), ...(saved.password ? { password: saved.password } : {}) };
     // A one-time code is asked for every time and never kept.
     const codes: Record<string, string> = {};
-    const needed: LoginField[] = fields.filter(field => field.transient || (!saved[field.key] && !supplied[field.key]));
+    const needed: LoginField[] = fields.filter(field => field.transient || (!known[field.key] && !supplied[field.key]));
     // An email-only first page is followed by a password page nearly everywhere: ask for both now, in one prompt.
     const early = !fields.some(field => field.kind === 'password') && !saved.password && !supplied.password
       && needed.some(field => ['email', 'username', 'accountId'].includes(field.key));
@@ -233,11 +270,19 @@ export async function loginComputerPage(input: {
       }
     }
     const before = signature(url, fields);
+    const valueOf = (field: LoginField): string => field.transient ? codes[field.key]! : (known[field.key] ?? supplied[field.key]!);
+    // Whoever answered (the saved login, the profile, the person): one value in two account boxes is a guess, not a sign-in.
+    const typed = fields.filter(field => field.kind === 'text' && !field.transient).map(valueOf);
+    if (new Set(typed).size !== typed.length) throw new LoginError('Nothing was typed or pressed: the same value was given for two different account fields of this page. Each field needs its own answer.');
     for (const field of fields) {
       if (!onSite(input.page.url(), startUrl)) return sentSaved && fields.some(candidate => candidate.kind === 'password') ? refused() : 'unverified';
-      await (await loginScope(input.page)).locator('input:visible').nth(field.index).fill(field.transient ? codes[field.key]! : (saved[field.key] ?? supplied[field.key]!));
+      await (await loginScope(input.page)).locator('input:visible').nth(field.index).fill(valueOf(field));
     }
     for (const key of Object.keys(codes)) delete codes[key];
+    // The words on the page before Enter. A page that says something new afterwards (a refusal shown in place, a spinner) took
+    // the submission: pressing its button as well would send the same answers twice, which counts twice towards a lockout.
+    const words = await pageWords(input.page);
+    const nudge = async (): Promise<void> => { if (words !== undefined && await pageWords(input.page) === words) await pressSubmit(input.page, fields.at(-1)!.index); };
     await (await loginScope(input.page)).locator('input:visible').nth(fields.at(-1)!.index).press('Enter');
     submitted = true;
     lastSubmit = Date.now();
@@ -245,12 +290,12 @@ export async function loginComputerPage(input: {
       submittedPassword = true;
       // A refusal counts against the saved password only when this whole submission came from the saved login: a form that also
       // needed something typed fresh (an account id, a different kind of sign-in) says nothing about the password it was sent with.
-      const allSaved = fields.every(field => field.transient || field.kind === 'password' || (saved[field.key] !== undefined && supplied[field.key] === undefined));
+      const allSaved = fields.every(field => field.transient || field.kind === 'password' || (known[field.key] !== undefined && supplied[field.key] === undefined));
       if (saved.password && !supplied.password && allSaved) sentSaved = true;
     }
     if (fields.some(field => field.transient)) codeAttempts++;
     // Nothing changed after the saved password was sent and the password box is still there: the site said no in place.
-    if (!await progress(input.page, before, input.signal, () => pressSubmit(input.page))) return sentSaved && (await visible(input.page)).some(field => field.kind === 'password') ? refused() : 'unverified';
+    if (!await progress(input.page, before, input.signal, nudge)) return sentSaved && (await visible(input.page)).some(field => field.kind === 'password') ? refused() : 'unverified';
   }
   return 'unverified';
 }

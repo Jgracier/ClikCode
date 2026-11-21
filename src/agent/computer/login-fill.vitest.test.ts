@@ -21,3 +21,10 @@ it('never puts the account email into a business name, registration number, phon
   expect(loginValueFor(saved, { password: false, hint: { autocomplete: '', type: 'email', label: 'Email', text: 'Email user[email]' } })).toBe('ada@example.com');
   expect(loginValueFor(saved, { password: false, hint: { autocomplete: '', type: 'text', label: 'Correo electrónico', text: 'Correo electrónico' } })).toBe('ada@example.com');
 });
+
+it('leaves an account ID, alias, tenant or workspace box to a saved account ID, never the email', () => {
+  const field = (label: string) => ({ password: false, hint: { autocomplete: '', type: 'text', label, text: `${label} account` } });
+  for (const label of ['Account ID or alias', 'Account ID', 'Tenant', 'Workspace', 'Organization ID']) expect([label, loginValueFor(saved, field(label))]).toEqual([label, undefined]);
+  expect(loginValueFor({ ...saved, accountId: '123456789012' }, field('Account ID or alias'))).toBe('123456789012');
+  expect(loginValueFor(saved, field('Account'))).toBe('ada@example.com');
+});

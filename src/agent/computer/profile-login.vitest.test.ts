@@ -28,6 +28,17 @@ describe('profileLoginAnswers', () => {
     expect(await profileLoginAnswers(stateDir, [])).toBeUndefined();
   });
 
+  it('does not answer an account ID, or a form with several account boxes, with the profile email', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'plogin-'));
+    const profile = await saveProfile(stateDir, { label: 'Personal', fields: { email: 'a@x.test' } });
+    await saveProfileSecret(stateDir, profile.id, 'password', 'pw-secret-1');
+    const password = field('password', 'password');
+    expect(await profileLoginAnswers(stateDir, [field('accountId'), password])).toBeUndefined();
+    expect(await profileLoginAnswers(stateDir, [field('accountId'), field('username'), password])).toBeUndefined();
+    expect(await profileLoginAnswers(stateDir, [field('email'), field('username'), password])).toBeUndefined();
+    expect(await profileLoginAnswers(stateDir, [field('username'), password])).toEqual({ username: 'a@x.test', password: 'pw-secret-1' });
+  });
+
   it('a NAMED profile answers before Personal, email and password together (an AWS root account is not the user\'s own email)', async () => {
     stateDir = await mkdtemp(join(tmpdir(), 'plogin-'));
     const me = await saveProfile(stateDir, { label: 'Personal', fields: { email: 'me@x.test', sso_email: 'me@x.test' } });

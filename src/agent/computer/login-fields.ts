@@ -1,6 +1,8 @@
 /** Metadata the agent may see on a sign-in page. Input values are never read. */
 import type { Frame, Page } from 'playwright-core';
 
+import { LoginError } from './login-error.js';
+
 /** A page, or the frame inside it that holds the sign-in form. */
 type LoginScope = Page | Frame;
 
@@ -36,6 +38,10 @@ type InputNode = {
   getAttribute(name: string): string | null;
 };
 
+/** A box that asks which account, tenant or workspace the person belongs to (AWS's "Account ID or alias"): a different thing
+ * from who they are, so an email or username is never its answer. */
+export const ACCOUNT_SCOPE = /account[ _-]?(?:id|alias|number)|tenant|workspace|organi[sz]ation|subdomain|company[ _-]?id/i;
+
 function safeLabel(value: string): string {
   return value.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[account]')
     .replace(/\b[A-Za-z0-9_-]{24,}\b/g, '[redacted]').slice(0, 80);
@@ -63,7 +69,7 @@ export async function loginFields(page: Page): Promise<LoginField[]> {
       // A field named in one word (oneTimeCode, authCode, mfaCode, otp_code) is a code box as much as one labelled "Code".
       || /one.?time|\botp\b|\btotp\b|verification|security code|passcode|authenticator|\b2fa\b|\bmfa\b|\bcode\b|(?:auth|login|signin|verify|mfa|otp|totp|security|access|sms|email|factor)[ _-]?code\b/.test(hint));
     const key = code ? 'code' : password ? 'password'
-      : /account[ -]?id|account[ -]?alias/.test(hint) ? 'accountId'
+      : ACCOUNT_SCOPE.test(hint) ? 'accountId'
       : field.type === 'email' || /\bemail\b/.test(field.autocomplete) ? 'email'
       : /username|identifier|email|phone|login/.test(hint) ? 'username'
       : `field_${field.index + 1}`;
@@ -73,6 +79,37 @@ export async function loginFields(page: Page): Promise<LoginField[]> {
     const label = safeLabel(field.label || (key === 'code' ? 'Verification code' : key === 'password' ? 'Password' : key === 'accountId' ? 'Account ID' : key === 'email' ? 'Email' : key === 'username' ? 'Email or username' : field.name || field.id || 'Login field'));
     return [{ index: field.index, key: finalKey, label, kind: password ? 'password' as const : 'text' as const, required: field.required, ...(code ? { transient: true as const } : {}) }];
   });
+}
+
+const isEmail = (value: string | undefined): value is string => !!value && value.includes('@');
+
+/** What a saved login puts in each account box of the form in front of it (password and code boxes are not its business).
+ * A box takes the saved value of its own kind. Two things are the same under another name and nothing else is: an email box
+ * takes a saved username that is an email, and the form's ONLY account box ("Email or username") takes the saved email.
+ * A form that asks for something the saved login does not hold (an account ID, a username beside an account ID, a second
+ * account box) is another kind of sign-in than the saved one, and is refused whole before anything is typed: an email put
+ * there as a guess is a failed attempt against the account. */
+export function savedLoginValues(fields: readonly LoginField[], saved: Readonly<Record<string, string>>): Record<string, string> {
+  const boxes = fields.filter(field => field.kind === 'text' && !field.transient);
+  const holds = [saved.accountId && 'an account ID', (saved.email || isEmail(saved.username)) && 'an email', saved.username && !isEmail(saved.username) && 'a username']
+    .filter((kind): kind is string => !!kind);
+  // No saved login in use: every box is asked of the person.
+  if (!holds.length) return {};
+  const values: Record<string, string> = {};
+  const missing: LoginField[] = [];
+  for (const box of boxes) {
+    const value = saved[box.key]
+      ?? (box.key === 'email' && isEmail(saved.username) ? saved.username : undefined)
+      ?? (box.key === 'username' && boxes.length === 1 ? saved.email : undefined);
+    // One saved value never answers two boxes.
+    if (value === undefined || Object.values(values).includes(value)) missing.push(box); else values[box.key] = value;
+  }
+  if (missing.length) {
+    throw new LoginError(`Nothing was typed or pressed. This page asks for ${missing.map(field => `"${field.label}"`).join(' and ')}, and the saved login holds only ${holds.join(' and ')} (with its password): `
+      + 'this is a different kind of sign-in than the saved login. Observe the page and press its own switch to the kind the saved login is for (for example "Sign in using root user email"), '
+      + 'or call login with new_account true to enter and save a login that has these fields.');
+  }
+  return values;
 }
 
 /** Names of the buttons and links on the page, for a page that holds a key or other
