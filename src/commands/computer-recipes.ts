@@ -17,7 +17,7 @@ async function need(host: string | undefined): Promise<Recipe> {
 
 export async function recipeList(): Promise<void> {
   const all = await listRecipes(stateDirectory());
-  if (isJsonDefaultMode()) return emitResult({ recipes: all.map(r => ({ host: r.host, loginRoute: r.loginRoute, steps: r.steps.length, verifiedAt: r.verifiedAt, issues: lintRecipe(r).length })) });
+  if (isJsonDefaultMode()) return emitResult({ recipes: all.map(r => ({ host: r.host, loginRoute: r.loginRoute, steps: r.steps.length, verifiedAt: r.verifiedAt, ...(r.keyPage ? { keyPage: r.keyPage } : {}), ...(r.captureHint ? { captureHint: r.captureHint } : {}), issues: lintRecipe(r).length })) });
   out(all.length ? all.map(r => `${r.host} via ${r.loginRoute}: ${r.steps.length} steps, verified ${r.verifiedAt.slice(0, 10)}${lintRecipe(r).length ? ` (${lintRecipe(r).length} lint finding${lintRecipe(r).length === 1 ? '' : 's'})` : ''}`).join('\n') : 'No recipes saved yet.');
 }
 
