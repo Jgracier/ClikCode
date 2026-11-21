@@ -7,6 +7,7 @@
  * the same reference back); and, when the page drew a new node, by the role and name the agent was shown for it, if exactly one
  * visible element still answers to them. */
 import type { Frame, Locator, Page } from 'playwright-core';
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { sharedState } from './shared-state.js';
 
 export const REF = /^(?:f\d+)?e\d+$/;
@@ -48,7 +49,7 @@ export async function resolveRef(page: Page, ref: string): Promise<Locator> {
   const byRef = page.locator(`aria-ref=${ref}`);
   // A reference into a frame that has since navigated makes the browser throw instead of counting zero: the same fact.
   if (await present(byRef)) return byRef;
-  await page.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never).catch(() => undefined);
+  await page.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never).catch(quiet('agent/computer/page-refs'));
   if (await present(byRef)) return byRef;
   const was = remembered.get(page)?.get(ref);
   let matches = 0;

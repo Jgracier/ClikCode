@@ -3,7 +3,7 @@
  * Answers stay in this worker, and a new login is saved only after the
  * browser has moved past sign-in. */
 import { quiet } from '../../runtime/lifecycle-log.js';
-import type { Page } from 'playwright-core';
+import type { ElementHandle, Page } from 'playwright-core';
 import { loginLabel, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected } from './credential-vault.js';
 import { LoginError } from './login-error.js';
 import { loginFields, loginScope, savedLoginValues, uniqueLabels, type LoginField } from './login-fields.js';
@@ -112,7 +112,7 @@ function ownSubmitControl(node: unknown): unknown {
 /** Enter did nothing: some forms only submit from their button. Presses the button of the form that holds box `index`, and no other. */
 async function pressSubmit(page: Page, index: number): Promise<void> {
   const box = (await loginScope(page)).locator('input:visible').nth(index);
-  const button = (await box.evaluateHandle(ownSubmitControl)).asElement();
+  const button = (await box.evaluateHandle(ownSubmitControl)).asElement() as ElementHandle | null;
   if (button) await button.click({ timeout: 3_000 });
 }
 

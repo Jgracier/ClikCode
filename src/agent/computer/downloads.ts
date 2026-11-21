@@ -142,7 +142,7 @@ async function placeFile(source: string, dir: string, name: string): Promise<str
 /** Takes a finished download from where the browser wrote it into the chat's folder, and returns it only once it is there, whole.
  * Throws with what was found otherwise: nothing is reported as downloaded that is not on disk. */
 export async function claimDownload(source: string, dir: string, name: string, expectedBytes?: number): Promise<SavedDownload> {
-  const arrived = await fs.stat(source).catch(() => undefined);
+  const arrived = await fs.stat(source).catch(() => undefined); /* fail-open-ok: no file there is what the next line reports */
   if (!arrived?.isFile()) throw new Error(`the browser reported it finished, but no file is at ${source}`);
   if (arrived.size === 0) {
     await fs.unlink(source).catch(quiet('agent/computer/downloads'));
@@ -154,7 +154,7 @@ export async function claimDownload(source: string, dir: string, name: string, e
   }
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const target = await placeFile(source, dir, name);
-  const saved = await fs.stat(target).catch(() => undefined);
+  const saved = await fs.stat(target).catch(() => undefined); /* fail-open-ok: no file there is what the next line reports */
   if (!saved?.isFile() || saved.size !== arrived.size) throw new Error(`moving it to ${target} failed (${saved ? `${saved.size} of ${arrived.size} bytes` : 'no file'} there)`);
   return { name: path.basename(target), path: target, size: saved.size };
 }
