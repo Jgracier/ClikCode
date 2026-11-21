@@ -95,3 +95,45 @@ it.skipIf(!enabled)('owns a tab that opens after the click\'s step has ended', a
   await current!.close();
   await page.close();
 }, 60_000);
+
+it.skipIf(!enabled)('tells the next call about a tab that opened late, does not act on the wrong page, and lets the chat switch back', async () => {
+  const { createServer } = await import('node:http');
+  const { closeComputerBrowser } = await import('../computer/browser.js');
+  const { setComputerEnabled } = await import('../computer/settings.js');
+  const { computerWebTool } = await import('./computer-web.js');
+  const own = await mkdtemp(join(tmpdir(), 'clikcode-late-tab-'));
+  const server = createServer((request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end(request.url === '/late'
+      ? '<title>Verify your account</title><button>Verify</button>'
+      : '<title>Start</title><button onclick="setTimeout(()=>window.open(\'/late\'),2600)">Link my account</button><button onclick="document.title=\'pressed\'">Other</button>');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await setComputerEnabled(own, true);
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No local HTTP port');
+    const run = (args: Record<string, unknown>) => computerWebTool.run(args, { stateDir: own, acceptsImages: false } as never);
+    await run({ action: 'open', url: `http://127.0.0.1:${address.port}/` });
+    const clicked = await run({ action: 'click', target: 'Link my account' });
+    expect(clicked.output).not.toContain('new tab');
+    await new Promise(resolve => setTimeout(resolve, 3_400));
+    // The click was meant for the first page; the late tab is in front now, so it is not made there.
+    const next = await run({ action: 'click', target: 'Other' });
+    expect(next.output).toContain('A new tab opened after the last action and is now the page in front');
+    expect(next.output).toContain('The click was not done');
+    expect(next.output).toContain('button "Verify"');
+    const tabs = await run({ action: 'tabs' });
+    expect(tabs.output).toMatch(/ {2}0: "Start"/);
+    expect(tabs.output).toMatch(/\* 1: "Verify your account"/);
+    const back = await run({ action: 'switch', text: 'start' });
+    expect(back.isError).toBeFalsy();
+    const pressed = await run({ action: 'click', target: 'Other' });
+    expect(pressed.output).not.toContain('new tab');
+    expect((await run({ action: 'tabs' })).output).toMatch(/\* 0: "pressed"/);
+  } finally {
+    await closeComputerBrowser(own);
+    server.close();
+    await rm(own, { recursive: true, force: true });
+  }
+}, 90_000);
