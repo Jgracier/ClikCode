@@ -502,16 +502,13 @@ export async function computerEmail(action: 'connect' | 'status' | 'disconnect',
 }
 
 /** `clikcode computer oauth-connect <connector>`: connects a ClikDeploy connector by pressing through the vendor's consent in the ClikCode browser. */
-export async function computerOauthConnect(connector: string): Promise<void> {
-  const dir = stateDirectory();
-  const { oauthConnect } = await import('../agent/computer/oauth-consent.js');
-  const { openNewComputerPage, closeOwnedPage } = await import('../agent/computer/browser.js');
-  const { profileEmail } = await import('../agent/computer/profiles.js');
-  const email = (await profileEmail(dir));
-  // A fresh tab this command owns (never a reused one with an earlier sign-in step in it), closed afterwards.
-  const reopen = async (old: import('playwright-core').Page) => { await closeOwnedPage(dir, old, 'oauth').catch(quiet('commands/computer')); return openNewComputerPage(dir, 'oauth'); };
-  const done = await oauthConnect(connector, await openNewComputerPage(dir, 'oauth'), { email, stateDir: dir, reopen, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'oauth').catch(quiet('commands/computer')); await releaseComputerBrowser(dir); });
-  return isJsonDefaultMode() ? emitResult({ computer: { oauthConnect: { connector: done.connector, connected: true } } }) : void process.stdout.write(`Connected ${done.connector}: ClikDeploy shows an active connection.\n`);
+export async function computerOauthConnect(connector: string, flags: { tab?: string; egress?: string } = {}): Promise<void> {
+  const { oauthConnectOutcome } = await import('./computer-ops.js');
+  const json = isJsonDefaultMode();
+  const outcome = await oauthConnectOutcome(connector, { ...flags, ...(json ? {} : { progress: (line: string) => { if (line) process.stdout.write(line); } }) });
+  if (json) emitResult({ computer: { oauthConnect: { connector, ...outcome } } });
+  else process.stdout.write(outcome.ok ? `Connected ${connector}: ClikDeploy shows an active connection.\n` : `Not connected: ${outcome.stop.message}\n`);
+  if (!outcome.ok) process.exitCode = 1;
 }
 
 /** `clikcode computer sms <user@host>|off|test`: where texted one-time codes are read from (agent/computer/sms-code.ts). */

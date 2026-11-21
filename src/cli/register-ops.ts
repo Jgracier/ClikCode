@@ -7,7 +7,9 @@ import { serveThenExit } from './stop-signal.js';
 export function registerOperatorCommands(program: Command, computer: Command): void {
   const ops = { hidden: process.env.CLIKCODE_OPS !== '1' };
   computer.command('unattended [setting]', ops).description('on or off: park what needs you (a password, a code, an account choice) in the queue and go on, instead of asking (default off)').action(async (setting?: string) => (await import('../commands/computer.js')).computerUnattended(setting));
-  computer.command('oauth-connect <connector>', ops).description("Connect a ClikDeploy connector: start its OAuth, press through the vendor's consent in the ClikCode browser (stops at a password, code or captcha), confirm it is active").action(async (connector: string) => (await import('../commands/computer.js')).computerOauthConnect(connector));
+  computer.command('oauth-connect <connector>').description("Connect a ClikDeploy connector for your account: start its OAuth, press through the vendor's consent in the ClikCode browser (stops at a password, code or captcha), confirm it is active. With --json: {ok, note} or {ok:false, stop}")
+    .option('--tab <name>', 'The tab to work in (default oauth)').option('--egress <name>', 'The way out the tab leaves through')
+    .action(async (connector: string, flags: { tab?: string; egress?: string }) => (await import('../commands/computer.js')).computerOauthConnect(connector, flags));
   connectors.command('run').description('Advance queued connectors without a model: connect test accounts through the consent driver, capture keys by saved recipes, call pipeline tools; hand unknown screens to an agent and record human-only walls')
     .option('--limit <n>', 'How many queued vendors to take (default 5, at most 25)')
     .option('--ids <ids>', 'Comma-separated connector ids instead of the next queued ones')

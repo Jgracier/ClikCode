@@ -5,6 +5,7 @@
  */
 import { serveThenExit, untilStopped } from './stop-signal.js';
 import { registerOperatorCommands } from './register-ops.js';
+import { registerComputerAbilities } from './register-computer-ops.js';
 import { Option, type Command } from 'commander';
 import type Conf from 'conf';
 
@@ -174,6 +175,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action(async (options: { chat?: string; remove?: string; account?: string }) => options.remove
       ? (await import('../commands/computer.js')).computerLoginsRemove(options.remove, options.account)
       : (await import('../commands/computer.js')).computerLogin(options.chat, { manage: true }));
+  registerComputerAbilities(program, computer);
   registerOperatorCommands(program, computer);
   program.command('logs').description('What every ClikCode window, worker and editor bridge did, in order (the lifecycle log)')
     .option('--session <id>', 'Only this conversation (an id or the start of one)')

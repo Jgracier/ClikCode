@@ -164,7 +164,7 @@ async function poll<T>(question: Question<T>, options: AskOptions): Promise<Poll
         signal,
         onTextDelta: () => undefined,
       });
-      if (process.env.CLIKCODE_CAPTCHA_VOTES) console.error(`vote ${question.roster} ${voter.name}: ${JSON.stringify(result.text.slice(0, 160))}`);
+      if (await voteLogOn()) console.error(`vote ${question.roster} ${voter.name}: ${JSON.stringify(result.text.slice(0, 160))}`);
       if (sample) sample.answers[voter.name || `voter-${seat + 1}`] = result.text.slice(0, 600);
       const answer = question.parse(result.text);
       if (answer !== undefined) return answer;
@@ -176,7 +176,7 @@ async function poll<T>(question: Question<T>, options: AskOptions): Promise<Poll
     } catch (error) {
       if (signal.aborted) return undefined;
       const message = error instanceof Error ? error.message : String(error);
-      if (process.env.CLIKCODE_CAPTCHA_VOTES) console.error(`vote ${question.roster} ${voter.name} failed: ${message.slice(0, 160)}`);
+      if (await voteLogOn()) console.error(`vote ${question.roster} ${voter.name} failed: ${message.slice(0, 160)}`);
       quiet('agent/computer/captcha-model')(message);
       // A voter that cannot answer sits out for a while and the next model in the roster votes in its place.
       if (voter.name) benched.set(voter.name, (options.now ?? Date.now)() + BENCH_MS);
@@ -495,4 +495,11 @@ export function cleanTranscript(text: string): string {
 export function spokenDigits(text: string): string {
   const words: Record<string, string> = { zero: '0', oh: '0', one: '1', two: '2', to: '2', too: '2', three: '3', four: '4', for: '4', five: '5', six: '6', seven: '7', eight: '8', ate: '8', nine: '9' };
   return text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).map(word => /^\d+$/.test(word) ? word : words[word] ?? '').join('');
+}
+
+/** `clikcode computer settings captchaVoteLog on`: each voter's answer goes to stderr. Read once per process. */
+let voteLog: Promise<boolean> | undefined;
+function voteLogOn(): Promise<boolean> {
+  voteLog ??= Promise.all([import('./settings.js'), import('../../session/store/paths.js')]).then(([settings, paths]) => settings.computerTunable(paths.stateDirectory(), 'captchaVoteLog')).catch(() => false);
+  return voteLog;
 }

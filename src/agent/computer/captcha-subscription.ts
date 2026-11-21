@@ -1,5 +1,6 @@
 /** A captcha voter that runs on the user's signed-in Claude or Codex subscription instead of Gateway credit: the
  * vendor's own command line, headless, with no tools but reading the challenge pictures and no session kept (the
+ * same way `clikcode agent run` runs, agent/headless/run.ts). It takes seconds to start and runs one or two
  * at a time, so it is for the few hard, single-picture questions -- a riddle, a match, a pick -- and for standing
  * in when the Gateway's voters cannot answer; never for the dozens of yes/no asks of a picture grid. */
 import type { ImageInput, ModelClient } from '../model-client.js';
@@ -19,8 +20,9 @@ async function account(now: number): Promise<{ command: 'claude' | 'codex'; env:
     lookedUp = { at: now };
     try {
       const { readState } = await import('../../session/state/read.js');
+      const { headlessAccount } = await import('../headless/route.js');
       const { nativeProfileEnvironment } = await import('../../harness/transport/profile-environment.js');
-      const found = microAccount((await readState({ transcripts: [] })).accounts);
+      const found = headlessAccount((await readState({ transcripts: [] })).accounts);
       if (found) {
         const env = { ...process.env, ...nativeProfileEnvironment(found.nativeProfile) };
         // A signed-in native account, never an unrelated API key inherited from the parent.
@@ -43,16 +45,18 @@ async function turnstile<T>(work: () => Promise<T>): Promise<T> {
 
 const extension = (image: ImageInput): string => /png/.test(image.mimeType) ? 'png' : /webp/.test(image.mimeType) ? 'webp' : 'jpg';
 
-export function subscriptionArgs(command: 'claude' | 'codex', prompt: string, files: string[], dir: string, config: string, final: string): string[] {
+export function subscriptionArgs(command: 'claude' | 'codex', prompt: string, files: string[], dir: string, config: string, final: string, model = 'claude-haiku-5-5'): string[] {
   return command === 'codex'
     ? ['exec', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only', '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"', ...files.flatMap(file => ['-i', file]), '-o', final, prompt]
-    : ['-p', prompt, '--model', process.env.CLIKCODE_CAPTCHA_SUBSCRIPTION_MODEL || 'claude-haiku-5-5', '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', 'Read', '--allowedTools', 'Read', '--permission-mode', 'dontAsk', '--no-session-persistence'];
+    : ['-p', prompt, '--model', model, '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', 'Read', '--allowedTools', 'Read', '--permission-mode', 'dontAsk', '--no-session-persistence'];
 }
 
-/** A voter on the user's subscription, or undefined when it is switched off (CLIKCODE_CAPTCHA_SUBSCRIPTION=0) or
- * no signed-in Claude or Codex account has usage left. */
+/** A voter on the user's subscription, or undefined when it is switched off (`clikcode computer settings captchaSubscription off`) or
+ * no signed-in Claude or Codex account has usage left. Its model is the captchaVoterModel setting (Haiku 5.5 by default). */
 export async function subscriptionVoter(now: () => number = Date.now): Promise<{ name: string; client: ModelClient } | undefined> {
-  if (process.env.CLIKCODE_CAPTCHA_SUBSCRIPTION === '0') return undefined;
+  const [{ computerTunable }, { stateDirectory }] = await Promise.all([import('./settings.js'), import('../../session/store/paths.js')]);
+  if (!await computerTunable(stateDirectory(), 'captchaSubscription')) return undefined;
+  const voterModel = await computerTunable(stateDirectory(), 'captchaVoterModel');
   const who = await account(now());
   if (!who) return undefined;
   const step = (async (request: Parameters<Step>[0]) => turnstile(async () => {
@@ -67,7 +71,7 @@ export async function subscriptionVoter(now: () => number = Date.now): Promise<{
       await writeFile(config, JSON.stringify({ mcpServers: {} }));
       const where = who.command === 'claude' && files.length ? `The picture${files.length > 1 ? 's, in order, are the files' : ' is the file'} ${files.join(', ')}. Read ${files.length > 1 ? 'them' : 'it'} first.\n\n` : '';
       const prompt = `${request.system}\n\n${where}${item?.text ?? ''}\n\nReply with the answer only, in the format asked for.`;
-      const child = spawn(who.command, subscriptionArgs(who.command, prompt, files, dir, config, final), { cwd: dir, env: who.env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+      const child = spawn(who.command, subscriptionArgs(who.command, prompt, files, dir, config, final, voterModel), { cwd: dir, env: who.env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
       let text = '';
       child.stdout!.on('data', chunk => { text = (text + String(chunk)).slice(-8_000); });
       child.stderr!.on('data', quiet('agent/computer/captcha-subscription'));

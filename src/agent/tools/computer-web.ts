@@ -1542,7 +1542,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       if (chosen.kind === 'value' && !args.secret_name && !/key|secret|token|password|api/i.test(label) && scrubSecrets(chosen.value) === chosen.value) return { output: `${label}: ${chosen.value}${chosen.alternatives ? ` (${chosen.alternatives} other candidate${chosen.alternatives === 1 ? '' : 's'} on the page; use a more exact label if this is not it)` : ''}\nTo send it on: send_to values {"name":"${chosen.value}"}.` };
       const origin = new URL(page.url()).origin;
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
-      await saveNamedSecret(ctx.stateDir, name, chosen.value, { url: origin, vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? await profileEmail(ctx.stateDir) });
+      await saveNamedSecret(ctx.stateDir, name, chosen.value, { url: origin, page: (() => { const u = new URL(page.url()); return `${u.origin}${u.pathname}`; })(), vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? await profileEmail(ctx.stateDir) });
       return { output: `${label}: read (${chosen.value.length} characters) and saved as "${name}"; it is not shown. Pass it on with send_to values {"<name>":"secret:${name}"}, e.g. {"to":"clikdeploy-connection","with":{"integration":"..."},"values":{"app_id":"secret:${name}"}}.` };
     }
     case 'observe': {

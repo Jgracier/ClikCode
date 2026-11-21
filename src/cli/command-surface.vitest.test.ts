@@ -22,6 +22,15 @@ describe('the public command surface', () => {
     expect(hidden(find(root, 'computer', 'driver'))).toBe(false);
   });
 
+  it('hands the computer abilities to scripts: a headless agent, the bounded tools server, keygrab, page reads, tabs and tokens', () => {
+    const root = program();
+    for (const path of [['agent', 'run'], ['computer', 'mcp'], ['computer', 'keygrab'], ['computer', 'keygrab-resume'], ['computer', 'keygrab-backoff'], ['computer', 'oauth-connect'], ['computer', 'page', 'read'], ['computer', 'page', 'fetch'], ['computer', 'tab', 'list'], ['computer', 'tab', 'close'], ['computer', 'desk-finished'], ['computer', 'settings'], ['computer', 'token', 'generate'], ['computer', 'token', 'call'], ['computer', 'secret-rename']]) {
+      expect(find(root, ...path), path.join(' ')).toBeDefined();
+      expect(hidden(find(root, ...path)), path.join(' ')).toBe(false);
+    }
+    expect(find(root, 'computer', 'keygrab')?.options.map((option) => option.long)).toEqual(expect.arrayContaining(['--send-to', '--key-name', '--egress', '--tab']));
+  });
+
   it('has one command for each thing', () => {
     const root = program();
     for (const gone of [['sessions', 'send'], ['sessions', 'chat'], ['sessions', 'set'], ['sessions', 'interactive'], ['sessions', 'slash'], ['gateway', 'models'], ['gateway', 'usage'], ['gateway', 'finetune'], ['conversations-mcp'], ['swarm-mcp']]) {

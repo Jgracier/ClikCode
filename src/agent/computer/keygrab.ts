@@ -206,7 +206,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const visited: string[] = [...(options.resume?.visited ?? [])];
   const menus: string[] = [...(options.resume?.menus ?? [])];
   const triedNames = new Set<string>();
-  const sink = options.log ?? (process.env.CLIKCODE_KEYGRAB_LOG ? (line: string): void => void process.stderr.write(`${line}\n`) : undefined);
+  const sink = options.log;
   const say = (line: string): void => sink?.(`keygrab ${options.id}: ${line}`);
 
   const act = async <T>(what: string, run: () => Promise<T>): Promise<T> => {

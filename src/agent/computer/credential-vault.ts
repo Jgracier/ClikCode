@@ -271,7 +271,7 @@ async function nearNames(stateDir: string, name: string): Promise<string[]> {
 }
 
 /** What a secret is for and who owns it, kept beside the value so a long list of credentials can be audited and rotated. */
-type SecretMeta = { vendor?: string; owner?: string; env?: string; url?: string; createdAt: string; rotatedAt?: string };
+type SecretMeta = { vendor?: string; owner?: string; env?: string; url?: string; /** The page a captured key was taken from (no query): where such a key is made. */ page?: string; createdAt: string; rotatedAt?: string };
 /** A website's base URL (https, or http for a local test page); nothing else, and never with a login in it. */
 function webOrigin(value: string | undefined): string | undefined {
   try { const url = new URL(value ?? ''); return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password ? url.origin : undefined; } catch { return undefined; }
@@ -288,7 +288,7 @@ async function baseUrlFor(stateDir: string, name: string, given: string | undefi
   const sites = new Set((await readItems(stateDir).catch(() => [])).map(({ item }) => item.origin).filter(origin => new URL(origin).hostname.toLowerCase().replace(/[^a-z0-9]/g, '').includes(vendor)));
   return sites.size === 1 ? [...sites][0] : undefined;
 }
-export async function saveNamedSecret(stateDir: string, name: string, value: string, meta: { vendor?: string; owner?: string; env?: string; url?: string } = {}, options: { legacy?: boolean } = {}): Promise<void> {
+export async function saveNamedSecret(stateDir: string, name: string, value: string, meta: { vendor?: string; owner?: string; env?: string; url?: string; page?: string } = {}, options: { legacy?: boolean } = {}): Promise<void> {
   if (!value) throw new CredentialError('The secret is empty.');
   // A spelling variant of a saved secret is that secret, rotated: no twin is made.
   name = await savedNameFor(stateDir, name) ?? name;
@@ -300,10 +300,10 @@ export async function saveNamedSecret(stateDir: string, name: string, value: str
   // A secret saved before records existed was made when its file was.
   if (before.value !== undefined && !before.meta) { const made = await fs.stat(file).then(info => info.mtime.toISOString(), () => undefined); if (made) before.meta = { createdAt: made }; }
   const now = new Date().toISOString();
-  const kept = (field: 'vendor' | 'owner' | 'env'): Partial<SecretMeta> => { const v = meta[field]?.trim() || before.meta?.[field]; return v ? { [field]: v } : {}; };
+  const kept = (field: 'vendor' | 'owner' | 'env' | 'page'): Partial<SecretMeta> => { const v = meta[field]?.trim() || before.meta?.[field]; return v ? { [field]: v } : {}; };
   const url = INTERNAL_SECRET.test(name) ? undefined : await baseUrlFor(stateDir, name, meta.url, before.meta?.url);
   if (!url && !INTERNAL_SECRET.test(name) && !options.legacy) throw new CredentialError(`A saved key must say which site it is for: give its base URL (https://example.com) when saving "${name}".`);
-  const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), ...(url ? { url } : {}), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) };
+  const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), ...kept('page'), ...(url ? { url } : {}), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) };
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await fs.writeFile(file, seal(key, aad, JSON.stringify({ name, value, meta: saved })), { mode: 0o600 });
 }

@@ -181,3 +181,46 @@ export async function removeEgress(stateDir: string, name: string): Promise<bool
   });
   return removed;
 }
+
+// ── tunable values: `clikcode computer settings [name] [value]` ──
+
+/** The values a user may tune, with their defaults and what each does. Shown by `clikcode computer settings`. */
+export const COMPUTER_TUNABLES = {
+  agentModel: { default: 'claude-sonnet-5-5', about: 'The model a headless agent (`clikcode agent run`) runs on under Claude Code. Codex runs on the chat\'s own model.' },
+  captchaVoterModel: { default: 'claude-haiku-5-5', about: 'The model the captcha voter on your Claude subscription uses for a hard picture question.' },
+  captchaSubscription: { default: true, about: 'Let a hard captcha question be answered on your signed-in Claude or Codex subscription (off: Gateway voters only).' },
+  captchaVoteLog: { default: false, about: 'Print each captcha voter\'s answer to stderr while solving (for diagnosing the solver).' },
+  keygrabLog: { default: false, about: 'Print each keygrab step to stderr (for diagnosing a key capture).' },
+} as const;
+export type ComputerTunable = keyof typeof COMPUTER_TUNABLES;
+type TunableValue<K extends ComputerTunable> = (typeof COMPUTER_TUNABLES)[K]['default'] extends boolean ? boolean : string;
+
+export async function computerTunable<K extends ComputerTunable>(stateDir: string, name: K): Promise<TunableValue<K>> {
+  const fallback = COMPUTER_TUNABLES[name].default as TunableValue<K>;
+  try {
+    const value = ((JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { tunables?: Record<string, unknown> }).tunables ?? {})[name];
+    return (typeof value === typeof fallback ? value : fallback) as TunableValue<K>;
+  } catch { return fallback; }
+}
+
+/** Sets one tunable from its text form (on/off/true/false for a switch); `default` removes it. Returns the value now in force. */
+export async function setComputerTunable(stateDir: string, name: string, text: string): Promise<string | boolean> {
+  if (!(name in COMPUTER_TUNABLES)) throw new Error(`No setting "${name}". Settings: ${Object.keys(COMPUTER_TUNABLES).join(', ')}.`);
+  const key = name as ComputerTunable;
+  const fallback = COMPUTER_TUNABLES[key].default;
+  let value: string | boolean | undefined;
+  if (text === 'default') value = undefined;
+  else if (typeof fallback === 'boolean') {
+    if (!/^(on|off|true|false)$/i.test(text)) throw new Error(`${name} is on or off.`);
+    value = /^(on|true)$/i.test(text);
+  } else {
+    if (!/^[A-Za-z0-9._:/-]{1,120}$/.test(text)) throw new Error(`${name} is a model name such as ${fallback}.`);
+    value = text;
+  }
+  await updateJsonFile(computerSettingsPath(stateDir), objectOrEmpty, current => {
+    const tunables = { ...((current.tunables as Record<string, unknown> | undefined) ?? {}) };
+    if (value === undefined) delete tunables[key]; else tunables[key] = value;
+    return { ...current, tunables };
+  });
+  return value ?? fallback;
+}

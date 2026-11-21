@@ -202,8 +202,10 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
     }
     const port = await liveKeygrabPort({ ...options, id });
     const knownKeyPages = await knownKeyPagesFor(options.stateDir, [url, ...(budget.alternates ?? [])]);
+    const { computerTunable } = await import('./settings.js');
+    const log = await computerTunable(options.stateDir, 'keygrabLog') ? (line: string): void => void process.stderr.write(`${line}\n`) : undefined;
     const done = await runKeygrab(port, {
-      id, url, ...(options.delivery?.keyName ? { keyName: options.delivery.keyName } : {}), maxMs: budget.maxMs, ...(knownKeyPages.length ? { knownKeyPages } : {}), ...(budget.maxSteps ? { maxSteps: budget.maxSteps } : {}), ...(budget.alternates?.length ? { alternates: budget.alternates } : {}),
+      id, url, ...(log ? { log } : {}), ...(options.delivery?.keyName ? { keyName: options.delivery.keyName } : {}), maxMs: budget.maxMs, ...(knownKeyPages.length ? { knownKeyPages } : {}), ...(budget.maxSteps ? { maxSteps: budget.maxSteps } : {}), ...(budget.alternates?.length ? { alternates: budget.alternates } : {}),
       ...(budget.resume ? { resume: { visited: budget.resume.visited, menus: budget.resume.menus, ...(budget.resume.signedIn ? { signedIn: true } : {}) } } : {}),
     });
     if (done.ok) {
