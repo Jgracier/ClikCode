@@ -24,7 +24,7 @@ const browser = vi.hoisted(() => {
   });
   const last = () => mfa ? 3 : 2;
   const page = {
-    on: () => undefined, off: () => undefined,
+    on: () => undefined, off: () => undefined, context: () => ({ browser: () => null }),
     evaluate: async () => "",
     url: () => rejections && step === rejectAt ? `https://accounts.google.com/v3/signin/again/${rejections}`
       : step === 0 ? 'https://accounts.google.com/v3/signin/identifier'
@@ -58,7 +58,7 @@ const browser = vi.hoisted(() => {
     requireMfa: () => { mfa = true; }, reuseSession: () => { emailOnly = true; }, signedIn: () => { step = last(); },
     requireVerification: () => { finishUrl = 'https://accounts.google.com/v3/signin/challenge/dp'; } };
 });
-vi.mock('../computer/browser.js', () => ({ computerPage: async () => browser.page }));
+vi.mock('../computer/browser.js', () => ({ computerPage: async () => browser.page, arrivedPages: () => [], ownedPages: () => ({ pages: [browser.page], current: browser.page }) }));
 vi.mock('../computer/settings.js', () => ({ computerEnabled: async () => true, unattendedEnabled: async () => false, generatedPasswordsAllowed: async () => true }));
 
 import { computerWebTool } from './computer-web.js';
