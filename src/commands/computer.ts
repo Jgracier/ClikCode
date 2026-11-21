@@ -81,7 +81,41 @@ export async function computerHeadless(setting: string | undefined): Promise<voi
   if (isJsonDefaultMode()) return emitResult({ computer: { headless: on } });
   process.stdout.write(on
     ? 'Headless is on: ClikCode\'s browser runs with no window. Turn off with `clikcode computer headless off`.\n'
-    : 'Headless is off: ClikCode\'s browser opens a window (Linux with no display, or CLIKCODE_BROWSER_HEADLESS=1, still runs without one). Turn on with `clikcode computer headless on`.\n');
+    : 'Headless is off: ClikCode\'s browser has a window (Linux with no display, or CLIKCODE_BROWSER_HEADLESS=1, still runs without one). On Linux the window is on a hidden display unless `clikcode computer display visible`. Turn on with `clikcode computer headless on`.\n');
+}
+
+/** `clikcode computer display visible|hidden`: where ClikCode's own browser puts its window on Linux. Hidden (the default) is a virtual
+ * display; visible is the desktop the user sits at. Only the setting changes here: the running browser holds every chat's tabs, so it is
+ * left alone and the setting is read the next time one starts. */
+export async function computerDisplay(setting: string | undefined): Promise<void> {
+  const { browserDisplay, headlessSetting, parseBrowserDisplay, setBrowserDisplay } = await import('../agent/computer/settings.js');
+  const { runningHostDisplay } = await import('../agent/computer/browser-host.js');
+  const { desktopSession, shouldRunHeadless } = await import('../agent/computer/browser-launch.js');
+  const dir = stateDirectory();
+  const wanted = parseBrowserDisplay(setting);
+  if (wanted) await setBrowserDisplay(dir, wanted);
+  else if (setting) throw new Error('Say visible or hidden: clikcode computer display visible');
+  const display = await browserDisplay(dir);
+  const running = await runningHostDisplay(dir);
+  const desktop = desktopSession() !== undefined;
+  const headless = shouldRunHeadless({ setting: await headlessSetting(dir) });
+  if (isJsonDefaultMode()) return emitResult({ computer: { display: { setting: display, ...(running ? { running } : {}), desktop, headless } } });
+  process.stdout.write(`${displayStatusText({ display, running, desktop, headless, platform: process.platform })}\n`);
+}
+
+/** What `clikcode computer display` prints: the setting, what it will do from here, and what the browser running now is doing. */
+export function displayStatusText(state: { display: 'visible' | 'hidden'; running: 'visible' | 'hidden' | 'headless' | undefined; desktop: boolean; headless: boolean; platform: NodeJS.Platform }): string {
+  const lines = [state.display === 'visible'
+    ? 'Display is visible: ClikCode\'s browser opens its window on your desktop, so you can watch the agent work in it. Go back with `clikcode computer display hidden`.'
+    : 'Display is hidden (the default): ClikCode\'s browser runs out of sight on a virtual display, so it never takes your screen or keyboard. To watch one chat\'s tab, ask the agent to show it (the browser tool\'s `show` action opens a live view in your own browser). To put the browser window itself on your desktop: `clikcode computer display visible`.'];
+  if (state.platform !== 'linux') lines.push('On macOS and Windows the browser window is always on the desktop; this setting only changes Linux.');
+  else if (state.headless) lines.push('Headless is on (`clikcode computer headless`, CLIKCODE_BROWSER_HEADLESS, or no display at all), and it wins: the browser has no window anywhere.');
+  else if (state.display === 'visible' && !state.desktop) lines.push('No desktop session can be seen from this terminal (no DISPLAY or WAYLAND_DISPLAY): a browser started from here stays hidden. One started from a chat on your desktop is visible.');
+  const wantedNow = state.platform !== 'linux' ? 'visible' : state.display;
+  if (state.running === undefined) lines.push('No browser is running: the setting applies when the next one starts.');
+  else if (state.running === wantedNow) lines.push(`The browser running now is ${state.running}.`);
+  else lines.push(`The browser running now is ${state.running} and was left as it is, because every chat\'s tabs are in it: the setting applies the next time the browser starts. To apply it now, close the browser with \`clikcode computer off\` (this closes every chat\'s tabs and locks saved logins), then \`clikcode computer on\`; the next browser call starts it ${state.display}.`);
+  return lines.join('\n');
 }
 
 /** `clikcode computer desk`: the one address for everything in the browser that waits on the user, and what is waiting there now. */

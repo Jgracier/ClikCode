@@ -50,7 +50,7 @@ checks never appear. When one does, four things happen in order:
    when a page blocks it (`browser_use` action `cloud`; the connector runner does it once
    per vendor). That service works on the challenge by itself. `on` runs every tab there;
    `off` (the default) is local only and stops the cloud session.
-4. **You.** `handoff` gives you a live view of the same tab on your phone.
+4. **You.** `handoff` gives you a live view of the same tab on your phone or any device on your tailnet.
 
 Save the key first as the secret `browser-use/api-key`. A cloud session costs
 $0.02/hour, billed by the minute, and ClikCode stops it when its last tab closes, when the
@@ -147,10 +147,18 @@ simply not recorded, rather than recorded wrong.
 - `/computer login [url] [--new]` does it from the command line; `/computer logins` lists and
   removes saved logins (the model sees only a count).
 - A CAPTCHA, a card, or MFA that needs hands: `handoff` returns a one-use link at once, served from
-  this computer's Tailscale address, so the phone connects directly (no relay, no third-party host;
-  the phone just has to be on the same tailnet). The agent gives you the link, then calls `handoff`
-  again to wait until you tap Done. Without Tailscale a handoff says so, and the step is finished at
-  the computer.
+  this computer's Tailscale address, so your phone (or any device on the same tailnet, this computer
+  included) connects directly: no relay, no third-party host. The agent gives you the link, then calls
+  `handoff` again to wait until you press Done. Without Tailscale a handoff says so and points to `show`.
+- Watching: on Linux the browser runs on a hidden display, so there is no window to look at. Ask the
+  agent to show you the tab: `show` opens a live view of the chat's tab in your own default browser on
+  your desktop (served on `127.0.0.1` only, at a random path) and returns at once. The agent keeps
+  working while you watch, the view follows the chat to another tab, and you can click and type in it.
+  Asking again returns the same view; it ends with `show` `clear: true`, or once the chat has had no tab
+  for ten minutes. With no desktop to open it on (a server, ssh) it says so and gives the address.
+  To have the browser window itself on your desktop, run `clikcode computer display visible`: it applies
+  the next time the browser starts (a running browser is left alone, since every chat's tabs are in it;
+  `clikcode computer off` then `on` closes it). `clikcode computer display hidden` is the default.
 
   **What the link is.** A live view of the chat's real tab, not a picture that refreshes: Chrome pushes
   each frame as it paints it over one WebSocket (one frame in flight at a time, so a slow phone gets
@@ -274,6 +282,8 @@ other document says what it is. Text that looks like a key is hidden, as on any 
   no window on any system (`=0` forces a window). On Linux with no `DISPLAY` or `WAYLAND_DISPLAY` and no
   `xvfb-run` (a server, a container, ssh) it falls back to headless by itself instead of failing; with
   `xvfb-run` it still uses a virtual display. macOS and Windows behave as before unless you ask.
+  A Linux desktop also gets the virtual display unless `clikcode computer display visible` (or
+  `CLIKCODE_BROWSER_VISIBLE=1`) asks for the window on the desktop.
 - **No browser installed.** ClikCode uses Chrome, then Edge. If neither exists it uses Playwright's own
   Chromium if that is already downloaded, and otherwise downloads it once (`playwright-core install
   chromium`, a few hundred MB, the same on Linux, macOS and Windows). While it downloads, `open` answers with

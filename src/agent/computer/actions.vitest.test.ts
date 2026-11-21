@@ -23,10 +23,23 @@ describe('the action table', () => {
 
   it('lists a tool\'s actions in groups, and nobody else\'s', () => {
     expect(listing('browser')).toMatch(/^LOOK: observe/);
-    expect(listing('browser')).toContain('PEOPLE: handoff');
+    expect(listing('browser')).toContain('PEOPLE: handoff · show · human_check');
     expect(listing('account')).toMatch(/^SIGN IN: login/);
     expect(listing('account')).not.toContain('observe');
     for (const spec of actionsOf('account')) expect(listing('browser'), spec.name).not.toContain(spec.name);
+  });
+
+  it('says what handoff and show each are for, and points one at the other', () => {
+    const handoff = specOf('handoff')!, show = specOf('show')!;
+    // A handoff is a step only the user can do, on whatever device they open the link with: not a phone feature.
+    expect(handoff.does).toContain('only they can do');
+    expect(handoff.does).toContain('any device on the tailnet');
+    expect(handoff.does).not.toMatch(/on their phone[,.]/);
+    expect(handoff.does).toContain('use show');
+    expect(show.does).toMatch(/^Let the person at this computer watch this tab/);
+    expect(show.does).toContain('Keep working as usual');
+    expect(show.does).toContain('clikcode computer display visible');
+    for (const spec of [handoff, show]) expect(spec.params).toEqual(['clear']);
   });
 
   it('carries each tool exactly the parameters its actions read', () => {

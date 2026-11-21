@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { BrowserContext, BrowserType } from 'playwright-core';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { hiddenDisplayCommand } from './browser.js';
-import { installMarkerFile, launchComputerBrowser, NoBrowserError, noBrowserMessage, progressLine, readHostStatus, shouldRunHeadless } from './browser-launch.js';
+import { desktopSession, installMarkerFile, launchComputerBrowser, NoBrowserError, noBrowserMessage, progressLine, readHostStatus, remoteSession, shouldRunHeadless } from './browser-launch.js';
 import { computerSettingsPath, headlessSetting, setHeadless } from './settings.js';
 
 let dir = '';
@@ -22,6 +22,30 @@ it('runs headless when forced, set, or when a Linux computer has no display', ()
   // macOS and Windows always have a display: no change unless asked.
   expect(shouldRunHeadless({ env: {}, platform: 'darwin' })).toBe(false);
   expect(shouldRunHeadless({ env: {}, platform: 'win32' })).toBe(false);
+});
+
+it('finds the desktop a person sits at, and none on a server or inside the browser\'s own virtual display', () => {
+  const none = (): boolean => false;
+  expect(desktopSession({ env: {}, platform: 'darwin' })).toEqual({});
+  expect(desktopSession({ env: {}, platform: 'win32' })).toEqual({});
+  expect(desktopSession({ env: { DISPLAY: ':0' }, platform: 'linux', socketExists: none })).toEqual({});
+  expect(desktopSession({ env: { WAYLAND_DISPLAY: 'wayland-1' }, platform: 'linux', socketExists: none })).toEqual({});
+  expect(desktopSession({ env: {}, platform: 'linux', socketExists: none })).toBeUndefined();
+  expect(desktopSession({ env: { XDG_RUNTIME_DIR: '/run/user/1000' }, platform: 'linux', socketExists: none })).toBeUndefined();
+  // No display variable, but the session's Wayland socket is there.
+  expect(desktopSession({ env: { XDG_RUNTIME_DIR: '/run/user/1000' }, platform: 'linux', socketExists: file => file === '/run/user/1000/wayland-0' })).toEqual({ WAYLAND_DISPLAY: 'wayland-0' });
+  // The display this process inherited is the browser's hidden one: it is not the desktop.
+  const virtual = { DISPLAY: ':99', CLIKCODE_BROWSER_VIRTUAL_DISPLAY: '1', XDG_RUNTIME_DIR: '/run/user/1000' };
+  expect(desktopSession({ env: virtual, platform: 'linux', socketExists: none })).toBeUndefined();
+  expect(desktopSession({ env: virtual, platform: 'linux', socketExists: () => true })).toEqual({ WAYLAND_DISPLAY: 'wayland-0' });
+});
+
+it('knows a session driven from somewhere else', () => {
+  expect(remoteSession({})).toBe(false);
+  expect(remoteSession({ DISPLAY: ':0' })).toBe(false);
+  expect(remoteSession({ SSH_CONNECTION: '10.0.0.2 5222 10.0.0.1 22', DISPLAY: ':0' })).toBe(true);
+  expect(remoteSession({ SSH_TTY: '/dev/pts/3' })).toBe(true);
+  expect(remoteSession({ CLIKDEPLOY_REMOTE_TERMINAL: '1' })).toBe(true);
 });
 
 it('does not wrap a headless browser in a virtual display', () => {

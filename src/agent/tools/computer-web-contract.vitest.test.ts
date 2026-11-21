@@ -81,6 +81,18 @@ describe('help', () => {
     expect(helpFor('account', 'guide')).toContain('API keys');
   });
 
+  it('tells watching apart from handing off, in the description every conversation carries and in help', () => {
+    expect(browserUseTool.description).toContain('anything only the user can do, use handoff');
+    expect(browserUseTool.description).toContain('when the user wants to watch, use show');
+    expect(browserUseTool.description).not.toMatch(/phone link/i);
+    const show = helpFor('browser', 'show');
+    expect(show).toContain('show (browser_use):');
+    expect(show).toContain('  clear:');
+    expect(show).toContain('clikcode computer display visible');
+    expect(helpFor('browser', 'handoff')).toContain('When the user only wants to watch, use show.');
+    expect(helpFor('browser', 'guide')).not.toMatch(/phone link/i);
+  });
+
   it('is an action of both tools', async () => {
     expect((await run(browserUseTool, { action: 'help' })).output).toContain('browser_use actions:');
     expect((await run(accountUseTool, { action: 'help', topic: 'login' })).output).toContain('login (account_use):');
