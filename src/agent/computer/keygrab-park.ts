@@ -1,6 +1,7 @@
 /** Two small pieces of per-vendor state a keygrab run leaves for the next command:
  *  - the parked record: the hidden tab is kept open on the last page when keygrab could not finish, and this file says where it is, what
- *  - the back-off: after a captcha shows on a vendor the runner does not try that vendor again for an hour (the solver answers most checks;
+ *    was tried and what recorder journal to carry on with, so `clikcode computer keygrab-resume <name>` reattaches and goes on;
+ *  - the back-off: after a captcha shows on a site a caller does not try that vendor again for an hour (the solver answers most checks;
  *    one it could not answer is worth another try once the site has cooled, not a quarter of a day later).
  * Nothing here holds a secret: addresses without queries, control names, short trails. */
 import { quiet, swallowed } from '../../runtime/lifecycle-log.js';

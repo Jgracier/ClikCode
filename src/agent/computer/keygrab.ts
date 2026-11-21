@@ -1,12 +1,13 @@
 /** `keygrab`: the deterministic policy for getting an API key from a vendor's site when no saved recipe fits. It signs in the way the user
  * prefers (Google, then GitHub, then the profile email with a made-up password and any emailed code), finds the API key page (menu links,
- * then common paths), presses Create/Generate (naming the key ClikDeploy), and captures the key unseen with the browser's own capture and
+ * then common paths), presses Create/Generate (naming the key as the caller asks, ClikCode by default), and captures the key unseen with the browser's own capture and
  * delivery. Walls only a person clears (captcha, SMS, payment, identity, approval, a refused email) end it with a human step; a screen it
  * does not know ends it with what the page showed. It solves a captcha itself (the vision model answers
  * the puzzle, at a visitor's pace), never pays, and never reads or prints a key: it only drives
  * a `KeygrabPort`, so the policy is tested with a fake site. The ClikCode recorder saves the recipe as the real browser actions succeed. */
 import { CAPTCHA_FIELD_WORDS, CAPTCHA_WORDS } from './human-check-words.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
+import type { HumanKind, HumanStep, StopInfo } from './keygrab-types.js';
 import { nextPress, pageExcerpt, type Control } from './oauth-consent.js';
 import { keyShaped } from './secret-finder.js';
 import { detectBlocker } from './signup-recipes.js';
@@ -29,7 +30,7 @@ export interface KeygrabPort {
   login(): Promise<{ ok: boolean; message: string }>;
   /** The code in the newest verification email, when a mailbox is connected. */
   emailCode(): Promise<string | undefined>;
-  /** The current authenticator-app code for the open site, when its seed is kept in ClikDeploy (undefined when none is). */
+  /** The current authenticator-app code for the open site, when its seed is kept for this account (undefined when none is). */
   authenticatorCode?(): Promise<string | undefined>;
   /** Whether the user's standing card rule lets a saved card into this payment page (its own words say nothing is charged until used,
    * and nothing recurs). The fill checks again and records the use; absent: a payment page is the person's. */
@@ -42,7 +43,7 @@ export interface KeygrabPort {
   resetLink?(): Promise<boolean>;
   /** Opens the link in the newest verification email in this tab. */
   emailLink(): Promise<boolean>;
-  /** Captures the key unseen and sends it to ClikDeploy. `target` is a control that reveals it; none: the page already shows it. */
+  /** Captures the key unseen and sends it where the caller asked. `target` is a control that reveals it; none: the page already shows it. */
   capture(target?: string): Promise<{ ok: boolean; message: string }>;
   /** A cheap fetch (no browser): whether the address answers with an HTML page, and where it ended up after redirects. */
   probe?(url: string): Promise<{ html: boolean; status: number; url: string } | undefined>;
@@ -56,10 +57,10 @@ export interface KeygrabPort {
   profileEmail(): Promise<string | undefined>;
 }
 
-interface KeygrabOptions { id: string; url: string; /** Continue from the page the browser is on (a resumed run): no start page is opened. */ resume?: { visited?: string[]; menus?: string[]; signedIn?: boolean }; /** Most pages post-login exploration follows (default 8). */ exploreMax?: number; /** Other starting points to try when `url` is no web page (the spec's homepage, sign-up and docs addresses). */ alternates?: string[]; /** Key pages already known for this site (a saved recipe's key page, often account-specific like Twilio's /account/<AC>/settings/us1/api-keys): tried once signed in, before menus and guessed paths. */ knownKeyPages?: string[]; maxSteps?: number; maxMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void }
-type KeygrabResult = { ok: true; note: string; steps: number; route: string } | { ok: false; stop: StopInfo; steps: number };
+interface KeygrabOptions { id: string; url: string; /** What the new key is named in the site's name box (default ClikCode). */ keyName?: string; /** Continue from the page the browser is on (a resumed run): no start page is opened. */ resume?: { visited?: string[]; menus?: string[]; signedIn?: boolean }; /** Most pages post-login exploration follows (default 8). */ exploreMax?: number; /** Other starting points to try when `url` is no web page (the spec's homepage, sign-up and docs addresses). */ alternates?: string[]; /** Key pages already known for this site (a saved recipe's key page, often account-specific like Twilio's /account/<AC>/settings/us1/api-keys): tried once signed in, before menus and guessed paths. */ knownKeyPages?: string[]; maxSteps?: number; maxMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void }
+type KeygrabResult = { ok: true; note: string; steps: number; route: string; /** The page the key was captured on (no query). */ capturedOn?: string } | { ok: false; stop: StopInfo; steps: number };
 
-const KEY_NAME = 'ClikDeploy';
+const KEY_NAME = 'ClikCode';
 const KEY_PATHS = ['/settings/api-keys', '/account/api', '/dashboard/api', '/developers', '/developer', '/api-keys', '/keys', '/settings/tokens'] as const;
 
 const GOOGLE_BUTTON = /^(?:[\w ]{0,24}?\s)?(?:with|using|via)\s+google\b|^google$/i;
@@ -75,13 +76,13 @@ const API_LINK_AREA = /\bapi\b[^.]{0,30}\b(?:account|portal|console|dashboard|ac
 /** Links that read like the API area but are reading matter: "Go to the API Developer Blog". */
 /** A page refusing a VoIP or virtual number (keep in step with VOIP_REFUSED in tools/computer-web.ts, which picks the number to type). */
 const VOIP_WORDS = /\b(?:voip|virtual (?:phone )?numbers?|landline|non-?mobile|this (?:phone )?number (?:type )?(?:is )?not (?:supported|allowed|accepted|eligible)|real mobile)\b/i;
-/** A capture that saved the key but whose delivery to ClikDeploy failed says so, with the delivery's own reason: "may have been created
+/** A capture that saved the key but whose delivery failed says so, with the delivery's own reason: "may have been created
  * but could not be captured" hid that the key was safe in the vault (Rasayel), and the reason was cut off behind the SAVED line. */
 export function capturedButNotConnected(message: string): string | undefined {
   const saved = /SAVED "([^"]+)"/.exec(message)?.[1];
   if (!saved) return undefined;
   const failed = message.split('\n').map(l => l.trim()).find(l => /^(?:NOT SENT|NOT connected|FAILED|ERROR)\b|not connected|refused|rejected/i.test(l) && !/^SAVED/.test(l));
-  return `a key was captured and saved as ${saved}, but ClikDeploy did not connect it: ${(failed ?? 'the delivery failed').slice(0, 220)}`;
+  return `a key was captured and saved as ${saved}, but its destination did not take it: ${(failed ?? 'the delivery failed').slice(0, 220)}`;
 }
 /** A page refusing a number from this country (keep in step with COUNTRY_REFUSED in tools/computer-web.ts). */
 const COUNTRY_WORDS = /\b(?:(?:u\.?s\.?|united states|american) (?:phone |mobile )?numbers? (?:are |is )?not (?:supported|accepted|allowed)|country (?:is )?not (?:supported|available)|not available in your (?:country|region))\b/i;
@@ -225,7 +226,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const wallStop = async (view: KeyView, wall: NonNullable<ReturnType<typeof keygrabWall>>): Promise<Halt> => {
     const host = hostOf(view.url) || 'the vendor';
     const url = pathOf(view.url);
-    const human: HumanStep = { kind: wall.kind, ...(url.startsWith('https://') ? { url } : {}), reasonCode: wall.reasonCode, instructions: `${host} shows ${wall.what} before ${options.id} can get a key; the runner does not bypass it and nothing was paid.` };
+    const human: HumanStep = { kind: wall.kind, ...(url.startsWith('https://') ? { url } : {}), reasonCode: wall.reasonCode, instructions: `${host} shows ${wall.what} before a key can be had for ${options.id}; keygrab does not bypass it and nothing was paid.` };
     return stop(wall.kind === 'captcha' ? 'captcha' : wall.kind === 'payment' ? 'payment' : wall.kind === 'mfa' || wall.kind === 'sms' ? 'mfa' : 'unknown', `${wall.what} at ${host}`, human, view);
   };
   // A page that shows only its footer (legal links) is a shell still loading, not a page with nothing to offer.
@@ -244,7 +245,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     return v;
   };
   let authenticatorTried = false;
-  /** An authenticator page is not a wall when ClikDeploy keeps the site's seed: type its code once and carry on. */
+  /** An authenticator page is not a wall when the site's seed is kept: type its code once and carry on. */
   const pastAuthenticator = async (view: KeyView): Promise<boolean> => {
     if (authenticatorTried || !port.authenticatorCode || !view.fields.length || SENT_CODE.test(view.text)) return false;
     authenticatorTried = true;
@@ -519,7 +520,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
 
   /** Controls that mean sign-in, outside the footer, a provider's own link excluded: "Continue with Google" style first. */
   // A bare "GitHub" or "Google" is a sign-in button only on a page that is about signing in; elsewhere (a blog's social links) it led
-  // keygrab off to github.com (three Vonage connectors).
+  // keygrab off to github.com (three Vonage sites).
   const authContext = (v: KeyView): boolean => v.hasPassword || v.fields.some(f => /e-?mail|user ?name|login/i.test(f)) || /\b(?:sign|log) ?(?:in|up) (?:with|using)\b|\bcontinue with\b/i.test(v.text.slice(0, 3000));
   const providerButtons = (v: KeyView, re: RegExp): KeyControl[] => v.controls
     .filter(c => c.name.length <= 80 && (!c.leaf || providerRank(c) < 2) && (providerRank(c) < 2 || authContext(v)) && !c.footer && re.test(c.name) && !(c.href && SOCIAL_HOST.test(hostOf(c.href))))
@@ -611,7 +612,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     shown = start;
     if (isKeyPage(v)) return v;
     // A key page this site is known to use comes before any search: the generic paths never reach an account-specific address,
-    // which sent ~40 Twilio connectors to "no API key page was found" although a recipe held the exact page.
+    // which sent ~40 Twilio runs to "no API key page was found" although a recipe held the exact page.
     for (const known of (options.knownKeyPages ?? []).slice(0, 3)) {
       let page = await openAt(known);
       if (!page) continue;
@@ -675,7 +676,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     // Leave the browser on the most useful page seen, not on the last guessed path (a 404): the tab is kept for a resumed run.
     if (pathOf(shown.url) && pathOf(shown.url) !== pathOf(await port.look().then(l => l.url).catch(() => ''))) { trail.push(`go back to ${pathOf(shown.url).replace(/^https:\/\//, '')}`); await port.open(shown.url).catch(quiet('agent/computer/keygrab')); }
     const gone = RETIRED.exec(start.text)?.[0];
-    const human: HumanStep | undefined = gone ? { kind: 'retire', ...(pathOf(start.url).startsWith('https://') ? { url: pathOf(start.url) } : {}), reasonCode: 'vendor-retired', instructions: `${hostOf(start.url)} says "${gone.slice(0, 120)}" and has no API key page; confirm and retire the connector.` } : undefined;
+    const human: HumanStep | undefined = gone ? { kind: 'retire', ...(pathOf(start.url).startsWith('https://') ? { url: pathOf(start.url) } : {}), reasonCode: 'vendor-retired', instructions: `${hostOf(start.url)} says "${gone.slice(0, 120)}" and has no API key page.` } : undefined;
     throw await stop('unknown', 'no API key page was found (menu links and the common paths were tried)', human, shown);
   };
 
@@ -735,7 +736,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     if (authWall(v) || (!isKeyPage(v) && hasEntry(v))) { await authenticate(); v = await look(); }
     let page = await findKeyPage(v);
     for (let retry = 0; retry < 2; retry++) {
-      if (showsKey(page) && !createOf(page)) { const got = await captured(); if (got.ok) return { ok: true, note: `key captured from ${pathOf(page.url)} and sent to ClikDeploy; it was not shown`, steps, route }; }
+      if (showsKey(page) && !createOf(page)) { const got = await captured(); if (got.ok) return { ok: true, note: `key captured from ${pathOf(page.url)} and delivered; it was not shown`, steps, route, capturedOn: pathOf(page.url) }; }
       const create = createOf(page);
       if (create) {
         await click(create.name);
@@ -743,7 +744,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
         let dialog = await look();
         const nameBox = dialog.fields.find(f => NAME_FIELD.test(f)) ?? (dialog.fields.length === 1 && !dialog.hasPassword ? dialog.fields[0] : undefined);
         if (nameBox && !showsKey(dialog)) {
-          await act(`name the key ${KEY_NAME}`, () => port.fill(nameBox, KEY_NAME));
+          await act(`name the key ${options.keyName ?? KEY_NAME}`, () => port.fill(nameBox, options.keyName ?? KEY_NAME));
           dialog = await chooseBroadest(dialog);
           const confirm = [...dialog.controls].reverse().find(c => pressable(c) && CONFIRM.test(c.name) && !NEVER_KEY.test(c.name));
           if (confirm) { await click(confirm.name); await sleep(900); dialog = await look(); }
@@ -753,13 +754,13 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
           const reveal = revealOf(dialog);
           if (reveal) got = await captured(reveal.name);
         }
-        if (got.ok) return { ok: true, note: `key created (named ClikDeploy${chosen.length ? `; broadest access chosen: ${chosen.join('; ')}` : ''}), captured unseen and sent to ClikDeploy`, steps, route };
+        if (got.ok) return { ok: true, note: `key created (named ${options.keyName ?? KEY_NAME}${chosen.length ? `; broadest access chosen: ${chosen.join('; ')}` : ''}), captured unseen and delivered`, steps, route, capturedOn: pathOf(dialog.url) };
         throw await stop('unknown', capturedButNotConnected(got.message) ?? `a key may have been created but could not be captured: ${got.message.slice(0, 200)}`, undefined, dialog);
       }
       const reveal = revealOf(page);
       if (reveal) {
         const got = await captured(reveal.name);
-        if (got.ok) return { ok: true, note: `key revealed with "${reveal.name}", captured unseen and sent to ClikDeploy`, steps, route };
+        if (got.ok) return { ok: true, note: `key revealed with "${reveal.name}", captured unseen and delivered`, steps, route, capturedOn: pathOf(page.url) };
         throw await stop('unknown', `the key could not be captured: ${got.message.slice(0, 200)}`, undefined, page);
       }
       page = await look();

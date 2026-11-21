@@ -38,7 +38,7 @@ describe('an authenticator page', () => {
     'https://vendor.example/keys': { text: 'API keys', controls: ['Create API key'], on: { 'Create API key': 'https://vendor.example/keys/made' } },
     'https://vendor.example/keys/made': { text: 'Your new key', controls: ['Copy'], key: true },
   };
-  it('is passed with the code from the seed ClikDeploy keeps, typed once', async () => {
+  it('is passed with the code from the kept seed, typed once', async () => {
     const site = fakeSite(pages);
     let asked = 0;
     const done = await runKeygrab({ ...site.port, authenticatorCode: async () => { asked++; return '123456'; } }, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined });
@@ -65,7 +65,7 @@ const newKey: Page = { text: 'Create key', fields: ['Name'], controls: ['Cancel'
 const madeKey: Page = { text: 'Your key was created. Save it now.', controls: ['Done'], key: true };
 
 describe('keygrab sign-in order', () => {
-  it('signs in with Google first, finds the API keys link, names the key ClikDeploy and captures it unseen', async () => {
+  it('signs in with Google first, finds the API keys link, names the key ClikCode and captures it unseen', async () => {
     const site = fakeSite({
       'https://vendor.example/': { text: 'Welcome', controls: ['Continue with Google', 'Continue with GitHub', 'Log in'], on: { 'Continue with Google': 'https://accounts.google.com/chooser', 'Continue with GitHub': 'https://github.com/login' } },
       'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://accounts.google.com/consent' } },
@@ -77,7 +77,7 @@ describe('keygrab sign-in order', () => {
     expect(done).toMatchObject({ ok: true, route: 'google' });
     expect(site.log).not.toContain('login');
     expect(site.log.some(l => l.includes('github'))).toBe(false);
-    expect(site.filled).toContainEqual(['Name', 'ClikDeploy']);
+    expect(site.filled).toContainEqual(['Name', 'ClikCode']);
     expect(site.captures).toEqual([undefined]);
   });
 
@@ -468,7 +468,7 @@ describe('keygrab first sign-in', () => {
       ...keyFlow,
     });
     expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
-    expect(site.filled).toEqual([['Name', 'ClikDeploy']]);
+    expect(site.filled).toEqual([['Name', 'ClikCode']]);
   });
 });
 
@@ -931,7 +931,7 @@ describe('a key captured but not connected', () => {
   it('says the key is saved and gives the delivery reason, not "may have been created"', async () => {
     const { capturedButNotConnected } = await import('./keygrab.js');
     const msg = 'SAVED "rasayel/key" in ClikCode Secrets Manager (36 characters, a UUID, taken from the text of the target itself)\nNOT SENT - clikdeploy-connection (rasayel): NOT connected: Rasayel rejected this key (HTTP 401).';
-    expect(capturedButNotConnected(msg)).toBe('a key was captured and saved as rasayel/key, but ClikDeploy did not connect it: NOT SENT - clikdeploy-connection (rasayel): NOT connected: Rasayel rejected this key (HTTP 401).');
+    expect(capturedButNotConnected(msg)).toBe('a key was captured and saved as rasayel/key, but its destination did not take it: NOT SENT - clikdeploy-connection (rasayel): NOT connected: Rasayel rejected this key (HTTP 401).');
     expect(capturedButNotConnected('Not saved: no key was found')).toBeUndefined();
   });
 });
