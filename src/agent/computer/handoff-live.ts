@@ -1,7 +1,10 @@
 /** The live view of one tab for a phone, over the DevTools protocol: Chrome pushes screen frames as it paints them, the page is laid out for the
  * phone's own size and touch screen so it reflows instead of being shrunk, and what the phone does reaches the page as real touch, mouse and key
  * events. The page's fields are told to the phone with where each is on its screen, so the phone can lay a real input over each one: a finger
- * on a field then lands on a real input of the phone's own (its keyboard, autofill and pickers), and what is entered is filled into the page. */
+ * on a field then lands on a real input of the phone's own (its keyboard, autofill and pickers), and what is entered is filled into the page.
+ *
+ * A view for watching (`watch`, the show action) is the same stream with the tab left as it is: the agent is working in it, so it keeps its own
+ * size and layout, the viewer scales the picture to its window, and its pointer and keys reach the page as a mouse and a keyboard. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import type { CDPSession, Frame, Page } from 'playwright-core';
 import { cleanPoints, cleanSize, keyEvent, MAX_REPEAT, MAX_TEXT, OUTSIDE, type KeyEvent, type Size } from './handoff-input.js';
@@ -93,6 +96,7 @@ const setValueExpression = (value: string | string[], index: number): string => 
 })(${JSON.stringify(value)}, ${index})`;
 
 type Message = { t?: string; [key: string]: unknown };
+type ScreenFrame = { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } };
 
 /** Where the phone's screen sits in the page. Chrome reads input positions as the page's own (layout) pixels, but the phone shows the
  * page through a visual viewport that can be zoomed out (a page with no mobile layout tag is laid out 980px wide and shown at about 0.4)
@@ -138,8 +142,12 @@ export class LiveView {
   private lastFields = '';
   /** What happened, for tests and for the phone's status line. */
   readonly stats = { frames: 0, restarts: 0 };
+  private readonly watch: boolean;
+  /** Watching: the size of the frames Chrome sends, which changes when the tab's own size does. */
+  private frameSize = '';
 
-  constructor(private readonly page: Page, private readonly socket: LiteSocket, private readonly finish: () => void, private readonly activity: () => void = () => undefined) {
+  constructor(private readonly page: Page, private readonly socket: LiteSocket, private readonly finish: () => void, private readonly activity: () => void = () => undefined, options: { watch?: boolean } = {}) {
+    this.watch = options.watch === true;
     // Listening starts now, not when Chrome is ready: what the phone sends first (its size) waits in the queue.
     socket.onMessage((data, binary) => { if (!binary) this.accept(String(data)); });
     socket.onClose(() => { void this.stop(); });
@@ -148,7 +156,7 @@ export class LiveView {
   async start(): Promise<void> {
     const cdp = await this.page.context().newCDPSession(this.page);
     this.cdp = cdp;
-    cdp.on('Page.screencastFrame', (frame: { data: string; sessionId: number }) => { void this.onFrame(frame); });
+    cdp.on('Page.screencastFrame', (frame: ScreenFrame) => { void this.onFrame(frame); });
     cdp.on('Page.frameNavigated', (event: { frame: { parentId?: string; url: string } }) => { if (!event.frame.parentId) this.sendPage(event.frame.url); });
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
@@ -170,8 +178,11 @@ export class LiveView {
     if (!cdp) return;
     const quietly = quiet('agent/computer/handoff-live');
     await cdp.send('Page.stopScreencast').catch(quietly);
-    await cdp.send('Emulation.clearDeviceMetricsOverride').catch(quietly);
-    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(quietly);
+    // A watched tab was never resized, and what the agent set with viewport is not this view's to undo.
+    if (!this.watch) {
+      await cdp.send('Emulation.clearDeviceMetricsOverride').catch(quietly);
+      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(quietly);
+    }
     if (this.scriptId) await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: this.scriptId }).catch(quietly);
     await cdp.detach().catch(quietly);
   }
@@ -207,12 +218,14 @@ export class LiveView {
     const cdp = this.cdp!;
     switch (message.t) {
       case 'hello': case 'resize': {
-        this.mode = message.m === 'mouse' ? 'mouse' : 'touch';
+        this.mode = this.watch || message.m === 'mouse' ? 'mouse' : 'touch';
         const size = cleanSize(message);
         if (size) await this.layout(size);
         return;
       }
       case 'touch': {
+        // A watched tab has no touch screen to send a finger to: the viewer's page sends a mouse.
+        if (this.watch) return;
         const points = cleanPoints(message.p);
         const type = ({ s: 'touchStart', m: 'touchMove', e: 'touchEnd', c: 'touchCancel' } as Record<string, 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel'>)[String(message.k)];
         if (!points || !type) return;
@@ -277,6 +290,14 @@ export class LiveView {
       case 'key': {
         const key = keyEvent(message.key);
         if (key) await this.pressKey(key, Math.max(1, Math.min(MAX_REPEAT, Math.floor(Number(message.n) || 1))));
+        return;
+      }
+      case 'text': {
+        // One character typed at the picture itself, with no field under the pointer (a page's own shortcut, a canvas app): a real key press.
+        const text = message.s;
+        if (typeof text !== 'string' || [...text].length !== 1) return;
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: text, text, unmodifiedText: text });
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: text });
         return;
       }
       case 'fill': {
@@ -365,8 +386,11 @@ export class LiveView {
     const touch = this.mode === 'touch';
     this.laidOutAs = this.mode;
     // A mouse sees the page at the phone's width at full size; a finger sees the mobile layout (zoomed out for a page with no layout tag, pinchable).
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: size.w, height: size.h, deviceScaleFactor: size.dpr, mobile: touch });
-    await cdp.send('Emulation.setTouchEmulationEnabled', touch ? { enabled: true, maxTouchPoints: 5 } : { enabled: false });
+    // A watched tab is left at the size the agent works in: only the frames are fitted to the viewer.
+    if (!this.watch) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: size.w, height: size.h, deviceScaleFactor: size.dpr, mobile: touch });
+      await cdp.send('Emulation.setTouchEmulationEnabled', touch ? { enabled: true, maxTouchPoints: 5 } : { enabled: false });
+    }
     // Frames at the screen's own density up to 2x: a phone's 3x costs more to send than the eye can tell from 2x.
     const scale = Math.min(size.dpr, 2);
     if (this.streaming) await cdp.send('Page.stopScreencast').catch(quiet('agent/computer/handoff-live'));
@@ -375,13 +399,25 @@ export class LiveView {
     await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: Math.round(size.w * scale), maxHeight: Math.round(size.h * scale), everyNthFrame: 1 });
     this.streaming = true;
     this.stats.restarts++;
-    this.send({ t: 'size', w: size.w, h: size.h });
+    if (this.watch) await this.sendTabSize();
+    else this.send({ t: 'size', w: size.w, h: size.h });
     this.scheduleFields(250);
   }
 
+  /** Watching: the tab's own size in page pixels, which is what the viewer scales the picture from and measures its pointer in. */
+  private async sendTabSize(): Promise<void> {
+    const own = await this.evaluate<{ w: number; h: number }>('({ w: innerWidth, h: innerHeight })');
+    if (own && own.w > 0 && own.h > 0) this.send({ t: 'size', w: own.w, h: own.h });
+  }
+
   /** One frame in flight at a time: Chrome is told a frame was received only once it has gone to the phone, so it paints no faster than the phone draws, and the phone always gets the newest. */
-  private async onFrame(frame: { data: string; sessionId: number }): Promise<void> {
+  private async onFrame(frame: ScreenFrame): Promise<void> {
     if (this.stopped || this.socket.closed) return;
+    if (this.watch) {
+      // The agent resized the tab (viewport), or the window changed: the viewer needs the new size before it places the next click.
+      const now = `${frame.metadata?.deviceWidth}x${frame.metadata?.deviceHeight}`;
+      if (now !== this.frameSize) { this.frameSize = now; void this.sendTabSize(); }
+    }
     if (!this.ready || this.socket.buffered > 400_000) {
       if (this.held) await this.ackChrome(this.held.sessionId);
       this.held = frame;

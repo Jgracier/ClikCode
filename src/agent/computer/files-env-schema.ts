@@ -8,7 +8,7 @@ export type FilesEnvArgs = { http_auth?: boolean | string; clear?: boolean; gran
 
 export const FILES_ENV_PARAMETERS: Record<string, object> = {
   http_auth: { type: ['boolean', 'string'], description: 'open: the site asks for HTTP sign-in (the browser\'s own username/password box, a 401): answer it with the saved login for the site (true), or the saved login whose username or email is this text. Credentials are never shown; https sites only.' },
-  clear: { type: 'boolean', description: 'auth: turn HTTP sign-in off for this tab. cookies: remove the site\'s cookies.' },
+  clear: { type: 'boolean', description: 'auth: turn HTTP sign-in off for this tab. cookies: remove the site\'s cookies. show, handoff: end the live view. cloud: back to the local browser.' },
   width: { type: 'number', description: 'viewport: window width in CSS pixels.' },
   height: { type: 'number', description: 'viewport: window height in CSS pixels.' },
   scale: { type: 'number', description: 'viewport: device pixel ratio (1, 2, 3).' },

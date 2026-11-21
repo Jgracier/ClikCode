@@ -1,13 +1,16 @@
 /** The page the phone opens: the live view of the browser tab, with the phone's own controls laid over the page's fields, and the phone's own
  * buttons for it. Plain HTML and JavaScript in one response (no library, no second request, nothing from a third party). */
 
-/** `back`: where the phone goes once the user taps Done (the desk's list of what else is waiting). A path of this server, never free text. */
-export function handoffPage(options: { back?: string } = {}): string {
+/** `back`: where the phone goes once the user taps Done (the desk's list of what else is waiting). A path of this server, never free text.
+ * `watch`: the page for someone watching the agent work (the show action): the picture is the tab at its own size, scaled down to fit the
+ * window, there is no Done, and the pointer is always a mouse. */
+export function handoffPage(options: { back?: string; watch?: boolean } = {}): string {
   const back = options.back && /^\/[A-Za-z0-9_\-/]{1,200}$/.test(options.back) ? options.back : '';
+  const watch = options.watch === true;
   return `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="referrer" content="no-referrer"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#161b22">
-<title>Finish in ClikCode</title>
+<title>${watch ? 'Watching ClikCode' : 'Finish in ClikCode'}</title>
 <style>
 html,body{margin:0;height:100%;background:#0d1117;color:#f2f5f8;font:15px system-ui,-apple-system,sans-serif;overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 #app{position:fixed;left:0;right:0;top:0;height:100%;display:flex;flex-direction:column}
@@ -18,6 +21,7 @@ html,body{margin:0;height:100%;background:#0d1117;color:#f2f5f8;font:15px system
 button{font:inherit;min-height:34px;border-radius:8px;border:1px solid #484f58;background:#21262d;color:#f0f6fc;padding:0 12px}
 #done{background:#238636;border-color:#2ea043;font-weight:600}
 #stage{flex:1;min-height:0;position:relative;background:#000;overflow:hidden}
+#fit{position:absolute;inset:0;transform-origin:0 0}
 #c{position:absolute;left:0;top:0;touch-action:none;outline:none;background:#000}
 #overlays{position:absolute;inset:0;z-index:4;pointer-events:none}
 #overlays>*{position:absolute;box-sizing:border-box;margin:0;padding:0;border:0;border-radius:0;outline:0;background:transparent;color:transparent;caret-color:transparent;opacity:.01;font-size:16px;pointer-events:auto;touch-action:none;resize:none;-webkit-appearance:none;appearance:none;-webkit-user-select:text;user-select:text}
@@ -27,16 +31,17 @@ button{font:inherit;min-height:34px;border-radius:8px;border:1px solid #484f58;b
 @media (max-width:430px){#ms{display:none}}
 </style>
 <div id="app">
-<div id="bar"><span id="dot"></span><span id="host">Connecting…</span><span id="ms"></span><button id="mode" aria-label="Switch between touch and mouse">Mouse</button><button id="done">Done</button></div>
-<div id="stage"><canvas id="c" tabindex="0"></canvas><div id="overlays"></div><div id="veil" class="on"><span id="veilText">Connecting…</span></div></div>
+<div id="bar"><span id="dot"></span><span id="host">Connecting…</span><span id="ms"></span>${watch ? '<span id="note" style="font-size:12px;color:#8b949e">Live: ClikCode is working here; your clicks and typing reach the page too</span>' : '<button id="mode" aria-label="Switch between touch and mouse">Mouse</button><button id="done">Done</button>'}</div>
+<div id="stage"><div id="fit"><canvas id="c" tabindex="0"></canvas><div id="overlays"></div></div><div id="veil" class="on"><span id="veilText">Connecting…</span></div></div>
 </div>
 <script>
 (() => {
 const $ = (id) => document.getElementById(id);
 const base = location.pathname.replace(/\\/$/, '');
 const BACK = ${JSON.stringify(back)};
+const WATCH = ${JSON.stringify(watch)};
 const canvas = $('c'), ctx = canvas.getContext('2d', { alpha: false });
-const stage = $('stage'), app = $('app'), overlays = $('overlays');
+const stage = $('stage'), app = $('app'), overlays = $('overlays'), box = $('fit');
 const T = window.__handoff = { frames: 0, latency: 0, connected: false, ended: false, mode: 'touch', fields: 0, overlays: 0 };
 let ws = null, retry = 0, finished = false, sentAt = 0, lastSize = '';
 
@@ -44,8 +49,9 @@ let ws = null, retry = 0, finished = false, sentAt = 0, lastSize = '';
 let mode = '';
 try { mode = localStorage.getItem('clikcode-handoff-mode') || ''; } catch (error) { /* private browsing */ }
 if (mode !== 'touch' && mode !== 'mouse') mode = matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse';
+if (WATCH) mode = 'mouse';
 T.mode = mode;
-const showMode = () => { $('mode').textContent = mode === 'touch' ? 'Mouse' : 'Touch'; };
+const showMode = () => { if (!WATCH) $('mode').textContent = mode === 'touch' ? 'Mouse' : 'Touch'; };
 showMode();
 
 const veil = (text) => { $('veilText').textContent = text || ''; $('veil').classList.toggle('on', Boolean(text)); };
@@ -67,8 +73,21 @@ const sendSize = (force) => {
   const key = JSON.stringify(o);
   if (!force && key === lastSize) return;
   lastSize = key;
-  canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+  if (WATCH) refit(); else { canvas.style.width = w + 'px'; canvas.style.height = h + 'px'; }
   send(o);
+};
+// Watching: the picture is the tab at its own size (tab.w by tab.h page pixels), shrunk to fit the window and centred. K is how much it
+// is shrunk; a position on the screen divided by K is a position in the page. Everywhere else K is 1.
+let K = 1, tab = null;
+const refit = () => {
+  if (!tab) return;
+  const w = stage.clientWidth, h = stage.clientHeight;
+  K = Math.min(1, w / tab.w, h / tab.h);
+  box.style.inset = 'auto'; box.style.width = tab.w + 'px'; box.style.height = tab.h + 'px';
+  box.style.left = Math.max(0, (w - tab.w * K) / 2) + 'px'; box.style.top = Math.max(0, (h - tab.h * K) / 2) + 'px';
+  box.style.transform = 'scale(' + K + ')';
+  canvas.style.width = tab.w + 'px'; canvas.style.height = tab.h + 'px';
+  T.scale = K;
 };
 new ResizeObserver(() => { clearTimeout(sizeTimer); sizeTimer = setTimeout(() => sendSize(false), 80); }).observe(stage);
 
@@ -104,7 +123,7 @@ const connect = () => {
     retry++;
     let alive = true;
     try { alive = (await fetch(base + '/ping', { cache: 'no-store' })).status !== 410; } catch (error) { alive = true; }
-    if (!alive) { finished = true; T.ended = true; veil('This link has ended. Ask ClikCode for a new one if you still need it.'); return; }
+    if (!alive) { finished = true; T.ended = true; veil(WATCH ? 'This view has ended. Ask ClikCode to show the tab again.' : 'This link has ended. Ask ClikCode for a new one if you still need it.'); return; }
     veil('Reconnecting…');
     setTimeout(connect, Math.min(1000, 150 * retry));
   };
@@ -112,6 +131,7 @@ const connect = () => {
     if (typeof event.data !== 'string') { newest = new Uint8Array(event.data, 1); if (!decoding) drawNewest(); return; }
     let msg; try { msg = JSON.parse(event.data); } catch (error) { return; }
     if (msg.t === 'page') $('host').textContent = msg.host || '';
+    else if (msg.t === 'size') { if (WATCH && msg.w > 0 && msg.h > 0) { tab = { w: msg.w, h: msg.h }; refit(); } }
     else if (msg.t === 'fields') { fields = Array.isArray(msg.f) ? msg.f : []; T.fields = fields.length; syncOverlays(); }
     else if (msg.t === 'done') { finished = true; T.ended = true; veil('Done. ClikCode will continue.'); if (BACK) setTimeout(() => { location.href = BACK; }, 900); }
   };
@@ -262,7 +282,7 @@ const mouseMode = (k, list) => {
 let onField = false, dragged = false, startAt = null;
 const onTouch = (k) => (event) => {
   const r = canvas.getBoundingClientRect();
-  const list = Array.from(event.touches).map((t) => ({ id: slotOf(t.identifier), x: round1(t.clientX - r.left), y: round1(t.clientY - r.top) }));
+  const list = Array.from(event.touches).map((t) => ({ id: slotOf(t.identifier), x: round1((t.clientX - r.left) / K), y: round1((t.clientY - r.top) / K) }));
   if (k === 's') { dragged = false; startAt = list[0] || null; onField = list.length === 1 && isOverlay(event.target); }
   if (k === 'm' && startAt && !dragged && (list.length > 1 || (list[0] && dist(list[0], startAt) > 10))) dragged = true;
   if (!(onField && !dragged)) event.preventDefault();
@@ -282,7 +302,7 @@ document.body.addEventListener('touchmove', (e) => { if (!(onField && !dragged))
 
 // A computer's own mouse and keyboard.
 let down = null, lastMove = 0;
-const at = (e) => { const r = canvas.getBoundingClientRect(); return { x: round1(e.clientX - r.left), y: round1(e.clientY - r.top) }; };
+const at = (e) => { const r = canvas.getBoundingClientRect(); return { x: round1((e.clientX - r.left) / K), y: round1((e.clientY - r.top) / K) }; };
 stage.addEventListener('mousedown', (e) => {
   if (isOverlay(e.target)) return;
   canvas.focus();
@@ -306,6 +326,7 @@ canvas.addEventListener('keydown', (e) => {
 });
 
 // ── the bar ──
+if (!WATCH) {
 for (const id of ['mode', 'done']) $(id).addEventListener('pointerdown', (e) => e.preventDefault());
 $('mode').onclick = () => {
   mode = mode === 'touch' ? 'mouse' : 'touch'; T.mode = mode;
@@ -316,6 +337,7 @@ $('mode').onclick = () => {
   lastSize = ''; sendSize(true);
 };
 $('done').onclick = () => { send({ t: 'done' }); veil('Finishing…'); };
+}
 
 connect();
 })();

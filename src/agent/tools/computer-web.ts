@@ -386,7 +386,7 @@ const WEB_TEXT = [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file, or the absolute path of a file in the workspace or the chat\'s downloads folder; nothing else can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · recipe (save the steps of a signup or key capture that worked, by control text, never secrets; run replays them and stops for the user at a captcha, code, payment or review page; list) · email_connect (one consent in this browser connects the signed-in Gmail; after that read_email_code and open_email_link read mail through the Gmail API, wait for it to arrive, and return only the code or the link) · oauth_connect (target = a ClikDeploy connector id: starts its OAuth connect, presses through the vendor consent screens in this signed-in browser (account named by the profile sso_email, Advanced / Go to ... (unsafe), Continue / Allow / Authorize), stops with a plain reason at a login password, MFA code, captcha or an unknown screen (sign in first with login), and confirms ClikDeploy shows an active connection) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · add_login (one private form for email and password, saved as a login for the website in url; with no url it asks for the website too; label = the email it starts with) · forget_login (remove the saved login for a site from the vault: target = the site, label = one account; returns only a count; use it for a login the site keeps refusing) · close.',
     PAGE_DESCRIPTION,
-    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. If it offers GitHub and not Google, use Continue with GitHub (sign in to GitHub with the saved login; there is no Google sign-in inside GitHub). Only when neither is offered, fill the form with no text: the profile email fills it, and on a sign-up every password box gets a strong password made up for that site (fitted to what the page asks, retried if the site refuses it, saved with the login, never shown to you); a later sign-in fills the saved login. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
+    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. If it offers GitHub and not Google, use Continue with GitHub (sign in to GitHub with the saved login; there is no Google sign-in inside GitHub). Only when neither is offered, fill the form with no text: the profile email fills it, and on a sign-up every password box gets a strong password made up for that site (fitted to what the page asks, retried if the site refuses it, saved with the login, never shown to you); a later sign-in fills the saved login. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a link to a live view of the tab at once, for a CAPTCHA or MFA only the user can do (it opens on their phone or any device on their Tailscale network); give it to the user, then call handoff again to wait until they finish. When the user only wants to watch what you are doing, use show instead.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     FILES_ENV_HELP,
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
@@ -421,7 +421,8 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'wait': return `Wait for ${args.text ? `"${args.text}"` : `${args.seconds ?? 30}s`}`;
       case 'steps': return `${args.steps?.length ?? 0} steps on the page`;
       case 'login': return 'Sign in';
-      case 'handoff': return 'Hand off to phone';
+      case 'handoff': return 'Hand off to the user';
+      case 'show': return args.clear ? 'Close the live view' : 'Show the tab to the user';
       case 'human_check': return 'Press the human check';
       case 'auth_code': return 'Type authenticator code';
       case 'cloud': return args.clear ? 'Back to the local browser' : 'Move tab to cloud browser';
@@ -685,7 +686,7 @@ const DESCRIPTION: Record<ToolKind, string> = {
   browser: [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself, and each chat has its own tab). Begin with open: it returns the page with a [ref=eN] on every element. Pass a ref (or the control's visible text) as target to act on it. After an action you get only what changed; observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
     `${listing('browser')}.`,
-    'fill with no text fills what only the user knows (name, email, phone, a password) from their saved profile or login, or asks them privately: you are never shown it. Signing in, signing up, API keys and emailed codes are account_use. For a CAPTCHA, or anything only the user can do, use handoff.',
+    'fill with no text fills what only the user knows (name, email, phone, a password) from their saved profile or login, or asks them privately: you are never shown it. Signing in, signing up, API keys and emailed codes are account_use. For a CAPTCHA, or anything only the user can do, use handoff. The browser runs out of sight: when the user wants to watch, use show.',
     `Work through the whole task without checking in at each step; ask only when genuinely blocked. ${HELP_LINE}`,
   ].join('\n'),
   account: [
@@ -1745,12 +1746,16 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       return { output: lines.join('\n'), ...(sent.some(delivery => !delivery.ok) ? { isError: true } : {}) };
     }
     case 'handoff': return handoffAction(args, ctx);
+    case 'show': {
+      const { showTab } = await import('../computer/handoff-show.js');
+      return { output: await showTab({ stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}), ...(args.clear === true ? { clear: true } : {}) }) };
+    }
     default: throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
   }
 }
 
 /**
- * The phone handoff. It runs OUTSIDE the chat's call queue (inOrder): waiting for the user can take minutes, and every other call of
+ * The handoff: a live view of the tab for a step only the user can do, on whatever device they open the link with. It runs OUTSIDE the chat's call queue (inOrder): waiting for the user can take minutes, and every other call of
  * the chat would otherwise line up behind the wait and time out. The first call returns the link at once; a repeat call waits up to
  * 90 s for the user and, if they are not done, shows the same link again so it is never lost; `clear: true` takes the tab back.
  */
@@ -1770,22 +1775,25 @@ async function handoffAction(args: WebArgs, ctx: ToolContext): Promise<ToolRunRe
     let resolveLink!: (link: string) => void; let failLink!: (error: Error) => void;
     const link = new Promise<string>((resolve, reject) => { resolveLink = resolve; failLink = reject; });
     link.catch(quiet('agent/tools/computer-web'));
-    // The phone reaches this computer directly over the user's Tailscale network: no relay, no third party.
+    // The user's device reaches this computer directly over their Tailscale network: no relay, no third party.
     const host = tailnetAddress();
-    if (!host) throw new Error('A handoff needs this computer and your phone on the same Tailscale network, and this computer is not on one (no Tailscale address). Install Tailscale and sign in on both, or finish this step at the computer.');
+    if (!host) throw new Error('A handoff link is served on the user\'s Tailscale network, and this computer is not on one (no Tailscale address). If the user is at this computer, use show: it opens the same live view in their own browser here, and they can do the step in it. Otherwise they need Tailscale installed and signed in on this computer and on their device.');
     const done = runTailnetHandoff({ stateDir: ctx.stateDir, host, signal: stop.signal, onLink: resolveLink, ...(args.tab ? { tab: args.tab } : {}) })
       .then(() => ({ ok: true as const }), (error: unknown) => { failLink(error instanceof Error ? error : new Error(String(error))); return { ok: false as const, message: error instanceof Error ? error.message : String(error) }; })
       .finally(() => { handoffs.delete(handoffKey); });
     running = { link, done, stop };
     handoffs.set(handoffKey, running);
-    const url = await Promise.race([running.link, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The phone link did not come up.')), 45_000))]);
+    const url = await Promise.race([running.link, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The handoff link did not come up.')), 45_000))]);
     running.url = url;
-    return { output: `Phone link over Tailscale (a live view of the browser for the phone, which must be on the same tailnet; one use, ends after 10 idle minutes): ${url}\nTell the user to open it, finish the browser step (CAPTCHA, MFA, a code) with their own keyboard, and tap Done. Then call handoff again to wait until they are done. Other browser calls still work meanwhile; do not act on the page the user is working on.` };
+    return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included; one use, ends after 10 idle minutes): ${url}\n${HANDOFF_NEXT}` };
   }
   const outcome = await Promise.race([running.done, new Promise<'waiting'>(resolve => setTimeout(() => resolve('waiting'), 90_000))]);
   if (outcome === 'waiting') return { output: `The user has not finished yet. The link is still ${running.url ?? '(opening)'}; show it to them again. Call handoff again to keep waiting, or handoff with clear: true to take the tab back.` };
   return outcome.ok ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: outcome.message, isError: true };
 }
+
+/** What the agent does with a handoff link, whichever way it was made. */
+const HANDOFF_NEXT = 'Give the user the link: they do the step only they can do (a CAPTCHA, MFA, a code) in it and press Done. Then call handoff again to wait until they are done. Until then leave this tab to them; your other tabs still work. If the user only wants to watch you work, that is show, not handoff.';
 
 /** The item each chat tab has on the handoff desk, so a repeat call waits on the same one. */
 const deskWaits = sharedState('desk-handoffs', () => new Map<string, string>());
@@ -1811,7 +1819,7 @@ async function deskHandoff(args: WebArgs, ctx: ToolContext, handoffKey: string):
     const put = await putTabOnDesk(ctx.stateDir, args.tab, { label: label || 'Browser step', kind: 'other' });
     if (!put) return undefined;
     deskWaits.set(handoffKey, put.item.id);
-    return { output: `Phone link over Tailscale (a live view of this tab for the phone, which must be on the same tailnet): ${put.address}\nIt stays valid until the user taps Done, reloads included, and the tab is kept open for them for up to twelve hours even if this chat ends. Everything waiting on them is listed at ${store.deskAddress(info)} (one address that never changes). Tell the user to open the link, finish the browser step with their own keyboard, and tap Done. Then call handoff again to wait until they are done. Other browser calls still work meanwhile; do not act on the page the user is working on.` };
+    return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included): ${put.address}\nIt stays valid until the user presses Done, reloads included, and the tab is kept open for them for up to twelve hours even if this chat ends. Everything waiting on them is listed at ${store.deskAddress(info)} (one address that never changes). ${HANDOFF_NEXT}` };
   }
   const id = item.id;
   for (let waited = 0; item?.status === 'waiting' && waited < 90_000; waited += 1_000) {

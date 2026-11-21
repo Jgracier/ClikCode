@@ -19,7 +19,7 @@ export function computerEnabledSync(stateDir: string): boolean {
   catch { return true; }
 }
 
-async function writeSettings(stateDir: string, change: Record<string, boolean>): Promise<void> {
+async function writeSettings(stateDir: string, change: Record<string, boolean | string>): Promise<void> {
   await updateJsonFile(computerSettingsPath(stateDir), objectOrEmpty, (current) => ({ ...current, ...change }));
 }
 
@@ -60,7 +60,21 @@ export async function browserProvider(stateDir: string): Promise<BrowserProvider
   } catch { return 'local'; }
 }
 export async function setBrowserProvider(stateDir: string, provider: BrowserProvider): Promise<void> {
-  await updateJsonFile(computerSettingsPath(stateDir), objectOrEmpty, current => ({ ...current, browserProvider: provider }));
+  await writeSettings(stateDir, { browserProvider: provider });
+}
+
+/** Where ClikCode's own Chrome puts its window (`clikcode computer display visible|hidden`). `hidden` (default): on Linux a virtual
+ * display, so its windows never take the screen or the keyboard from the person working; the `show` action opens a live view of one
+ * tab instead. `visible`: the desktop the person is sitting at. Read when the shared browser starts, never applied to a running one
+ * (every chat's tabs live in it). macOS and Windows have no hidden display: the window is always on the desktop there. */
+export type BrowserDisplay = 'hidden' | 'visible';
+export const parseBrowserDisplay = (value: unknown): BrowserDisplay | undefined => (value === 'hidden' || value === 'visible' ? value : undefined);
+export async function browserDisplay(stateDir: string): Promise<BrowserDisplay> {
+  try { return parseBrowserDisplay((JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { display?: unknown }).display) ?? 'hidden'; }
+  catch { return 'hidden'; }
+}
+export async function setBrowserDisplay(stateDir: string, display: BrowserDisplay): Promise<void> {
+  await writeSettings(stateDir, { display });
 }
 
 export const COMPUTER_OFF = 'Computer use is off. Run `clikcode computer on` to enable it.';

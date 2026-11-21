@@ -3,6 +3,7 @@
  * because it runs detached and the worker that asked for it cannot see its output. */
 import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -46,6 +47,27 @@ export function shouldRunHeadless(options: { env?: NodeJS.ProcessEnv; platform?:
   if (falsy(env.CLIKCODE_BROWSER_HEADLESS)) return false;
   if (options.setting === true) return true;
   return (options.platform ?? process.platform) === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY;
+}
+
+/** Set by hiddenDisplayCommand (browser.ts) when the host runs inside xvfb-run; everything the host starts inherits it. */
+export const VIRTUAL_DISPLAY_ENV = 'CLIKCODE_BROWSER_VIRTUAL_DISPLAY';
+
+/** The desktop a person can be sitting at, as what a program started from here needs added to its environment to put a window on it
+ * (nothing, when the environment already names it); undefined when there is none (a server, a container). macOS and Windows always have
+ * one. On Linux it is the DISPLAY or WAYLAND_DISPLAY this process inherited, unless that is ClikCode's own virtual display; failing that,
+ * the session's Wayland socket in XDG_RUNTIME_DIR (a worker started by a service has the directory but not the variable). */
+export function desktopSession(options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; socketExists?: (file: string) => boolean } = {}): Record<string, string> | undefined {
+  const env = options.env ?? process.env;
+  if ((options.platform ?? process.platform) !== 'linux') return {};
+  if ((env.DISPLAY || env.WAYLAND_DISPLAY) && env[VIRTUAL_DISPLAY_ENV] !== '1') return {};
+  const socketExists = options.socketExists ?? existsSync;
+  return env.XDG_RUNTIME_DIR && socketExists(path.join(env.XDG_RUNTIME_DIR, 'wayland-0')) ? { WAYLAND_DISPLAY: 'wayland-0' } : undefined;
+}
+
+/** The person driving this process is somewhere else (ssh, ClikDeploy's remote terminal): a window opened on this computer's desktop is
+ * not in front of them, whatever display variables the session inherited. */
+export function remoteSession(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CLIKDEPLOY_REMOTE_TERMINAL === '1' || Boolean(env.SSH_CONNECTION || env.SSH_TTY);
 }
 
 // ── what the detached host is doing ─────────────────────────────────────────

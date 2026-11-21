@@ -3,21 +3,33 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { leaveDialogsToWorkers } from './page-dialogs.js';
-import { hostStatusFile, launchComputerBrowser, shouldRunHeadless, writeHostStatus } from './browser-launch.js';
+import { hostStatusFile, launchComputerBrowser, shouldRunHeadless, VIRTUAL_DISPLAY_ENV, writeHostStatus } from './browser-launch.js';
 import { headlessSetting } from './settings.js';
 import { restoreTabs, startBrowserJanitor, takeRecycle } from './browser-janitor.js';
 import { startHandoffDesk } from './handoff-desk.js';
 import { tailnetAddress } from './tailnet-handoff.js';
 import { startEgressService } from './egress-host.js';
+import { pidIsAlive } from '../../session/store/locks.js';
 import { downloadsInbox } from './downloads.js';
 
 export function computerProfile(stateDir: string): string { return path.join(stateDir, 'computer', 'chrome'); }
 export function computerHostFile(stateDir: string): string { return path.join(stateDir, 'computer', 'host.json'); }
 
-export { BROWSER_CHANNELS, launchFirst } from './browser-launch.js';
+export { BROWSER_CHANNELS, launchFirst, VIRTUAL_DISPLAY_ENV } from './browser-launch.js';
 
-/** Set by hiddenDisplayCommand when the host runs inside xvfb-run. */
-export const VIRTUAL_DISPLAY_ENV = 'CLIKCODE_BROWSER_VIRTUAL_DISPLAY';
+/** Where the running browser's window is, as host.json says it: on the desktop, on the virtual display, or nowhere (headless). */
+export type HostDisplay = 'visible' | 'hidden' | 'headless';
+export function hostDisplay(options: { headless: boolean; virtualDisplay: boolean }): HostDisplay {
+  return options.headless ? 'headless' : options.virtualDisplay ? 'hidden' : 'visible';
+}
+/** Where the browser that is running now shows itself; undefined when none is running (or an older host that did not say). */
+export async function runningHostDisplay(stateDir: string, alive: (pid: number) => boolean = pidIsAlive): Promise<HostDisplay | undefined> {
+  try {
+    const record = JSON.parse(await fs.readFile(computerHostFile(stateDir), 'utf8')) as { pid?: unknown; display?: unknown };
+    if (typeof record.pid !== 'number' || !alive(record.pid)) return undefined;
+    return record.display === 'visible' || record.display === 'hidden' || record.display === 'headless' ? record.display : undefined;
+  } catch { return undefined; }
+}
 
 /** Chrome's own arguments for the host. FedCm off: Google's sign-in button then uses its popup, not a browser-drawn dialog that no page tool
  * can see or press. Playwright's default --enable-automation (left out by the caller) and Chrome's port-0 debugging each advertise WebDriver
@@ -37,6 +49,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   await writeHostStatus(stateDir, { pid: process.pid, state: 'starting' });
   const { chromium } = await import('playwright-core');
   const headless = shouldRunHeadless({ setting: await headlessSetting(stateDir) });
+  const virtualDisplay = process.platform === 'linux' && process.env[VIRTUAL_DISPLAY_ENV] === '1';
   // The download folder the host names for the shared profile and for every context it makes later (egress): the same one each worker names.
   const inbox = downloadsInbox(stateDir);
   await fs.mkdir(inbox, { recursive: true, mode: 0o700 });
@@ -45,7 +58,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     context = await launchComputerBrowser(chromium, profile, {
       headless, viewport: null, acceptDownloads: true, downloadsPath: inbox,
       ignoreDefaultArgs: ['--enable-automation'],
-      args: hostChromeArgs({ headless, virtualDisplay: process.platform === 'linux' && process.env[VIRTUAL_DISPLAY_ENV] === '1' }),
+      args: hostChromeArgs({ headless, virtualDisplay }),
     }, stateDir);
   } catch (error) {
     // The worker that started this process cannot see its output: leave the reason where it will look.
@@ -57,7 +70,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   // The egress contexts and their tunnels live here, for this Chrome's whole life (egress-host.ts); workers find the socket in host.json.
   const egress = await startEgressService(stateDir, profile).catch(quiet('agent/computer/browser-host'));
   await writeHostStatus(stateDir, { pid: process.pid, state: 'running' });
-  const record = JSON.stringify({ pid: process.pid, ...(egress ? { egressSocket: egress.socket } : {}) });
+  const record = JSON.stringify({ pid: process.pid, display: hostDisplay({ headless, virtualDisplay }), ...(egress ? { egressSocket: egress.socket } : {}) });
   try {
     await fs.writeFile(hostFile, record, { mode: 0o600 });
     // Closing a Chrome that is already gone never fires 'close', so a stop is bounded: the process ends either way.
