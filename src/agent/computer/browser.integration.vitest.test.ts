@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -98,6 +98,9 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('takes a key file the sit
     // The downloaded copy is gone once it has been read.
     expect(downloaded).toBeTruthy();
     await expect(access(downloaded!)).rejects.toThrow();
+    // Nor is it left where Chrome really wrote it (the shared inbox, downloads.ts).
+    const { downloadsInbox } = await import('./downloads.js');
+    expect(await readdir(downloadsInbox(stateDir))).toEqual([]);
     // The whole file is hidden, and so is each long field inside it (the private key quoted on its own).
     const { scrubSecrets } = await import('./secret-scrubber.js');
     expect(scrubSecrets(FILE)).toBe('[secret hidden]');

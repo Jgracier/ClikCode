@@ -6,7 +6,7 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import type { Download, Page } from 'playwright-core';
-import { holdDownloads } from './downloads.js';
+import { arrivedDownload, holdDownloads } from './downloads.js';
 
 const MAX_BYTES = 256 * 1024;
 
@@ -15,14 +15,15 @@ type DownloadWatch = { result(): Promise<string | undefined>; stop(): void };
 export function watchDownload(page: Page): DownloadWatch {
   let reading: Promise<string | undefined> | undefined;
   const read = async (download: Download): Promise<string | undefined> => {
+    // Where Chrome really wrote it (downloads.ts), which is not where Playwright expects it in a shared browser.
+    let file: string | undefined;
     try {
-      const file = await download.path();
-      if (!file) return undefined;
+      file = (await arrivedDownload(page, download)).file;
       const info = await fs.stat(file);
       if (info.size > MAX_BYTES) return undefined;
       return (await fs.readFile(file, 'utf8')).trim() || undefined;
     } catch { return undefined; }
-    finally { await download.delete().catch(quiet('agent/computer/download-capture')); }
+    finally { if (file) await fs.unlink(file).catch(quiet('agent/computer/download-capture')); }
   };
   const onDownload = (download: Download): void => { reading ??= read(download); };
   page.on('download', onDownload);

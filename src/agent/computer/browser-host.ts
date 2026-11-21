@@ -9,6 +9,7 @@ import { restoreTabs, startBrowserJanitor, takeRecycle } from './browser-janitor
 import { startHandoffDesk } from './handoff-desk.js';
 import { tailnetAddress } from './tailnet-handoff.js';
 import { startEgressService } from './egress-host.js';
+import { downloadsInbox } from './downloads.js';
 
 export function computerProfile(stateDir: string): string { return path.join(stateDir, 'computer', 'chrome'); }
 export function computerHostFile(stateDir: string): string { return path.join(stateDir, 'computer', 'host.json'); }
@@ -36,10 +37,13 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   await writeHostStatus(stateDir, { pid: process.pid, state: 'starting' });
   const { chromium } = await import('playwright-core');
   const headless = shouldRunHeadless({ setting: await headlessSetting(stateDir) });
+  // The download folder the host names for the shared profile and for every context it makes later (egress): the same one each worker names.
+  const inbox = downloadsInbox(stateDir);
+  await fs.mkdir(inbox, { recursive: true, mode: 0o700 });
   let context;
   try {
     context = await launchComputerBrowser(chromium, profile, {
-      headless, viewport: null, acceptDownloads: true,
+      headless, viewport: null, acceptDownloads: true, downloadsPath: inbox,
       ignoreDefaultArgs: ['--enable-automation'],
       args: hostChromeArgs({ headless, virtualDisplay: process.platform === 'linux' && process.env[VIRTUAL_DISPLAY_ENV] === '1' }),
     }, stateDir);

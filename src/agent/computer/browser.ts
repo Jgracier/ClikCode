@@ -10,7 +10,7 @@ import { hostStatusFile, installingMessage, liveHostStatus, readHostStatus } fro
 import { BROWSER_HOST_UNIT, browserHostLaunch } from './browser-host-scope.js';
 import { sharedState } from './shared-state.js';
 import { pidIsAlive, tryLease } from '../../session/store/locks.js';
-import { watchDownloads } from './downloads.js';
+import { serveDownloads, watchDownloads } from './downloads.js';
 import { watchDialogs } from './page-dialogs.js';
 import { watchConsole } from './console-log.js';
 import { allTabs, closeTabsByLabel, closeTabsOfOwner, readTabRecords, sweepTabs, writeTabRecord, type TabRecord } from './tab-registry.js';
@@ -35,6 +35,8 @@ async function connect(stateDir: string): Promise<Connected | undefined> {
     const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 8_000 });
     const context = browser.contexts()[0];
     if (!context) { await browser.close(); return undefined; }
+    // Downloads from this connection's tabs are found where Chrome reports them (downloads.ts); without it they are reported as failed, never lost.
+    await serveDownloads(browser, stateDir).catch(quiet('agent/computer/browser'));
     return { browser, context };
   } catch { return undefined; }
 }
