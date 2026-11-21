@@ -10,14 +10,21 @@ import { saveTask } from './work-queue.js';
 /** The one-time code in an email: a 4-8 character code that the text calls a code, else a lone 6-digit number. */
 export function verificationCode(text: string): string | undefined {
   const flat = text.replace(/\s+/g, ' ');
-  const named = /\b(?:verification|security|confirmation|activation|login|sign[- ]?in|one[- ]time|access)?\s*code\b[^A-Za-z0-9]{0,20}([A-Z0-9]{4,8})\b/i.exec(flat)
-    // A few words may stand between the word and the code ("Enter this activation code on the website: 4501"): then the code is
-    // all digits, so ordinary words after "code" are never taken for it.
-    ?? /\b(?:verification|security|confirmation|activation|login|sign[- ]?in|one[- ]time|access|otp)?\s*(?:code|otp|passcode|pin)\b[^.\d]{0,40}?[:\s](\d{4,8})\b/i.exec(flat)
-    ?? /\b([A-Z0-9]{4,8})\b[^.]{0,30}\bis your (?:\w+ )?code\b/i.exec(flat);
-  if (named && /\d/.test(named[1]!)) return named[1];
+  const patterns = [
+    /\b(?:verification|security|confirmation|activation|login|sign[- ]?in|one[- ]time|access)?\s*code\b[^A-Za-z0-9]{0,20}([A-Z0-9]{4,8})\b/gi,
+    /\b(?:verification|security|confirmation|activation|login|sign[- ]?in|one[- ]time|access|otp)?\s*(?:code|otp|passcode|pin)\b[^.\d]{0,40}?[:\s](\d{4,8})\b/gi,
+    /\b([A-Z0-9]{4,8})\b[^.]{0,30}\bis your (?:\w+ ){0,3}code\b/gi,
+  ];
+  // A match such as "code below" is not a code. Keep looking rather than letting that word hide a later numeric match.
+  for (const pattern of patterns) for (const match of flat.matchAll(pattern)) if (/\d/.test(match[1]!)) return match[1];
   const sixes = [...new Set(flat.match(/(?<![\w.-])\d{6}(?![\w-])/g) ?? [])];
   return sixes.length === 1 ? sixes[0] : undefined;
+}
+
+/** Both MIME body and subject can hold the code. Conflicting answers are not guessed between. */
+export function emailVerificationCode(mail: { subject: string; text: string }): string | undefined {
+  const body = verificationCode(mail.text), subject = verificationCode(mail.subject);
+  return body && subject && body !== subject ? undefined : body ?? subject;
 }
 
 const CODE_WORDS = /\b(?:code|otp|passcode|pin|verify|verification|confirm(?:ation)?|one[- ]time|sign[- ]?in|log[- ]?in|security alert)\b/i;
@@ -25,7 +32,7 @@ const LINK_WORDS = /\b(?:verify|verification|confirm(?:ation)?|activate|activati
 /** An email that is a verification message with a code in it, not a newsletter that happens to hold a six-digit number. */
 export function looksLikeCodeEmail(mail: { subject: string; text: string }): boolean {
   if (MARKETING.test(mail.subject) || MARKETING.test(mail.text.slice(0, 200))) return false;
-  return verificationCode(mail.text) !== undefined && CODE_WORDS.test(`${mail.subject} ${mail.text.slice(0, 300)}`);
+  return emailVerificationCode(mail) !== undefined && CODE_WORDS.test(`${mail.subject} ${mail.text.slice(0, 300)}`);
 }
 /** An email that is a verification or sign-in message with a link to follow. */
 export function looksLikeLinkEmail(mail: { subject: string; text: string; links: string[] }): boolean {
@@ -43,7 +50,7 @@ export async function emailedCode(stateDir: string, options: { site: string; sin
     try {
       // The first pass reads the inbox; later passes also look in spam, where a new sender's first email often lands.
       const mail = await findEmail(stateDir, { hints, site: options.site, since: options.since, timeoutMs: passMs, pollMs: options.pollMs, spam: pass > 0, consume: true, accept: looksLikeCodeEmail, signal: options.signal, endpoints: options.endpoints });
-      return { code: verificationCode(mail.text)! };
+      return { code: emailVerificationCode(mail)! };
     } catch (error) {
       if (error instanceof EmailAmbiguous) return { hold: error.message };
       if (options.signal?.aborted) throw error;

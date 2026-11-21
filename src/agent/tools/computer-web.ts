@@ -45,7 +45,7 @@ import { ACTIONABLE, condenseSnapshot } from './snapshot-condense.js';
 import { followPopup, SIGN_IN_CLICK } from '../computer/google-popup.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { emailConnected, emailStatus, findEmail, loginAddresses } from '../computer/email-api.js';
-import { codeFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
+import { codeFromMailbox, emailVerificationCode, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
 import { connectEmail } from '../computer/email-consent.js';
 import { beginJournal, noteStep, recordVerified } from '../computer/recipe-recorder.js';
 import { chooseValue, labelledCandidates } from '../computer/read-value.js';
@@ -1625,13 +1625,13 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       if (await emailConnected(ctx.stateDir)) {
         // The mail arrives when the vendor sends it: wait for it instead of looking once.
         const hints = await mailboxHints(ctx.stateDir, page);
-        const mail = await findEmail(ctx.stateDir, { address: args.address, hints, from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => verificationCode(m.text) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal })
+        const mail = await findEmail(ctx.stateDir, { address: args.address, hints, from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => emailVerificationCode(m) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal })
           .catch(async (error: unknown) => {
             if (!(error instanceof Error) || !/^No email matched/.test(error.message)) throw error;
             // Say where it looked: the usual cause is that the mail went to another address, not that the filter was wrong.
             throw new Error(`${error.message} Looked in ${args.address ?? (await emailStatus(ctx.stateDir)).mailboxes.map(m => m.email).join(', ')} (inbox and spam, the last 15 minutes). If the site emailed another address, connect that mailbox (email_connect with address). If the sender's name differs, leave from out: the page's site then picks the email.`);
           });
-        const code = verificationCode(mail.text);
+        const code = emailVerificationCode(mail);
         if (!code) throw new Error(`The email from ${args.from ?? args.subject} has no code in it. It says: "${mail.text.replace(/\s+/g, ' ').slice(0, 160)}".`);
         return { output: `Code: ${code} (read from ${mail.mailbox}). Type it into the page that asked for it.` };
       }

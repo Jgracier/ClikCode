@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EMAIL_CLIENT_SECRET, senderMatch, startConsent, type GoogleEndpoints } from './email-api.js';
-import { codeFromMailbox, emailedCode, holdForEmail, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from './email-code.js';
+import { codeFromMailbox, emailedCode, holdForEmail, emailVerificationCode, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from './email-code.js';
 import { saveNamedSecret } from './credential-vault.js';
 import { Parked } from './parking.js';
 import { listTasks } from './work-queue.js';
@@ -150,4 +150,20 @@ describe('codes worded loosely', () => {
     expect(verificationCode('Use the discount code on the website today')).toBeUndefined();
     expect(verificationCode('Thanks for signing up. See you soon.')).toBeUndefined();
   });
+});
+
+it('does not let a word such as below hide a four-digit code', () => {
+  expect(verificationCode("Let's verify your account by adding in the code below:\n\n1234\n\nContact support if needed.")).toBe('1234');
+  expect(verificationCode('Your code follows: 5678')).toBe('5678');
+});
+
+it('reads a subject-only code and refuses conflicting subject and body codes', () => {
+  expect(emailVerificationCode({ subject: '1234 is your bubbles login code', text: 'Enter the code from the subject.' })).toBe('1234');
+  expect(looksLikeCodeEmail({ subject: '1234 is your bubbles login code', text: 'Enter the code from the subject.' })).toBe(true);
+  expect(emailVerificationCode({ subject: '1234 is your login code', text: 'Your code is 5678' })).toBeUndefined();
+});
+
+it('retrieves a Bubbles-style message through the mailbox code reader', async () => {
+  messages = [mail('bubbles', 'code@mail.auth.usebubbles.com', '1234', { subject: '1234 is your bubbles login code', html: '<p>Let’s verify your account by adding in the code below:</p><p>1234</p>' })];
+  expect(await emailedCode(dir, { site: 'https://www.usebubbles.com', since: Date.now() - 60000, endpoints, ...fast })).toEqual({ code: '1234' });
 });
