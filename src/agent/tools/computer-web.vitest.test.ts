@@ -391,3 +391,68 @@ describe('inOrder across tabs', () => {
     expect(log.indexOf('a1 end')).toBeLessThan(log.indexOf('a2 start'));
   });
 });
+
+describe('a stopped call', () => {
+  it('keeps the queue until the stopped work has ended, within a bound', async () => {
+    const log: string[] = [];
+    let finish = (): void => undefined;
+    const work = new Promise<void>(resolve => { finish = () => { log.push('work ended'); resolve(); }; });
+    const stopped = inOrder('stop-chat', async hold => { hold(work); return 'Stopped.'; });
+    const next = inOrder('stop-chat', async () => { log.push('next ran'); });
+    expect(await stopped).toBe('Stopped.');
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(log).toEqual([]);
+    finish();
+    await next;
+    expect(log).toEqual(['work ended', 'next ran']);
+    // Work that never ends holds the queue only for the grace time.
+    const stuck = inOrder('stop-chat-2', async hold => { hold(new Promise(() => undefined), 40); }, 40);
+    const after = inOrder('stop-chat-2', async () => 'ran');
+    await stuck;
+    expect(await after).toBe('ran');
+  });
+
+  it('ends a batch of steps at the stop: a long wait ends and later steps do not run', async () => {
+    const { runSteps } = await import('./computer-web.js');
+    const touched: string[] = [];
+    const page = {
+      url: () => 'https://example.test/', isClosed: () => false,
+      waitForTimeout: (ms: number) => { touched.push(`waitForTimeout ${ms}`); return new Promise(resolve => setTimeout(resolve, ms)); },
+      waitForLoadState: async () => undefined, evaluate: async () => undefined,
+      locator: (selector: string) => { touched.push(`locator ${selector}`); return { first: () => ({ evaluate: async () => '' }), evaluateAll: async () => [], count: async () => 0 }; },
+      getByRole: () => { touched.push('getByRole'); throw new Error('no'); },
+    };
+    const controller = new AbortController();
+    const stateDir = (await import('node:os')).tmpdir();
+    setTimeout(() => controller.abort(), 30);
+    const began = Date.now();
+    await expect(runSteps(page as never, [{ do: 'wait', seconds: 3 }, { do: 'click', target: 'Next' }], { stateDir, signal: controller.signal } as never, 'stop-tab')).rejects.toThrow('Stopped.');
+    expect(Date.now() - began).toBeLessThan(1_500);
+    expect(touched.filter(line => /Next|getByRole|waitForTimeout 3000/.test(line))).toEqual([]);
+  });
+});
+
+describe('waiting on a handoff', () => {
+  it('a desk wait ends at a stop instead of polling for 90 seconds', async () => {
+    const { waitForDeskItem } = await import('./computer-web.js');
+    const controller = new AbortController();
+    let reads = 0;
+    setTimeout(() => controller.abort(), 20);
+    const began = Date.now();
+    const got = await waitForDeskItem({ status: 'waiting' }, async () => { reads++; return { status: 'waiting' }; }, controller.signal, 5_000, 10);
+    expect(typeof got).toBe('symbol');
+    expect(Date.now() - began).toBeLessThan(1_000);
+    expect(reads).toBeLessThan(10);
+    expect(await waitForDeskItem({ status: 'waiting' }, async () => ({ status: 'done' }), undefined, 1_000, 5)).toEqual({ status: 'done' });
+  });
+
+  it('a bounded wait clears its timer, and a stop ends it', async () => {
+    const { waitAtMost } = await import('./computer-web.js');
+    expect(await waitAtMost(Promise.resolve('x'), 60_000)).toBe('x');
+    expect(typeof await waitAtMost(new Promise(() => undefined), 10)).toBe('symbol');
+    const controller = new AbortController();
+    const waiting = waitAtMost(new Promise(() => undefined), 60_000, controller.signal);
+    controller.abort();
+    await expect(waiting).rejects.toThrow('Stopped.');
+  });
+});

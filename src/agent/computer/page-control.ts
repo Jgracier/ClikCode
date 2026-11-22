@@ -2,6 +2,8 @@
  * waits on page state, rich fields and the console. Only Playwright and node:path calls, so it behaves the same on Linux,
  * macOS and Windows. Anything that returns page content goes through the same hiding the page view uses. */
 import { quiet } from '../../runtime/lifecycle-log.js';
+import { sleep } from '../../runtime/sleep.js';
+import { StoppedError } from './stopped.js';
 import type { Frame, Locator, Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
@@ -190,13 +192,21 @@ export async function scrollStep(page: Page, target: Locator | undefined, step: 
 // ---------------------------------------------------------------------------------------------------- wait
 
 /** `target`/`selector` state, a URL change, or network idle. Polled, so a page that rebuilds itself is still found. Not an error on timeout: the page as it is, is the answer. */
-export async function waitForState(page: Page, step: StepExtras & { target?: string; seconds?: number }, deps: Pick<PageDeps, 'locate' | 'displayUrl'>): Promise<{ note: string; halt?: true }> {
+export async function waitForState(page: Page, step: StepExtras & { target?: string; seconds?: number }, deps: Pick<PageDeps, 'locate' | 'displayUrl'> & { signal?: AbortSignal | undefined }): Promise<{ note: string; halt?: true }> {
+  // A stop ends the wait at once (a wait is up to two minutes of the call queue).
+  const pause = (ms: number): Promise<void> => sleep(ms, deps.signal, () => new StoppedError());
+  if (deps.signal?.aborted) throw new StoppedError();
   const seconds = Math.min(Math.max(Math.floor(step.seconds ?? 30), 1), 120);
   const deadline = Date.now() + seconds * 1000;
   const until = step.until ?? (step.url !== undefined ? 'url' : undefined);
   if (until === 'network_idle') {
-    try { await page.waitForLoadState('networkidle', { timeout: seconds * 1000 }); return { note: 'The network is idle.' }; }
-    catch { return { note: `The network was still busy after ${seconds}s.`, halt: true }; }
+    let onAbort = (): void => undefined;
+    const stopped = new Promise<never>((_resolve, reject) => { onAbort = () => reject(new StoppedError()); });
+    stopped.catch(quiet('agent/computer/page-control'));
+    deps.signal?.addEventListener('abort', onAbort, { once: true });
+    try { await Promise.race([page.waitForLoadState('networkidle', { timeout: seconds * 1000 }), stopped]); return { note: 'The network is idle.' }; }
+    catch (error) { if (error instanceof StoppedError) throw error; return { note: `The network was still busy after ${seconds}s.`, halt: true }; }
+    finally { deps.signal?.removeEventListener('abort', onAbort); }
   }
   if (until === 'url') {
     const started = page.url();
@@ -208,7 +218,7 @@ export async function waitForState(page: Page, step: StepExtras & { target?: str
     };
     while (Date.now() < deadline) {
       if (matches(page.url())) return { note: `The address is now ${deps.displayUrl(page.url())}.` };
-      await page.waitForTimeout(200);
+      await pause(200);
     }
     return { note: `The address ${wanted ? `did not match "${wanted}"` : 'did not change'} after ${seconds}s; it is ${deps.displayUrl(page.url())}.`, halt: true };
   }
@@ -230,7 +240,7 @@ export async function waitForState(page: Page, step: StepExtras & { target?: str
   };
   while (Date.now() < deadline) {
     if (await state()) return { note: `${what} is ${until}.` };
-    await page.waitForTimeout(250);
+    await pause(250);
   }
   return { note: `${what} was still not ${until} after ${seconds}s.`, halt: true };
 }

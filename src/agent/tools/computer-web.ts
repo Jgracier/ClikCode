@@ -60,6 +60,7 @@ import { findTailnetAddress, runTailnetHandoff } from '../computer/tailnet-hando
 import type { Frame, Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 import { sleep } from '../../runtime/sleep.js';
+import { StoppedError, throwIfStopped } from '../computer/stopped.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'hover' | 'drag'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: ScrollDirection; accept_dialog?: boolean; gone?: boolean; seconds?: number } & StepExtras;
 type WebArgs = {
@@ -449,7 +450,7 @@ export const computerWebTool = defineTool<WebArgs>({
 const AFTER_NEW_TAB = new Set(['open', 'observe', 'screenshot', 'console', 'cookies', 'switch']);
 
 function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult> {
-  return inOrder(args.tab ? `${hostCtx.stateDir}#${args.tab}` : hostCtx.stateDir, async (): Promise<ToolRunResult> => {
+  return inOrder(args.tab ? `${hostCtx.stateDir}#${args.tab}` : hostCtx.stateDir, async (hold): Promise<ToolRunResult> => {
     // Unattended: a private prompt about a site (a password, a code, an account choice) is parked in the queue, not shown.
     // Missing profile details follow the same rule: no private dialog can suspend an unattended worker.
     const ctx: ToolContext = await unattendedEnabled(hostCtx.stateDir) && hostCtx.requestPrivateLogin
@@ -635,15 +636,17 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       const waiting = pendingDialogNote(page);
       if (waiting && args.action !== 'dialog' && args.action !== 'open') return { output: waiting };
       const leftBehind = args.action === 'open' ? await settleWaitingDialog(page, true) : undefined;
-      // Playwright cannot be interrupted mid-call, so a stop returns at once
-      // and the browser carries on harmlessly in the background.
+      // A stop returns at once. The work sees the same signal and ends at its next step or wait (Playwright cannot be interrupted
+      // mid-call); until it has, the chat's next call waits (bounded), so it never runs while this one still drives the tab.
       let onAbort = (): void => undefined;
-      const stopped = new Promise<never>((_resolve, reject) => { onAbort = () => reject(new Error('Stopped.')); });
+      const stopped = new Promise<never>((_resolve, reject) => { onAbort = () => reject(new StoppedError()); });
       stopped.catch(quiet('agent/tools/computer-web'));
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
+      let work: Promise<ToolRunResult> | undefined;
       try {
-        if (ctx.signal?.aborted) throw new Error('Stopped.');
-        const done = await Promise.race([stopped, args.action === 'fill' ? fillWhole(page, args, ctx) : act(page, args, ctx)]);
+        throwIfStopped(ctx.signal);
+        work = args.action === 'fill' ? fillWhole(page, args, ctx) : act(page, args, ctx);
+        const done = await Promise.race([stopped, work]);
         // The page the batch ended on, which is not `page` when a popup took over.
         const ended = await computerPage(ctx.stateDir, args.tab).catch(() => page);
         const withPicture = !done.isError && args.with_screenshot && ctx.acceptsImages === true && args.action !== 'screenshot' && !ended.isClosed() ? await withScreenshot(done, ended) : done;
@@ -651,7 +654,11 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
         const noted = withDialogNotices(shown, page);
         const lead = [late, leftBehind].filter(Boolean).join('\n\n');
         return lead ? { ...noted, output: `${lead}\n\n${noted.output}` } : noted;
-      } finally { ctx.signal?.removeEventListener('abort', onAbort); bindDialogs(page, true); }
+      } finally {
+        ctx.signal?.removeEventListener('abort', onAbort);
+        if (work && ctx.signal?.aborted) hold(work);
+        bindDialogs(page, true);
+      }
     } catch (error) {
       // A sign-in's own errors may echo what was typed, so only its planned messages are shown; a capture's are always the real reason.
       if (error instanceof Parked) return { output: error.message, isError: true };
@@ -789,10 +796,21 @@ function uploadPaths(args: WebArgs): string[] {
   return named.filter((text): text is string => typeof text === 'string' && path.isAbsolute(text));
 }
 
+/** How long a stopped call may keep the chat's queue while its work winds down (a Playwright call in flight cannot be cancelled). */
+export const STOP_GRACE_MS = 15_000;
+
 const queues = sharedState('computer-web-queue', () => new Map<string, Promise<unknown>>());
-export function inOrder<T>(key: string, job: () => Promise<T>): Promise<T> {
-  const run = (queues.get(key) ?? Promise.resolve()).then(job, job);
-  const tail = run.catch(quiet('agent/tools/computer-web'));
+/** Runs `job` after the calls queued before it under `key`. `hold(work)` keeps the queue until `work` settles (at most `ms`) even after
+ * the job has answered: a stopped call answers at once, and the next call must not drive the tab while the stopped work still does. */
+export function inOrder<T>(key: string, job: (hold: (work: Promise<unknown>, ms?: number) => void) => Promise<T>, graceMs = STOP_GRACE_MS): Promise<T> {
+  const holds: Array<Promise<unknown>> = [];
+  const hold = (work: Promise<unknown>, ms = graceMs): void => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    holds.push(Promise.race([work.catch(quiet('agent/tools/computer-web')), new Promise(resolve => { timer = setTimeout(resolve, ms); })]).finally(() => clearTimeout(timer)));
+  };
+  const start = (): Promise<T> => job(hold);
+  const run = (queues.get(key) ?? Promise.resolve()).then(start, start);
+  const tail = run.catch(quiet('agent/tools/computer-web')).then(() => Promise.all(holds));
   queues.set(key, tail);
   void tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
   return run;
@@ -825,19 +843,22 @@ type StepOutcome = string | { note: string; halt: true };
 
 /** Long jobs (an API being enabled, a resource being created) finish on their own: wait for words to
  * appear (or go) instead of looking again and again. Gives up with the page as it is, and says so. */
-async function waitOn(page: Page, step: Step): Promise<StepOutcome> {
+async function waitOn(page: Page, step: Step, signal?: AbortSignal): Promise<StepOutcome> {
   if (step.until && step.until !== 'text' || (!step.text?.trim() && (step.selector || step.url !== undefined))) {
-    const done = await waitForState(page, step, { locate, displayUrl });
+    const done = await waitForState(page, step, { locate, displayUrl, signal });
     return done.halt ? { note: done.note, halt: true } : done.note;
   }
   const seconds = Math.min(Math.max(Math.floor(step.seconds ?? 30), 1), 120);
   const text = step.text?.trim();
-  if (!text) { await page.waitForTimeout(seconds * 1000); return `Waited ${seconds}s.`; }
+  // A stop ends the wait at once: it holds the chat's call queue for up to two minutes.
+  const pause = (ms: number): Promise<void> => sleep(ms, signal, () => new StoppedError());
+  if (!text) { await pause(seconds * 1000); return `Waited ${seconds}s.`; }
   const deadline = Date.now() + seconds * 1000;
   while (Date.now() < deadline) {
+    throwIfStopped(signal);
     const shown = (await page.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never).catch(() => '') as string).toLowerCase().includes(text.toLowerCase());
     if (shown !== (step.gone === true)) return `${step.gone ? 'Gone' : 'Appeared'}: "${text}".`;
-    await page.waitForTimeout(1_000);
+    await pause(1_000);
   }
   // Not an error: the page simply is not there yet. What it shows now is the answer.
   return { note: `Still ${step.gone ? 'showing' : 'not showing'} "${text}" after ${seconds}s.`, halt: true };
@@ -891,7 +912,7 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
       await page.keyboard.press(checkKey(step.key));
       return `Pressed ${step.key}.`;
     case 'scroll': return scrollStep(page, step.target?.trim() ? await locate(page, step.target) : undefined, step);
-    case 'wait': return waitOn(page, step);
+    case 'wait': return waitOn(page, step, ctx?.signal);
     default: throw new Error(`Unknown step "${String((step as { do?: unknown }).do)}".`);
   }
 }
@@ -1259,6 +1280,8 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
     return { output: `${[...notes, error.message].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
   }
   for (const [index, planned] of steps.entries()) {
+    // A stop ends the batch here: the steps after it are not run on a tab the user took back.
+    throwIfStopped(ctx.signal);
     // A later fill of the same batch still carries a generated password the site has since refused: it gets the current one.
     const held = generatedFor(current);
     const step = planned.do === 'fill' && held && planned.text && held.past.has(planned.text) ? { ...planned, text: held.password } : planned;
@@ -1297,6 +1320,7 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
         }
       }
     } catch (error) {
+      if (error instanceof StoppedError) throw error;
       // The page closing itself (a sign-in popup that finished) is read from the page, not from an error message.
       if (current.isClosed()) {
         // The chat's own tab that is in front now, never just any tab of the shared browser: those are other chats'.
@@ -1556,7 +1580,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       // shows the real endpoint, method and answer shape when documentation is thin. Header values are never shown.
       const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
       const { recordNetwork, describeCalls } = await import('../computer/network-capture.js');
-      const { result, calls, dropped } = await recordNetwork(page, async () => Array.isArray(list) && list.length ? runSteps(page, list, ctx, args.tab, args.label) : (await page.waitForTimeout((args.seconds ?? 5) * 1000), undefined), { ...(args.find ? { find: args.find } : {}), ...(args.bodies ? { bodies: true } : {}) });
+      const { result, calls, dropped } = await recordNetwork(page, async () => Array.isArray(list) && list.length ? runSteps(page, list, ctx, args.tab, args.label) : (await sleep((args.seconds ?? 5) * 1000, ctx.signal, () => new StoppedError()), undefined), { ...(args.find ? { find: args.find } : {}), ...(args.bodies ? { bodies: true } : {}) });
       return { output: `${result?.output ? `${result.output}\n\n` : ''}${describeCalls(calls, dropped)}`, ...(result?.isError ? { isError: true } : {}) };
     }
     case 'open_email_link': {
@@ -1770,13 +1794,30 @@ async function handoffAction(args: WebArgs, ctx: ToolContext): Promise<ToolRunRe
       .finally(() => { handoffs.delete(handoffKey); });
     running = { link, done, stop };
     handoffs.set(handoffKey, running);
-    const url = await Promise.race([running.link, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The handoff link did not come up.')), 45_000))]);
+    // A link that never comes up ends the handoff: left in the map it would be found again with no address ("(opening)") forever.
+    const url = await waitAtMost(running.link, 45_000, ctx.signal).catch((error: unknown) => { stop.abort(); if (handoffs.get(handoffKey) === running) handoffs.delete(handoffKey); throw error; });
+    if (url === TIMED_OUT) { stop.abort(); if (handoffs.get(handoffKey) === running) handoffs.delete(handoffKey); throw new Error('The handoff link did not come up.'); }
     running.url = url;
     return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included; one use, ends after 10 idle minutes): ${url}\n${HANDOFF_NEXT}` };
   }
-  const outcome = await Promise.race([running.done, new Promise<'waiting'>(resolve => setTimeout(() => resolve('waiting'), 90_000))]);
-  if (outcome === 'waiting') return { output: `The user has not finished yet. The link is still ${running.url ?? '(opening)'}; show it to them again. Call handoff again to keep waiting, or handoff with clear: true to take the tab back.` };
+  const outcome = await waitAtMost(running.done, 90_000, ctx.signal).catch((error: unknown): typeof STOPPED => { if (error instanceof StoppedError) return STOPPED; throw error; });
+  if (outcome === STOPPED) return { output: `Stopped waiting. The handoff is still open at ${running.url ?? 'its link'}; call handoff again to wait, or handoff with clear: true to take the tab back.` };
+  if (outcome === TIMED_OUT) return { output: `The user has not finished yet. The link is still ${running.url ?? '(opening)'}; show it to them again. Call handoff again to keep waiting, or handoff with clear: true to take the tab back.` };
   return outcome.ok ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: outcome.message, isError: true };
+}
+
+const TIMED_OUT = Symbol('timed out');
+const STOPPED = Symbol('stopped');
+/** `work`, or TIMED_OUT after `ms`; rejects with StoppedError when `signal` aborts. Its timer and listener are always removed. */
+export function waitAtMost<T>(work: Promise<T>, ms: number, signal?: AbortSignal): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort = (): void => undefined;
+  const bounded = new Promise<typeof TIMED_OUT>((resolve, reject) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+    onAbort = () => reject(new StoppedError());
+    if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
+  });
+  return Promise.race([work, bounded]).finally(() => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); });
 }
 
 /** What the agent does with a handoff link, whichever way it was made. */
@@ -1809,14 +1850,23 @@ async function deskHandoff(args: WebArgs, ctx: ToolContext, handoffKey: string):
     return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included): ${put.address}\nIt stays valid until the user presses Done, reloads included, and the tab is kept open for them for up to twelve hours even if this chat ends. Everything waiting on them is listed at ${store.deskAddress(info)} (one address that never changes). ${HANDOFF_NEXT}` };
   }
   const id = item.id;
-  for (let waited = 0; item?.status === 'waiting' && waited < 90_000; waited += 1_000) {
-    await sleep(1_000);
-    item = await store.readDeskItem(ctx.stateDir, id);
-  }
+  const polled = await waitForDeskItem(item, () => store.readDeskItem(ctx.stateDir, id), ctx.signal);
+  if (polled === STOPPED) return { output: `Stopped waiting. The handoff is still open at ${store.deskItemAddress(info, id)}; call handoff again to wait, or handoff with clear: true to take the tab back.` };
+  item = polled;
   if (item?.status === 'waiting') return { output: `The user has not finished yet. The link is still ${store.deskItemAddress(info, id)}; show it to them again. Call handoff again to keep waiting, or handoff with clear: true to take the tab back.` };
   deskWaits.delete(handoffKey);
   await store.removeDeskItem(ctx.stateDir, id);
   return item?.status === 'done' ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: 'The handoff ended without the user finishing (it waited too long, or the tab was closed). Observe the page, and hand off again if it is still needed.', isError: true };
+}
+
+/** Polls a desk item while the user has not finished, up to `ms`; STOPPED as soon as `signal` aborts. */
+export async function waitForDeskItem<T extends { status: string }>(item: T | undefined, read: () => Promise<T | undefined>, signal?: AbortSignal, ms = 90_000, every = 1_000): Promise<T | undefined | typeof STOPPED> {
+  for (let waited = 0; item?.status === 'waiting' && waited < ms; waited += every) {
+    try { await sleep(every, signal, () => new StoppedError()); }
+    catch { return STOPPED; }
+    item = await read();
+  }
+  return item;
 }
 
 /** A native dialog or separate popup window is outside the page, so a click
