@@ -361,7 +361,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     with: { type: ['object', 'string'], description: 'send_secret: values for the destination slots, e.g. {key:"SALAD_API_KEY"}.' },
     values: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'send_secret with to clikdeploy-connection: the plain connection values, e.g. {org_api_key:"..."} or {app_id:"secret:<saved name>"}.' },
     ask: { type: 'boolean', description: 'profile: ask the user now for name, email, phone and address and save them as a profile (also happens when none exists).' },
-    from: { type: 'string', description: 'open_email_link, read_email_code: sender (name or address) of the email in the signed-in Gmail. read_sms_code: the texting number or short code, or a word the text contains; default: the text must name the page\'s site; "any" takes any sender.' },
+    from: { type: 'string', description: 'open_email_link, read_email_code, read_sms_code: the sender (for a text: number or a word in it; "any"; default: names the site).' },
     subject: { type: 'string', description: 'open_email_link, read_email_code: words from the subject.' },
     link: { type: 'string', description: 'open_email_link: words or domain of the link to open (default: the first real link in the message).' },
     account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },

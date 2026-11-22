@@ -192,7 +192,7 @@ export async function waitForTextedCode(stateDir: string, options: { since: numb
     onAbort = () => reject(signal.reason);
     if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
   });
-  interrupted.catch(() => undefined);
+  interrupted.catch(() => undefined); // fail-open-ok: only silences the unhandled rejection; every await below races it and sees the abort
   /** Per source: whether it ever answered, and its last error. */
   const health = new Map<string, { answered: boolean; error?: string }>();
   const poll = async (source: string, ask: () => Promise<{ rows: string } | { error: string }>): Promise<TextedCode> => {
