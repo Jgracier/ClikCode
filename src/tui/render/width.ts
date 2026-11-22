@@ -84,8 +84,42 @@ export function visiblePathTail(path: string, width: number): string {
  * boundary, so backspace can never strand half an emoji in the composer.
  * The segmenter is made on first use: building one loads ICU's break rules,
  * about 6 ms a worker, the editor bridge or `--version` paid at load. */
-let graphemeSegmenter: Intl.Segmenter | undefined;
-const graphemes = (): Intl.Segmenter => (graphemeSegmenter ??= new Intl.Segmenter(undefined, { granularity: 'grapheme' }));
+let graphemeSegmenter: Segmenter | undefined;
+const graphemes = (): Segmenter => (graphemeSegmenter ??= typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : fallbackSegmenter);
+
+/** What this file uses of Intl.Segmenter: the segments of a string, in order, each with where it starts. */
+interface Segmenter {
+  segment(text: string): Iterable<{ segment: string; index: number }>;
+}
+
+/**
+ * A grapheme segmenter for an engine without Intl.Segmenter: Hermes, which runs this file inside the phone app (the shared chat
+ * client draws tool rows with visibleSlice). Every `new Intl.Segmenter` there threw "undefined cannot be used as a constructor" and
+ * crashed the app the moment a tool ran. It joins what the terminal and the person treat as one character: combining marks,
+ * variation selectors, skin-tone modifiers, tag characters, a ZWJ and the code point it joins, and regional-indicator pairs (a flag).
+ * Not the full Unicode rules (no Hangul jamo or Indic conjunct sequences), which only Node's ICU has; enough for width and editing.
+ */
+const EXTENDS = /^[\p{M}\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}\u200D]$/u;
+const REGIONAL = /^[\u{1F1E6}-\u{1F1FF}]$/u;
+export const fallbackSegmenter: Segmenter = {
+  segment(text: string) {
+    const out: { segment: string; index: number }[] = [];
+    let index = 0;
+    let joinNext = false;
+    for (const char of text) {
+      const last = out[out.length - 1];
+      const flag = last && REGIONAL.test(char) && [...last.segment].length === 1 && REGIONAL.test(last.segment);
+      if (last && (joinNext || EXTENDS.test(char) || flag)) {
+        last.segment += char;
+      } else {
+        out.push({ segment: char, index });
+      }
+      joinNext = char === '\u200D';
+      index += char.length;
+    }
+    return out;
+  },
+};
 
 /** No realistic cluster approaches this many code units, so bounding the
  * segmented window keeps cursor motion O(1) rather than re-segmenting the
