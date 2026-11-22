@@ -18,6 +18,14 @@ export async function exchangeVault(stateDir: string, incoming: string): Promise
 /** Moves one message to the other computer and brings back its answer. */
 type Transport = (payload: string) => Promise<string>;
 
+/** What came back, without one character of it: a reply that is nearly a vault is a plaintext vault. Its size, and whether it is JSON. */
+function describeReply(text: string): string {
+  const size = `${text.length} characters`;
+  if (!text.trim()) return 'it was empty';
+  try { const parsed = JSON.parse(text) as unknown; return `${size} of JSON (${Array.isArray(parsed) ? 'an array' : parsed === null ? 'null' : typeof parsed}), not a v1 vault`; }
+  catch { return `${size}, not JSON`; }
+}
+
 export async function syncVault(stateDir: string, transport: Transport): Promise<SyncResult> {
   const mine = await snapshotVault(stateDir);
   // The first run on a computer that was just updated has answered with something other than its vault; the second always has. Ask once more, and say what came back if it still is not one.
@@ -26,7 +34,7 @@ export async function syncVault(stateDir: string, transport: Transport): Promise
     last = await transport(JSON.stringify(mine));
     try { const parsed = JSON.parse(last) as VaultSnapshot; if (parsed?.v === 1 && Array.isArray(parsed.secrets)) reply = parsed; } catch { /* fail-open-ok: not JSON */ }
   }
-  if (!reply) throw new Error(`The other computer answered with something that is not a vault: ${last.replace(/\s+/g, ' ').slice(0, 160)}`);
+  if (!reply) throw new Error(`The other computer answered with something that is not a vault (${describeReply(last)}). Its answer is not shown: it may hold secrets. Run \`clikcode computer secrets --exchange\` there by hand to see what it says.`);
   const received = await mergeVault(stateDir, reply);
   // What the other computer gained is what it lacked of mine: counted from the reply rather than asked for again.
   const theirs = new Set(reply.secrets.map(secret => secret.name.toLowerCase()));
