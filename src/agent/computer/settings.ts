@@ -188,6 +188,7 @@ export async function removeEgress(stateDir: string, name: string): Promise<bool
 export const COMPUTER_TUNABLES = {
   agentModel: { default: 'claude-sonnet-5-5', about: 'The model a headless agent (`clikcode agent run`) runs on under Claude Code. Codex runs on the chat\'s own model.' },
   captchaVoterModel: { default: 'claude-haiku-5-5', about: 'The model the captcha voter on your Claude subscription uses for a hard picture question.' },
+  captchaCodexVoterModel: { default: '', about: 'The model the captcha voter on your Codex subscription uses (unset: the Codex account\'s own default).' },
   captchaSubscription: { default: true, about: 'Let a hard captcha question be answered on your signed-in Claude or Codex subscription (off: Gateway voters only).' },
   captchaVoteLog: { default: false, about: 'Print each captcha voter\'s answer to stderr while solving (for diagnosing the solver).' },
   keygrabLog: { default: false, about: 'Print each keygrab step to stderr (for diagnosing a key capture).' },

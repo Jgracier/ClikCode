@@ -43,3 +43,13 @@ describe('native profile environments', () => {
     } finally { rmSync(profile, { recursive: true, force: true }); }
   });
 });
+
+describe('subscription CLI environment', () => {
+  it('drops every key, token, endpoint and cloud route that would leave the subscription', async () => {
+    const { subscriptionCliEnvironment, SUBSCRIPTION_SCRUBBED_VARIABLES } = await import('./profile-environment.js');
+    const base = Object.fromEntries(SUBSCRIPTION_SCRUBBED_VARIABLES.map(name => [name, 'x']));
+    const env = subscriptionCliEnvironment({ env: 'CLAUDE_CONFIG_DIR', path: '/p' }, { ...base, PATH: '/bin' });
+    expect(env).toMatchObject({ PATH: '/bin', CLAUDE_CONFIG_DIR: '/p' });
+    for (const name of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'OPENAI_BASE_URL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']) expect(env[name]).toBeUndefined();
+  });
+});

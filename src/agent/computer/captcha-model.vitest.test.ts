@@ -288,6 +288,10 @@ describe('what a vote costs and who sided with the answer', () => {
     const codex = subscriptionArgs('codex', 'Q', ['/t/picture-1.png'], '/t', '/t/mcp.json', '/t/final.txt');
     expect(codex).toEqual(expect.arrayContaining(['exec', '--ephemeral', '--ignore-user-config', '-i', '/t/picture-1.png', '-o', '/t/final.txt']));
     expect(codex.at(-1)).toBe('Q');
+    expect(codex).not.toContain('-m');
+    // Codex takes its own model setting; a Claude model name never reaches it.
+    expect(subscriptionArgs('codex', 'Q', [], '/t', '/t/mcp.json', '/t/final.txt', 'gpt-6-sol').slice(0, 3)).toEqual(['exec', '-m', 'gpt-6-sol']);
+    expect(subscriptionArgs('claude', 'Q', [], '/t', '/t/mcp.json', '/t/final.txt', 'claude-sonnet-5-5')).toEqual(expect.arrayContaining(['--model', 'claude-sonnet-5-5']));
   });
 });
 

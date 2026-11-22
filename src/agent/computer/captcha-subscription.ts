@@ -21,13 +21,11 @@ async function account(now: number): Promise<{ command: 'claude' | 'codex'; env:
     try {
       const { readState } = await import('../../session/state/read.js');
       const { headlessAccount } = await import('../headless/route.js');
-      const { nativeProfileEnvironment } = await import('../../harness/transport/profile-environment.js');
+      const { subscriptionCliEnvironment } = await import('../../harness/transport/profile-environment.js');
       const found = headlessAccount((await readState({ transcripts: [] })).accounts);
       if (found) {
-        const env = { ...process.env, ...nativeProfileEnvironment(found.nativeProfile) };
-        // A signed-in native account, never an unrelated API key inherited from the parent.
-        delete env.OPENAI_API_KEY;
-        delete env.ANTHROPIC_API_KEY;
+        // The signed-in subscription only: no inherited key, token, endpoint or cloud route.
+        const env = subscriptionCliEnvironment(found.nativeProfile);
         lookedUp = { at: now, command: found.provider === 'openai' ? 'codex' : 'claude', env };
       }
     } catch (error) { quiet('agent/computer/captcha-subscription')(error instanceof Error ? error.message : String(error)); }
@@ -45,20 +43,22 @@ async function turnstile<T>(work: () => Promise<T>): Promise<T> {
 
 const extension = (image: ImageInput): string => /png/.test(image.mimeType) ? 'png' : /webp/.test(image.mimeType) ? 'webp' : 'jpg';
 
-export function subscriptionArgs(command: 'claude' | 'codex', prompt: string, files: string[], dir: string, config: string, final: string, model = 'claude-haiku-5-5'): string[] {
+/** The command line for one voter turn, on `model` (that vendor's model name; empty: the account's own default). */
+export function subscriptionArgs(command: 'claude' | 'codex', prompt: string, files: string[], dir: string, config: string, final: string, model = command === 'claude' ? 'claude-haiku-5-5' : ''): string[] {
   return command === 'codex'
-    ? ['exec', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only', '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"', ...files.flatMap(file => ['-i', file]), '-o', final, prompt]
+    ? ['exec', ...(model ? ['-m', model] : []), '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only', '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"', ...files.flatMap(file => ['-i', file]), '-o', final, prompt]
     : ['-p', prompt, '--model', model, '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', 'Read', '--allowedTools', 'Read', '--permission-mode', 'dontAsk', '--no-session-persistence'];
 }
 
 /** A voter on the user's subscription, or undefined when it is switched off (`clikcode computer settings captchaSubscription off`) or
- * no signed-in Claude or Codex account has usage left. Its model is the captchaVoterModel setting (Haiku 5.5 by default). */
+ * no signed-in Claude or Codex account has usage left. Its model is the captchaVoterModel setting (Haiku 5.5 by default)
+ * on Claude, captchaCodexVoterModel on Codex (the account's default when unset). */
 export async function subscriptionVoter(now: () => number = Date.now): Promise<{ name: string; client: ModelClient } | undefined> {
   const [{ computerTunable }, { stateDirectory }] = await Promise.all([import('./settings.js'), import('../../session/store/paths.js')]);
   if (!await computerTunable(stateDirectory(), 'captchaSubscription')) return undefined;
-  const voterModel = await computerTunable(stateDirectory(), 'captchaVoterModel');
   const who = await account(now());
   if (!who) return undefined;
+  const voterModel = await computerTunable(stateDirectory(), who.command === 'codex' ? 'captchaCodexVoterModel' : 'captchaVoterModel');
   const step = (async (request: Parameters<Step>[0]) => turnstile(async () => {
     const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);
     const dir = await mkdtemp(join(tmpdir(), 'clikcode-captcha-'));

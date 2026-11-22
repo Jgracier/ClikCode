@@ -114,3 +114,31 @@ export function nativeAccountEnvironment(
   }
   return environment;
 }
+
+/** Variables that would move a vendor CLI off the signed-in subscription: an
+ * API key or bearer token (billed per call), a different endpoint or proxy,
+ * or a cloud-provider route (Bedrock, Vertex, Foundry) billed to that cloud.
+ * Read from the claude and codex command lines' own documented settings. */
+export const SUBSCRIPTION_SCRUBBED_VARIABLES: readonly string[] = [
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS',
+  'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL', 'ANTHROPIC_VERTEX_PROJECT_ID', 'ANTHROPIC_FOUNDRY_BASE_URL',
+  'ANTHROPIC_FOUNDRY_API_KEY', 'ANTHROPIC_FOUNDRY_RESOURCE', 'AWS_BEARER_TOKEN_BEDROCK',
+  'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY',
+  'CLAUDE_CODE_SKIP_BEDROCK_AUTH', 'CLAUDE_CODE_SKIP_VERTEX_AUTH', 'CLAUDE_CODE_API_KEY_HELPER_TTL_MS',
+  'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_API_BASE', 'OPENAI_ORG_ID', 'OPENAI_ORGANIZATION', 'OPENAI_PROJECT',
+  'CODEX_API_KEY', 'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT',
+];
+
+/** The environment for a headless vendor CLI turn that must run on the
+ * account's signed-in subscription and nothing else (captcha voters,
+ * `clikcode agent run`): the parent's environment plus the account profile,
+ * with every variable that would bill an API key or route elsewhere removed
+ * -- including a key pasted into the profile, since that is per-call usage
+ * too. The one place this list lives; spawn sites must not hand-roll it. */
+export function subscriptionCliEnvironment(
+  nativeProfile: AiHarnessAccount['nativeProfile'], base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { ...base, ...nativeProfileEnvironment(nativeProfile) };
+  for (const name of SUBSCRIPTION_SCRUBBED_VARIABLES) delete environment[name];
+  return environment;
+}
