@@ -41,3 +41,15 @@ it('reads only visible and hidden as a display', () => {
   expect(parseBrowserDisplay('hidden')).toBe('hidden');
   for (const other of ['on', 'Visible', '', undefined, true, 1]) expect(parseBrowserDisplay(other)).toBeUndefined();
 });
+
+it('keeps a captcha roster as a list setting, the measured roster by default', async () => {
+  const { computerTunableList, setComputerTunable } = await import('./settings.js');
+  const dir = await mkdtemp(join(tmpdir(), 'clikcode-settings-'));
+  try {
+    expect((await computerTunableList(dir, 'captchaTileVoters'))[0]).toBe('gpt-6-luna');
+    await setComputerTunable(dir, 'captchaTileVoters', 'gpt-6-sol, gpt-6.1-terra');
+    expect(await computerTunableList(dir, 'captchaTileVoters')).toEqual(['gpt-6-sol', 'gpt-6.1-terra']);
+    await expect(setComputerTunable(dir, 'captchaVoterModel', 'a,b')).rejects.toThrow(/model name/);
+    await expect(setComputerTunable(dir, 'captchaTileVoters', 'a,b c')).rejects.toThrow(/comma-separated/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

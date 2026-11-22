@@ -68,7 +68,7 @@ export function registerComputerAbilities(program: Command, computer: Command): 
     .option('--take', 'Mark them taken, so the next call does not list them again').option('--remove <resume>', 'Drop the waiting items that name this')
     .action(async (flags: { take?: boolean; remove?: string }) => (await import('../commands/computer-ops.js')).computerDeskFinished(flags));
 
-  computer.command('settings [name] [value]').description('Tunable values (JSON): agentModel, captchaVoterModel, captchaSubscription, captchaVoteLog, keygrabLog. With a value: set it (default: back to the default)')
+  computer.command('settings [name] [value]').description('Tunable values (JSON): agentModel, captchaVoterModel, captchaCodexVoterModel, captcha{Tile,Click,Order,Text}Voters, captchaTranscribeModels, captchaSubscription, captchaVoteLog, keygrabLog. With a value: set it (default: back to the default)')
     .action(async (name?: string, value?: string) => (await import('../commands/computer-ops.js')).computerSettings(name, value));
 
   const token = computer.command('token').description('A random token kept in the vault for one https site and used without being shown');

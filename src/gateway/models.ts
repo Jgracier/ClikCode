@@ -98,6 +98,9 @@ export interface GatewayModelList {
   /** The super admin's subscription switch (subscriptions.ts), as the list was asked for. Absent for
    * everyone else: its presence is what shows the switch. */
   subscriptions?: boolean;
+  /** Speech-to-text models (`/v1/audio/transcriptions`), with the tier that serves each. Not chat models, so never
+   * in `models`; the captcha solver's audio challenges choose from these. */
+  speech?: Array<{ id: string; access?: GatewayAccess }>;
 }
 
 export interface GatewayUncensoredConsent {
@@ -285,6 +288,7 @@ const GATEWAY_AUTO_MODEL = 'auto';
 export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList {
   let auto: GatewayAutoFacts | null = null;
   const models: GatewayModel[] = [];
+  const speech: Array<{ id: string; access?: GatewayAccess }> = [];
   for (const raw of data) {
     if (!raw || typeof raw !== 'object') continue;
     const entry = raw as {
@@ -293,6 +297,10 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
       deployment?: { state?: unknown; modelId?: unknown; detail?: unknown };
     };
     if (typeof entry.id !== 'string' || !entry.id) continue;
+    if (typeof entry.type === 'string' && /transcri|speech|stt|audio/i.test(entry.type)) {
+      speech.push({ id: entry.id, ...(typeof entry.access === 'string' && ACCESS.has(entry.access) ? { access: entry.access as GatewayAccess } : {}) });
+      continue;
+    }
     // Media and embedding models share this list; only chat models can run a conversation.
     if (entry.type !== undefined && entry.type !== 'chat') continue;
     if (entry.id === GATEWAY_AUTO_MODEL) {
@@ -348,7 +356,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
         : {}),
     });
   }
-  return { auto, models };
+  return { auto, models, ...(speech.length ? { speech } : {}) };
 }
 
 /** The model a Gateway session shows on screen: a private deployment is stored under an opaque list id, so show the

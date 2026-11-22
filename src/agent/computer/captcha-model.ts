@@ -8,23 +8,36 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { listedModel } from '../../gateway/model-names.js';
 import type { ImageInput, ModelClient } from '../model-client.js';
+import { COMPUTER_TUNABLES } from './settings.js';
 
 // ── who is asked ────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The kinds of question, each with the models that answered it best when measured on live challenges
  * (2026-11-14, hand-checked answers), best first. The first three the account's Gateway lists are asked; the
- * rest stand in when one of them cannot answer (a provider out of credit or overloaded). */
+ * rest stand in when one of them cannot answer (a provider out of credit or overloaded). These are the defaults
+ * of the captcha{Tile,Click,Order,Text}Voters settings (`clikcode computer settings`), which is what a vote reads. */
+const defaultList = (name: keyof typeof COMPUTER_TUNABLES): readonly string[] => String(COMPUTER_TUNABLES[name].default).split(',');
 export const ROSTERS = {
   /** Is the outlined square part of the target? (reCAPTCHA grids, GeeTest example matching): many quick asks, the fast models first. */
-  tile: ['gpt-6-luna', 'gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.3-codex'],
+  tile: defaultList('captchaTileVoters'),
   /** Where should one click? (hCaptcha riddles, unknown challenge boxes) */
-  click: ['gpt-6-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+  click: defaultList('captchaClickVoters'),
   /** Matching, ordering and choosing among options (GeeTest icons, hCaptcha drags, Arkose picks). */
-  order: ['gpt-6-sol', 'gpt-6.1-terra', 'gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+  order: defaultList('captchaOrderVoters'),
   /** Reading distorted characters. */
-  text: ['gpt-6-luna', 'gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-5.6-terra'],
-} as const;
+  text: defaultList('captchaTextVoters'),
+};
 export type Roster = keyof typeof ROSTERS;
+const ROSTER_SETTING = { tile: 'captchaTileVoters', click: 'captchaClickVoters', order: 'captchaOrderVoters', text: 'captchaTextVoters' } as const;
+
+/** A roster as the settings name it now (the measured default when unset or unreadable). */
+async function rosterSetting(roster: Roster): Promise<readonly string[]> {
+  try {
+    const [{ computerTunableList }, { stateDirectory }] = await Promise.all([import('./settings.js'), import('../../session/store/paths.js')]);
+    const listed = await computerTunableList(stateDirectory(), ROSTER_SETTING[roster]);
+    return listed.length ? listed : ROSTERS[roster];
+  } catch (error) { quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error)); return ROSTERS[roster]; }
+}
 const VOTERS = 3;
 const VISION_TTL_MS = 60_000;
 
@@ -43,12 +56,28 @@ export const newMeter = (): AskMeter => ({ asks: 0, models: {}, votes: [], sampl
 
 /** `order`: the roster's models in the order measured on this machine (captcha-log.ts voterOrder), when known.
  * `meter`: where to count the asks. The rest are seams for tests: fake voters, a fixed clock, a signal. */
-export interface AskOptions { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; /** Named voters, best first, in place of the roster (a seam for tests of who sits in and who stands in). */ voters?: () => Promise<Voter[]>; now?: () => number; meter?: AskMeter; order?: Partial<Record<Roster, readonly string[]>> }
+export interface AskOptions { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; /** Named voters, best first, in place of the roster (a seam for tests of who sits in and who stands in). */ voters?: () => Promise<Voter[]>; now?: () => number; meter?: AskMeter; order?: Partial<Record<Roster, readonly string[]>>;
+  /** Seams for tests of how the seats are filled: the Gateway listing, a roster, a Gateway client, the subscription voter. */
+  seats?: { listing?: () => Promise<GatewayListing>; roster?: (roster: Roster) => Promise<readonly string[]>; client?: (id: string) => Promise<ModelClient>; subscription?: () => Promise<Voter | undefined> } }
+
+/** What a captcha ask may use from the Gateway's model list: only what a subscription or the free tier serves. */
+interface GatewayListing { models: Array<{ id: string; vision?: boolean; access?: string }>; speech?: Array<{ id: string; access?: string }> }
+const subsidized = (model: { access?: string }): boolean => model.access === 'subscription' || model.access === 'free';
 
 /** The questions worth a subscription voter: one or two pictures, an answer that takes thought. */
 const HARD: ReadonlySet<Roster> = new Set<Roster>(['click', 'order']);
 
-async function gatewayClient(model: string): Promise<ModelClient> {
+/** One client per model, made once a minute at most (each read the saved connection from disk). */
+const clients = new Map<string, { at: number; client: Promise<ModelClient> }>();
+function gatewayClient(model: string, now: number): Promise<ModelClient> {
+  const kept = clients.get(model);
+  if (kept && now - kept.at <= VISION_TTL_MS) return kept.client;
+  const client = makeGatewayClient(model);
+  clients.set(model, { at: now, client });
+  client.catch(() => clients.delete(model));
+  return client;
+}
+async function makeGatewayClient(model: string): Promise<ModelClient> {
   const { gatewayConnection, gatewayModelClient } = await import('../models/for-session.js');
   const Conf = (await import('conf')).default;
   const { baseUrl, apiKey } = gatewayConnection(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
@@ -76,8 +105,7 @@ export const STAND_INS = [] as readonly string[];
  * order), then the roster's own order, then the stand-ins. A roster name stands for whatever the Gateway lists under it now
  * (src/gateway/model-names.ts): its list renames families, and a name matched exactly silently dropped every Claude voter from the
  * rosters on 2026-11-17. The voter keeps the wanted name (for scores and benching); the client asks for the listed one. */
-export function seatOrder(roster: Roster, vision: readonly string[], measured: readonly string[] = []): Array<{ name: string; id: string }> {
-  const listed: readonly string[] = ROSTERS[roster];
+export function seatOrder(roster: Roster, vision: readonly string[], measured: readonly string[] = [], listed: readonly string[] = ROSTERS[roster]): Array<{ name: string; id: string }> {
   const wanted = [...measured.filter(name => listed.includes(name)), ...listed.filter(name => !measured.includes(name)), ...STAND_INS.filter(name => !listed.includes(name))];
   const seen = new Set<string>();
   const out: Array<{ name: string; id: string }> = [];
@@ -90,26 +118,50 @@ export function seatOrder(roster: Roster, vision: readonly string[], measured: r
 
 /** The voters for a kind of question, best first: the roster's models the account has (those not sitting out
  * first), else its first vision model alone. The first three vote; the rest stand in for one that fails. */
-async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> {
+async function gatewayListing(): Promise<GatewayListing> {
+  const { gatewayModels } = await import('../../gateway/models.js');
+  return gatewayModels();
+}
+
+/** The subscription and free vision models the Gateway lists, a minute's memory. A listing that fails keeps the
+ * last one (or none): it must not take the user's own subscription voter down with it. */
+async function visionModels(options: AskOptions, now: number): Promise<string[]> {
+  if (cachedVision && now - cachedVision.at <= VISION_TTL_MS) return cachedVision.ids;
+  try {
+    // Only what a subscription (or the free tier) serves: a paid model is never seated, whatever a roster names.
+    const listing = await (options.seats?.listing ?? gatewayListing)();
+    cachedVision = { ids: listing.models.filter(model => model.vision === true && subsidized(model)).map(model => model.id), at: now };
+    return cachedVision.ids;
+  } catch (error) {
+    quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
+    return cachedVision?.ids ?? [];
+  }
+}
+
+/** Forget the cached listing and clients (tests; a new Gateway sign-in). */
+export function resetCaptchaVoters(): void { cachedVision = undefined; clients.clear(); benched.clear(); }
+
+export async function votersFor(roster: Roster, options: AskOptions): Promise<Voter[]> {
   if (options.voters) return options.voters();
   if (options.modelClientsOf) return (await options.modelClientsOf()).map(client => ({ name: '', client }));
   const now = options.now ?? Date.now;
-  if (!cachedVision || now() - cachedVision.at > VISION_TTL_MS) {
-    const { gatewayModels } = await import('../../gateway/models.js');
-    // Only what a subscription (or the free tier) serves: a paid model is never seated, whatever a roster names.
-    cachedVision = { ids: (await gatewayModels()).models.filter(model => model.vision === true && (model.access === 'subscription' || model.access === 'free')).map(model => model.id), at: now() };
-  }
-  const vision = cachedVision.ids;
-  const preferred = seatOrder(roster, vision, options.order?.[roster] ?? []);
-  const fit = preferred.filter(model => (benched.get(model.name) ?? 0) <= now());
+  const vision = await visionModels(options, now());
+  const listed = await (options.seats?.roster ?? rosterSetting)(roster);
+  const preferred = seatOrder(roster, vision, options.order?.[roster] ?? [], listed);
+  const fit = preferred.filter(model => !isBenched(model.name, now()));
   const ordered = preferred.length ? [...fit, ...preferred.filter(model => !fit.includes(model))] : vision.slice(0, 1).map(id => ({ name: id, id }));
-  const gateway = await Promise.all(ordered.map(async model => ({ name: model.name, client: await gatewayClient(model.id) })));
+  const clientOf = options.seats?.client ?? ((id: string) => gatewayClient(id, now()));
+  const gateway = (await Promise.all(ordered.map(async model => {
+    try { return { name: model.name, client: await clientOf(model.id) }; }
+    catch (error) { quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error)); return undefined; }
+  }))).filter((voter): voter is Voter => !!voter);
   // The user's own subscription votes third on a hard question (two Gateway voters agreeing still ends the vote
   // before it is waited for) and stands in last on reading text; it never takes the many yes/no asks of a grid.
   if (roster === 'tile') return gateway;
-  const { subscriptionVoter } = await import('./captcha-subscription.js');
-  const own = await subscriptionVoter(now).catch(quiet('agent/computer/captcha-model'));
-  if (!own) return gateway;
+  const subscription = options.seats?.subscription ?? (async () => (await import('./captcha-subscription.js')).subscriptionVoter(now));
+  const own = await subscription().catch(quiet('agent/computer/captcha-model'));
+  // A subscription voter that failed or declined lately sits out like any other (the bench is by name).
+  if (!own || isBenched(own.name, now())) return gateway;
   return HARD.has(roster) ? [...gateway.slice(0, VOTERS - 1), own, ...gateway.slice(VOTERS - 1)] : [...gateway, own];
 }
 
@@ -200,14 +252,20 @@ function credit<T>(polled: Polled<T>, options: AskOptions, sides: (answer: T) =>
   });
 }
 
-/** The value most voters gave, or undefined on a tie for first place (unless there was only one voter). */
-function majority<T>(answers: Array<T | undefined>, voters: number): T | undefined {
+/** The value most voters gave, or undefined on a tie for first place. */
+function majority<T>(answers: Array<T | undefined>): T | undefined {
   const counts = new Map<T, number>();
   for (const answer of answers) if (answer !== undefined) counts.set(answer, (counts.get(answer) ?? 0) + 1);
   const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
   if (!ranked.length) return undefined;
-  if (ranked.length > 1 && ranked[0]![1] === ranked[1]![1] && voters > 1) return undefined;
+  if (ranked.length > 1 && ranked[0]![1] === ranked[1]![1]) return undefined;
   return ranked[0]![0];
+}
+/** The answer that wins the vote: given by at least two voters and by more than any other. One reading alone --
+ * a single voter, or the only one of three that answered -- is never an answer; the caller treats it as none. */
+export function agreed<T>(answers: Array<T | undefined>): T | undefined {
+  const winner = majority(answers);
+  return winner !== undefined && answers.filter(answer => answer === winner).length >= 2 ? winner : undefined;
 }
 const sharedBy = <T>(answers: Array<T | undefined>, count: number): boolean => { const seen = new Map<T, number>(); for (const a of answers) if (a !== undefined) { const n = (seen.get(a) ?? 0) + 1; if (n >= count) return true; seen.set(a, n); } return false; };
 
@@ -280,10 +338,16 @@ export function tileQuestionText(question: Pick<TileQuestion, 'instruction' | 't
     : 'Each square is a separate photo.';
   return `This is an image-selection test: "${question.instruction}". One square is outlined in red. Does the red-outlined square contain any part of ${question.target}? ${whole} Answer one word: yes or no.`;
 }
-const yesNo = (text: string): boolean | undefined => /\byes\b/i.test(text) ? true : /\bno\b/i.test(text) ? false : undefined;
+/** A one-word answer: the first yes or no in it. A model declining ("I can't say yes or no to captchas") gave none: undefined, so it
+ * takes the refusal path (benched, its seat handed on) instead of counting as a vote. */
+export const yesNo = (text: string): boolean | undefined => {
+  if (REFUSAL.test(text)) return undefined;
+  const word = /\b(yes|no)\b/i.exec(text)?.[1];
+  return word === undefined ? undefined : word.toLowerCase() === 'yes';
+};
 
-/** Does the outlined square hold any part of the target? The majority of the voters that answered decides (a tie or
- * no answer at all is "no"). One square at a time, outlined in the whole picture, reads far better than asking for
+/** Does the outlined square hold any part of the target? At least two voters agreeing, and more than disagree, decide;
+ * anything less (a tie, a single answer, none) is undefined, which the grid takes as "no". One square at a time, outlined in the whole picture, reads far better than asking for
  * a list of squares: the model sees the context and judges one place. */
 export async function askTileMatch(question: TileQuestion, options: AskOptions = {}): Promise<boolean | undefined> {
   const enough = question.lenient ? (got: Array<boolean | undefined>) => got.includes(true) : (got: Array<boolean | undefined>) => sharedBy(got, 2);
@@ -291,7 +355,9 @@ export async function askTileMatch(question: TileQuestion, options: AskOptions =
   if (!polled) return undefined;
   const votes = polled.answers.filter((v): v is boolean => v !== undefined);
   if (!votes.length) return undefined;
-  const yes = question.lenient ? votes.includes(true) : votes.filter(Boolean).length * 2 > votes.length;
+  // Lenient: one voter seeing the target is enough, by design (the majority's "no" was just refused by the widget).
+  const yes = question.lenient ? votes.includes(true) : agreed(votes);
+  if (yes === undefined) return undefined;
   credit(polled, options, answer => answer === yes);
   return yes;
 }
@@ -313,7 +379,7 @@ export async function askSquaresLikeExample(example: ImageInput, grid: ImageInpu
   if (!polled) return undefined;
   const votes = new Map<number, number>();
   for (const answer of polled.answers) for (const square of answer ?? []) votes.set(square, (votes.get(square) ?? 0) + 1);
-  const need = polled.voters > 1 ? 2 : 1;
+  const need = 2;
   const picked = [...votes].filter(([, count]) => count >= need).sort((a, b) => b[1] - a[1]).slice(0, want).map(([square]) => square);
   if (picked.length) credit(polled, options, answer => picked.every(square => answer.includes(square)));
   return picked;
@@ -332,8 +398,8 @@ export async function askClickPoints(images: ImageInput | ImageInput[], instruct
     + (frames.length > 1 ? ' (on the last frame)' : '') + '. Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}.';
   const polled = await poll({ roster: 'click', system: 'You locate answers to visual puzzles and reply with JSON only.', text, images: frames, parse: parsePoints, maxOutputTokens: 1500, enough: got => sameAnswer(got).length > 0 }, options);
   if (!polled || polled.answers.every(a => a === undefined)) return undefined;
-  // One voter (an account with a single vision model): its answer stands.
-  const spots = polled.voters === 1 ? (polled.answers[0] ?? []) : sameAnswer(polled.answers);
+  // One voter alone (an account with a single vision model) agrees with nobody: no answer, the caller asks for another challenge.
+  const spots = sameAnswer(polled.answers);
   if (spots.length) credit(polled, options, answer => sameAnswer([answer, spots]).length > 0);
   return spots;
 }
@@ -346,7 +412,7 @@ export async function askOrderedPoints(image: ImageInput, options: AskOptions = 
     + 'Answer with JSON only: {"points": [{"x": 0.0-1.0, "y": 0.0-1.0}]}, one point per icon.';
   const polled = await poll({ roster: 'order', system: 'You match icons to drawings and reply with JSON only.', text, images: [image], parse: parsePoints, maxOutputTokens: 1500, enough: got => !!agreedInOrder(got) }, options);
   if (!polled) return undefined;
-  const inOrder = polled.voters === 1 ? polled.answers[0] : agreedInOrder(polled.answers);
+  const inOrder = agreedInOrder(polled.answers);
   if (inOrder?.length) credit(polled, options, answer => !!agreedInOrder([answer, inOrder]));
   return inOrder;
 }
@@ -395,19 +461,19 @@ export async function askDrags(image: ImageInput, instruction: string, options: 
     + 'Answer with JSON only: {"drags": [{"n": 2, "from": {"x": 0.0, "y": 0.0}, "to": {"x": 0.0, "y": 0.0}}]}.';
   const polled = await poll({ roster: 'order', system: 'You solve drag puzzles and reply with JSON only.', text, images: [image], parse: parseDrags, maxOutputTokens: 1500, enough: got => agreedDrags(got).length > 0 && got.filter(Boolean).length >= 2 }, options);
   if (!polled || polled.answers.every(a => a === undefined)) return undefined;
-  const drags = polled.voters === 1 ? (polled.answers[0] ?? []) : agreedDrags(polled.answers);
+  const drags = agreedDrags(polled.answers);
   if (drags.length) credit(polled, options, answer => agreedDrags([answer, drags]).length === drags.length);
   return drags;
 }
 
 /** Which of several numbered pictures answers an instruction (Arkose's "use the arrows to pick the image that..."):
- * the majority's pick, numbered from 1 in the order given; a tie or no answer is undefined. */
+ * the pick at least two voters share, numbered from 1 in the order given; a tie, a lone pick or none is undefined. */
 export async function askPick(images: ImageInput[], instruction: string, options: AskOptions = {}): Promise<number | undefined> {
   const text = `These ${images.length} pictures are the options of one visual puzzle, numbered 1 to ${images.length} in the order given. The instruction is: "${instruction}". `
     + 'Which one option is the correct answer? Answer with JSON only: {"pick": <number>}.';
   const parse = (answer: string): number | undefined => { const pick = Number(/"pick"\s*:\s*(\d+)/.exec(answer)?.[1]); return Number.isInteger(pick) && pick >= 1 && pick <= images.length ? pick : undefined; };
   const polled = await poll({ roster: 'order', system: 'You choose the option that answers a visual puzzle and reply with JSON only.', text, images, parse, enough: got => sharedBy(got, 2) }, options);
-  const pick = polled ? majority(polled.answers, polled.voters) : undefined;
+  const pick = polled ? agreed(polled.answers) : undefined;
   if (polled && pick !== undefined) credit(polled, options, answer => answer === pick);
   return pick;
 }
@@ -419,8 +485,9 @@ export function parseCaptchaText(text: string): string | undefined {
 }
 
 /** The characters in a classic "type what you see" captcha picture, exactly as drawn (case kept, no spaces), or
- * undefined when it could not be read. The reading most voters agree on wins (a tie goes to the best-ranked
- * model): one model alone misreads a 7 as a 1 now and then. */
+ * undefined when it could not be read. A reading two voters share wins, else the character vote below; voters
+ * that disagree leave it unread (a new picture is cheap, a wrong code is a failed submit): one model alone
+ * misreads a 7 as a 1 now and then. */
 /** When no whole reading wins, the readings of the commonest length are voted on one character at a time: three
  * voters that each misread a different character still spell the right code between them. Undefined when fewer
  * than three readings share a length or some position has no majority. */
@@ -431,7 +498,7 @@ export function characterVote(readings: Array<string | undefined>): string | und
   if (!same || same.length < 3) return undefined;
   let out = '';
   for (let i = 0; i < same[0]!.length; i++) {
-    const char = majority(same.map(reading => reading[i]!), same.length);
+    const char = majority(same.map(reading => reading[i]!));
     if (char === undefined) return undefined;
     out += char;
   }
@@ -443,39 +510,60 @@ export async function askCaptchaText(image: ImageInput, options: AskOptions = {}
     text: 'This picture is a text captcha: distorted letters and digits on a noisy background. Read the characters exactly as drawn, keeping upper and lower case, ignoring lines and noise. '
       + 'If it shows a simple sum (like 3 + 4), give the result instead. Answer with JSON only: {"text": "..."}.' }, options);
   if (!polled) return undefined;
-  const reading = majority(polled.answers, polled.voters) ?? characterVote(polled.answers) ?? polled.answers.find(answer => answer !== undefined);
+  const reading = agreed(polled.answers) ?? characterVote(polled.answers);
   if (reading) credit(polled, options, answer => answer === reading);
   return reading;
 }
 
 // ── listening ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Speech-to-text models on the Gateway, best first for short noisy clips of spoken words or digits. */
-export const TRANSCRIBE_MODELS = ['whisper-large-v3', 'whisper-1', 'whisper-large-v3-turbo', 'gpt-4o-transcribe'];
+/** Speech-to-text models, best first for short noisy clips of spoken words or digits: the default of the
+ * captchaTranscribeModels setting. Only the ones the Gateway lists as served by a subscription or the free tier
+ * are ever asked -- whisper-1 and gpt-4o-transcribe are usually metered, and a captcha never spends paid usage. */
+export const TRANSCRIBE_MODELS = defaultList('captchaTranscribeModels');
+const TRANSCRIBE_MS = 45_000;
 
-/** The words spoken in an audio challenge clip, through the account's own Gateway (`/v1/audio/transcriptions`).
- * The first model that answers with text wins. `fetchImpl` and `connection` are the test seams. Never throws. */
-export async function askTranscript(audio: Buffer, mimeType: string, options: { signal?: AbortSignal; fetchImpl?: typeof fetch; connection?: { baseUrl: string; apiKey: string } } = {}): Promise<string | undefined> {
+/** The transcription models to try, in the setting's order, that the listing says cost nothing per call. */
+export function transcribeOrder(wanted: readonly string[], speech: GatewayListing['speech']): string[] {
+  const served = new Set((speech ?? []).filter(subsidized).map(model => model.id));
+  return wanted.filter(model => served.has(model));
+}
+
+export interface TranscriptOptions { signal?: AbortSignal; fetchImpl?: typeof fetch; connection?: { baseUrl: string; apiKey: string }; listing?: () => Promise<GatewayListing>; models?: readonly string[] }
+
+/** The words spoken in an audio challenge clip, through the account's own Gateway (`/v1/audio/transcriptions`), on the
+ * subscriptions lane like the vision asks. The first model that answers with text wins; none listed as subscription or
+ * free means no ask at all. `fetchImpl`, `connection`, `listing` and `models` are the test seams. Never throws. */
+export async function askTranscript(audio: Buffer, mimeType: string, options: TranscriptOptions = {}): Promise<string | undefined> {
   let connection = options.connection;
+  let models: string[];
   try {
     if (!connection) {
       const { gatewayConnection } = await import('../models/for-session.js');
       const Conf = (await import('conf')).default;
       connection = gatewayConnection(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
     }
+    const wanted = options.models ?? await transcribeSetting();
+    models = transcribeOrder(wanted, (await (options.listing ?? gatewayListing)()).speech);
   } catch (error) {
     quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
     return undefined;
   }
+  if (!models.length) { quiet('agent/computer/captcha-model')('no subscription or free speech-to-text model is listed: the audio challenge is not asked'); return undefined; }
+  const { subscriptionsHeader } = await import('../../gateway/subscriptions.js');
   const fetchImpl = options.fetchImpl ?? fetch;
   const name = /wav/i.test(mimeType) ? 'clip.wav' : /ogg/i.test(mimeType) ? 'clip.ogg' : 'clip.mp3';
-  for (const model of TRANSCRIBE_MODELS) {
+  for (const model of models) {
+    if (options.signal?.aborted) return undefined;
     try {
       const form = new FormData();
       form.append('model', model);
       form.append('language', 'en');
       form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), name);
-      const response = await fetchImpl(`${connection.baseUrl}/v1/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${connection.apiKey}` }, body: form, signal: options.signal ?? AbortSignal.timeout(45_000) });
+      // The caller's signal and this ask's own time limit, both: a caller's signal must not lift the limit.
+      const timeout = AbortSignal.timeout(TRANSCRIBE_MS);
+      const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+      const response = await fetchImpl(`${connection.baseUrl}/v1/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${connection.apiKey}`, ...subscriptionsHeader(true) }, body: form, signal });
       if (!response.ok) continue;
       const text = String(((await response.json()) as { text?: unknown }).text ?? '').trim();
       if (text) return text;
@@ -484,6 +572,12 @@ export async function askTranscript(audio: Buffer, mimeType: string, options: { 
     }
   }
   return undefined;
+}
+
+async function transcribeSetting(): Promise<readonly string[]> {
+  const [{ computerTunableList }, { stateDirectory }] = await Promise.all([import('./settings.js'), import('../../session/store/paths.js')]);
+  const listed = await computerTunableList(stateDirectory(), 'captchaTranscribeModels');
+  return listed.length ? listed : TRANSCRIBE_MODELS;
 }
 
 /** What gets typed for an audio challenge: lower case, no punctuation, single spaces. */

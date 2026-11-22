@@ -76,6 +76,9 @@ describe('an ask over the Gateway', () => {
     reply = { chunks: ['I cannot see anything to click.'] };
     expect(await askClickPoints(image, 'Click the odd one out', { modelClientsOf: async () => [await clientOf(), await clientOf()] })).toBeUndefined();
     expect(await askClickPoints(image, 'Click the odd one out', { modelClientsOf: async () => [] })).toBeUndefined();
+    // A lone voter agrees with nobody: no spots to click, never its unchecked guess.
+    reply = { chunks: ['{"points": [{"x": 0.4, "y": 0.6}]}'] };
+    expect(await askClickPoints(image, 'Click the odd one out', { modelClientsOf: async () => [await clientOf()] })).toEqual([]);
   });
 });
 
@@ -87,8 +90,9 @@ describe('one outlined square at a time', () => {
     const { askTileMatch } = await import('./captcha-model.js');
     expect(await askTileMatch(question, { modelClientsOf: async () => [fake('Yes.'), fake('yes'), fake('No')] })).toBe(true);
     expect(await askTileMatch(question, { modelClientsOf: async () => [fake('No'), fake('Yes'), fake('no.')] })).toBe(false);
-    // One model failed: the two that answered decide, and a 1-1 split is no.
-    expect(await askTileMatch(question, { modelClientsOf: async () => [fake('Yes'), fake(new Error('down')), fake('No')] })).toBe(false);
+    // One model failed: a 1-1 split is no answer, and neither is a lone yes (the grid takes both as no).
+    expect(await askTileMatch(question, { modelClientsOf: async () => [fake('Yes'), fake(new Error('down')), fake('No')] })).toBeUndefined();
+    expect(await askTileMatch(question, { modelClientsOf: async () => [fake('Yes'), fake(new Error('down')), fake(new Error('down'))] })).toBeUndefined();
     expect(await askTileMatch(question, { modelClientsOf: async () => [fake(new Error('down')), fake('maybe')] })).toBeUndefined();
   });
 
@@ -123,9 +127,10 @@ describe('reading text and spoken digits', () => {
     expect(parseCaptchaText('```json\n{"text": "Xk d7DE"}\n```')).toBe('Xkd7DE');
     expect(parseCaptchaText('{"text": "this is far too long to be a code"}')).toBeUndefined();
     const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);
-    // The reading most voters agree on wins; a tie goes to the first voter.
+    // A reading two voters share wins; two that disagree leave it unread (never the first voter's guess).
     expect(await askCaptchaText({ mimeType: 'image/png', data: 'eA==' }, { modelClientsOf: async () => [fake('{"text":"XKd1DE"}'), fake('{"text":"XKd7DE"}'), fake('{"text":"XKd7DE"}')] })).toBe('XKd7DE');
-    expect(await askCaptchaText({ mimeType: 'image/png', data: 'eA==' }, { modelClientsOf: async () => [fake('{"text":"ab12"}'), fake('{"text":"ab1z"}')] })).toBe('ab12');
+    expect(await askCaptchaText({ mimeType: 'image/png', data: 'eA==' }, { modelClientsOf: async () => [fake('{"text":"ab12"}'), fake('{"text":"ab1z"}')] })).toBeUndefined();
+    expect(await askCaptchaText({ mimeType: 'image/png', data: 'eA==' }, { modelClientsOf: async () => [fake('{"text":"ab12"}')] })).toBeUndefined();
   });
 
   it('spells the code one character at a time when three voters each misread a different character', async () => {
@@ -152,9 +157,32 @@ describe('listening to an audio challenge', () => {
       const model = String(init.body.get('model')); asked.push(model);
       return asked.length === 1 ? new Response('{"error":{}}', { status: 500 }) : new Response(JSON.stringify({ text: ' Their, plan was: simple.' }), { status: 200 });
     }) as unknown as typeof fetch;
-    const heard = await askTranscript(Buffer.from('mp3-bytes'), 'audio/mpeg', { fetchImpl, connection: { baseUrl: 'http://gateway.test', apiKey: 'k' } });
+    const listing = async () => ({ models: [], speech: [{ id: 'whisper-large-v3', access: 'free' }, { id: 'whisper-1', access: 'subscription' }] });
+    const heard = await askTranscript(Buffer.from('mp3-bytes'), 'audio/mpeg', { fetchImpl, listing, connection: { baseUrl: 'http://gateway.test', apiKey: 'k' } });
     expect(asked).toEqual(['whisper-large-v3', 'whisper-1']);
     expect(cleanTranscript(heard!)).toBe('their plan was simple');
+  });
+
+  it('asks only subscription or free speech models, on the subscriptions lane, and keeps its own time limit under a caller signal', async () => {
+    const { askTranscript, transcribeOrder } = await import('./captcha-model.js');
+    expect(transcribeOrder(['whisper-large-v3', 'whisper-1', 'gpt-4o-transcribe'], [{ id: 'whisper-1', access: 'paid' }, { id: 'gpt-4o-transcribe' }, { id: 'whisper-large-v3', access: 'free' }])).toEqual(['whisper-large-v3']);
+    const seen: Array<{ model: string; headers: Record<string, string>; signal: AbortSignal }> = [];
+    const fetchImpl = (async (_url: unknown, init: { body: FormData; headers: Record<string, string>; signal: AbortSignal }) => {
+      seen.push({ model: String(init.body.get('model')), headers: init.headers, signal: init.signal });
+      return new Response(JSON.stringify({ text: 'seven' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const caller = new AbortController();
+    const connection = { baseUrl: 'http://gateway.test', apiKey: 'k' };
+    // Only paid speech models listed: nothing is sent at all.
+    expect(await askTranscript(Buffer.from('x'), 'audio/mpeg', { fetchImpl, connection, listing: async () => ({ models: [], speech: [{ id: 'whisper-1', access: 'paid' }] }) })).toBeUndefined();
+    expect(seen).toEqual([]);
+    expect(await askTranscript(Buffer.from('x'), 'audio/mpeg', { fetchImpl, connection, signal: caller.signal, listing: async () => ({ models: [], speech: [{ id: 'whisper-1', access: 'subscription' }] }) })).toBe('seven');
+    expect(seen[0]!.model).toBe('whisper-1');
+    expect(seen[0]!.headers['x-clikcode-subscriptions']).toBe('on');
+    // The signal handed to fetch is not the caller's own: it is combined with the ask's time limit.
+    expect(seen[0]!.signal).not.toBe(caller.signal);
+    caller.abort();
+    expect(seen[0]!.signal.aborted).toBe(true);
   });
 });
 
@@ -292,6 +320,66 @@ describe('what a vote costs and who sided with the answer', () => {
     // Codex takes its own model setting; a Claude model name never reaches it.
     expect(subscriptionArgs('codex', 'Q', [], '/t', '/t/mcp.json', '/t/final.txt', 'gpt-6-sol').slice(0, 3)).toEqual(['exec', '-m', 'gpt-6-sol']);
     expect(subscriptionArgs('claude', 'Q', [], '/t', '/t/mcp.json', '/t/final.txt', 'claude-sonnet-5-5')).toEqual(expect.arrayContaining(['--model', 'claude-sonnet-5-5']));
+  });
+});
+
+describe('a yes/no answer', () => {
+  it('takes the first yes or no, and reads a refusal as no answer', async () => {
+    const { yesNo } = await import('./captcha-model.js');
+    expect(yesNo('Yes.')).toBe(true);
+    expect(yesNo('No, it does not; yes would be wrong')).toBe(false);
+    expect(yesNo("I can't help with solving captchas, so I won't say yes or no.")).toBeUndefined();
+    expect(yesNo('I am unable to answer: yes/no questions about CAPTCHAs are prohibited.')).toBeUndefined();
+  });
+
+  it('a refusing tile voter is benched and its seat handed on instead of voting yes', async () => {
+    const { askTileMatch, isBenched } = await import('./captcha-model.js');
+    const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);
+    const question = { image: { mimeType: 'image/jpeg', data: 'eA==' }, instruction: 'Select all squares with buses', target: 'buses', size: 3 };
+    const voters = async () => [
+      { name: 'tile-refuses', client: fake("I can't say yes or no to a captcha.") },
+      { name: 'tile-yes', client: fake('yes') },
+      { name: 'tile-no', client: fake('no') },
+      { name: 'tile-spare', client: fake('no') },
+    ];
+    expect(await askTileMatch(question, { voters })).toBe(false);
+    expect(isBenched('tile-refuses')).toBe(true);
+  });
+});
+
+describe('filling the seats', () => {
+  const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);
+  const own = { name: 'subscription-claude', client: fake('{"pick": 1}') };
+  const listing = async () => ({ models: [{ id: 'gpt-6-sol', vision: true, access: 'subscription' }, { id: 'gpt-6.1-terra', vision: true, access: 'free' }, { id: 'gpt-5.6-sol', vision: true, access: 'paid' }] });
+  const seats = (overrides: Record<string, unknown> = {}) => ({ listing, roster: async () => ['gpt-6-sol', 'gpt-6.1-terra', 'gpt-5.6-sol'], client: async () => fake(''), subscription: async () => own, ...overrides });
+
+  it('seats the subscription voter third on a hard question, and keeps it when the Gateway listing fails', async () => {
+    const { votersFor, resetCaptchaVoters } = await import('./captcha-model.js');
+    resetCaptchaVoters();
+    expect((await votersFor('order', { seats: seats() })).map(voter => voter.name)).toEqual(['gpt-6-sol', 'gpt-6.1-terra', 'subscription-claude']);
+    resetCaptchaVoters();
+    const down = await votersFor('click', { seats: seats({ listing: async () => { throw new Error('gateway down'); } }) });
+    expect(down.map(voter => voter.name)).toEqual(['subscription-claude']);
+  });
+
+  it('benches the subscription voter like any other once it fails', async () => {
+    const { votersFor, resetCaptchaVoters, askPick } = await import('./captcha-model.js');
+    resetCaptchaVoters();
+    const failing = { name: 'subscription-claude', client: { step: async () => { throw new Error('out of usage'); } } as unknown as ModelClient };
+    await askPick([{ mimeType: 'image/png', data: 'eA==' }, { mimeType: 'image/png', data: 'eA==' }], 'pick', { voters: async () => [failing] });
+    expect((await votersFor('order', { seats: seats() })).map(voter => voter.name)).not.toContain('subscription-claude');
+    resetCaptchaVoters();
+  });
+
+  it('reads the roster from the setting, and caches the listing', async () => {
+    const { votersFor, resetCaptchaVoters } = await import('./captcha-model.js');
+    resetCaptchaVoters();
+    let listed = 0;
+    const counted = async () => { listed++; return listing(); };
+    expect((await votersFor('tile', { seats: seats({ listing: counted, roster: async () => ['gpt-6.1-terra'] }) })).map(voter => voter.name)).toEqual(['gpt-6.1-terra']);
+    await votersFor('tile', { seats: seats({ listing: counted }) });
+    expect(listed).toBe(1);
+    resetCaptchaVoters();
   });
 });
 

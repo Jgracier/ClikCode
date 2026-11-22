@@ -189,6 +189,11 @@ export const COMPUTER_TUNABLES = {
   agentModel: { default: 'claude-sonnet-5-5', about: 'The model a headless agent (`clikcode agent run`) runs on under Claude Code. Codex runs on the chat\'s own model.' },
   captchaVoterModel: { default: 'claude-haiku-5-5', about: 'The model the captcha voter on your Claude subscription uses for a hard picture question.' },
   captchaCodexVoterModel: { default: '', about: 'The model the captcha voter on your Codex subscription uses (unset: the Codex account\'s own default).' },
+  captchaTileVoters: { default: 'gpt-6-luna,gpt-5.6-luna,gpt-6.1-terra,gpt-6-sol,gpt-5.6-terra,gpt-5.6-sol,gpt-5.3-codex', list: true, about: 'Captcha voters for picture-grid squares, best first (comma-separated; only subscription or free models are ever seated).' },
+  captchaClickVoters: { default: 'gpt-6-sol,gpt-6.1-terra,gpt-6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna', list: true, about: 'Captcha voters for where-to-click questions, best first.' },
+  captchaOrderVoters: { default: 'gpt-6-sol,gpt-6.1-terra,gpt-5.6-sol,gpt-6-luna,gpt-5.6-terra,gpt-5.6-luna', list: true, about: 'Captcha voters for matching, ordering and picking questions, best first.' },
+  captchaTextVoters: { default: 'gpt-6-luna,gpt-5.6-luna,gpt-6.1-terra,gpt-6-sol,gpt-5.6-terra', list: true, about: 'Captcha voters for reading distorted text, best first.' },
+  captchaTranscribeModels: { default: 'whisper-large-v3,whisper-1,whisper-large-v3-turbo,gpt-4o-transcribe', list: true, about: 'Speech-to-text models for audio captchas, best first (only ones the Gateway serves by subscription or free are asked).' },
   captchaSubscription: { default: true, about: 'Let a hard captcha question be answered on your signed-in Claude or Codex subscription (off: Gateway voters only).' },
   captchaVoteLog: { default: false, about: 'Print each captcha voter\'s answer to stderr while solving (for diagnosing the solver).' },
   keygrabLog: { default: false, about: 'Print each keygrab step to stderr (for diagnosing a key capture).' },
@@ -204,6 +209,12 @@ export async function computerTunable<K extends ComputerTunable>(stateDir: strin
   } catch { return fallback; }
 }
 
+/** A list tunable (comma-separated model names), as a list; the default's list when unset. */
+export async function computerTunableList(stateDir: string, name: ComputerTunable): Promise<string[]> {
+  const value = await computerTunable(stateDir, name);
+  return typeof value === 'string' ? value.split(',').map(part => part.trim()).filter(Boolean) : [];
+}
+
 /** Sets one tunable from its text form (on/off/true/false for a switch); `default` removes it. Returns the value now in force. */
 export async function setComputerTunable(stateDir: string, name: string, text: string): Promise<string | boolean> {
   if (!(name in COMPUTER_TUNABLES)) throw new Error(`No setting "${name}". Settings: ${Object.keys(COMPUTER_TUNABLES).join(', ')}.`);
@@ -215,7 +226,9 @@ export async function setComputerTunable(stateDir: string, name: string, text: s
     if (!/^(on|off|true|false)$/i.test(text)) throw new Error(`${name} is on or off.`);
     value = /^(on|true)$/i.test(text);
   } else {
-    if (!/^[A-Za-z0-9._:/-]{1,120}$/.test(text)) throw new Error(`${name} is a model name such as ${fallback}.`);
+    const list = 'list' in COMPUTER_TUNABLES[key];
+    if (list ? !text.split(',').every(part => /^[A-Za-z0-9._:/-]{1,120}$/.test(part.trim())) : !/^[A-Za-z0-9._:/-]{1,120}$/.test(text)) throw new Error(list ? `${name} is a comma-separated list of model names such as ${fallback}.` : `${name} is a model name such as ${fallback}.`);
+    if (list) text = text.split(',').map(part => part.trim()).join(',');
     value = text;
   }
   await updateJsonFile(computerSettingsPath(stateDir), objectOrEmpty, current => {
