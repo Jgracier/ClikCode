@@ -5,6 +5,7 @@
  * secret both have wins; nothing is ever deleted. Values travel only inside that connection and are never printed. */
 import { spawn } from 'node:child_process';
 import { mergeVault, snapshotVault, type VaultSnapshot } from './credential-vault.js';
+import { scrubSecrets } from './secret-scrubber.js';
 
 interface SyncResult { sent: { added: number; updated: number; same: number }; received: { added: number; updated: number; same: number } }
 
@@ -22,7 +23,13 @@ type Transport = (payload: string) => Promise<string>;
 function describeReply(text: string): string {
   const size = `${text.length} characters`;
   if (!text.trim()) return 'it was empty';
-  try { const parsed = JSON.parse(text) as unknown; return `${size} of JSON (${Array.isArray(parsed) ? 'an array' : parsed === null ? 'null' : typeof parsed}), not a v1 vault`; }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    // ClikCode's own error document ({status: "error", message}) holds no vault: its message is the one thing worth saying.
+    const doc = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+    if (doc && doc.status === 'error' && typeof doc.message === 'string' && !('secrets' in doc) && !('items' in doc)) return `its error: ${scrubSecrets(doc.message).replace(/\s+/g, ' ').slice(0, 160)}`;
+    return `${size} of JSON (${Array.isArray(parsed) ? 'an array' : parsed === null ? 'null' : typeof parsed}), not a v1 vault`;
+  }
   catch { return `${size}, not JSON`; }
 }
 

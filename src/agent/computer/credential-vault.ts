@@ -3,6 +3,8 @@ import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from '../../session/store/files.js';
+import { withFileLock } from '../../session/store/locks.js';
 
 const SESSION_MS = 10 * 60_000;
 const sessions = new Map<string, { key: Buffer; expires: number }>();
@@ -31,6 +33,21 @@ export function siteKey(url: string): string {
 export function sameSite(a: string, b: string): boolean {
   try { return siteKey(a) === siteKey(b); } catch { return false; }
 }
+/** Every read-modify-write of the vault holds this lock, so two processes (a worker, the CLI, a sync's remote end) never lose
+ * each other's change. Not re-entrant: the public writers take it, the `...Held` helpers they share assume it. */
+async function withVaultLock<T>(stateDir: string, run: () => Promise<T>): Promise<T> {
+  await fs.mkdir(vaultDir(stateDir), { recursive: true, mode: 0o700 });
+  return withFileLock(path.join(vaultDir(stateDir), 'write.lock'), run);
+}
+/** A sealed file written whole or not at all (temp file, fsync, rename): a crash or a reader mid-write never sees half of one.
+ * `exclusive`: refuse (EEXIST) when the file is already there -- checked under the vault lock, so it cannot race another writer. */
+async function writeSealed(file: string, data: string, options: { exclusive?: boolean } = {}): Promise<void> {
+  if (options.exclusive && await fs.lstat(file).then(() => true, () => false)) throw Object.assign(new Error(`${path.basename(file)} exists`), { code: 'EEXIST' });
+  await atomicWriteFile(file, data, { mode: 0o600 });
+}
+/** A vault file that is a record, not a temporary of an atomic write or the lock. */
+const isRecordFile = (file: string): boolean => file.endsWith('.json');
+
 function seal(key: Buffer, aad: string, plain: string): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
@@ -112,30 +129,39 @@ export async function savedLoginFields(stateDir: string, url: string, id: string
   return itemFields(await readCredential(stateDir, url, id));
 }
 
+/** The username a sign-up's login carries until its email is seen. Every such entry is its own account: never matched to another. */
+export const UNKNOWN_ACCOUNT = '(email not captured)';
+
 export async function saveLoginFields(stateDir: string, url: string, fields: Record<string, string>, id?: string, extra: { name?: string; method?: string } = {}): Promise<string> {
   const origin = siteOrigin(url);
   if (!Object.keys(fields).length || Object.values(fields).some(value => !value)) throw new CredentialError('Complete the visible login fields.');
+  return withVaultLock(stateDir, () => saveLoginFieldsHeld(stateDir, url, origin, fields, id, extra));
+}
+async function saveLoginFieldsHeld(stateDir: string, url: string, origin: string, fields: Record<string, string>, id: string | undefined, extra: { name?: string; method?: string }): Promise<string> {
   const key = await vaultKey(stateDir, true);
   // The same account saved again (a new password after a reset) replaces the old entry: two entries for one
-  // account would leave a sign-in asking which of them, which no unattended agent can answer.
+  // account would leave a sign-in asking which of them, which no unattended agent can answer. A sign-up whose email
+  // is not known yet is not "the same account" as another one: each keeps its own entry.
   const username = fields.username?.trim().toLowerCase();
-  id ??= username ? (await readItems(stateDir)).find(({ item }) => sameSite(item.origin, url) && item.fields?.username?.trim().toLowerCase() === username)?.id : undefined;
+  id ??= username && username !== UNKNOWN_ACCOUNT ? (await readItems(stateDir)).find(({ item }) => sameSite(item.origin, url) && item.fields?.username?.trim().toLowerCase() === username)?.id : undefined;
   const item: Item = id ? await readCredential(stateDir, url, id) : { origin };
   const method = extra.method ?? item.method ?? (fields.password || item.fields?.password ? 'password' : undefined);
   const itemId = id ?? randomUUID();
   const dir = path.join(vaultDir(stateDir), 'items');
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const { rejected: _worked, ...kept } = item;
-  await fs.writeFile(path.join(dir, `${itemId}.json`), seal(key, `item:${itemId}`, JSON.stringify({ ...kept, name: extra.name ?? kept.name ?? siteName(origin), ...(method ? { method } : {}), fields: { ...item.fields, ...fields } })), { mode: 0o600, flag: id ? 'w' : 'wx' });
+  await writeSealed(path.join(dir, `${itemId}.json`), seal(key, `item:${itemId}`, JSON.stringify({ ...kept, name: extra.name ?? kept.name ?? siteName(origin), ...(method ? { method } : {}), fields: { ...item.fields, ...fields } })), { exclusive: !id });
   return itemId;
 }
 
 /** The site refused this saved password. Remembered so the next sign-in asks
  * which account to use (and can take a new password) instead of resending it. */
 export async function setLoginRejected(stateDir: string, url: string, id: string, rejected: boolean): Promise<void> {
-  const key = await vaultKey(stateDir, false);
-  const { rejected: _was, ...item } = await readCredential(stateDir, url, id);
-  await fs.writeFile(path.join(vaultDir(stateDir), 'items', `${id}.json`), seal(key, `item:${id}`, JSON.stringify(rejected ? { ...item, rejected: true } : item)), { mode: 0o600 });
+  await withVaultLock(stateDir, async () => {
+    const key = await vaultKey(stateDir, false);
+    const { rejected: _was, ...item } = await readCredential(stateDir, url, id);
+    await writeSealed(path.join(vaultDir(stateDir), 'items', `${id}.json`), seal(key, `item:${id}`, JSON.stringify(rejected ? { ...item, rejected: true } : item)));
+  });
 }
 
 async function readCredential(stateDir: string, url: string, id: string): Promise<Item> {
@@ -159,6 +185,10 @@ export function loginLabel(fields: Readonly<Record<string, string>>): string {
   return values.join(' · ') || 'Saved login';
 }
 
+/** Saved logins that could not be opened on the last read (a damaged or foreign file), by id: skipped, never fatal, and said in the audit. */
+const unreadableItems = new Map<string, Set<string>>();
+export const unreadableLoginIds = (stateDir: string): string[] => [...(unreadableItems.get(stateDir) ?? [])].sort();
+
 async function readItems(stateDir: string): Promise<{ id: string; item: Item }[]> {
   const dir = path.join(vaultDir(stateDir), 'items');
   let files: string[];
@@ -170,12 +200,15 @@ async function readItems(stateDir: string): Promise<{ id: string; item: Item }[]
   if (files.length === 0) return [];
   const key = await vaultKey(stateDir, false);
   const items: { id: string; item: Item }[] = [];
+  const unreadable = new Set<string>();
   for (const file of files) {
     const id = file.replace(/\.json$/, '');
     if (!/^[0-9a-f-]{36}$/i.test(id) || file !== `${id}.json`) continue;
+    // One damaged entry must not hide every other login: it is skipped and reported (auditVault), never shown.
     try { items.push({ id, item: JSON.parse(open(key, `item:${id}`, await fs.readFile(path.join(dir, file), 'utf8'))) as Item }); }
-    catch { throw new CredentialError('A saved login could not be opened.'); }
+    catch (error) { unreadable.add(id); swallowed('agent/computer/credential-vault', error); }
   }
+  if (unreadable.size) unreadableItems.set(stateDir, unreadable); else unreadableItems.delete(stateDir);
   return items;
 }
 
@@ -288,8 +321,12 @@ async function baseUrlFor(stateDir: string, name: string, given: string | undefi
   const sites = new Set((await readItems(stateDir).catch(() => [])).map(({ item }) => item.origin).filter(origin => new URL(origin).hostname.toLowerCase().replace(/[^a-z0-9]/g, '').includes(vendor)));
   return sites.size === 1 ? [...sites][0] : undefined;
 }
-export async function saveNamedSecret(stateDir: string, name: string, value: string, meta: { vendor?: string; owner?: string; env?: string; url?: string; page?: string } = {}, options: { legacy?: boolean } = {}): Promise<void> {
+type SecretInput = { vendor?: string; owner?: string; env?: string; url?: string; page?: string };
+export async function saveNamedSecret(stateDir: string, name: string, value: string, meta: SecretInput = {}, options: { legacy?: boolean } = {}): Promise<void> {
   if (!value) throw new CredentialError('The secret is empty.');
+  await withVaultLock(stateDir, () => saveNamedSecretHeld(stateDir, name, value, meta, options));
+}
+async function saveNamedSecretHeld(stateDir: string, name: string, value: string, meta: SecretInput, options: { legacy?: boolean }): Promise<void> {
   // A spelling variant of a saved secret is that secret, rotated: no twin is made.
   name = await savedNameFor(stateDir, name) ?? name;
   const { file, aad } = secretFile(stateDir, name);
@@ -305,7 +342,7 @@ export async function saveNamedSecret(stateDir: string, name: string, value: str
   if (!url && !INTERNAL_SECRET.test(name) && !options.legacy) throw new CredentialError(`A saved key must say which site it is for: give its base URL (https://example.com) when saving "${name}".`);
   const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), ...kept('page'), ...(url ? { url } : {}), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) };
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await fs.writeFile(file, seal(key, aad, JSON.stringify({ name, value, meta: saved })), { mode: 0o600 });
+  await writeSealed(file, seal(key, aad, JSON.stringify({ name, value, meta: saved })));
 }
 /** Names with their records, never the values. */
 export async function namedSecretInfo(stateDir: string): Promise<{ name: string; meta?: SecretMeta }[]> {
@@ -314,7 +351,7 @@ export async function namedSecretInfo(stateDir: string): Promise<{ name: string;
   try { files = await fs.readdir(dir); } catch { return []; }
   const key = await vaultKey(stateDir, false);
   const out: { name: string; meta?: SecretMeta }[] = [];
-  for (const file of files) {
+  for (const file of files.filter(isRecordFile)) {
     try { const { name, meta } = JSON.parse(open(key, `secret:${file.replace(/\.json$/, '')}`, await fs.readFile(path.join(dir, file), 'utf8'))) as { name: string; meta?: SecretMeta }; out.push({ name, ...(meta ? { meta } : {}) }); }
     catch (error) { /* an unreadable file is skipped, never shown */ swallowed('agent/computer/credential-vault', error); }
   }
@@ -338,18 +375,23 @@ export async function namedSecretNames(stateDir: string): Promise<string[]> {
   try { files = await fs.readdir(dir); } catch { return []; }
   const key = await vaultKey(stateDir, false);
   const names: string[] = [];
-  for (const file of files) {
+  for (const file of files.filter(isRecordFile)) {
     try { names.push((JSON.parse(open(key, `secret:${file.replace(/\.json$/, '')}`, await fs.readFile(path.join(dir, file), 'utf8'))) as { name: string }).name); }
     catch (error) { /* an unreadable file is skipped, never shown */ swallowed('agent/computer/credential-vault', error); }
   }
   return names.sort();
 }
 
+/** Removes the secret `name` means, read the way readNamedSecret reads it: the exact name, else the one saved secret with the same
+ * canonical form ("acme/api-key" for a saved "acme/key"). Two or more candidates is no answer, and nothing is removed. */
 export async function deleteNamedSecret(stateDir: string, name: string): Promise<boolean> {
-  // Only the exact name is deleted: a spelling variant must never remove a different key.
-  const { file } = secretFile(stateDir, name);
-  try { await fs.unlink(file); return true; }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The secret could not be removed.'); }
+  secretFile(stateDir, name);
+  return withVaultLock(stateDir, async () => {
+    const saved = await savedNameFor(stateDir, name);
+    if (!saved) return false;
+    try { await fs.unlink(secretFile(stateDir, saved).file); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The secret could not be removed.'); }
+  });
 }
 
 /** Other sealed records that live in the vault (autofill profiles): one encrypted file each, under the same key. */
@@ -359,7 +401,7 @@ export async function writeVaultRecord(stateDir: string, folder: string, id: str
   const key = await vaultKey(stateDir, true);
   const dir = path.join(vaultDir(stateDir), folder);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(path.join(dir, `${id}.json`), seal(key, `${folder}:${id}`, JSON.stringify(value)), { mode: 0o600 });
+  await withVaultLock(stateDir, () => writeSealed(path.join(dir, `${id}.json`), seal(key, `${folder}:${id}`, JSON.stringify(value))));
 }
 export async function readVaultRecords<T>(stateDir: string, folder: string): Promise<{ id: string; value: T }[]> {
   if (!RECORD_FOLDER.test(folder)) throw new CredentialError('Invalid vault record.');
@@ -385,31 +427,36 @@ export async function removeVaultRecord(stateDir: string, folder: string, id: st
 
 /** Gives every secret saved before records existed a vendor (the first part of its name, "netlify/client-id" is netlify) and, where it can be told, its site's base URL. The value is untouched and never leaves this file. */
 export async function backfillSecretMeta(stateDir: string, owner?: string): Promise<string[]> {
+  return withVaultLock(stateDir, () => backfillSecretMetaHeld(stateDir, owner));
+}
+async function backfillSecretMetaHeld(stateDir: string, owner?: string): Promise<string[]> {
   const done: string[] = [];
   for (const { name, meta } of await namedSecretInfo(stateDir)) {
     const vendor = name.includes('/') ? name.split('/')[0] : undefined;
     const url = INTERNAL_SECRET.test(name) || meta?.url ? undefined : await baseUrlFor(stateDir, name, undefined, undefined);
     if ((meta?.vendor || !vendor) && (meta?.owner || !owner) && !url) continue;
-    await saveNamedSecret(stateDir, name, await readNamedSecret(stateDir, name), { ...(vendor && !meta?.vendor ? { vendor } : {}), ...(owner && !meta?.owner ? { owner } : {}), ...(url ? { url } : {}) }, { legacy: true });
+    await saveNamedSecretHeld(stateDir, name, await readNamedSecret(stateDir, name), { ...(vendor && !meta?.vendor ? { vendor } : {}), ...(owner && !meta?.owner ? { owner } : {}), ...(url ? { url } : {}) }, { legacy: true });
     done.push(name);
   }
   return done;
 }
 
 /** What is untidy in the vault, by name only. Nothing here changes anything. */
-interface VaultAudit { twins: string[][]; oddNames: string[]; noOwner: string[]; noUrl: string[]; incompleteLogins: { site: string; label: string; method: string }[]; rejectedLogins: { site: string; label: string }[] }
+interface VaultAudit { /** Saved logins that could not be opened, by id: skipped by every lookup. */ unreadableLogins: string[]; twins: string[][]; oddNames: string[]; noOwner: string[]; noUrl: string[]; incompleteLogins: { site: string; label: string; method: string }[]; rejectedLogins: { site: string; label: string }[] }
 export async function auditVault(stateDir: string): Promise<VaultAudit> {
   const info = await namedSecretInfo(stateDir);
   const groups = new Map<string, string[]>();
   for (const { name } of info) groups.set(canonicalSecretName(name), [...(groups.get(canonicalSecretName(name)) ?? []), name]);
   const odd = /\d{4}-\d{2}-\d{2}|-m\d+$|\btry-|-\d$/;
+  const items = await readItems(stateDir);
   return {
+    unreadableLogins: unreadableLoginIds(stateDir),
     twins: [...groups.values()].filter(names => names.length > 1),
     oddNames: info.map(({ name }) => name).filter(name => !name.includes('/') || odd.test(name)),
     noOwner: info.filter(({ meta }) => !meta?.owner).map(({ name }) => name),
     noUrl: info.filter(({ name, meta }) => !meta?.url && !INTERNAL_SECRET.test(name)).map(({ name }) => name),
-    incompleteLogins: (await readItems(stateDir)).map(({ id, item }) => loginRecord(id, item)).filter(record => !record.complete).map(record => ({ site: new URL(record.site).hostname, label: record.account, method: record.method })),
-    rejectedLogins: (await readItems(stateDir)).filter(({ item }) => item.rejected).map(({ item }) => ({ site: new URL(item.origin).hostname, label: loginLabel(itemFields(item)) })),
+    incompleteLogins: items.map(({ id, item }) => loginRecord(id, item)).filter(record => !record.complete).map(record => ({ site: new URL(record.site).hostname, label: record.account, method: record.method })),
+    rejectedLogins: items.filter(({ item }) => item.rejected).map(({ item }) => ({ site: new URL(item.origin).hostname, label: loginLabel(itemFields(item)) })),
   };
 }
 
@@ -417,20 +464,23 @@ export async function auditVault(stateDir: string): Promise<VaultAudit> {
  * Logins and profiles are added when missing and never replaced. Safe to run in both directions, in any order, any number of times. */
 export async function mergeVault(stateDir: string, snapshot: VaultSnapshot): Promise<{ added: number; updated: number; same: number }> {
   if (snapshot?.v !== 1 || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.secrets) || !Array.isArray(snapshot.records)) throw new CredentialError('That is not a ClikCode vault snapshot.');
+  return withVaultLock(stateDir, () => mergeVaultHeld(stateDir, snapshot));
+}
+async function mergeVaultHeld(stateDir: string, snapshot: VaultSnapshot): Promise<{ added: number; updated: number; same: number }> {
   const mine = new Map((await namedSecretInfo(stateDir)).map(entry => [canonicalSecretName(entry.name), entry]));
   const stamp = (meta?: SecretMeta): string => meta?.rotatedAt ?? meta?.createdAt ?? '';
   let updated = 0, same = 0;
   const forLogins: VaultSnapshot = { v: 1, items: snapshot.items, secrets: [], records: snapshot.records };
-  const logins = await restoreVault(stateDir, forLogins);
+  const logins = await restoreVaultHeld(stateDir, forLogins, {});
   let added = logins.added;
   same += logins.skipped;
   for (const secret of snapshot.secrets) {
     const have = mine.get(canonicalSecretName(secret.name));
-    if (!have) { await saveNamedSecret(stateDir, secret.name, secret.value, secret.meta ?? {}, { legacy: true }); await stampMeta(stateDir, secret.name, secret.meta); added++; continue; }
-    if (stamp(secret.meta) > stamp(have.meta) && await readNamedSecret(stateDir, have.name) !== secret.value) { await saveNamedSecret(stateDir, have.name, secret.value, secret.meta ?? {}, { legacy: true }); await stampMeta(stateDir, have.name, secret.meta); updated++; continue; }
+    if (!have) { await saveNamedSecretHeld(stateDir, secret.name, secret.value, secret.meta ?? {}, { legacy: true }); await stampMeta(stateDir, secret.name, secret.meta); added++; continue; }
+    if (stamp(secret.meta) > stamp(have.meta) && await readNamedSecret(stateDir, have.name) !== secret.value) { await saveNamedSecretHeld(stateDir, have.name, secret.value, secret.meta ?? {}, { legacy: true }); await stampMeta(stateDir, have.name, secret.meta); updated++; continue; }
     // The same key with a site, owner or vendor the other computer was missing: the record is filled in, the key is untouched.
     const fill = (['url', 'owner', 'vendor'] as const).filter(field => secret.meta?.[field] && !have.meta?.[field]);
-    if (fill.length) { await saveNamedSecret(stateDir, have.name, await readNamedSecret(stateDir, have.name), Object.fromEntries(fill.map(field => [field, secret.meta![field]])), { legacy: true }); updated++; continue; }
+    if (fill.length) { await saveNamedSecretHeld(stateDir, have.name, await readNamedSecret(stateDir, have.name), Object.fromEntries(fill.map(field => [field, secret.meta![field]])), { legacy: true }); updated++; continue; }
     same++;
   }
   return { added, updated, same };
@@ -442,7 +492,7 @@ async function stampMeta(stateDir: string, name: string, meta: SecretMeta | unde
   const key = await vaultKey(stateDir, false);
   const record = JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as { meta?: SecretMeta };
   record.meta = { ...record.meta, ...meta };
-  await fs.writeFile(file, seal(key, aad, JSON.stringify(record)), { mode: 0o600 });
+  await writeSealed(file, seal(key, aad, JSON.stringify(record)));
 }
 
 /** Everything in the vault in the clear, for an encrypted backup (see vault-backup.ts). Never leaves this process unencrypted. */
@@ -458,7 +508,7 @@ export async function snapshotVault(stateDir: string): Promise<VaultSnapshot> {
   const key = await vaultKey(stateDir, false).catch(quiet('agent/computer/credential-vault'));
   const secrets: VaultSnapshot['secrets'] = [];
   const dir = path.join(vaultDir(stateDir), 'secrets');
-  for (const file of key ? await fs.readdir(dir).catch(() => [] as string[]) : []) {
+  for (const file of key ? (await fs.readdir(dir).catch(() => [] as string[])).filter(isRecordFile) : []) {
     try { secrets.push(JSON.parse(open(key!, `secret:${file.replace(/\.json$/, '')}`, await fs.readFile(path.join(dir, file), 'utf8'))) as VaultSnapshot['secrets'][number]); }
     catch (error) { /* an unreadable file is left out of the backup, as it is out of every list */ swallowed('agent/computer/credential-vault', error); }
   }
@@ -473,11 +523,14 @@ export async function snapshotVault(stateDir: string): Promise<VaultSnapshot> {
 /** Puts a snapshot into this vault (making its key if there is none). What is already here is kept unless `overwrite`. */
 export async function restoreVault(stateDir: string, snapshot: VaultSnapshot, options: { overwrite?: boolean } = {}): Promise<{ added: number; skipped: number }> {
   if (snapshot?.v !== 1 || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.secrets) || !Array.isArray(snapshot.records)) throw new CredentialError('That is not a ClikCode vault backup.');
+  return withVaultLock(stateDir, () => restoreVaultHeld(stateDir, snapshot, options));
+}
+async function restoreVaultHeld(stateDir: string, snapshot: VaultSnapshot, options: { overwrite?: boolean }): Promise<{ added: number; skipped: number }> {
   const key = await vaultKey(stateDir, true);
   let added = 0; let skipped = 0;
   const put = async (file: string, aad: string, value: unknown): Promise<void> => {
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    try { await fs.writeFile(file, seal(key, aad, JSON.stringify(value)), { mode: 0o600, flag: options.overwrite ? 'w' : 'wx' }); added++; }
+    try { await writeSealed(file, seal(key, aad, JSON.stringify(value)), { exclusive: !options.overwrite }); added++; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') skipped++; else throw error; }
   };
   for (const { id, item } of snapshot.items) {
@@ -497,7 +550,11 @@ export async function restoreVault(stateDir: string, snapshot: VaultSnapshot, op
 
 /** Records the base URL a saved key is for. */
 export async function setSecretUrl(stateDir: string, name: string, url: string): Promise<void> {
-  const saved = await savedNameFor(stateDir, name);
-  if (!saved) throw new CredentialError(`No secret named "${name}" is saved.`);
-  await saveNamedSecret(stateDir, saved, await readNamedSecret(stateDir, saved), { url: webOrigin(url) ?? (() => { throw new CredentialError('Give the site\'s base URL, such as https://example.com.'); })() }, { legacy: true });
+  const origin = webOrigin(url);
+  if (!origin) throw new CredentialError('Give the site\'s base URL, such as https://example.com.');
+  await withVaultLock(stateDir, async () => {
+    const saved = await savedNameFor(stateDir, name);
+    if (!saved) throw new CredentialError(`No secret named "${name}" is saved.`);
+    await saveNamedSecretHeld(stateDir, saved, await readNamedSecret(stateDir, saved), { url: origin }, { legacy: true });
+  });
 }

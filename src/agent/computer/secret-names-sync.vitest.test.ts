@@ -25,9 +25,13 @@ it('finds a secret by any spelling, saves a variant as a rotation not a twin, an
   expect(await namedSecretNames(dir)).toEqual(['acme/api-key']);
   expect(await readNamedSecret(dir, 'acme/api-key')).toBe('value-two-2');
   await expect(readNamedSecret(dir, 'acme/client-id')).rejects.toThrow('Saved for that vendor: acme/api-key');
-  // A variant never deletes a different key.
-  expect(await deleteNamedSecret(dir, 'acme/key')).toBe(false);
-  expect(await namedSecretNames(dir)).toEqual(['acme/api-key']);
+  // Deleting reads the name the way reading does: the variant that found it removes it.
+  expect(await deleteNamedSecret(dir, 'acme/key')).toBe(true);
+  expect(await namedSecretNames(dir)).toEqual([]);
+  // Two saved secrets a name could mean: no answer, and nothing is removed.
+  await saveNamedSecret(dir, 'acme/admin-key', 'v-admin-1', { url: 'https://example.com' });
+  expect(await deleteNamedSecret(dir, 'acme/other')).toBe(false);
+  expect(await namedSecretNames(dir)).toEqual(['acme/admin-key']);
 });
 
 it('saving a second spelling updates the first instead of adding a twin', async () => {

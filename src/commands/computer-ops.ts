@@ -222,6 +222,9 @@ export async function computerSettings(name?: string, value?: string): Promise<v
 export async function computerSecretRename(from: string, to: string): Promise<void> {
   if (!NAME.test(from) || !NAME.test(to)) throw new Error('Secret names are letters, digits, dots, dashes and slashes.');
   const vault = await import('../agent/computer/credential-vault.js');
+  // Two spellings of one key (acme/api-key, acme/key) are one secret: saving under the new one would rotate the old file in place,
+  // and removing the old name would then delete the key itself.
+  if (vault.canonicalSecretName(from) === vault.canonicalSecretName(to)) throw new Error(`"${from}" and "${to}" already name the same secret; nothing to rename.`);
   const dir = stateDirectory();
   const info = (await vault.namedSecretInfo(dir)).find(item => item.name === from);
   const value = info ? await vault.readNamedSecret(dir, from).catch(() => '') : '';

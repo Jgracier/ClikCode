@@ -1,8 +1,8 @@
-import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { allSavedLogins, forgetSavedLogins, loginLabel, lockCredentialVault, removeSavedLogin, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected, siteKey } from './credential-vault.js';
+import { allSavedLogins, auditVault, readNamedSecret, saveNamedSecret, UNKNOWN_ACCOUNT, forgetSavedLogins, loginLabel, lockCredentialVault, removeSavedLogin, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected, siteKey } from './credential-vault.js';
 
 let dir = '';
 afterEach(async () => { if (dir) { lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); dir = ''; } });
@@ -103,4 +103,51 @@ it('forgets the saved logins of one site, or one account of it, and reports only
   expect(await forgetSavedLogins(dir, 'https://wordnik.com/login')).toBe(1);
   expect((await allSavedLogins(dir)).map(login => login.id)).toEqual([other]);
   await expect(forgetSavedLogins(dir, '')).rejects.toThrow('Name the site');
+});
+
+describe('vault writes and reads that survive each other', () => {
+  it('two saves of one account at once leave one entry: the read-modify-write is locked', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-race-'));
+    try {
+      await Promise.all([
+        saveLoginFields(dir, 'https://race.example.com/login', { username: 'ada@example.com', password: 'first-pass-1' }),
+        saveLoginFields(dir, 'https://race.example.com/login', { username: 'ada@example.com', password: 'second-pass-2' }),
+      ]);
+      expect(await savedLoginsForSite(dir, 'https://race.example.com/')).toHaveLength(1);
+    } finally { lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('one damaged login does not break every lookup: it is skipped and reported by the audit', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-bad-'));
+    try {
+      await saveLoginFields(dir, 'https://good.example.com/login', { username: 'ada@example.com', password: 'pass-good-1' });
+      const bad = '0f0f0f0f-0000-4000-8000-000000000000';
+      await writeFile(join(dir, 'computer', 'vault', 'items', `${bad}.json`), 'not-a-sealed-item', { mode: 0o600 });
+      expect(await savedLoginsForSite(dir, 'https://good.example.com/')).toHaveLength(1);
+      expect((await auditVault(dir)).unreadableLogins).toEqual([bad]);
+    } finally { lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('writes leave no partial or temporary files behind', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-atomic-'));
+    try {
+      await saveNamedSecret(dir, 'acme/key', 'value-atomic-1', { url: 'https://acme.example.com' });
+      await saveNamedSecret(dir, 'acme/key', 'value-atomic-2', { url: 'https://acme.example.com' });
+      expect((await readdir(join(dir, 'computer', 'vault', 'secrets'))).every(name => /^[0-9a-f]{32}\.json$/.test(name))).toBe(true);
+      expect(await readNamedSecret(dir, 'acme/key')).toBe('value-atomic-2');
+    } finally { lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('sign-ups whose email is not known yet each keep their own entry, and take the email once it is seen', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-unknown-'));
+    try {
+      const first = await saveLoginFields(dir, 'https://site.example.com/signup', { username: UNKNOWN_ACCOUNT, password: 'pw-first-111' });
+      const second = await saveLoginFields(dir, 'https://site.example.com/signup', { username: UNKNOWN_ACCOUNT, password: 'pw-second-222' });
+      expect(second).not.toBe(first);
+      expect(await savedLoginsForSite(dir, 'https://site.example.com/')).toHaveLength(2);
+      expect((await savedLoginFields(dir, 'https://site.example.com/', first)).password).toBe('pw-first-111');
+      await saveLoginFields(dir, 'https://site.example.com/signup', { username: 'ada@example.com' }, first);
+      expect((await savedLoginsForSite(dir, 'https://site.example.com/')).map(login => login.label).sort()).toEqual([UNKNOWN_ACCOUNT, 'ada@example.com']);
+    } finally { lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); }
+  });
 });
