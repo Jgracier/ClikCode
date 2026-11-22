@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { nativeAccountEnvironment, nativeProfileEnvironment } from './profile-environment.js';
+import { nativeAccountEnvironment, nativeProfileEnvironment, subscriptionCliEnvironment } from './profile-environment.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 describe('native profile environments', () => {
+  it('drops inherited keys, tokens, base URLs and cloud switches from a subscription run, keeping the profile', () => {
+    const env = subscriptionCliEnvironment({ env: 'CLAUDE_CONFIG_DIR', path: '/nonexistent-profile' },
+      { PATH: '/bin', ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_BASE_URL: 'http://proxy', CLAUDE_CODE_OAUTH_TOKEN: 'o', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_USE_VERTEX: '1', OPENAI_BASE_URL: 'http://x', OPENAI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k' });
+    expect(env).toEqual({ PATH: '/bin', CLAUDE_CONFIG_DIR: '/nonexistent-profile' });
+  });
+
   it('isolates HOME-based profiles through USERPROFILE on native Windows', () => {
     const profile = { env: 'HOME', path: 'C:\\profiles\\one', extraEnv: { TOKEN: 'x' } };
     expect(nativeProfileEnvironment(profile, 'win32')).toEqual({

@@ -3,6 +3,7 @@
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
+import { quotaScopeForModel } from '../../harness/accounts/quota-scope.js';
 import { matchesVendorTurn, nextUsableFailoverAccount } from '../../turn/account-routing.js';
 
 /** A saved, usable native Claude or Codex profile (Claude first): what a short single-purpose turn (a captcha vote) runs on. */
@@ -39,9 +40,11 @@ export function agentRoute(state: { sessions: readonly HarnessSession[]; account
   // On Claude Code the model is the setting, not the chat's: a chat on the largest model would spend the subscription on browser steps.
   const picked = harness === 'claude' ? options.claudeModel : chat.model;
   const model = picked ? { model: picked } : {};
-  if (accountCanTakeTurn(account, now) && !attempted.has(account.id)) return { harness: harness as HeadlessHarness, account, ...model };
+  // Usage is judged for the model this run uses (agentModel under Claude Code), not the chat's: a chat on a spent model family must
+  // not move a run on another one, nor a spent agentModel stay put because the chat's model has room.
+  if (accountCanTakeTurn(account, now, quotaScopeForModel(account, picked ?? undefined)) && !attempted.has(account.id)) return { harness: harness as HeadlessHarness, account, ...model };
   const next = nextUsableFailoverAccount(state as unknown as HarnessState, account,
-    candidate => matchesVendorTurn(candidate) && candidate.authKind === 'vendor-cli' && candidate.nativeProfile !== undefined, new Map([...attempted, [account.id, now]]), now, chat.model ?? undefined);
+    candidate => matchesVendorTurn(candidate) && candidate.authKind === 'vendor-cli' && candidate.nativeProfile !== undefined, new Map([...attempted, [account.id, now]]), now, picked ?? undefined);
   if (!next) return { error: `The current chat's ${harness} account (${account.label}) has no usage left now, and no other signed-in ${harness} account can take the work.` };
   return { harness: harness as HeadlessHarness, account: next, ...model, movedFrom: account.label };
 }

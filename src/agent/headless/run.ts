@@ -30,7 +30,7 @@ export async function runHeadlessAgent(options: HeadlessAgentOptions): Promise<H
   const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);
   const { readState } = await import('../../session/state/read.js');
   const { computerTunable } = await import('../computer/settings.js');
-  const { nativeProfileEnvironment } = await import('../../harness/transport/profile-environment.js');
+  const { subscriptionCliEnvironment } = await import('../../harness/transport/profile-environment.js');
   const { classifyAccountFailure } = await import('../../turn/failover.js');
   const { storeQuotaRefusal } = await import('../../turn/account-outcome.js');
   const claudeModel = options.model ?? await computerTunable(options.stateDir, 'agentModel');
@@ -67,10 +67,8 @@ export async function runHeadlessAgent(options: HeadlessAgentOptions): Promise<H
             '-c', `mcp_servers.${name}.env=${tomlInline(servers[name]!.env ?? {})}`, '-c', `mcp_servers.${name}.required=true`, '-c', `mcp_servers.${name}.default_tools_approval_mode="approve"`]),
           '-o', final, options.prompt]
         : ['-p', options.prompt, ...(model ? ['--model', model] : []), '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', '', '--allowedTools', ...names.map(name => `mcp__${name}`), '--permission-mode', 'dontAsk', '--no-session-persistence'];
-      const env = { ...process.env, ...nativeProfileEnvironment(account.nativeProfile!) };
-      // A signed-in native account, never an unrelated API key inherited from the parent.
-      delete env.OPENAI_API_KEY;
-      delete env.ANTHROPIC_API_KEY;
+      // A signed-in native account, never a key, token, gateway URL or cloud switch inherited from the parent.
+      const env = subscriptionCliEnvironment(account.nativeProfile!);
       const child = spawn(useCodex ? 'codex' : 'claude', args, { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
       let text = '', diagnostics = '', timedOut = false, stalled = false;
       child.stdout!.on('data', c => { text = (text + String(c)).slice(-20_000); });

@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as routing from '../../turn/account-routing.js';
 import { agentRoute, headlessAccount } from './route.js';
+
+vi.mock('../../turn/account-routing.js', async original => {
+  const actual = await original<typeof import('../../turn/account-routing.js')>();
+  return { ...actual, nextUsableFailoverAccount: vi.fn(actual.nextUsableFailoverAccount) };
+});
 
 const M = 'claude-sonnet-5-5';
 
@@ -59,5 +65,13 @@ describe('the route a headless agent runs on', () => {
   it('skips a newer chat on a harness that cannot run headless for the most recent Claude Code or Codex chat', () => {
     const route = agentRoute({ accounts, sessions: [chat('2026-11-18T10:00:00Z', 'claude', 'claude-a', 'opus'), chat('2026-11-18T12:00:00Z', 'copilot', 'claude-a')] }, { claudeModel: M });
     expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'claude-sonnet-5-5' });
+  });
+  it('judges failover usage by the model the run uses, not the chat\'s', () => {
+    const spent = [account('claude-a', 'anthropic', 'CLAUDE_CONFIG_DIR', 'exhausted'), account('claude-b', 'anthropic', 'CLAUDE_CONFIG_DIR')];
+    const spy = vi.mocked(routing.nextUsableFailoverAccount);
+    spy.mockClear();
+    agentRoute({ accounts: spent, sessions: [chat('2026-11-18T12:00:00Z', 'claude', 'claude-a', 'opus')] }, { claudeModel: M });
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]![5]).toBe(M);
   });
 });
