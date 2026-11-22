@@ -6,7 +6,7 @@ into scrollback), no history lost or repeated, no row wider than the screen. No 
 (../fake-grok.mjs) plays the turns, in a throwaway HOME.
 
     node scripts/build.mjs
-    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-keepback|xterm-nopull|xterm-mute|tmux] [--mode inline|full|auto] [--keep]
+    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-keepback|xterm-nopull|xterm-page|xterm-mute|tmux] [--mode inline|full|auto] [--keep]
 
 Exit status 0 when every checked snapshot holds every invariant."""
 import argparse, base64, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time
@@ -16,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 from state_guard import refuse_real_state
 ENTRY = os.environ.get('MATRIX_ENTRY', os.path.join(REPO, 'dist/index.js'))  # the build under test
+LAG_MS = int(os.environ.get('MATRIX_PAGE_LAG_MS', '0'))
 SETTLE = 1.2  # RESIZE_SETTLE_MS is 100; a cursor report that is never answered times out after 120 ms (xterm-mute)
 
 def marker_block(first, last, extra=''):
@@ -241,6 +242,9 @@ class Pty:
         self.text = ''
     def size(self, cols, rows):
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+        # MATRIX_PAGE_LAG_MS: the phone tells the pty at the START of a keyboard move and fits its own grid this much later (what the
+        # program writes in between lands on the old grid).
+        if hasattr(self, 'text') and LAG_MS: self.pump(LAG_MS / 1000)
         self.emulator.send({'k': 'resize', 'c': cols, 'r': rows})
     def drain(self):
         for event in self.emulator.events():

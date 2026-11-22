@@ -16,6 +16,7 @@
  *                  is up (what a client that keeps a copy of every cleared screen does). A page that drew on the main screen after a clear
  *                  would leave rows of the conversation directly above it, wherever the viewport is scrolled to.
  *   xterm-nopull a client that does not pull saved lines back when the window grows: the content stays top-aligned, blank rows appear below
+ *   xterm-page   the ClikDeploy phone page: xterm with the cursor put on the last row around a resize (page.js doFit)
  *   xterm-mute   a terminal that never answers a cursor position request (CSI 6n): the program's defined failure is exercised */
 import { createInterface } from 'node:readline';
 import xterm from '@xterm/headless';
@@ -56,7 +57,15 @@ lineReader.on('line', (line) => chain(async () => {
       term.options.scrollback = 0;
       term.options.scrollback = 100000;
     }
-    term.resize(event.c, event.r);
+    if (variant === 'xterm-page' && term.buffer.active.type === 'normal') {
+      // The ClikDeploy phone page (page.js doFit): the cursor is put on the last row for the resize, so xterm pulls saved lines in on a
+      // grow and pushes the top rows out on a shrink, then put back on its own line.
+      const core = term._core.buffer;
+      const line = core.ybase + core.y;
+      core.y = term.rows - 1;
+      term.resize(event.c, event.r);
+      core.y = Math.max(0, Math.min(term.rows - 1, line - core.ybase));
+    } else term.resize(event.c, event.r);
   } else if (event.k === 'out') {
     let data = Buffer.from(event.d, 'base64');
     bytes += data.length;

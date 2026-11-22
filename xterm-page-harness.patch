@@ -1,0 +1,60 @@
+diff --git a/scripts/tui-e2e/resize-matrix/emulate.mjs b/scripts/tui-e2e/resize-matrix/emulate.mjs
+index 396e4241..5ed203a4 100644
+--- a/scripts/tui-e2e/resize-matrix/emulate.mjs
++++ b/scripts/tui-e2e/resize-matrix/emulate.mjs
+@@ -16,6 +16,7 @@
+  *                  is up (what a client that keeps a copy of every cleared screen does). A page that drew on the main screen after a clear
+  *                  would leave rows of the conversation directly above it, wherever the viewport is scrolled to.
+  *   xterm-nopull a client that does not pull saved lines back when the window grows: the content stays top-aligned, blank rows appear below
++ *   xterm-page   the ClikDeploy phone page: xterm with the cursor put on the last row around a resize (page.js doFit)
+  *   xterm-mute   a terminal that never answers a cursor position request (CSI 6n): the program's defined failure is exercised */
+ import { createInterface } from 'node:readline';
+ import xterm from '@xterm/headless';
+@@ -56,7 +57,15 @@ lineReader.on('line', (line) => chain(async () => {
+       term.options.scrollback = 0;
+       term.options.scrollback = 100000;
+     }
+-    term.resize(event.c, event.r);
++    if (variant === 'xterm-page' && term.buffer.active.type === 'normal') {
++      // The ClikDeploy phone page (page.js doFit): the cursor is put on the last row for the resize, so xterm pulls saved lines in on a
++      // grow and pushes the top rows out on a shrink, then put back on its own line.
++      const core = term._core.buffer;
++      const line = core.ybase + core.y;
++      core.y = term.rows - 1;
++      term.resize(event.c, event.r);
++      core.y = Math.max(0, Math.min(term.rows - 1, line - core.ybase));
++    } else term.resize(event.c, event.r);
+   } else if (event.k === 'out') {
+     let data = Buffer.from(event.d, 'base64');
+     bytes += data.length;
+diff --git a/scripts/tui-e2e/resize-matrix/matrix.py b/scripts/tui-e2e/resize-matrix/matrix.py
+index 49d5a295..c2f38121 100644
+--- a/scripts/tui-e2e/resize-matrix/matrix.py
++++ b/scripts/tui-e2e/resize-matrix/matrix.py
+@@ -6,7 +6,7 @@ into scrollback), no history lost or repeated, no row wider than the screen. No
+ (../fake-grok.mjs) plays the turns, in a throwaway HOME.
+ 
+     node scripts/build.mjs
+-    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-keepback|xterm-nopull|xterm-mute|tmux] [--mode inline|full|auto] [--keep]
++    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-keepback|xterm-nopull|xterm-page|xterm-mute|tmux] [--mode inline|full|auto] [--keep]
+ 
+ Exit status 0 when every checked snapshot holds every invariant."""
+ import argparse, base64, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time
+@@ -16,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
+ sys.path.insert(0, os.path.dirname(HERE))
+ from state_guard import refuse_real_state
+ ENTRY = os.environ.get('MATRIX_ENTRY', os.path.join(REPO, 'dist/index.js'))  # the build under test
++LAG_MS = int(os.environ.get('MATRIX_PAGE_LAG_MS', '0'))
+ SETTLE = 1.2  # RESIZE_SETTLE_MS is 100; a cursor report that is never answered times out after 120 ms (xterm-mute)
+ 
+ def marker_block(first, last, extra=''):
+@@ -241,6 +242,9 @@ class Pty:
+         self.text = ''
+     def size(self, cols, rows):
+         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
++        # MATRIX_PAGE_LAG_MS: the phone tells the pty at the START of a keyboard move and fits its own grid this much later (what the
++        # program writes in between lands on the old grid).
++        if hasattr(self, 'text') and LAG_MS: self.pump(LAG_MS / 1000)
+         self.emulator.send({'k': 'resize', 'c': cols, 'r': rows})
+     def drain(self):
+         for event in self.emulator.events():
