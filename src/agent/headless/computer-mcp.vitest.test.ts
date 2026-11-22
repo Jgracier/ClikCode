@@ -59,4 +59,18 @@ describe('the bounded computer tools server', () => {
     await home({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'browser_use', arguments: {} } });
     expect(bound).toEqual(['agent-acme->prod']);
   });
+
+  it('never lets two calls at once both take the last call of the budget', async () => {
+    const slow = (seen: unknown[]) => ({ name: 'browser_use', description: 'd', parameters: { type: 'object' }, run: async () => { seen.push(1); await new Promise(r => setTimeout(r, 20)); return { output: 'ok' }; } }) as never;
+    const file = join(await mkdtemp(join(tmpdir(), 'cc-activity-')), 'activity');
+    await writeFile(file, '');
+    for (const activity of [file, undefined]) {
+      const seen: unknown[] = [];
+      const handle = computerMcpHandler({ tab: 't', maxCalls: 1, tools: [slow(seen)], stateDir: '/tmp/none', ...(activity ? { activity } : { activity: '' }) });
+      const call = (n: number) => handle({ jsonrpc: '2.0', id: n, method: 'tools/call', params: { name: 'browser_use', arguments: {} } }) as Promise<Reply>;
+      const results = await Promise.all([call(1), call(2), call(3)]);
+      expect(seen).toHaveLength(1);
+      expect(results.filter(r => r.result.isError)).toHaveLength(2);
+    }
+  });
 });

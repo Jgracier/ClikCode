@@ -7,6 +7,8 @@ import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from '../computer/secret-scrubber.js';
 import { ACTIVITY_ENV, MAX_CALLS_ENV, readActivity } from './activity.js';
 import { agentRoute } from './route.js';
+import type { ChildProcess } from 'node:child_process';
+import { killOnExit, stopTree } from '../computer/run-cli.js';
 
 export interface McpServerEntry { command: string; args?: string[]; env?: Record<string, string> }
 export interface HeadlessAgentOptions {
@@ -16,6 +18,7 @@ export interface HeadlessAgentOptions {
   maxCalls: number; maxMs: number; stallMs: number;
   /** Bind the route to this chat (else the most recent chat on Claude Code or Codex). */ sessionId?: string;
   /** Overrides the agentModel setting under Claude Code. */ model?: string;
+  /** Stops the run (Ctrl-C): the agent and its tool servers are stopped as on a timeout, the temporary directory removed. */ signal?: AbortSignal;
   stateDir: string;
 }
 export interface HeadlessAgentResult {
@@ -56,35 +59,30 @@ export async function runHeadlessAgent(options: HeadlessAgentOptions): Promise<H
         if (name === 'clikcode' && options.computer) throw new Error('The MCP server name "clikcode" is ClikCode\'s own computer tools.');
         servers[name] = { ...entry, env: { ...(entry.env ?? {}), ...shared } };
       }
-      const names = Object.keys(servers);
       const config = join(dir, 'mcp.json');
-      await writeFile(config, JSON.stringify({ mcpServers: servers }));
+      // The servers' environments (API keys a caller's MCP server needs) stay in files only this user can read, never on argv.
+      await writeFile(config, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
       const final = join(dir, 'final.txt');
-      const args = useCodex
-        ? ['exec', ...(model ? ['-m', model] : []), '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only',
-          '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"',
-          ...names.flatMap(name => ['-c', `mcp_servers.${name}.command=${JSON.stringify(servers[name]!.command)}`, '-c', `mcp_servers.${name}.args=${JSON.stringify(servers[name]!.args ?? [])}`,
-            '-c', `mcp_servers.${name}.env=${tomlInline(servers[name]!.env ?? {})}`, '-c', `mcp_servers.${name}.required=true`, '-c', `mcp_servers.${name}.default_tools_approval_mode="approve"`]),
-          '-o', final, options.prompt]
-        : ['-p', options.prompt, ...(model ? ['--model', model] : []), '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', '', '--allowedTools', ...names.map(name => `mcp__${name}`), '--permission-mode', 'dontAsk', '--no-session-persistence'];
+      let launch = servers;
+      if (useCodex) {
+        await writeFile(join(dir, ENV_LAUNCHER), ENV_LAUNCHER_SOURCE, { mode: 0o600 });
+        launch = {};
+        for (const [name, entry] of Object.entries(servers)) {
+          const envFile = join(dir, `env-${name.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+          await writeFile(envFile, JSON.stringify(entry.env ?? {}), { mode: 0o600 });
+          launch[name] = { command: process.execPath, args: [join(dir, ENV_LAUNCHER), envFile, entry.command, ...(entry.args ?? [])] };
+        }
+      }
+      const args = agentArgs({ useCodex, ...(model ? { model } : {}), servers: launch, dir, config, final, prompt: options.prompt });
       // A signed-in native account, never a key, token, gateway URL or cloud switch inherited from the parent.
       const env = subscriptionCliEnvironment(account.nativeProfile!);
+      if (options.signal?.aborted) return { text: '', calls: 0, timedOut: false, error: 'The agent run was stopped.' };
       const child = spawn(useCodex ? 'codex' : 'claude', args, { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
-      let text = '', diagnostics = '', timedOut = false, stalled = false;
+      let text = '', diagnostics = '';
       child.stdout!.on('data', c => { text = (text + String(c)).slice(-20_000); });
       child.stderr!.on('data', c => { diagnostics = (diagnostics + String(c)).slice(-4_000); });
-      const kill = (): void => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); } };
-      const timer = setTimeout(() => { timedOut = true; kill(); }, options.maxMs);
-      // Working is a tool call now and then, or one in flight: each moves the stall deadline. Only an agent that stopped calling is cut off.
-      let seen = 0, lastCall = Date.now();
-      const watch = setInterval(() => {
-        void readActivity(activity).then(now => {
-          if (now.started + now.finished > seen || now.inFlight) { seen = now.started + now.finished; lastCall = Date.now(); }
-          else if (Date.now() - lastCall > options.stallMs && !timedOut) { timedOut = true; stalled = true; kill(); }
-        });
-      }, 5_000);
-      const code = await new Promise<number | null>(resolve => { child.once('close', resolve); child.once('error', () => resolve(-1)); });
-      clearTimeout(timer); clearInterval(watch);
+      const { code, timedOut, stalled, stopped } = await superviseAgent(child, { activity, maxMs: options.maxMs, stallMs: options.stallMs, ...(options.signal ? { signal: options.signal } : {}) });
+      if (stopped) return { text: scrubSecrets(text), calls: (await readActivity(activity)).started, timedOut: false, error: 'The agent run was stopped.', harness: route.harness, account: account.label };
       if (useCodex) text = await readFile(final, 'utf8').catch(() => '');
       const calls = (await readActivity(activity)).started;
       if (code !== 0 && !timedOut && calls === 0) {
@@ -105,7 +103,78 @@ export async function runHeadlessAgent(options: HeadlessAgentOptions): Promise<H
   }
 }
 
-/** A TOML inline table of strings, for a codex -c override. */
-function tomlInline(values: Record<string, string>): string {
-  return `{${Object.entries(values).map(([k, v]) => `${JSON.stringify(k)}=${JSON.stringify(v)}`).join(',')}}`;
+/** The vendor CLI's command line. Under Claude Code the servers come from the config file; under Codex each server is named in
+ * -c overrides with its command and args only (its environment is in a file the launcher reads, ENV_LAUNCHER). With no MCP
+ * server at all there are no tools to allow, and no --allowedTools (an empty list would swallow the next flag). */
+export function agentArgs(input: { useCodex: boolean; model?: string; servers: Record<string, McpServerEntry>; dir: string; config: string; final: string; prompt: string }): string[] {
+  const { useCodex, model, servers, dir, config, final, prompt } = input;
+  const names = Object.keys(servers);
+  if (useCodex) {
+    return ['exec', ...(model ? ['-m', model] : []), '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only',
+      '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"',
+      ...names.flatMap(name => ['-c', `mcp_servers.${name}.command=${JSON.stringify(servers[name]!.command)}`, '-c', `mcp_servers.${name}.args=${JSON.stringify(servers[name]!.args ?? [])}`,
+        '-c', `mcp_servers.${name}.required=true`, '-c', `mcp_servers.${name}.default_tools_approval_mode="approve"`]),
+      '-o', final, prompt];
+  }
+  return ['-p', prompt, ...(model ? ['--model', model] : []), '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', '',
+    ...(names.length ? ['--allowedTools', ...names.map(name => `mcp__${name}`)] : []), '--permission-mode', 'dontAsk', '--no-session-persistence'];
+}
+
+/** A Codex MCP server is started through this: it reads the server's environment from a 0600 file and runs the server with it,
+ * passing stdio through and forwarding stop signals, so no secret appears in any process's argv. */
+export const ENV_LAUNCHER = 'mcp-env-launcher.cjs';
+export const ENV_LAUNCHER_SOURCE = `'use strict';
+const { spawn } = require('node:child_process');
+const { readFileSync } = require('node:fs');
+const { constants } = require('node:os');
+const [file, command, ...args] = process.argv.slice(2);
+const child = spawn(command, args, { stdio: 'inherit', env: { ...process.env, ...JSON.parse(readFileSync(file, 'utf8')) } });
+for (const name of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(name, () => { try { child.kill(name); } catch {} });
+child.on('error', error => { process.stderr.write(String(error) + '\\n'); process.exit(127); });
+child.on('exit', (code, signal) => process.exit(code ?? 128 + (constants.signals[signal] || 1)));
+`;
+
+/** How long a stopped agent and its tool servers get between SIGTERM and SIGKILL: enough for `clikcode computer mcp` to close its tab. */
+export const AGENT_STOP_GRACE_MS = 10_000;
+
+/** Watches a running agent until it exits: the ceiling `maxMs`, the stall rule (no tool call for `stallMs` and none in flight), and
+ * the caller's `signal` (Ctrl-C) each stop it by SIGTERM to its whole process group -- the vendor CLI and the MCP servers it started
+ * -- then SIGKILL after `graceMs`. Once it exits, whatever is left in its group gets the same treatment, and ClikCode exiting kills
+ * it. Never answers before the agent's own process has exited. */
+export async function superviseAgent(child: ChildProcess, options: { activity: string; maxMs: number; stallMs: number; signal?: AbortSignal; graceMs?: number; pollMs?: number }): Promise<{ code: number | null; timedOut: boolean; stalled: boolean; stopped: boolean }> {
+  const grace = options.graceMs ?? AGENT_STOP_GRACE_MS;
+  const untrack = killOnExit(child);
+  let timedOut = false, stalled = false, stopped = false;
+  const stop = (): void => stopTree(child, grace);
+  const timer = setTimeout(() => { timedOut = true; stop(); }, options.maxMs);
+  const onAbort = (): void => { stopped = true; stop(); };
+  if (options.signal?.aborted) onAbort(); else options.signal?.addEventListener('abort', onAbort, { once: true });
+  // Working is a tool call now and then, or one in flight: each moves the stall deadline. Only an agent that stopped calling is cut off.
+  let seen = 0, lastCall = Date.now();
+  const watch = setInterval(() => {
+    void readActivity(options.activity).then(now => {
+      if (now.started + now.finished > seen || now.inFlight) { seen = now.started + now.finished; lastCall = Date.now(); }
+      else if (Date.now() - lastCall > options.stallMs && !timedOut && !stopped) { timedOut = true; stalled = true; stop(); }
+    });
+  }, options.pollMs ?? 5_000);
+  try {
+    const code = await new Promise<number | null>(resolve => {
+      if (child.exitCode !== null || child.signalCode !== null) { resolve(child.exitCode); return; }
+      child.once('exit', resolve);
+      child.once('error', () => resolve(-1));
+    });
+    // Tool servers the agent left behind get their stop signal and grace too (they close their tabs on SIGTERM).
+    if (process.platform !== 'win32' && child.pid !== undefined) {
+      try { process.kill(-child.pid, 'SIGTERM'); } catch { /* fail-open-ok: nothing left in the group */ }
+      const pid = child.pid;
+      setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* fail-open-ok: the group ended on SIGTERM */ } }, grace).unref();
+    }
+    // Output still in the pipe is read, but a leftover holding it open cannot keep the answer back.
+    await new Promise<void>(resolve => { const t = setTimeout(resolve, 1_000); child.once('close', () => { clearTimeout(t); resolve(); }); if (child.stdout?.closed !== false && child.stderr?.closed !== false) { clearTimeout(t); resolve(); } });
+    return { code, timedOut, stalled, stopped };
+  } finally {
+    clearTimeout(timer); clearInterval(watch);
+    options.signal?.removeEventListener('abort', onAbort);
+    untrack();
+  }
 }

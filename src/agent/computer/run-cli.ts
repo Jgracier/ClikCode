@@ -15,12 +15,27 @@ const DRAIN_MS = 1_000;
 
 const live = new Set<ChildProcess>();
 let exitHookInstalled = false;
-/** One process-exit hook for every running command (not one per call): what ClikCode started does not outlive it. */
-function trackUntilExit(child: ChildProcess): void {
+/** One process-exit hook for every running command (not one per call): what ClikCode started does not outlive it. Returns the
+ * untrack; a child is untracked by itself when it exits. */
+export function killOnExit(child: ChildProcess): () => void {
   live.add(child);
-  if (exitHookInstalled) return;
-  exitHookInstalled = true;
-  process.once('exit', () => { for (const running of live) signalTree(running, 'SIGKILL'); });
+  const untrack = (): void => { live.delete(child); };
+  child.once('exit', untrack);
+  if (!exitHookInstalled) {
+    exitHookInstalled = true;
+    process.once('exit', () => { for (const running of live) signalTree(running, 'SIGKILL'); });
+  }
+  return untrack;
+}
+
+/** SIGTERM to the child's group, then SIGKILL if it has not exited after `graceMs`: a stopped tool server gets to clean up
+ * (close its browser tab) before anything is forced. */
+export function stopTree(child: ChildProcess, graceMs: number = KILL_GRACE_MS): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  signalTree(child, 'SIGTERM');
+  const timer = setTimeout(() => signalTree(child, 'SIGKILL'), graceMs);
+  timer.unref?.();
+  child.once('exit', () => clearTimeout(timer));
 }
 
 /** Signals the command's whole process group, or the command alone where there are no groups (Windows) or the group is gone. */
@@ -36,7 +51,7 @@ export function runCli(command: string, argv: string[], options: { stdin?: strin
   if (options.signal?.aborted) return Promise.resolve({ code: null, text: '', missing: false });
   return new Promise(resolve => {
     const child = spawn(command, argv, { stdio: [options.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
-    trackUntilExit(child);
+    killOnExit(child);
     let text = '';
     let settled = false;
     let exited = false;
@@ -56,7 +71,6 @@ export function runCli(command: string, argv: string[], options: { stdin?: strin
       settled = true;
       clearTimeout(timer); if (drainTimer) clearTimeout(drainTimer);
       options.signal?.removeEventListener('abort', stop);
-      live.delete(child);
       child.stdout?.destroy(); child.stderr?.destroy();
       resolve(result);
     };

@@ -38,8 +38,10 @@ export async function agentRun(flags: AgentRunFlags): Promise<void> {
     if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') throw new Error('--mcp-config is a JSON file with {"mcpServers": {name: {command, args, env}}}.');
     servers = parsed.mcpServers;
   }
-  const result = await runHeadlessAgent({
-    prompt, stateDir: stateDirectory(),
+  const { untilStopped } = await import('../cli/stop-signal.js');
+  // Ctrl-C, SIGTERM or a closed terminal stop the agent and its tool servers (each tab closed), and the run's files are removed.
+  const result = await untilStopped(signal => runHeadlessAgent({
+    prompt, stateDir: stateDirectory(), signal,
     ...(flags.tab ? { computer: { tab: tabOf(flags.tab, ''), ...(flags.egress ? { egress: flags.egress } : {}), ...(flags.blockUrl?.length ? { blockUrls: flags.blockUrl } : {}), ...(flags.blockMessage ? { blockMessage: flags.blockMessage } : {}) } } : {}),
     ...(servers ? { servers } : {}),
     maxCalls: whole(flags.maxCalls, 'max-calls', 1, 1000) ?? 60,
@@ -47,7 +49,7 @@ export async function agentRun(flags: AgentRunFlags): Promise<void> {
     stallMs: (whole(flags.stallMinutes, 'stall-minutes', 1, 60) ?? 5) * 60_000,
     ...(flags.session ?? process.env.CLIKCODE_SESSION_ID ? { sessionId: flags.session ?? process.env.CLIKCODE_SESSION_ID } : {}),
     ...(flags.model ? { model: flags.model } : {}),
-  });
+  }));
   print(result);
   if (result.error) process.exitCode = 1;
 }

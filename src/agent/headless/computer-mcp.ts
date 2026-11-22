@@ -10,6 +10,7 @@ import { untilInputEnds } from '../../cli/stop-signal.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import type { ToolContext, ToolDefinition } from '../tool-contract.js';
 import { scrubSecrets } from '../computer/secret-scrubber.js';
+import { withFileLock } from '../../session/store/locks.js';
 import { ACTIVITY_ENV, MAX_CALLS_ENV, markActivity, readActivity } from './activity.js';
 
 type Rpc = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: Record<string, any> };
@@ -48,7 +49,17 @@ export function computerMcpHandler(options: ComputerMcpOptions): (message: Rpc) 
     const { accountUseTool, browserUseTool } = await import('../tools/computer-web.js');
     return [browserUseTool, accountUseTool] as unknown as ToolDefinition[];
   };
-  const used = async (): Promise<number> => activity ? (await readActivity(activity)).started : calls;
+  // Checking the budget and taking a call are one step: two calls at once (or two servers sharing the activity file) cannot
+  // both see the last call free. The activity file's lock covers every server on it; without one the count is in this process.
+  const takeCall = async (): Promise<boolean> => {
+    if (!activity) { if (calls >= options.maxCalls) return false; calls++; return true; }
+    return withFileLock(`${activity}.lock`, async () => {
+      if ((await readActivity(activity)).started >= options.maxCalls) return false;
+      calls++;
+      await markActivity(activity, '+');
+      return true;
+    });
+  };
   return async message => {
     if (message.id === undefined) return undefined;
     const reply = (result: unknown): Record<string, unknown> => ({ jsonrpc: '2.0', id: message.id, result });
@@ -60,9 +71,7 @@ export function computerMcpHandler(options: ComputerMcpOptions): (message: Rpc) 
         const name = String(message.params?.name ?? '');
         const tool = (await load()).find(t => t.name === name);
         if (!tool) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
-        if (await used() >= options.maxCalls) return reply({ content: [{ type: 'text', text: `Call budget of ${options.maxCalls} used. Stop now and give your final answer.` }], isError: true });
-        calls++;
-        await markActivity(activity, '+');
+        if (!await takeCall()) return reply({ content: [{ type: 'text', text: `Call budget of ${options.maxCalls} used. Stop now and give your final answer.` }], isError: true });
         try {
           // The tab is ours, whatever the caller passes.
           const args = { ...(message.params?.arguments ?? {}), tab: options.tab } as Record<string, unknown>;
@@ -86,6 +95,9 @@ export function computerMcpHandler(options: ComputerMcpOptions): (message: Rpc) 
   };
 }
 
+/** How long calls still running may finish once the server is told to stop, before its tab is closed. */
+export const STOP_DRAIN_MS = 3_000;
+
 /** Serves until stdin closes or `signal` stops it, then closes its tab; the caller exits after. */
 export async function serveComputerMcp(options: ComputerMcpOptions, signal?: AbortSignal): Promise<void> {
   const handle = computerMcpHandler(options);
@@ -99,7 +111,10 @@ export async function serveComputerMcp(options: ComputerMcpOptions, signal?: Abo
     void work.finally(() => pending.delete(work));
   });
   await untilInputEnds(lines, signal);
-  await Promise.allSettled([...pending]);
+  // Told to stop (SIGTERM from the agent runner, which SIGKILLs after a grace period): a call still running -- a captcha solve, a
+  // texted-code wait -- gets a moment, then the tab is closed anyway rather than left open by the kill that follows.
+  const drained = Promise.allSettled([...pending]);
+  await (signal?.aborted ? Promise.race([drained, new Promise(resolve => setTimeout(resolve, STOP_DRAIN_MS).unref())]) : drained);
   const { closeComputerPage, releaseComputerBrowser } = await import('../computer/browser.js');
   await closeComputerPage(options.stateDir ?? stateDirectory(), options.tab).catch(quiet('agent/headless/computer-mcp'));
   await releaseComputerBrowser(options.stateDir ?? stateDirectory()).catch(quiet('agent/headless/computer-mcp'));
