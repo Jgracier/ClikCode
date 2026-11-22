@@ -181,6 +181,10 @@ async function exchange(stateDir: string, client: Client, code: string, verifier
 }
 
 async function accessToken(stateDir: string, endpoints: GoogleEndpoints, address?: string, signal?: AbortSignal): Promise<string> {
+  // A wait polls every few seconds with its mailbox already chosen: a live token for it answers without reading the vault again
+  // (picking reads every mailbox's secret). A token is cached only for a connected mailbox, and disconnecting drops it.
+  const live = address ? cached.get(cacheKey(stateDir, address)) : undefined;
+  if (live && live.expires > Date.now()) return live.token;
   const email = await pickMailbox(stateDir, { address });
   const hit = cached.get(cacheKey(stateDir, email));
   if (hit && hit.expires > Date.now()) return hit.token;
@@ -246,7 +250,8 @@ function anchors(html: string): MailAnchor[] {
 export class EmailAmbiguous extends Error {}
 
 /** Newsletters and promotions: never the wanted message, and not counted as "the email that arrived". */
-export const MARKETING = /newsletter|webinar|new features|what'?s new|promo|% off|sale\b|digest|unsubscribe from (?:these|all)|view (?:this )?in (?:your )?browser/i;
+/** "sale" only as a word (not wholesale, resale), and no "view in browser": real code and verification mails carry that footer too. */
+export const MARKETING = /newsletter|webinar|new features|what'?s new|\bpromo(?:tion(?:al)?)?s?\b|% off|\bsale\b|digest|unsubscribe from (?:these|all)/i;
 const isMarketing = (mail: Pick<FoundEmail, 'subject' | 'text'>): boolean => MARKETING.test(mail.subject) || MARKETING.test(mail.text.slice(0, 200));
 
 /** The start of the body that names the vendor: 400 characters, or 1500 when `widen` (a lone email after the request, sent by an unrelated mail service). */

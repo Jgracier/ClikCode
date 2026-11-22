@@ -2,8 +2,14 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { senderMatch, disconnectEmail, EMAIL_CLIENT_SECRET, emailConnected, emailStatus, startConsent, waitForEmail, type GoogleEndpoints } from './email-api.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as vault from './credential-vault.js';
+
+vi.mock('./credential-vault.js', async original => {
+  const actual = await original<typeof import('./credential-vault.js')>();
+  return { ...actual, readNamedSecret: vi.fn(actual.readNamedSecret) };
+});
+import { MARKETING, senderMatch, disconnectEmail, EMAIL_CLIENT_SECRET, emailConnected, emailStatus, startConsent, waitForEmail, type GoogleEndpoints } from './email-api.js';
 import { saveNamedSecret } from './credential-vault.js';
 import { verificationCode } from '../tools/computer-web.js';
 import { saveProfile } from './profiles.js';
@@ -224,3 +230,20 @@ it('bounds a stalled Gmail request by the verification wait, not the fetch timeo
   stallListing = true;
   await expect(waitForEmail(dir, { site: 'https://acme.io', endpoints, timeoutMs: 100 })).rejects.toThrow(/No email matched/);
 }, 1000);
+
+describe('a wait for an email', () => {
+  it('does not read the vault again on every poll once its mailbox has a live token', async () => {
+    await connect();
+    const reads = vi.mocked(vault.readNamedSecret);
+    reads.mockClear();
+    await expect(waitForEmail(dir, { from: 'nobody@example.com', timeoutMs: 500, pollMs: 20, endpoints })).rejects.toThrow(/No email matched/);
+    expect(reads.mock.calls.length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('marketing mail', () => {
+  it('is told from code mail by whole words: wholesale, resale and a view-in-browser footer are not marketing', () => {
+    for (const real of ['Your Acme Wholesale verification code', 'Confirm your resale account', 'Your code is 123456. View this email in your browser.']) expect(MARKETING.test(real), real).toBe(false);
+    for (const ad of ['Black Friday sale: 40% off', 'Our November newsletter', 'Promotional offer inside']) expect(MARKETING.test(ad), ad).toBe(true);
+  });
+});
