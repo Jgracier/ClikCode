@@ -353,7 +353,6 @@ Six ship as plain data (`clikdeploy-secret`, `clikdeploy-app-secret`,
 `clikdeploy-compute`, `clikdeploy-connector`, `clikdeploy-connection`, `github-secret`). ClikDeploy destinations send secret-bearing JSON on stdin, so the credential is absent from process arguments. You add your own with one line, and the agent
 can then use it by name; an unknown name is answered with the full list:
 
-
 ```
 clikcode computer destination add my-vault --stdin "{{secret}}" -- vault kv put secret/{{path}} value=-
 clikcode computer destination list | remove <name>
