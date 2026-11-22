@@ -18,10 +18,12 @@ import { openTransport, type McpTransport } from '../agent/mcp/transport.js';
 import { clikDeployConnection, type ClikDeployConnection } from '../agent/mcp/clikdeploy-session.js';
 import { CLIKDEPLOY_CORE_TOOLS, PERMISSION_MODE_HEADER } from '../gateway/mcp.js';
 import { untilInputEnds } from '../cli/stop-signal.js';
+import { quiet } from '../runtime/lifecycle-log.js';
 
 type Json = Record<string, any>;
 type Rpc = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: Json };
 
+const AREA = 'commands/clikdeploy-mcp-serve';
 export const CLIKDEPLOY_TOOL_PREFIX = 'clikdeploy_';
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const MODES = new Set(['ask', 'auto', 'bypass']);
@@ -76,7 +78,7 @@ export function createClikDeployProxy(options: ClikDeployProxyOptions = {}): (me
   async function open(): Promise<{ transport: McpTransport; connection: ClikDeployConnection; headers: Record<string, string> }> {
     const connection = connect();
     if (!upstream || upstream.transport.closed || upstream.key !== connection.key || upstream.url !== connection.url) {
-      void upstream?.transport.close().catch(() => undefined);
+      void upstream?.transport.close().catch(quiet(AREA));
       const headers: Record<string, string> = { authorization: `Bearer ${connection.key}` };
       const transport = openTransport({ name: 'clikdeploy', transport: 'http', url: `${connection.url}/mcp?toolmode=search`, headers }, {});
       const ready = (async () => {
@@ -87,7 +89,7 @@ export function createClikDeployProxy(options: ClikDeployProxyOptions = {}): (me
       upstream = { transport, headers, key: connection.key, url: connection.url, ready };
     }
     const current = upstream;
-    try { await current.ready; } catch (error) { if (upstream === current) upstream = undefined; void current.transport.close().catch(() => undefined); throw error; }
+    try { await current.ready; } catch (error) { if (upstream === current) upstream = undefined; void current.transport.close().catch(quiet(AREA)); throw error; }
     return { transport: current.transport, connection, headers: current.headers };
   }
 
@@ -95,7 +97,7 @@ export function createClikDeployProxy(options: ClikDeployProxyOptions = {}): (me
   async function prepare(headers: Record<string, string>, connection: ClikDeployConnection): Promise<void> {
     const token = connection.config.get('adminMfaToken');
     if (typeof token === 'string' && token) headers['x-admin-mfa'] = token; else delete headers['x-admin-mfa'];
-    const mode = await permissionMode().catch(() => undefined);
+    const mode = await permissionMode().catch(quiet(AREA));
     if (mode) headers[PERMISSION_MODE_HEADER] = mode; else delete headers[PERMISSION_MODE_HEADER];
   }
 
