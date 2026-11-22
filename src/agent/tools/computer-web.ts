@@ -61,6 +61,7 @@ import type { Frame, Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 import { sleep } from '../../runtime/sleep.js';
 import { StoppedError, throwIfStopped } from '../computer/stopped.js';
+import { VOIP_REFUSED, askedCountries } from '../computer/phone-walls.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'hover' | 'drag'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: ScrollDirection; accept_dialog?: boolean; gone?: boolean; seconds?: number } & StepExtras;
 type WebArgs = {
@@ -826,6 +827,14 @@ export function inOrder<T>(key: string, job: (hold: (work: Promise<unknown>, ms?
   return run;
 }
 
+/** Whose email a read_email_code / open_email_link may take: unless the sender is named, it must belong to the page's site, with a
+ * subject too -- a subject alone ("verification") fits every vendor's mail, and the message is consumed, so parallel sign-ups
+ * took each other's codes. A page that is no site (about:blank) adds nothing. */
+export function emailSiteScope(args: { from?: string }, pageUrl: string): { site?: string } {
+  if (args.from) return {};
+  try { return /^https?:$/.test(new URL(pageUrl).protocol) && new URL(pageUrl).hostname.includes('.') ? { site: pageUrl } : {}; } catch { return {}; }
+}
+
 /** Actions that can make a page send a code (a click, a key, a form), and when each page last had one. */
 const ACTS_ON_PAGE: ReadonlySet<string> = new Set(['click', 'press', 'fill', 'choose', 'steps', 'upload', 'drag', 'open', 'reload', 'login', 'evaluate']);
 const pageActedAt = sharedState('page-acted-at', () => new WeakMap<Page, number>());
@@ -964,20 +973,30 @@ async function frameOf(page: Page, target: string | undefined): Promise<Page | F
   } catch { return page; }
 }
 
-/** Words a page uses to refuse a VoIP or virtual number (a Twilio number) for phone verification. */
-export const VOIP_REFUSED = /\b(?:voip|virtual (?:phone )?numbers?|internet (?:phone|calling) numbers?|non-?mobile (?:phone )?numbers?|landline|this (?:phone )?number (?:type )?(?:is )?not (?:supported|allowed|accepted|eligible)|(?:can ?not|can't|cannot) (?:be )?(?:use|accept)(?:d)? (?:this|that) (?:phone )?number|(?:please )?(?:use|enter|provide) a (?:real|valid|personal) mobile(?: phone)?(?: number)?|only mobile (?:phone )?numbers)\b/i;
+export { VOIP_REFUSED } from '../computer/phone-walls.js';
 
 /** The phone to type here: the profile's (the sign-up number), or the user's own mobile once the page has refused a VoIP number. */
 /** Words a page uses to refuse a number from this country (a US number) or to ask for another country's. */
 export const COUNTRY_REFUSED = /\b(?:(?:u\.?s\.?|united states|american|north american) (?:phone |mobile )?numbers? (?:are |is )?not (?:supported|accepted|allowed)|(?:this )?country (?:is )?not (?:supported|available)|not available in your (?:country|region)|(?:only|must be an?) (?:uk|united kingdom|canadian|canada|eu|european)\b|(?:uk|canadian|eu) (?:mobile |phone )?numbers? only)\b/i;
 
-/** The phone to type here: the profile's (the sign-up number); another country's number (the profile's phone_ca, …) once the page
- * refuses a US number; the user's own mobile once it refuses a VoIP number. */
-export async function phoneForPage(page: { evaluate<T>(fn: () => T): Promise<T> }, profilePhone: string, personal: string | undefined, abroad: readonly string[] = []): Promise<string> {
+/** A number of the profile's for another country: phone_ca is `{ country: 'ca', number }`. */
+export interface AbroadPhone { country: string; number: string }
+
+/** The phone to type here: the profile's (the sign-up number); the user's own mobile once the page refuses a VoIP number; once it
+ * refuses a US number, the profile's number for the country it asks for (phone_gb for "UK numbers only"), or any other country's
+ * when it names none. A page that asks for a country the profile has no number for is a wall: that is thrown, not papered over
+ * with another country's number the page will refuse too. */
+export async function phoneForPage(page: { evaluate<T>(fn: () => T): Promise<T> }, profilePhone: string, personal: string | undefined, abroad: readonly AbroadPhone[] = []): Promise<string> {
   if (!personal && !abroad.length) return profilePhone;
   const text = await page.evaluate(() => (globalThis as unknown as { document: { body?: { innerText?: string } } }).document.body?.innerText ?? '').catch(() => '');
   if (personal && VOIP_REFUSED.test(text)) return personal;
-  if (abroad.length && COUNTRY_REFUSED.test(text)) return abroad[0]!;
+  if (abroad.length && COUNTRY_REFUSED.test(text)) {
+    const asked = askedCountries(text);
+    if (!asked) return abroad[0]!.number;
+    const fit = abroad.find(phone => asked.includes(phone.country));
+    if (fit) return fit.number;
+    throw new Error(`The page asks for a phone number from ${asked.slice(0, 2).join('/').toUpperCase()}${asked.length > 2 ? ' (or another EU country)' : ''}; the profile has numbers only for ${abroad.map(phone => phone.country.toUpperCase()).join(', ')}. A person must give one (profile field phone_${asked[0]}).`);
+  }
   return profilePhone;
 }
 const PROFILE_PROMPT: readonly [string, string, boolean][] = [['given_name', 'First name', true], ['family_name', 'Last name', true], ['email', 'Email', true], ['phone', 'Phone (with area code)', true], ['address_line1', 'Street address', true], ['address_line2', 'Apartment / suite (optional)', false], ['city', 'City', true], ['state', 'State', true], ['postal_code', 'Zip / postal code', true], ['country', 'Country', true], ['organization', 'Company (optional)', false], ['birthday', 'Date of birth (month/day/year)', false]];
@@ -1200,7 +1219,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     }
     // The profile phone is the Twilio number sign-ups use; a site that refuses it as VoIP or virtual gets the user's own mobile
     // (custom field phone_personal), whose texts the Mac reads. Decided by what the page says, so the runner and agents fill the same.
-    const abroad = Object.entries(profile?.custom ?? {}).filter(([name]) => /^phone_[a-z]{2}$/.test(name)).map(([, field]) => field.value).filter(Boolean);
+    const abroad = Object.entries(profile?.custom ?? {}).filter(([name, field]) => /^phone_[a-z]{2}$/.test(name) && field.value).map(([name, field]) => ({ country: name.slice(6), number: field.value }));
     const phone = key === 'phone' && known ? await phoneForPage(page, known, profile?.custom?.phone_personal?.value, abroad) : known;
     if (phone) { values.set(field.step, key === 'phone' ? phoneFor(phone, field.placeholder, field.current) : key === 'birthday' ? birthdayFor(phone, `${field.label} ${field.placeholder}`) : phone); continue; }
     ask.push({ step: field.step, key, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true } });
@@ -1599,7 +1618,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
     }
     case 'open_email_link': {
       if (await emailConnected(ctx.stateDir)) {
-        const mail = await findEmail(ctx.stateDir, { address: args.address, hints: await mailboxHints(ctx.stateDir, page), from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => m.links.length > 0) : looksLikeLinkEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
+        const mail = await findEmail(ctx.stateDir, { address: args.address, hints: await mailboxHints(ctx.stateDir, page), from: args.from, subject: args.subject, ...emailSiteScope(args, page.url()), spam: true, consume: true, accept: args.from || args.subject ? (m => m.links.length > 0) : looksLikeLinkEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
         const anchors = mail.anchors?.length ? mail.anchors : mail.links.map(href => ({ href, text: '' }));
         const pick = pickLink(anchors, args.link);
         if (!pick) throw new Error(`The email has no ${args.link ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${anchors.slice(0, 6).map(link => link.text.trim() || displayUrl(link.href)).join(', ') || 'none'}.`);
@@ -1657,7 +1676,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       if (await emailConnected(ctx.stateDir)) {
         // The mail arrives when the vendor sends it: wait for it instead of looking once.
         const hints = await mailboxHints(ctx.stateDir, page);
-        const mail = await findEmail(ctx.stateDir, { address: args.address, hints, from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => emailVerificationCode(m) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal })
+        const mail = await findEmail(ctx.stateDir, { address: args.address, hints, from: args.from, subject: args.subject, ...emailSiteScope(args, page.url()), spam: true, consume: true, accept: args.from || args.subject ? (m => emailVerificationCode(m) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal })
           .catch(async (error: unknown) => {
             if (!(error instanceof Error) || !/^No email matched/.test(error.message)) throw error;
             // Say where it looked: the usual cause is that the mail went to another address, not that the filter was wrong.

@@ -6,6 +6,7 @@
  * the puzzle, at a visitor's pace), never pays, and never reads or prints a key: it only drives
  * a `KeygrabPort`, so the policy is tested with a fake site. The ClikCode recorder saves the recipe as the real browser actions succeed. */
 import { CAPTCHA_FIELD_WORDS, CAPTCHA_WORDS } from './human-check-words.js';
+import { VOIP_REFUSED } from './phone-walls.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import type { HumanKind, HumanStep, StopInfo } from './keygrab-types.js';
 import { nextPress, pageExcerpt, type Control } from './oauth-consent.js';
@@ -75,8 +76,8 @@ const API_LINK = /api (keys?|tokens?|credentials|developers?)/i;
 /** "Word Associations API Account", "API console": the way into the vendor's API area, ranked between the key links and the bare ones. */
 const API_LINK_AREA = /\bapi\b[^.]{0,30}\b(?:account|portal|console|dashboard|access|sign ?up|register)\b|\b(?:developer|api) (?:portal|console|dashboard|account)\b/i;
 /** Links that read like the API area but are reading matter: "Go to the API Developer Blog". */
-/** A page refusing a VoIP or virtual number (keep in step with VOIP_REFUSED in tools/computer-web.ts, which picks the number to type). */
-const VOIP_WORDS = /\b(?:voip|virtual (?:phone )?numbers?|landline|non-?mobile|this (?:phone )?number (?:type )?(?:is )?not (?:supported|allowed|accepted|eligible)|real mobile)\b/i;
+/** A page refusing a VoIP or virtual number: the one definition the form filler uses too. */
+const VOIP_WORDS = VOIP_REFUSED;
 /** A capture that saved the key but whose delivery failed says so, with the delivery's own reason: "may have been created
  * but could not be captured" hid that the key was safe in the vault (Rasayel), and the reason was cut off behind the SAVED line. */
 /** The names of what can be pressed, safe to hand back: a held secret is masked and a key-shaped value hidden, because a page
