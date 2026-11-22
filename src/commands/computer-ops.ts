@@ -246,7 +246,7 @@ export async function computerSecretGenerate(name: string, flags: { url: string;
   const token = `${prefix}${randomBytes(whole(flags.bytes, 'bytes', 16, 64) ?? 32).toString('hex')}`;
   const { registerSecret } = await import('../agent/computer/secret-scrubber.js');
   registerSecret(token);
-  await (await import('../agent/computer/credential-vault.js')).saveNamedSecret(stateDirectory(), name, token, { url: origin, vendor: GENERATED_TOKEN });
+  await (await import('../agent/computer/credential-vault.js')).saveGeneratedToken(stateDirectory(), name, token, origin, { vendor: GENERATED_TOKEN });
   print({ name, url: origin, sha256: createHash('sha256').update(token).digest('hex') });
 }
 
@@ -256,17 +256,20 @@ export async function computerSecretCall(name: string, flags: { path: string; me
   const vault = await import('../agent/computer/credential-vault.js');
   const dir = stateDirectory();
   const info = (await vault.namedSecretInfo(dir)).find(item => item.name === name);
-  const origin = info?.meta?.url;
-  if (!info || !origin) throw new Error(`No saved token named "${name}" with a recorded site.`);
-  // Only a token made here for one site: a captured key's recorded site can be edited later, so it is never sent by this command.
-  if (info.meta?.vendor !== GENERATED_TOKEN) throw new Error(`"${name}" was not made by \`clikcode computer secrets generate\`; only such a token can be used this way.`);
+  if (!info) throw new Error(`No saved token named "${name}".`);
+  // Only a token made here for one site, sent only to the origin pinned when it was made. The record's url and vendor tag are not
+  // trusted: a later setSecretUrl, a merge from another computer or any save of a secret can change them.
+  const pinned = await vault.pinnedToken(dir, name);
+  if (!pinned) throw new Error(`"${name}" was not made by \`clikcode computer secrets generate\` on this computer (or was changed since); only such a token can be used this way.`);
+  if (info.meta?.url && info.meta.url !== pinned.origin) throw new Error(`The site recorded for "${name}" (${info.meta.url}) is not the one it was made for (${pinned.origin}); it is not sent.`);
+  const origin = pinned.origin;
   let base: URL;
   try { base = new URL(origin); } catch { throw new Error(`The site recorded for "${name}" is not an address.`); }
   if (base.protocol !== 'https:') throw new Error(`The site recorded for "${name}" is not https.`);
   if (!flags.path.startsWith('/') || flags.path.startsWith('//')) throw new Error('--path is a path on that site, starting with one /.');
   const target = new URL(flags.path, base.origin);
   if (target.origin !== base.origin) throw new Error('--path must stay on the site the token belongs to.');
-  const token = await vault.readNamedSecret(dir, name);
+  const token = pinned.value;
   const { registerSecret, scrubSecrets } = await import('../agent/computer/secret-scrubber.js');
   registerSecret(token);
   const headers: Record<string, string> = { authorization: `Bearer ${token}` };

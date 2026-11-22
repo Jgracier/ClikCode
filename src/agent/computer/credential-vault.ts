@@ -1,6 +1,6 @@
 /** Local encrypted login vault. Only opaque item ids cross the model boundary. */
 import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from '../../session/store/files.js';
@@ -326,13 +326,13 @@ export async function saveNamedSecret(stateDir: string, name: string, value: str
   if (!value) throw new CredentialError('The secret is empty.');
   await withVaultLock(stateDir, () => saveNamedSecretHeld(stateDir, name, value, meta, options));
 }
-async function saveNamedSecretHeld(stateDir: string, name: string, value: string, meta: SecretInput, options: { legacy?: boolean }): Promise<void> {
+async function saveNamedSecretHeld(stateDir: string, name: string, value: string, meta: SecretInput, options: { legacy?: boolean; pin?: TokenPin }): Promise<void> {
   // A spelling variant of a saved secret is that secret, rotated: no twin is made.
   name = await savedNameFor(stateDir, name) ?? name;
   const { file, aad } = secretFile(stateDir, name);
   const key = await vaultKey(stateDir, true);
   // A second save of the same name is a rotation: the first date stays, and what was given before stays unless given again.
-  let before: { value?: string; meta?: SecretMeta } = {};
+  let before: { value?: string; meta?: SecretMeta; pin?: TokenPin } = {};
   try { before = JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as typeof before; } catch { /* fail-open-ok: a new secret */ }
   // A secret saved before records existed was made when its file was.
   if (before.value !== undefined && !before.meta) { const made = await fs.stat(file).then(info => info.mtime.toISOString(), () => undefined); if (made) before.meta = { createdAt: made }; }
@@ -342,8 +342,40 @@ async function saveNamedSecretHeld(stateDir: string, name: string, value: string
   if (!url && !INTERNAL_SECRET.test(name) && !options.legacy) throw new CredentialError(`A saved key must say which site it is for: give its base URL (https://example.com) when saving "${name}".`);
   const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), ...kept('page'), ...(url ? { url } : {}), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) };
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await writeSealed(file, seal(key, aad, JSON.stringify({ name, value, meta: saved })));
+  // The origin pin of a generated token survives a save that keeps its value (a filled-in owner); a new value is a new token, unpinned.
+  const pin = options.pin ?? (before.pin && before.value === value ? before.pin : undefined);
+  await writeSealed(file, seal(key, aad, JSON.stringify({ name, value, meta: saved, ...(pin ? { pin } : {}) })));
 }
+/** The one site a token `secrets generate` made may be sent to, fixed when it was made. Not the record's `url` (which a later
+ * setSecretUrl, merge or backfill may change) and not its vendor tag (anything that saves a secret can write that): an HMAC under
+ * this vault's key over the name, the origin and the token, which only saveGeneratedToken writes. */
+type TokenPin = { origin: string; mac: string };
+const pinMac = (key: Buffer, name: string, origin: string, value: string): string =>
+  createHmac('sha256', key).update(`token-pin:v1\0${name.toLowerCase()}\0${origin}\0${createHash('sha256').update(value).digest('hex')}`).digest('base64url');
+
+/** Saves a token made here for exactly one https origin, pinned (see TokenPin). */
+export async function saveGeneratedToken(stateDir: string, name: string, value: string, origin: string, meta: { vendor: string }): Promise<void> {
+  const url = webOrigin(origin);
+  if (!value || !url || !url.startsWith('https://')) throw new CredentialError('A generated token needs an https origin.');
+  await withVaultLock(stateDir, async () => {
+    const key = await vaultKey(stateDir, true);
+    const saved = await savedNameFor(stateDir, name) ?? name;
+    await saveNamedSecretHeld(stateDir, saved, value, { url, vendor: meta.vendor }, { pin: { origin: url, mac: pinMac(key, saved, url, value) } });
+  });
+}
+/** The origin a generated token is pinned to, with the token, when the pin is genuine and still matches the saved value; else undefined. */
+export async function pinnedToken(stateDir: string, name: string): Promise<{ origin: string; value: string } | undefined> {
+  const { file, aad } = secretFile(stateDir, name);
+  const key = await vaultKey(stateDir, false);
+  let record: { name?: string; value?: string; pin?: TokenPin };
+  try { record = JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as typeof record; } catch { return undefined; }
+  const { pin, value } = record;
+  if (!pin || typeof pin.origin !== 'string' || typeof pin.mac !== 'string' || typeof value !== 'string' || !value) return undefined;
+  const want = Buffer.from(pinMac(key, record.name ?? name, pin.origin, value));
+  const have = Buffer.from(pin.mac);
+  return want.length === have.length && timingSafeEqual(want, have) ? { origin: pin.origin, value } : undefined;
+}
+
 /** Names with their records, never the values. */
 export async function namedSecretInfo(stateDir: string): Promise<{ name: string; meta?: SecretMeta }[]> {
   const dir = path.join(vaultDir(stateDir), 'secrets');
