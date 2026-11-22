@@ -15,6 +15,20 @@ export type RecipeStep = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' 
 export interface Recipe { host: string; loginRoute: LoginRoute; steps: RecipeStep[]; keyPage?: string; captureHint?: string; verifiedAt: string }
 
 const MAX_STEPS = 40;
+/** A control that destroys or replaces something that exists (an old key, an account): never recorded, never replayed. A replay that
+ * pressed "Revoke" or "Regenerate" would kill the key the user's systems already use. */
+export const DESTRUCTIVE_STEP = /\b(?:delete|revoke|remove|rotate|roll|regenerate|deactivate|destroy)\b/i;
+export const destructiveStep = (step: RecipeStep): boolean => step.do !== 'fill' && step.do !== 'wait' && !!step.target && DESTRUCTIVE_STEP.test(step.target);
+/** Hosts a recipe's replay may be on: its own host and subdomains, and the sign-in provider of its route. */
+export function replayHostAllowed(recipe: Pick<Recipe, 'host' | 'loginRoute'>, url: string): boolean {
+  let host = '';
+  try { const u = new URL(url); if (u.protocol !== 'https:' && u.protocol !== 'http:') return false; host = u.hostname.toLowerCase().replace(/^www\./, ''); } catch { return false; }
+  const own = recipe.host.toLowerCase().replace(/^www\./, '');
+  if (host === own || host.endsWith(`.${own}`)) return true;
+  if (recipe.loginRoute === 'google') return host === 'accounts.google.com';
+  if (recipe.loginRoute === 'github') return host === 'github.com';
+  return false;
+}
 const REF = /^(?:f\d+)?e\d+$/;
 const DOS = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload']);
 const SECRET_FIELD = /pass(?:word|code|phrase)?|secret|token|api[ _-]?key|private[ _-]?key|\bpin\b|otp|cvv|cvc|card number|one[- ]time|2fa|verification code/i;
@@ -116,10 +130,21 @@ interface Replay { output: string; isError?: boolean; completed: boolean; blocke
 
 /** Replays a recipe through `run` (the existing steps runner, which calls `guard` after each step and stops
  * when it returns text). Stops at the first failure or at a blocker page and says what to do from there. */
-export async function replayRecipe(recipe: Recipe, run: (steps: RecipeStep[], guard: () => Promise<string | undefined>) => Promise<{ output: string; isError?: boolean }>, readPage: () => Promise<string>, pastCaptcha?: () => Promise<boolean>): Promise<Replay> {
+export async function replayRecipe(recipe: Recipe, run: (steps: RecipeStep[], guard: () => Promise<string | undefined>) => Promise<{ output: string; isError?: boolean }>, readPage: () => Promise<string>, pastCaptcha?: () => Promise<boolean>, pageUrl?: () => string): Promise<Replay> {
+  const head = `Recipe for ${recipe.host} (${recipe.loginRoute})`;
+  // A recipe drives the page by control text: on another site the same words ("Continue", "Delete") would press something else.
+  const offSite = (): string | undefined => { const url = pageUrl?.(); return url !== undefined && !replayHostAllowed(recipe, url) ? (() => { try { return new URL(url).hostname; } catch { return url.slice(0, 80); } })() : undefined; };
+  const away = offSite();
+  if (away !== undefined) return { output: `${head} was not run: the page is on ${away}, not ${recipe.host}. Open ${recipe.host} first.`, isError: true, completed: false };
+  const dropped = recipe.steps.filter(destructiveStep);
+  const steps = recipe.steps.filter(step => !destructiveStep(step)).map(s => ({ ...s }));
+  const droppedNote = dropped.length ? `\nNot replayed (they destroy or replace something): ${dropped.map(step => `${step.do} "${step.target}"`).join(', ')}.` : '';
   let blocker: string | undefined;
+  let left: string | undefined;
   let answered = 0;
-  const result = await run(recipe.steps.map(s => ({ ...s })), async () => {
+  const result = await run(steps, async () => {
+    left = offSite();
+    if (left !== undefined) return `the page left ${recipe.host} (it is on ${left})`;
     blocker = detectBlocker(await readPage().catch(() => ''));
     // A captcha is answered on the spot (twice at most in one replay) and the replay carries on; only one that stays is a stop.
     if (blocker === 'a captcha' && pastCaptcha && answered < 2) {
@@ -129,9 +154,9 @@ export async function replayRecipe(recipe: Recipe, run: (steps: RecipeStep[], gu
     }
     return blocker;
   });
-  const head = `Recipe for ${recipe.host} (${recipe.loginRoute})`;
+  if (left !== undefined) return { output: `${head} stopped: the page left ${recipe.host} for ${left}, and a recipe is only replayed on its own site. Take over from the page below.${droppedNote}\n\n${result.output}`, isError: true, completed: false };
   if (blocker) return { output: `${head} stopped at ${blocker}. That step is for the person: not bypassed. Hand it over (handoff, ask_user, or record it with queue), then carry on from the page below.\n\n${result.output}`, completed: false, blocker };
   if (result.isError) return { output: `${head} stopped at the first step that failed; the page below is where it is now, so take over from here. Save a corrected recipe when you finish.\n\n${result.output}`, isError: true, completed: false };
   if (/\d+ later steps? (?:was|were) not run/.test(result.output)) return { output: `${head} stopped early (a step is waiting on the page); take over from the page below.\n\n${result.output}`, completed: false };
-  return { output: `${head} ran all ${recipe.steps.length} steps.${recipe.keyPage ? ` Key page: ${recipe.keyPage}.` : ''}${recipe.captureHint ? ` Capture: ${recipe.captureHint}` : ''}\n\n${result.output}`, completed: true };
+  return { output: `${head} ran all ${steps.length} steps.${recipe.keyPage ? ` Key page: ${recipe.keyPage}.` : ''}${recipe.captureHint ? ` Capture: ${recipe.captureHint}` : ''}${droppedNote}\n\n${result.output}`, completed: true };
 }

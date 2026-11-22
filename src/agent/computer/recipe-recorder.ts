@@ -5,7 +5,7 @@
 import { sharedState } from './shared-state.js';
 import { keyShaped } from './secret-finder.js';
 import { compactSavedRecipes } from './recipe-tools.js';
-import { getRecipe, normalizeHost, recipeProblem, saveRecipe, type LoginRoute, type Recipe, type RecipeStep } from './signup-recipes.js';
+import { destructiveStep, getRecipe, normalizeHost, recipeProblem, saveRecipe, type LoginRoute, type Recipe, type RecipeStep } from './signup-recipes.js';
 
 interface Journal { host: string; steps: RecipeStep[]; visited: Set<string>; spoiled?: string; signedIn: boolean }
 const journals = sharedState('recipe-journals', () => new Map<string, Journal>());
@@ -35,6 +35,8 @@ export function recordableStep(step: RecipeStep, label?: string): RecipeStep | '
   const name = raw && !REF.test(raw) ? raw : label;
   const target = name ? safeText(name, 120) : undefined;
   if (!target) return 'spoiled';
+  // Revoke, Regenerate, Delete, Roll: what the run did once to an old key is not a step to repeat on every replay.
+  if (destructiveStep({ do: step.do, target })) return 'skip';
   const out: RecipeStep = { do: step.do, target };
   if (step.at) out.at = step.at;
   if (step.accept_dialog) out.accept_dialog = true;

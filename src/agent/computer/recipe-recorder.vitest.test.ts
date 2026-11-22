@@ -111,6 +111,38 @@ describe('automatic recipes', () => {
   }));
 });
 
+describe('replay safety', () => {
+  const recipe = { host: 'app.example.com', loginRoute: 'email' as const, verifiedAt: '2026-11-01T00:00:00Z', steps: [
+    { do: 'click' as const, target: 'API keys' }, { do: 'click' as const, target: 'Revoke key' }, { do: 'click' as const, target: 'Regenerate secret' },
+    { do: 'click' as const, target: 'Roll key' }, { do: 'click' as const, target: 'Delete' }, { do: 'click' as const, target: 'Create key' },
+  ] };
+
+  it('never replays a Revoke, Regenerate, Roll or Delete step, and says which were left out', async () => {
+    let seen: RecipeStep[] = [];
+    const out = await replayRecipe(recipe, async steps => { seen = steps; return { output: 'ok' }; }, async () => '', undefined, () => 'https://app.example.com/keys');
+    expect(seen.map(s => s.target)).toEqual(['API keys', 'Create key']);
+    expect(out.output).toContain('Not replayed');
+  });
+
+  it('does not run on another site, and stops when a step leaves the recipe\'s site', async () => {
+    let ran = false;
+    const elsewhere = await replayRecipe(recipe, async () => { ran = true; return { output: 'ok' }; }, async () => '', undefined, () => 'https://evil.example.net/');
+    expect(ran).toBe(false);
+    expect(elsewhere).toMatchObject({ completed: false, isError: true });
+    let url = 'https://app.example.com/';
+    const left = await replayRecipe(recipe, async (steps, guard) => { url = 'https://other.example.org/'; return (await guard()) ? { output: 'stopped' } : { output: 'ok' }; }, async () => '', undefined, () => url);
+    expect(left).toMatchObject({ completed: false, isError: true });
+    expect(left.output).toContain('other.example.org');
+    // A subdomain is the same site.
+    expect((await replayRecipe(recipe, async () => ({ output: 'ok' }), async () => '', undefined, () => 'https://eu.app.example.com/')).completed).toBe(true);
+  });
+
+  it('records no destructive step', () => {
+    expect(recordableStep({ do: 'click', target: 'Revoke' })).toBe('skip');
+    expect(recordableStep({ do: 'click', target: 'Create key' })).toEqual({ do: 'click', target: 'Create key' });
+  });
+});
+
 describe('compactSteps', () => {
   const click = (target: string) => ({ do: 'click' as const, target });
   it('keeps only the last lap of a journey that went round in circles', async () => {

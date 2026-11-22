@@ -17,7 +17,7 @@ import { CARD_APPROVAL_MS, cardFieldFor, cardValueFor, describeCard, describeSav
 import { forgetSavedLogins, savedLoginFields, savedLoginsForSite, saveLoginFields } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
 import { FILL_DEADLINE_MS, FillTimeout, withFillDeadline, type FillClock } from '../computer/fill-deadline.js';
-import { describeRecipe, fillPlaceholders, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
+import { describeRecipe, destructiveStep, fillPlaceholders, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, bestProfileFor, isUnfillable, customFieldFor, defaultProfile, describeProfile, listProfiles, profileEmail, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup, sitePasswordFor } from '../computer/signup-login.js';
@@ -1577,8 +1577,9 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       const mine = (await profileEmail(ctx.stateDir));
       const filled = { ...recipe, steps: recipe.steps.map(step => ({ ...step, ...(step.target ? { target: fillPlaceholders(step.target, { sso_email: mine }) } : {}), ...(step.text ? { text: fillPlaceholders(step.text, { sso_email: mine }) } : {}) })) };
       const replay = await replayRecipe(filled, (steps, guard) => runSteps(page, steps as Step[], ctx, args.tab, args.label, async current => { ended = current; return guard(); }), async () => scrubSecrets(await ended.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never) as string),
-        async () => (await passHumanCheck(ended, { stateDir: ctx.stateDir, solve: !tabIsInCloud(ctx.stateDir, args.tab) && await captchaSolvingAllowed(ctx.stateDir), ...(ctx.signal ? { signal: ctx.signal } : {}) })).outcome === 'cleared');
-      if (replay.completed) await saveRecipe(ctx.stateDir, { host: recipe.host, loginRoute: recipe.loginRoute, steps: recipe.steps, ...(recipe.keyPage ? { keyPage: recipe.keyPage } : {}), ...(recipe.captureHint ? { captureHint: recipe.captureHint } : {}) }).catch(quiet('agent/tools/computer-web'));
+        async () => (await passHumanCheck(ended, { stateDir: ctx.stateDir, solve: !tabIsInCloud(ctx.stateDir, args.tab) && await captchaSolvingAllowed(ctx.stateDir), ...(ctx.signal ? { signal: ctx.signal } : {}) })).outcome === 'cleared',
+        () => ended.url());
+      if (replay.completed) await saveRecipe(ctx.stateDir, { host: recipe.host, loginRoute: recipe.loginRoute, steps: recipe.steps.filter(step => !destructiveStep(step)), ...(recipe.keyPage ? { keyPage: recipe.keyPage } : {}), ...(recipe.captureHint ? { captureHint: recipe.captureHint } : {}) }).catch(quiet('agent/tools/computer-web'));
       return { output: replay.output, ...(replay.isError ? { isError: true } : {}) };
     }
     case 'dialog': {

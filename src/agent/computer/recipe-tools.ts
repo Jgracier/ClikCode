@@ -3,7 +3,7 @@
  * The step logic is pure; the dry run takes a small port so it is tested with a fake site. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { normalizeHost, saveRecipe, type Recipe, type RecipeStep } from './signup-recipes.js';
+import { DESTRUCTIVE_STEP, normalizeHost, saveRecipe, type Recipe, type RecipeStep } from './signup-recipes.js';
 import { selectorsOf } from './keygrab-scope.js';
 import { sleep } from '../../runtime/sleep.js';
 
@@ -119,7 +119,7 @@ export interface DryRunReport { host: string; ok: boolean; steps: DryStep[]; ope
 
 const norm = (t: string): string => t.replace(/\s+/g, ' ').trim().toLowerCase();
 const SUBMITS = /^\W*(?:create|generate|save|submit|confirm|finish|register|sign ?up|publish|apply|done|add|continue|next|ok)\b/i;
-const NEVER = /\b(?:delete|revoke|remove|rotate|regenerate|cancel|deactivate|destroy)\b/i;
+const NEVER = new RegExp(`${DESTRUCTIVE_STEP.source}|\\bcancel\\b`, 'i');
 
 /** Is the step's target on the page: a pressable or text box with that name (exact, else containing it). */
 function targetOnPage(step: RecipeStep, view: DryView): boolean {
