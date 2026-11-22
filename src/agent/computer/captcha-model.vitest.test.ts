@@ -163,9 +163,10 @@ describe('listening to an audio challenge', () => {
     expect(cleanTranscript(heard!)).toBe('their plan was simple');
   });
 
-  it('asks only subscription or free speech models, on the subscriptions lane, and keeps its own time limit under a caller signal', async () => {
+  it('asks subscription or free speech models first, then the other listed ones, never an unlisted one, on the subscriptions lane, and keeps its own time limit under a caller signal', async () => {
     const { askTranscript, transcribeOrder } = await import('./captcha-model.js');
-    expect(transcribeOrder(['whisper-large-v3', 'whisper-1', 'gpt-4o-transcribe'], [{ id: 'whisper-1', access: 'paid' }, { id: 'gpt-4o-transcribe' }, { id: 'whisper-large-v3', access: 'free' }])).toEqual(['whisper-large-v3']);
+    expect(transcribeOrder(['whisper-large-v3', 'whisper-1', 'gpt-4o-transcribe'], [{ id: 'whisper-1', access: 'paid' }, { id: 'gpt-4o-transcribe' }, { id: 'whisper-large-v3', access: 'free' }])).toEqual(['whisper-large-v3', 'whisper-1', 'gpt-4o-transcribe']);
+    expect(transcribeOrder(['whisper-large-v3', 'whisper-1'], [{ id: 'gpt-4o-transcribe' }])).toEqual([]);
     const seen: Array<{ model: string; headers: Record<string, string>; signal: AbortSignal }> = [];
     const fetchImpl = (async (_url: unknown, init: { body: FormData; headers: Record<string, string>; signal: AbortSignal }) => {
       seen.push({ model: String(init.body.get('model')), headers: init.headers, signal: init.signal });
@@ -173,9 +174,12 @@ describe('listening to an audio challenge', () => {
     }) as unknown as typeof fetch;
     const caller = new AbortController();
     const connection = { baseUrl: 'http://gateway.test', apiKey: 'k' };
-    // Only paid speech models listed: nothing is sent at all.
-    expect(await askTranscript(Buffer.from('x'), 'audio/mpeg', { fetchImpl, connection, listing: async () => ({ models: [], speech: [{ id: 'whisper-1', access: 'paid' }] }) })).toBeUndefined();
+    // None of the wanted models listed: nothing is sent at all.
+    expect(await askTranscript(Buffer.from('x'), 'audio/mpeg', { fetchImpl, connection, listing: async () => ({ models: [], speech: [{ id: 'tts-1' }] }) })).toBeUndefined();
     expect(seen).toEqual([]);
+    // Only a metered one listed: it is asked.
+    expect(await askTranscript(Buffer.from('x'), 'audio/mpeg', { fetchImpl, connection, listing: async () => ({ models: [], speech: [{ id: 'whisper-1', access: 'paid' }] }) })).toBe('seven');
+    seen.length = 0;
     expect(await askTranscript(Buffer.from('x'), 'audio/mpeg', { fetchImpl, connection, signal: caller.signal, listing: async () => ({ models: [], speech: [{ id: 'whisper-1', access: 'subscription' }] }) })).toBe('seven');
     expect(seen[0]!.model).toBe('whisper-1');
     expect(seen[0]!.headers['x-clikcode-subscriptions']).toBe('on');

@@ -518,22 +518,26 @@ export async function askCaptchaText(image: ImageInput, options: AskOptions = {}
 // ── listening ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Speech-to-text models, best first for short noisy clips of spoken words or digits: the default of the
- * captchaTranscribeModels setting. Only the ones the Gateway lists as served by a subscription or the free tier
- * are ever asked -- whisper-1 and gpt-4o-transcribe are usually metered, and a captcha never spends paid usage. */
+ * captchaTranscribeModels setting. The audio challenge is the one place a metered model is used on purpose: a clip
+ * costs a fraction of a cent, and without it a picture puzzle the voters cannot clear ends the sign-up. Models the
+ * Gateway serves by subscription or the free tier are asked first; the other listed ones follow in the setting's order. */
 export const TRANSCRIBE_MODELS = defaultList('captchaTranscribeModels');
 const TRANSCRIBE_MS = 45_000;
 
-/** The transcription models to try, in the setting's order, that the listing says cost nothing per call. */
+/** The transcription models to try: the wanted ones the Gateway lists, those it serves at no per-call cost first, then
+ * the rest in the setting's order. A model the Gateway does not list is never asked. */
 export function transcribeOrder(wanted: readonly string[], speech: GatewayListing['speech']): string[] {
-  const served = new Set((speech ?? []).filter(subsidized).map(model => model.id));
-  return wanted.filter(model => served.has(model));
+  const listed = speech ?? [];
+  const free = new Set(listed.filter(subsidized).map(model => model.id));
+  const served = new Set(listed.map(model => model.id));
+  return [...wanted.filter(model => free.has(model)), ...wanted.filter(model => served.has(model) && !free.has(model))];
 }
 
 export interface TranscriptOptions { signal?: AbortSignal; fetchImpl?: typeof fetch; connection?: { baseUrl: string; apiKey: string }; listing?: () => Promise<GatewayListing>; models?: readonly string[] }
 
 /** The words spoken in an audio challenge clip, through the account's own Gateway (`/v1/audio/transcriptions`), on the
- * subscriptions lane like the vision asks. The first model that answers with text wins; none listed as subscription or
- * free means no ask at all. `fetchImpl`, `connection`, `listing` and `models` are the test seams. Never throws. */
+ * subscriptions lane like the vision asks. The first model that answers with text wins; none of the wanted models
+ * listed means no ask at all. `fetchImpl`, `connection`, `listing` and `models` are the test seams. Never throws. */
 export async function askTranscript(audio: Buffer, mimeType: string, options: TranscriptOptions = {}): Promise<string | undefined> {
   let connection = options.connection;
   let models: string[];
@@ -549,7 +553,7 @@ export async function askTranscript(audio: Buffer, mimeType: string, options: Tr
     quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error));
     return undefined;
   }
-  if (!models.length) { quiet('agent/computer/captcha-model')('no subscription or free speech-to-text model is listed: the audio challenge is not asked'); return undefined; }
+  if (!models.length) { quiet('agent/computer/captcha-model')('none of the captchaTranscribeModels is listed by the Gateway: the audio challenge is not asked'); return undefined; }
   const { subscriptionsHeader } = await import('../../gateway/subscriptions.js');
   const fetchImpl = options.fetchImpl ?? fetch;
   const name = /wav/i.test(mimeType) ? 'clip.wav' : /ogg/i.test(mimeType) ? 'clip.ogg' : 'clip.mp3';

@@ -193,7 +193,7 @@ export const COMPUTER_TUNABLES = {
   captchaClickVoters: { default: 'gpt-6-sol,gpt-6.1-terra,gpt-6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna', list: true, about: 'Captcha voters for where-to-click questions, best first.' },
   captchaOrderVoters: { default: 'gpt-6-sol,gpt-6.1-terra,gpt-5.6-sol,gpt-6-luna,gpt-5.6-terra,gpt-5.6-luna', list: true, about: 'Captcha voters for matching, ordering and picking questions, best first.' },
   captchaTextVoters: { default: 'gpt-6-luna,gpt-5.6-luna,gpt-6.1-terra,gpt-6-sol,gpt-5.6-terra', list: true, about: 'Captcha voters for reading distorted text, best first.' },
-  captchaTranscribeModels: { default: 'whisper-large-v3,whisper-1,whisper-large-v3-turbo,gpt-4o-transcribe', list: true, about: 'Speech-to-text models for audio captchas, best first (only ones the Gateway serves by subscription or free are asked).' },
+  captchaTranscribeModels: { default: 'whisper-large-v3,whisper-large-v3-turbo,gpt-4o-mini-transcribe,whisper-1,gpt-4o-transcribe', list: true, about: 'Speech-to-text models for audio captchas, best first (subscription or free ones are asked first; the others may bill a fraction of a cent a clip).' },
   captchaSubscription: { default: true, about: 'Let a hard captcha question be answered on your signed-in Claude or Codex subscription (off: Gateway voters only).' },
   captchaVoteLog: { default: false, about: 'Print each captcha voter\'s answer to stderr while solving (for diagnosing the solver).' },
   keygrabLog: { default: false, about: 'Print each keygrab step to stderr (for diagnosing a key capture).' },
