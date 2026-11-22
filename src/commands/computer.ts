@@ -498,14 +498,13 @@ export async function computerOauthConnect(connector: string, flags: { tab?: str
   if (!outcome.ok) process.exitCode = 1;
 }
 
-/** `clikcode computer sms <user@host>|off|test`: where texted one-time codes are read from (agent/computer/sms-code.ts). */
+/** `clikcode computer sms <user@host>|off|test|twilio:…`: where texted one-time codes are read from (agent/computer/sms-code.ts). */
 export async function computerSms(setting: string | undefined): Promise<void> {
   const dir = stateDirectory();
-  const { askMessages, askTwilio, setSmsSource, setTwilioSms, smsSource, twilioSms } = await import('../agent/computer/sms-code.js');
-  // twilio:+<number>:<AC account sid> (or twilio:off) sets the Twilio number sign-ups use; anything else is the Mac.
+  const { applyTwilioSetting, askMessages, askTwilio, setSmsSource, setTwilioSms, smsSource, twilioSms } = await import('../agent/computer/sms-code.js');
+  // twilio:+<number>:<AC account sid>, twilio:add:+<number>, twilio:remove:+<number> or twilio:off: the Twilio numbers; anything else is the Mac.
   const twilioSetting = /^twilio:(.+)$/i.exec(setting ?? '')?.[1];
-  if (twilioSetting === 'off') await setTwilioSms(dir, undefined);
-  else if (twilioSetting) { const [number, account] = twilioSetting.split(':'); await setTwilioSms(dir, { number: number ?? '', account: account ?? '' }); }
+  if (twilioSetting) await setTwilioSms(dir, applyTwilioSetting(await twilioSms(dir), twilioSetting));
   else if (setting === 'off') await setSmsSource(dir, undefined);
   else if (setting && setting !== 'test') await setSmsSource(dir, setting);
   const [target, twilio] = await Promise.all([smsSource(dir), twilioSms(dir)]);
@@ -518,7 +517,7 @@ export async function computerSms(setting: string | undefined): Promise<void> {
   }
   const check = checks.join(' ') || undefined;
   if (isJsonDefaultMode()) return emitResult({ computer: { sms: target ?? null, smsTwilio: twilio ?? null, ...(check ? { check } : {}) } });
-  const where = [twilio ? `the Twilio number ${twilio.number}` : '', target ?? ''].filter(Boolean).join(' and ');
+  const where = [twilio ? `the Twilio number ${twilio.number}${twilio.others?.length ? ` (and ${twilio.others.join(', ')})` : ''}` : '', target ?? ''].filter(Boolean).join(' and ');
   process.stdout.write(where ? `Texted codes are read from ${where}.${check ? ` ${check}` : ''}\n` : 'No phone is set up to read texted codes. Run: clikcode computer sms twilio:+<number>:<account sid>, or clikcode computer sms <user@host>\n');
 }
 

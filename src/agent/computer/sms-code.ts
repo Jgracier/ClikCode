@@ -143,6 +143,25 @@ export async function setTwilioSms(stateDir: string, value: TwilioSms | undefine
   });
 }
 
+/** What `clikcode computer sms twilio:<…>` makes of the current setting: `+<number>:<AC sid>` sets the sign-up number and account
+ * (the account's other numbers are kept), `add:+<number>` / `remove:+<number>` change those other numbers (another country's,
+ * offered when a site refuses a US one), `off` clears it. Undefined: no Twilio number. */
+export function applyTwilioSetting(current: TwilioSms | undefined, setting: string): TwilioSms | undefined {
+  if (setting === 'off') return undefined;
+  const change = /^(add|remove):(.*)$/i.exec(setting);
+  if (change) {
+    const number = change[2]!.trim();
+    if (!TWILIO_NUMBER.test(number)) throw new Error('Give the number as +<country><number>: clikcode computer sms twilio:add:+18734578891');
+    if (!current) throw new Error('Set the sign-up number first: clikcode computer sms twilio:+<number>:<account sid>');
+    const others = (current.others ?? []).filter(n => n !== number && n !== current.number);
+    if (change[1]!.toLowerCase() === 'add' && number !== current.number) others.push(number);
+    return { number: current.number, account: current.account, ...(others.length ? { others } : {}) };
+  }
+  const [number = '', account = ''] = setting.split(':');
+  const others = (current?.account === account ? current.others ?? [] : []).filter(n => n !== number);
+  return { number, account, ...(others.length ? { others } : {}) };
+}
+
 /** The texts the Twilio number received since `sinceUnixSeconds`, as rows like the Mac's (unix seconds, sender, text). */
 export async function askTwilio(stateDir: string, sms: TwilioSms, sinceUnixSeconds: number, signal?: AbortSignal, fetcher: typeof fetch = fetch, given?: { sid: string; key: string }): Promise<{ rows: string } | { error: string }> {
   const { readNamedSecret } = await import('./credential-vault.js');

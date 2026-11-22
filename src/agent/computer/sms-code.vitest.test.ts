@@ -174,3 +174,17 @@ describe('a texted code is handed out once, and only a new one for this site', (
     expect(oneAnswered).toMatchObject({ error: expect.stringMatching(/No new texted code/) });
   }, 20_000);
 });
+
+describe('changing the Twilio setting', () => {
+  const AC = `AC${'1'.repeat(32)}`;
+  it('keeps the other numbers when the sign-up number is set again, and adds and removes them', async () => {
+    const { applyTwilioSetting } = await import('./sms-code.js');
+    const withCa = { number: '+17192497747', account: AC, others: ['+18734578891'] };
+    expect(applyTwilioSetting(withCa, `+17192490000:${AC}`)).toEqual({ number: '+17192490000', account: AC, others: ['+18734578891'] });
+    expect(applyTwilioSetting(withCa, `+17192490000:AC${'2'.repeat(32)}`)).toEqual({ number: '+17192490000', account: `AC${'2'.repeat(32)}` });
+    expect(applyTwilioSetting({ number: '+17192497747', account: AC }, 'add:+447700900123')).toEqual({ number: '+17192497747', account: AC, others: ['+447700900123'] });
+    expect(applyTwilioSetting(withCa, 'remove:+18734578891')).toEqual({ number: '+17192497747', account: AC });
+    expect(applyTwilioSetting(withCa, 'off')).toBeUndefined();
+    expect(() => applyTwilioSetting(undefined, 'add:+447700900123')).toThrow(/sign-up number first/);
+  });
+});
