@@ -102,10 +102,13 @@ export async function serveEgress(socketPath: string, contexts: Pick<EgressConte
   if (process.platform !== 'win32') await fs.unlink(socketPath).catch(quiet('agent/computer/egress-host'));
   const server: Server = createServer(client => {
     let buffer = '';
-    client.on('data', chunk => {
+    // One request per connection: the first line is answered and the connection ended; whatever follows it is not read (a second line
+    // used to start a second ensure and a second end on a socket already ending).
+    const onData = (chunk: Buffer | string): void => {
       buffer += String(chunk);
       const end = buffer.indexOf('\n');
       if (end < 0) { if (buffer.length > 4_096) client.destroy(); return; }
+      client.off('data', onData);
       let name = '';
       try { name = String((JSON.parse(buffer.slice(0, end)) as { egress?: unknown }).egress ?? ''); } catch { name = ''; }
       buffer = '';
@@ -114,7 +117,8 @@ export async function serveEgress(socketPath: string, contexts: Pick<EgressConte
         held => client.end(`${JSON.stringify(held)}\n`),
         (error: unknown) => client.end(`${JSON.stringify({ error: (error instanceof Error ? error.message : String(error)).slice(0, 300) })}\n`),
       );
-    });
+    };
+    client.on('data', onData);
     client.on('error', quiet('agent/computer/egress-host'));
   });
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(socketPath, () => { server.off('error', reject); resolve(); }); });

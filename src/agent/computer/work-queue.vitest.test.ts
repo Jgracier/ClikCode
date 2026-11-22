@@ -12,10 +12,11 @@ describe('work queue', () => {
   it('keeps one task per vendor and kind, updates what is given, and drops the reason once the task moves on', async () => {
     stateDir = await mkdtemp(join(tmpdir(), 'queue-'));
     expect(taskId('Xero', 'oauth-app')).toBe(taskId(' xero ', 'oauth-app'));
-    await saveTask(stateDir, { vendor: 'Xero', status: 'needs-human', reason: 'captcha', note: 'trial needs reCAPTCHA', connectors: ['xero-a'] });
-    await saveTask(stateDir, { vendor: 'xero', connectors: ['xero-b'] });
+    await saveTask(stateDir, { vendor: 'Xero', status: 'needs-human', reason: 'captcha', note: 'trial needs reCAPTCHA' });
+    await saveTask(stateDir, { vendor: 'xero' });
     let [task] = await listTasks(stateDir);
-    expect(task).toMatchObject({ vendor: 'xero', status: 'needs-human', reason: 'captcha', connectors: ['xero-a', 'xero-b'] });
+    expect(task).toMatchObject({ vendor: 'xero', status: 'needs-human', reason: 'captcha' });
+    expect(task).not.toHaveProperty('connectors');
     await saveTask(stateDir, { vendor: 'xero', status: 'done', owner: 'gracierdigital@gmail.com' });
     [task] = await listTasks(stateDir);
     expect(task!.reason).toBeUndefined();

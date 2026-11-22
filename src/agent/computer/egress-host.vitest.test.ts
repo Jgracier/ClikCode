@@ -81,6 +81,26 @@ describe('asking the host over its socket', () => {
     await expect(fs.stat(socket)).rejects.toThrow();
   });
 
+  it('answers one request per connection: a second line is not read', async () => {
+    const socket = egressSocketPath(dir, 4343);
+    const asked: string[] = [];
+    const served = await serveEgress(socket, { ensure: async name => { asked.push(name); await new Promise(resolve => setTimeout(resolve, 40)); return { id: `ctx-${name}`, server: 'socks5://127.0.0.1:41000' }; } });
+    try {
+      const { connect } = await import('node:net');
+      const reply = await new Promise<string>((resolve, reject) => {
+        const client = connect(socket);
+        let got = '';
+        // The second line comes in a chunk of its own, while the first is still being answered.
+        client.once('connect', () => { client.write(`${JSON.stringify({ egress: 'prod' })}\n`); setTimeout(() => client.write(`${JSON.stringify({ egress: 'other' })}\n`), 10); });
+        client.on('data', chunk => { got += String(chunk); });
+        client.once('end', () => resolve(got));
+        client.once('error', reject);
+      });
+      expect(reply.trim().split('\n')).toEqual([JSON.stringify({ id: 'ctx-prod', server: 'socks5://127.0.0.1:41000' })]);
+      expect(asked).toEqual(['prod']);
+    } finally { await served.stop(); }
+  });
+
   it('a host that serves no egress (an older one, or none) is told apart from a failure', async () => {
     await expect(requestHostedContext(dir, 'prod', async () => JSON.stringify({ pid: 1 }))).rejects.toBeInstanceOf(EgressNotServed);
     await expect(requestHostedContext(dir, 'prod', async () => { throw new Error('ENOENT'); })).rejects.toBeInstanceOf(EgressNotServed);

@@ -17,8 +17,6 @@ type Task = {
   vendor: string; kind: TaskKind; status: TaskStatus; reason?: TaskReason; note?: string;
   /** The account the vendor's app or key is registered under. */
   owner?: string;
-  /** Connector ids this task covers. */
-  connectors?: string[];
   updatedAt: string;
 };
 export type SavedTask = Task & { id: string };
@@ -40,7 +38,7 @@ export async function listTasks(stateDir: string, filter: { status?: TaskStatus;
 }
 
 /** Creates the task or updates the one for this vendor and kind; what is not given stays as it was. */
-export async function saveTask(stateDir: string, input: { vendor: string; kind?: TaskKind; status?: TaskStatus; reason?: TaskReason; note?: string; owner?: string; connectors?: string[] }): Promise<SavedTask> {
+export async function saveTask(stateDir: string, input: { vendor: string; kind?: TaskKind; status?: TaskStatus; reason?: TaskReason; note?: string; owner?: string }): Promise<SavedTask> {
   const vendor = input.vendor.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9 ._-]{0,59}$/.test(vendor)) throw new Error(`A vendor is a short name of letters and digits (got "${input.vendor}").`);
   const kind = input.kind ?? 'oauth-app';
@@ -52,10 +50,9 @@ export async function saveTask(stateDir: string, input: { vendor: string; kind?:
   const status = input.status ?? before?.status ?? 'queued';
   // A reason belongs to the status it was given for: a task that moves on to done or working has no one waiting.
   const reason = input.reason ?? (input.status && input.status !== before?.status && !['needs-human', 'blocked'].includes(status) ? undefined : before?.reason);
-  const connectors = input.connectors ? [...new Set([...(before?.connectors ?? []), ...input.connectors])].sort() : before?.connectors;
   const note = input.note !== undefined ? input.note.trim().slice(0, MAX_NOTE) : before?.note;
   const owner = input.owner?.trim() || before?.owner;
-  const saved: Task = { vendor, kind, status, ...(reason ? { reason } : {}), ...(note ? { note } : {}), ...(owner ? { owner } : {}), ...(connectors?.length ? { connectors } : {}), updatedAt: new Date().toISOString() };
+  const saved: Task = { vendor, kind, status, ...(reason ? { reason } : {}), ...(note ? { note } : {}), ...(owner ? { owner } : {}), updatedAt: new Date().toISOString() };
   await writeVaultRecord(stateDir, FOLDER, id, saved);
   return { ...saved, id };
 }

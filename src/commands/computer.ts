@@ -445,11 +445,11 @@ export async function computerQueue(options: { status?: string; reason?: string;
   const stateDir = stateDirectory();
   if (options.importLedger) {
     const { readFile } = await import('node:fs/promises');
-    const ledger = JSON.parse(await readFile(options.importLedger, 'utf8')) as Record<string, { ids?: string[]; status?: string; note?: string }>;
+    const ledger = JSON.parse(await readFile(options.importLedger, 'utf8')) as Record<string, { status?: string; note?: string }>;
     const map: Record<string, string> = { done: 'done', blocked: 'blocked', 'no-self-serve': 'no-self-serve', 'todo-capture': 'queued' };
     let count = 0;
     for (const [vendor, entry] of Object.entries(ledger)) {
-      await saveTask(stateDir, { vendor, kind: 'oauth-app', status: (map[entry.status ?? ''] ?? 'queued') as never, ...(entry.note ? { note: entry.note } : {}), ...(entry.ids?.length ? { connectors: entry.ids } : {}) });
+      await saveTask(stateDir, { vendor, kind: 'oauth-app', status: (map[entry.status ?? ''] ?? 'queued') as never, ...(entry.note ? { note: entry.note } : {}) });
       count++;
     }
     return void process.stdout.write(`Imported ${count} vendors into the queue.\n`);
