@@ -16,3 +16,11 @@ describe('which desktop windows could show the ClikCode browser', () => {
     expect(windowMayShowBrowser([], 777)).toBe(false);
   });
 });
+
+describe('whether a typed credential may be on screen', () => {
+  it('refuses the picture when the browser\'s tabs cannot be listed, and allows it only when no browser is open', async () => {
+    const { credentialOnScreen } = await import('./sensitive-fields.js');
+    expect(await credentialOnScreen('/tmp/none', undefined, { listPages: async () => { throw new Error('Target page, context or browser has been closed'); } })).toBe(true);
+    expect(await credentialOnScreen('/tmp/none', undefined, { listPages: async () => { throw new Error('ClikCode browser is closed. Open a URL with browser_use first.'); } })).toBe(false);
+  });
+});

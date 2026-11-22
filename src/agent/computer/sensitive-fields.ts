@@ -4,6 +4,7 @@
 import type { Page } from 'playwright-core';
 import { allComputerPages, computerBrowserPids } from './browser.js';
 import { secretRef } from './secret-scrubber.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 /** A card box that does not carry the standard cc-* autocomplete: named for the number or the security code. */
 const CARD_BOX = ['cardnumber', 'card-number', 'card_number', 'ccnumber', 'cc-number', 'cc_number'].flatMap(word => [`input[name*="${word}" i]`, `input[id*="${word}" i]`]).join(', ')
@@ -180,19 +181,28 @@ export function windowMayShowBrowser(browserPids: readonly number[] | undefined,
   return browserPids.includes(windowPid);
 }
 
+/** What browser.ts says when no ClikCode browser (local or cloud) is open. */
+const BROWSER_CLOSED = /^(?:ClikCode browser|The managed cloud browser) is closed\b/;
+
 /** A typed or revealed credential is in a tab a screenshot could show: the front tab of a window that is not
  * minimized (a tab behind it, or a closed window, is not on screen). With `windowPid`, only when that window is
  * the ClikCode browser itself: a picture of another app cannot hold the browser's fields. */
-export async function credentialOnScreen(stateDir: string, windowPid?: number): Promise<boolean> {
+export async function credentialOnScreen(stateDir: string, windowPid?: number, options: { listPages?: (stateDir: string) => Promise<Page[]> } = {}): Promise<boolean> {
   let pages: Page[];
-  try { pages = await allComputerPages(stateDir); }
-  catch { return false; } // No ClikCode browser is open.
+  try { pages = await (options.listPages ?? allComputerPages)(stateDir); }
+  catch (error) {
+    // No ClikCode browser open: nothing of it can be on screen. Any other failure to list its tabs is not proof that none shows a
+    // typed password, so the picture is refused (fail closed).
+    return !(error instanceof Error && BROWSER_CLOSED.test(error.message));
+  }
   if (windowPid !== undefined) {
-    const pids = await computerBrowserPids(stateDir);
+    const pids = await computerBrowserPids(stateDir).catch(quiet('agent/computer/sensitive-fields'));
     if (!windowMayShowBrowser(pids, windowPid)) return false;
   }
   for (const page of pages) {
-    if (!(await sensitiveValues(page)).length) continue;
+    // A tab whose fields cannot be read may hold one: counted as showing it.
+    const values = await sensitiveValues(page).catch(quiet('agent/computer/sensitive-fields'));
+    if (values && !values.length) continue;
     if (await page.evaluate(() => (globalThis as unknown as { document: { visibilityState: string } }).document.visibilityState !== 'hidden').catch(() => true)) return true;
   }
   return false;

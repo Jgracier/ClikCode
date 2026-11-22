@@ -21,6 +21,8 @@ const state = sharedState('computer-driver', () => ({
   /** What the latest observe of each window gave, by `pid:window_id`: its snapshot, or none when Cua issued no tokens
    * for it. It dies with the driver process. */
   observed: new Map<string, WindowObservation>(),
+  /** One process-exit hook kills whichever driver is connected then: one per restart piled up listeners (and held old clients). */
+  exitHook: false,
 }));
 
 /** Where `clikcode computer driver install` puts cua-driver: its own versioned layout, so PATH is not needed. */
@@ -61,7 +63,10 @@ function start(): Promise<McpClient> {
     state.fields = undefined;
     // A new driver process knows none of the old one's snapshots.
     state.observed.clear();
-    process.once('exit', () => client.killNow());
+    if (!state.exitHook) {
+      state.exitHook = true;
+      process.once('exit', () => state.connected?.killNow());
+    }
     return client;
   }).finally(() => { state.pending = undefined; });
   return state.pending;
