@@ -332,6 +332,23 @@ describe('keygrab on a page it does not know', () => {
       expect(done.stop.trail!.length).toBeGreaterThan(0);
     }
   });
+  it('after Create, a key it could not capture is never in a screenshot, the buttons or the page text', async () => {
+    const KEY = ['vk', 'demo', '9fA3kQ7xLmP2vR8tZ4wY1bN6'].join('_');
+    const site = fakeSite({
+      'https://vendor.example/': keysPage,
+      'https://vendor.example/keys/new': newKey,
+      // The dialog shows the new key as the label of its copy button; the capture fails (key: false).
+      'https://vendor.example/keys/made': { text: `Your key was created. Save it now. ${KEY}`, controls: [KEY, 'Done'] },
+    });
+    const done = await run(site);
+    expect(done.ok).toBe(false);
+    if (!done.ok) {
+      expect(done.stop.screenshot).toBeUndefined();
+      expect(JSON.stringify(done.stop.controls)).not.toContain(KEY);
+      expect(done.stop.controls).toContain('Done');
+      expect(done.stop.pageText).not.toContain(KEY);
+    }
+  });
   it('stops at its step budget instead of wandering', async () => {
     const site = fakeSite({ 'https://vendor.example/': { text: 'Nothing here', controls: ['Home'] } });
     const done = await run(site, { maxSteps: 3 });

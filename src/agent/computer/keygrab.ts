@@ -9,7 +9,8 @@ import { CAPTCHA_FIELD_WORDS, CAPTCHA_WORDS } from './human-check-words.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import type { HumanKind, HumanStep, StopInfo } from './keygrab-types.js';
 import { nextPress, pageExcerpt, type Control } from './oauth-consent.js';
-import { keyShaped } from './secret-finder.js';
+import { hideKeyLikeText, keyShaped } from './secret-finder.js';
+import { scrubSecrets } from './secret-scrubber.js';
 import { detectBlocker } from './signup-recipes.js';
 import { allAtOnce, broadestOption, revealedOptions, selectorsOf } from './keygrab-scope.js';
 import { exploreForKeys, menuOpeners } from './keygrab-explore.js';
@@ -78,6 +79,12 @@ const API_LINK_AREA = /\bapi\b[^.]{0,30}\b(?:account|portal|console|dashboard|ac
 const VOIP_WORDS = /\b(?:voip|virtual (?:phone )?numbers?|landline|non-?mobile|this (?:phone )?number (?:type )?(?:is )?not (?:supported|allowed|accepted|eligible)|real mobile)\b/i;
 /** A capture that saved the key but whose delivery failed says so, with the delivery's own reason: "may have been created
  * but could not be captured" hid that the key was safe in the vault (Rasayel), and the reason was cut off behind the SAVED line. */
+/** The names of what can be pressed, safe to hand back: a held secret is masked and a key-shaped value hidden, because a page
+ * can show a key as a control's label (a copy button named by the key, a key row that is a link). */
+export function safeControlNames(controls: readonly { name: string }[], max: number): string[] {
+  return controls.slice(0, max).map(c => hideKeyLikeText(scrubSecrets(c.name)).text);
+}
+
 export function capturedButNotConnected(message: string): string | undefined {
   const saved = /SAVED "([^"]+)"/.exec(message)?.[1];
   if (!saved) return undefined;
@@ -217,10 +224,14 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     say(`${steps}: ${what.slice(0, 80)}`);
     return run();
   };
+  /** A Create or Reveal was pressed and the key it shows has not been captured: the screen may hold the key itself. */
+  let keyOnScreen = false;
   const stop = async (kind: StopInfo['kind'], message: string, human?: HumanStep, view?: KeyView): Promise<Halt> => {
     const seen = view ?? await port.look().catch((): KeyView => ({ url: '', text: '', controls: [], fields: [], hasPassword: false }));
-    const screenshot = await port.screenshot().catch(quiet('agent/computer/keygrab'));
-    return new Halt({ kind, message, url: pathOf(seen.url) || seen.url, pageText: pageExcerpt(seen.text), controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 12), ...(screenshot ? { screenshot } : {}), ...(human ? { human } : {}), trail: trail.slice(-30), actions: steps, ...(signedIn ? { signedIn: true } : {}), ...(visited.length ? { visited: visited.slice(-30) } : {}), ...(menus.length ? { menus: menus.slice(-12) } : {}) });
+    // No picture of a page that may show an uncaptured key: a screenshot is read by the agent and kept on disk.
+    const withhold = keyOnScreen || showsKey(seen) || hideKeyLikeText(seen.text).hidden > 0;
+    const screenshot = withhold ? undefined : await port.screenshot().catch(quiet('agent/computer/keygrab'));
+    return new Halt({ kind, message, url: pathOf(seen.url) || seen.url, pageText: pageExcerpt(hideKeyLikeText(seen.text).text), controls: safeControlNames(seen.controls.filter(c => !c.leaf), 12), ...(screenshot ? { screenshot } : {}), ...(human ? { human } : {}), trail: trail.slice(-30), actions: steps, ...(signedIn ? { signedIn: true } : {}), ...(visited.length ? { visited: visited.slice(-30) } : {}), ...(menus.length ? { menus: menus.slice(-12) } : {}) });
   };
   /** Ends the run on a wall with a human step: kind, the page, and what to do. */
   const wallStop = async (view: KeyView, wall: NonNullable<ReturnType<typeof keygrabWall>>): Promise<Halt> => {
@@ -705,7 +716,11 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     }
     return form;
   };
-  const captured = async (target?: string): Promise<{ ok: boolean; message: string }> => act('capture the key', () => port.capture(target));
+  const captured = async (target?: string): Promise<{ ok: boolean; message: string }> => {
+    const got = await act('capture the key', () => port.capture(target));
+    if (got.ok) keyOnScreen = false;
+    return got;
+  };
 
   try {
     // Start where a web page answers: the address given, else the spec's other addresses and the vendor's usual ones, tested with a cheap fetch first.
@@ -739,6 +754,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       if (showsKey(page) && !createOf(page)) { const got = await captured(); if (got.ok) return { ok: true, note: `key captured from ${pathOf(page.url)} and delivered; it was not shown`, steps, route, capturedOn: pathOf(page.url) }; }
       const create = createOf(page);
       if (create) {
+        keyOnScreen = true;
         await click(create.name);
         await sleep(700);
         let dialog = await look();
@@ -752,13 +768,14 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
         let got = await captured();
         if (!got.ok) {
           const reveal = revealOf(dialog);
-          if (reveal) got = await captured(reveal.name);
+          if (reveal) { keyOnScreen = true; got = await captured(reveal.name); }
         }
         if (got.ok) return { ok: true, note: `key created (named ${options.keyName ?? KEY_NAME}${chosen.length ? `; broadest access chosen: ${chosen.join('; ')}` : ''}), captured unseen and delivered`, steps, route, capturedOn: pathOf(dialog.url) };
         throw await stop('unknown', capturedButNotConnected(got.message) ?? `a key may have been created but could not be captured: ${got.message.slice(0, 200)}`, undefined, dialog);
       }
       const reveal = revealOf(page);
       if (reveal) {
+        keyOnScreen = true;
         const got = await captured(reveal.name);
         if (got.ok) return { ok: true, note: `key revealed with "${reveal.name}", captured unseen and delivered`, steps, route, capturedOn: pathOf(page.url) };
         throw await stop('unknown', `the key could not be captured: ${got.message.slice(0, 200)}`, undefined, page);
