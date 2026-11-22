@@ -3,22 +3,14 @@
 import Conf from 'conf';
 import { defineTool } from '../tool-contract.js';
 import { openTransport } from '../mcp/transport.js';
-import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
+import { getApiKeyForUrl } from '../../gateway/credentials.js';
+import { clikDeployConnection, type ClikDeployConnection } from '../mcp/clikdeploy-session.js';
 import { registerSecret, scrubSecrets } from '../computer/secret-scrubber.js';
 
 type Args = { action: 'unlock' | 'call'; tool?: string; arguments?: Record<string, unknown>; password?: boolean };
 type Json = Record<string, unknown>;
 
-function connection(): { url: string; key: string; config: Conf; codeConfig: Conf } {
-  const cli = new Conf({ projectName: 'clikdeploy', configFileMode: 0o600 });
-  const code = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
-  const cliUrl = (process.env.CLIKDEPLOY_API_URL_OVERRIDE || process.env.CLIKDEPLOY_API_URL || getApiUrl(cli)).replace(/\/+$/, '');
-  const config = getApiKeyForUrl(cli, cliUrl) ? cli : code;
-  const url = config === cli ? cliUrl : getApiUrl(code);
-  const key = getApiKeyForUrl(config, url);
-  if (!key) throw new Error('Sign in to ClikDeploy with clikdeploy login or clikcode gateway login first.');
-  return { url, key, config, codeConfig: code };
-}
+const connection = (): ClikDeployConnection => clikDeployConnection();
 
 function rememberUnlock(config: Conf, codeConfig: Conf, url: string, key: string, token: string): void {
   config.set('adminMfaToken', token);

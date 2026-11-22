@@ -36,6 +36,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // ClikCode's computer tools over MCP (stdio), started for every harness session: a spawn target, not a command to type.
   program.command('mcp-serve', { hidden: true })
     .action(async () => { const { mcpServe } = await import('../commands/mcp-serve.js'); await serveThenExit(mcpServe); });
+  // ClikDeploy's tools over MCP (stdio), started for every harness session while signed in to ClikDeploy: also a spawn target.
+  program.command('clikdeploy-mcp-serve', { hidden: true })
+    .action(async () => { const { clikDeployMcpServe } = await import('../commands/clikdeploy-mcp-serve.js'); await serveThenExit(clikDeployMcpServe); });
   program.command('computer-host <stateDir>', { hidden: true }).action(async (stateDir: string) => (await import('../agent/computer/browser-host.js')).runComputerHost(stateDir));
   // An editor extension's client (ide/bridge.ts), over an IPC channel the
   // extension opens; and the terminal it runs a vendor sign-in in. Hidden for

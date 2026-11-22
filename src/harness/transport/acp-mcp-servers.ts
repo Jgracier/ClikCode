@@ -19,6 +19,7 @@ import { vendorMcpServerNames } from '../../agent/mcp/import.js';
 import { mcpOAuthProvider, mcpOAuthState } from '../../agent/mcp/oauth.js';
 import { computerEnabledSync } from '../../agent/computer/settings.js';
 import { stateDirectory } from '../../session/store/paths.js';
+import { clikDeploySessionServer } from '../../agent/mcp/clikdeploy-session.js';
 
 type Json = Record<string, any>;
 type HttpSpec = Extract<McpServerSpec, { transport: 'http' | 'sse' }>;
@@ -74,9 +75,10 @@ export async function globalMcpServers(
   try {
     const stateDir = stateDirectory();
     const { servers: recorded } = await loadMcpServers(stateDir);
-    // A server the user recorded under this name wins; the built-in one steps aside.
-    const builtIn = builtInMcpServer();
-    const servers = builtIn && !recorded.some((server) => server.name === builtIn.name) ? [builtIn, ...recorded] : recorded;
+    // A server the user recorded under its name wins; a built-in one steps aside. ClikDeploy's
+    // tools come while this machine is signed in to ClikDeploy (agent/mcp/clikdeploy-session.ts).
+    const builtIns = [builtInMcpServer(), clikDeploySessionServer()].filter((server): server is McpServerSpec => server !== undefined);
+    const servers = [...builtIns.filter((builtIn) => !recorded.some((server) => server.name === builtIn.name)), ...recorded];
     if (!servers.length) return [];
     const { names } = await vendorMcpServerNames(command, home, profile, workspace);
     const wanted = servers.filter((server) => !names.has(server.name));
