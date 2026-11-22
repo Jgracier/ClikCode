@@ -103,10 +103,11 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) load
 interface DeskDeps { stateDir: string; host: string; context: BrowserContext; port?: number; now?: () => number }
 
 /** Serve the desk until `stop()`. Resolves once it listens; undefined when no port could be taken. */
-export async function startHandoffDesk(deps: DeskDeps): Promise<{ address: string; stop(): Promise<void> } | undefined> {
+export async function startHandoffDesk(deps: DeskDeps): Promise<{ readonly address: string; stop(): Promise<void> } | undefined> {
   const { stateDir, context } = deps;
   const now = deps.now ?? Date.now;
-  const token = await deskToken(stateDir);
+  // Read on every request: the token is replaced once it is too old (DESK_TOKEN_MAX_AGE_MS), and the old link then stops working.
+  let token = await deskToken(stateDir, { now: now() });
   const views = new Map<string, { socket: LiteSocket; view: LiveView }>();
 
   const route = (request: IncomingMessage): { ok: boolean; rest: string } => {
@@ -179,12 +180,22 @@ export async function startHandoffDesk(deps: DeskDeps): Promise<{ address: strin
   if (!up) return undefined;
   const port = (server.address() as AddressInfo).port;
   await writeDeskInfo(stateDir, { pid: process.pid, host: deps.host, port, token });
-  const tidy = async (): Promise<void> => { await tidyDesk(stateDir, new Set((await pagesById(context)).keys()), now()); };
+  const rotate = async (): Promise<void> => {
+    const fresh = await deskToken(stateDir, { now: now() });
+    if (fresh === token) return;
+    token = fresh;
+    // The open live views were reached through the old address; they end with it.
+    for (const { socket, view } of views.values()) { socket.close(1001); await view.stop().catch(quiet('agent/computer/handoff-desk')); }
+    views.clear();
+    await writeDeskInfo(stateDir, { pid: process.pid, host: deps.host, port, token });
+    lifecycle('handoff.desk.token-rotated', { host: deps.host, port });
+  };
+  const tidy = async (): Promise<void> => { await rotate(); await tidyDesk(stateDir, new Set((await pagesById(context)).keys()), now()); };
   const timer = setInterval(() => { void tidy().catch(quiet('agent/computer/handoff-desk')); }, TIDY_EVERY_MS);
   timer.unref();
   lifecycle('handoff.desk.up', { host: deps.host, port });
   return {
-    address: `http://${deps.host}:${port}/${token}/`,
+    get address() { return `http://${deps.host}:${port}/${token}/`; },
     async stop() {
       clearInterval(timer);
       for (const { socket, view } of views.values()) { socket.close(1001); await view.stop().catch(quiet('agent/computer/handoff-desk')); }

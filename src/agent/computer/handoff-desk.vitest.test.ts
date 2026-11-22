@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { addDeskItem, deskHeldTargets, deskToken, DESK_WAIT_MS, finishDeskItem, listDeskItems, readDeskInfo, takeFinishedResumes, tidyDesk, writeDeskInfo } from './handoff-desk-store.js';
+import { addDeskItem, deskHeldTargets, deskToken, DESK_TOKEN_MAX_AGE_MS, DESK_WAIT_MS, finishDeskItem, listDeskItems, readDeskInfo, takeFinishedResumes, tidyDesk, writeDeskInfo } from './handoff-desk-store.js';
 import { deskListing, deskListPage } from './handoff-desk.js';
 import { planTabClosures, type TabRecord } from './tab-registry.js';
 
@@ -14,6 +14,16 @@ it('keeps one address: the token is made once and read back', async () => {
   const first = await deskToken(dir);
   expect(first).toMatch(/^[A-Za-z0-9_-]{24,}$/);
   expect(await deskToken(dir)).toBe(first);
+});
+
+it('the desk address does not live forever: a token older than its age limit is replaced, and the old link stops working', async () => {
+  const first = await deskToken(dir, { now: 1_000 });
+  expect(await deskToken(dir, { now: 1_000 + DESK_TOKEN_MAX_AGE_MS - 1 })).toBe(first);
+  const next = await deskToken(dir, { now: 1_000 + DESK_TOKEN_MAX_AGE_MS });
+  expect(next).not.toBe(first);
+  expect(next).toMatch(/^[A-Za-z0-9_-]{24,}$/);
+  expect(await deskToken(dir, { now: 2_000 + DESK_TOKEN_MAX_AGE_MS })).toBe(next);
+  expect(await deskToken(dir, { rotate: true })).not.toBe(next);
 });
 
 it('says where the desk is only while its host process is alive', async () => {

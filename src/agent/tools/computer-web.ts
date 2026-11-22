@@ -56,7 +56,7 @@ import { deleteNamedSecret, saveNamedSecret } from '../computer/credential-vault
 import { VENDOR_MFA_DESTINATION } from '../computer/secret-destinations.js';
 import { lintRecipe } from '../computer/recipe-tools.js';
 import { oauthConnect } from '../computer/oauth-consent.js';
-import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.js';
+import { findTailnetAddress, runTailnetHandoff } from '../computer/tailnet-handoff.js';
 import type { Frame, Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 import { sleep } from '../../runtime/sleep.js';
@@ -1763,7 +1763,7 @@ async function handoffAction(args: WebArgs, ctx: ToolContext): Promise<ToolRunRe
     const link = new Promise<string>((resolve, reject) => { resolveLink = resolve; failLink = reject; });
     link.catch(quiet('agent/tools/computer-web'));
     // The user's device reaches this computer directly over their Tailscale network: no relay, no third party.
-    const host = tailnetAddress();
+    const host = await findTailnetAddress();
     if (!host) throw new Error('A handoff link is served on the user\'s Tailscale network, and this computer is not on one (no Tailscale address). If the user is at this computer, use show: it opens the same live view in their own browser here, and they can do the step in it. Otherwise they need Tailscale installed and signed in on this computer and on their device.');
     const done = runTailnetHandoff({ stateDir: ctx.stateDir, host, signal: stop.signal, onLink: resolveLink, ...(args.tab ? { tab: args.tab } : {}) })
       .then(() => ({ ok: true as const }), (error: unknown) => { failLink(error instanceof Error ? error : new Error(String(error))); return { ok: false as const, message: error instanceof Error ? error.message : String(error) }; })

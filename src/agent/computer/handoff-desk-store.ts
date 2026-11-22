@@ -46,15 +46,26 @@ const itemFile = (stateDir: string, id: string): string => path.join(itemsDir(st
 const infoFile = (stateDir: string): string => path.join(deskDir(stateDir), 'desk.json');
 const tokenFile = (stateDir: string): string => path.join(deskDir(stateDir), 'token');
 
-/** The desk's secret path. Made once and kept, so the address the user saved keeps working across restarts. */
-export async function deskToken(stateDir: string): Promise<string> {
-  try {
-    const saved = (await fs.readFile(tokenFile(stateDir), 'utf8')).trim();
-    if (/^[A-Za-z0-9_-]{24,}$/.test(saved)) return saved;
-  } catch { /* fail-open-ok: first run */ }
+/** How long one desk address lives. Long enough that a saved link survives restarts for a working week; short enough that a
+ * link that leaked (a screenshot, a shared phone, browser history) stops opening this computer's tabs on its own. */
+export const DESK_TOKEN_MAX_AGE_MS = 7 * 24 * 3_600_000;
+const TOKEN_SHAPE = /^[A-Za-z0-9_-]{24,}$/;
+
+/** The desk's secret path. Kept across restarts so the address the user saved keeps working, and replaced with a new one
+ * once it is older than DESK_TOKEN_MAX_AGE_MS (or `rotate` is asked for). A token file from before ages from its write time. */
+export async function deskToken(stateDir: string, options: { now?: number; rotate?: boolean } = {}): Promise<string> {
+  const now = options.now ?? Date.now();
+  if (!options.rotate) {
+    try {
+      const text = (await fs.readFile(tokenFile(stateDir), 'utf8')).trim();
+      let saved: { token?: unknown; createdAt?: unknown };
+      try { saved = JSON.parse(text) as typeof saved; } catch { saved = { token: text, createdAt: (await fs.stat(tokenFile(stateDir))).mtimeMs }; }
+      if (typeof saved.token === 'string' && TOKEN_SHAPE.test(saved.token) && typeof saved.createdAt === 'number' && now - saved.createdAt < DESK_TOKEN_MAX_AGE_MS && saved.createdAt <= now + 60_000) return saved.token;
+    } catch { /* fail-open-ok: first run */ }
+  }
   const token = randomBytes(24).toString('base64url');
   await fs.mkdir(deskDir(stateDir), { recursive: true, mode: 0o700 });
-  await fs.writeFile(tokenFile(stateDir), token, { mode: 0o600 });
+  await atomicWriteFile(tokenFile(stateDir), JSON.stringify({ token, createdAt: now }), { mode: 0o600 });
   return token;
 }
 

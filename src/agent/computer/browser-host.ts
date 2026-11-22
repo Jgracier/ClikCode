@@ -7,7 +7,7 @@ import { hostStatusFile, launchComputerBrowser, shouldRunHeadless, VIRTUAL_DISPL
 import { headlessSetting } from './settings.js';
 import { restoreTabs, startBrowserJanitor, takeRecycle } from './browser-janitor.js';
 import { startHandoffDesk } from './handoff-desk.js';
-import { tailnetAddress } from './tailnet-handoff.js';
+import { findTailnetAddress } from './tailnet-handoff.js';
 import { startEgressService } from './egress-host.js';
 import { pidIsAlive } from '../../session/store/locks.js';
 import { downloadsInbox } from './downloads.js';
@@ -109,7 +109,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
       retire: () => stop(),
     });
     // The handoff desk lives here because this process outlives every worker: one address for what waits on the user.
-    const tailnet = tailnetAddress();
+    const tailnet = await findTailnetAddress().catch(quiet('agent/computer/browser-host'));
     const desk = tailnet ? await startHandoffDesk({ stateDir, host: tailnet, context }).catch(quiet('agent/computer/browser-host')) : undefined;
     process.once('SIGTERM', stop);
     process.once('SIGINT', stop);
