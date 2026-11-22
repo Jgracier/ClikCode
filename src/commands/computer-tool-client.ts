@@ -147,8 +147,10 @@ export async function callWorkerTool(input: {
 }): Promise<Outcome> {
   const sessionId = await callerSession(input.chat);
   const line = await toolLine(sessionId);
+  // One id for the call however it is asked: a worker that was only slow to say it took the call (stalled, not old) may still run it,
+  // and runs a call id once (worker/computer-tool-calls.ts), so asking again the old way cannot run it twice.
+  const id = randomUUID();
   if (!attachOnly.has(line.record.pid)) {
-    const id = randomUUID();
     try {
       return await awaitCall(input.signal, (call) => line.send(id, input.tool, input.args, call), () => new NotTaken());
     } catch (error) {
@@ -157,13 +159,12 @@ export async function callWorkerTool(input: {
       attachOnly.add(line.record.pid);
     }
   }
-  return callAttached(sessionId, input);
+  return callAttached(sessionId, id, input);
 }
 
 /** The call as a worker from before tool calls without an attach takes it. */
-async function callAttached(sessionId: string, input: { tool: string; args: Record<string, unknown>; signal?: AbortSignal }): Promise<Outcome> {
+async function callAttached(sessionId: string, id: string, input: { tool: string; args: Record<string, unknown>; signal?: AbortSignal }): Promise<Outcome> {
   const client = await WorkerClient.attach(sessionId);
-  const id = randomUUID();
   try {
     return await awaitCall(input.signal, (call) => {
       const onEvent = (event: WorkerEvent): void => { if ((event as { id?: unknown }).id === id) call.onEvent(event); };

@@ -82,10 +82,12 @@ describe('the computer tools\' connection to the worker', () => {
     await worker(false);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
+      const attachedIds: string[] = [];
       fake.attach.mockImplementation(async () => {
         const client = Object.assign(new EventEmitter(), {
           send: (command: ClientCommand) => {
             if (command.type !== 'computer-tool') return;
+            attachedIds.push(command.id);
             queueMicrotask(() => client.emit('event', { type: 'computer-tool-result', id: command.id, ok: true, output: `attached ${command.tool}` }));
           },
           close: vi.fn(),
@@ -96,6 +98,8 @@ describe('the computer tools\' connection to the worker', () => {
       await vi.waitFor(() => expect(received).toHaveLength(1));
       await vi.advanceTimersByTimeAsync(5_000);
       expect(await first).toEqual({ ok: true, output: 'attached a' });
+      // Asked again under the same id: a worker that was only slow runs a call id once.
+      expect(attachedIds[0]).toBe((received[0] as { id: string }).id);
       expect(await call('b')).toEqual({ ok: true, output: 'attached b' });
       // The second went straight to the old way: the line was not asked again.
       expect(received).toHaveLength(1);

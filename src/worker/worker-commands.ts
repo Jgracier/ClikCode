@@ -16,6 +16,7 @@ import { LoginError } from '../agent/computer/login-error.js';
 import { manageSavedLogins } from '../agent/computer/login-manager.js';
 import { askPrivateLogin } from '../agent/computer/private-login-prompt.js';
 import { runSharedComputerTool } from './computer-tool.js';
+import { ToolCalls } from './computer-tool-calls.js';
 import { homedir } from 'node:os';
 import { sendEvent, windowReadsSaved } from './broadcast-observer.js';
 import { MOVED_REASON, type ClientCommand } from './protocol.js';
@@ -124,21 +125,15 @@ export function createCommandHandler(ctx: WorkerContext) {
     }).finally(() => { ctx.warming = undefined; });
   };
 
+  const toolCalls = new ToolCalls(sendEvent);
   /** `computer-tool`: one of the shared computer tools, for a harness that is
    * not ClikCode's own agent (commands/computer-tool-client.ts). The caller is
    * not a window: one that attached to ask is left out of the windows a
    * private prompt can be shown in. */
   const runComputerTool = (socket: Socket, command: Extract<ClientCommand, { type: 'computer-tool' }>, connection: ConnectionState): void => {
-    sendEvent(socket, { type: 'computer-tool-started', id: command.id });
-    const controller = new AbortController();
-    const cancel = (): void => controller.abort();
-    socket.once('close', cancel);
-    void (async () => {
-      const result = await runSharedComputerTool({ observer, stateDir: stateDirectory(), homeDir: homedir(), tool: command.tool, args: command.args,
-        signal: controller.signal, windows: () => observer.attachedCount - (connection.attached ? 1 : 0) });
-      if (!socket.destroyed) sendEvent(socket, { type: 'computer-tool-result', id: command.id, ...result });
-      socket.off('close', cancel);
-    })();
+    // Once per call id: a caller that heard nothing in time asks again with the same id (computer-tool-calls.ts).
+    toolCalls.take(socket, command.id, signal => runSharedComputerTool({ observer, stateDir: stateDirectory(), homeDir: homedir(), tool: command.tool, args: command.args,
+      signal, windows: () => observer.attachedCount - (connection.attached ? 1 : 0) }));
   };
 
   return Object.assign(async (socket: Socket, command: ClientCommand, connection: ConnectionState): Promise<void> => {
