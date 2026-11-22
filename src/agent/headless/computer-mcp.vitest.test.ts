@@ -73,4 +73,32 @@ describe('the bounded computer tools server', () => {
       expect(results.filter(r => r.result.isError)).toHaveLength(2);
     }
   });
+
+  it('closes a popup that landed on a blocked address, and blanks the page in front, whatever the result shows', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const page = (url: string) => { const p = { at: url, closed: false, url: () => p.at, isClosed: () => p.closed, close: async () => { p.closed = true; }, goto: async (to: string) => { p.at = to; } }; return p; };
+    const front = page('https://acme.example/login');
+    const popup = page('https://signin.aws.amazon.com/console');
+    const handle = computerMcpHandler({ tab: 'agent-acme', maxCalls: 5, tools: [tool(seen, () => 'Page: https://acme.example/login')], stateDir: '/tmp/none', blockUrls: ['^https?://signin\\.aws\\.amazon\\.com'], blockMessage: 'Refused: no consoles.',
+      tabPages: async () => ({ pages: [front, popup], current: front }) });
+    const reply = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'browser_use', arguments: { action: 'click', target: 'Sign in with AWS' } } }) as Reply;
+    expect(reply.result).toMatchObject({ isError: true, content: [{ text: 'Refused: no consoles.' }] });
+    expect(popup.closed).toBe(true);
+    expect(front.closed).toBe(false);
+    front.at = 'https://signin.aws.amazon.com/x';
+    await handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'browser_use', arguments: { action: 'observe' } } });
+    expect(front.at).toBe('about:blank');
+    expect(front.closed).toBe(false);
+  });
+
+  it('tries the egress bind again after it failed', async () => {
+    let tries = 0;
+    const seen: Array<Record<string, unknown>> = [];
+    const handle = computerMcpHandler({ tab: 't', maxCalls: 5, egress: 'prod', stateDir: '/tmp/none', tools: [tool(seen)], bindEgress: async () => { tries++; if (tries === 1) throw new Error('tunnel down'); } });
+    const call = (n: number) => handle({ jsonrpc: '2.0', id: n, method: 'tools/call', params: { name: 'browser_use', arguments: {} } }) as Promise<Reply>;
+    expect((await call(1)).result.content[0]!.text).toContain('tunnel down');
+    expect((await call(2)).result.isError).toBe(false);
+    expect(tries).toBe(2);
+    expect(seen).toHaveLength(1);
+  });
 });

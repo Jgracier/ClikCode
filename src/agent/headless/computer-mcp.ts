@@ -23,6 +23,33 @@ export interface ComputerMcpOptions {
   /** Addresses never opened (regular expressions, case-insensitive), and what the caller is told instead. */
   blockUrls?: readonly string[]; blockMessage?: string;
   /** Binds the tab to the egress (browser.ts bindTabEgress); tests give a fake. */ bindEgress?: (stateDir: string, tab: string, egress: string) => Promise<void>;
+  /** Every page the tab holds now, its popups included (browser.ts ownedPages); tests give a fake. */ tabPages?: (stateDir: string, tab: string) => Promise<TabPages>;
+}
+
+/** What the blocked-address sweep needs of the tab's pages. */
+export interface LeavablePage { url(): string; isClosed(): boolean; close(): Promise<void>; goto(url: string): Promise<unknown> }
+export interface TabPages { pages: LeavablePage[]; current: LeavablePage | undefined }
+
+async function liveTabPages(stateDir: string, tab: string): Promise<TabPages> {
+  const browser = await import('../computer/browser.js');
+  return browser.ownedPages(stateDir, tab);
+}
+
+/** Leaves every page of the tab that is on a blocked address: a popup is closed, the page in front is sent to about:blank (the tab
+ * stays). True when one was found. A popup the call opened is not named in its result, so the pages themselves are looked at. */
+export async function leaveBlockedPages(patterns: readonly RegExp[], held: TabPages): Promise<boolean> {
+  if (!patterns.length) return false;
+  let found = false;
+  const open = held.pages.filter(page => !page.isClosed());
+  for (const page of open) {
+    let url = '';
+    try { url = page.url(); } catch { continue; }
+    if (!url || !patterns.some(pattern => pattern.test(url))) continue;
+    found = true;
+    const keep = page === held.current || open.length === 1;
+    await (keep ? page.goto('about:blank') : page.close()).catch(quiet('agent/headless/computer-mcp'));
+  }
+  return found;
 }
 
 /** Whether a call opens, or a result shows, an address matching one of `patterns`. */
@@ -41,7 +68,12 @@ export function computerMcpHandler(options: ComputerMcpOptions): (message: Rpc) 
   const refusal = options.blockMessage ?? 'Refused: this address is not open to this run.';
   const bindEgress = (stateDir: string): Promise<void> => {
     if (!options.egress || options.egress === 'home') return Promise.resolve();
-    bound ??= (options.bindEgress ? options.bindEgress(stateDir, options.tab, options.egress) : import('../computer/browser.js').then(browser => browser.bindTabEgress(stateDir, options.tab, options.egress)));
+    // A failed bind is not kept: the next call tries again instead of failing for the rest of the run.
+    if (!bound) {
+      const binding = options.bindEgress ? options.bindEgress(stateDir, options.tab, options.egress) : import('../computer/browser.js').then(browser => browser.bindTabEgress(stateDir, options.tab, options.egress));
+      bound = binding;
+      binding.catch(() => { if (bound === binding) bound = undefined; });
+    }
     return bound;
   };
   const load = async (): Promise<readonly ToolDefinition[]> => {
@@ -80,11 +112,12 @@ export function computerMcpHandler(options: ComputerMcpOptions): (message: Rpc) 
           if (blockedAddress(patterns, args)) return reply({ content: [{ type: 'text', text: refusal }], isError: true });
           await bindEgress(stateDir);
           const result = await tool.run(args as never, context);
-          // A page that redirected into a blocked address is left at once and not shown.
-          if (blockedAddress(patterns, {}, result.output)) {
-            await tool.run({ action: 'open', url: 'about:blank', tab: options.tab } as never, context).catch(quiet('agent/headless/computer-mcp'));
-            return reply({ content: [{ type: 'text', text: refusal }], isError: true });
-          }
+          // A page that redirected into a blocked address is left at once and not shown; so is any popup or other page of the tab that
+          // landed on one, whatever the result names.
+          const shownBlocked = blockedAddress(patterns, {}, result.output);
+          if (shownBlocked) await tool.run({ action: 'open', url: 'about:blank', tab: options.tab } as never, context).catch(quiet('agent/headless/computer-mcp'));
+          const pagesBlocked = patterns.length ? await (options.tabPages ?? liveTabPages)(stateDir, options.tab).then(held => leaveBlockedPages(patterns, held)).catch(quiet('agent/headless/computer-mcp')) : false;
+          if (shownBlocked || pagesBlocked) return reply({ content: [{ type: 'text', text: refusal }], isError: true });
           return reply({ content: [{ type: 'text', text: scrubSecrets(result.output) }], isError: !!result.isError });
         } catch (error) {
           return reply({ content: [{ type: 'text', text: scrubSecrets(error instanceof Error ? error.message : String(error)) }], isError: true });
