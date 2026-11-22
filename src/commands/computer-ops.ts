@@ -83,7 +83,7 @@ function delivery(flags: Pick<KeygrabFlags, 'sendTo' | 'keyName' | 'secretName'>
 }
 
 export async function computerKeygrab(name: string, url: string, flags: KeygrabFlags): Promise<void> {
-  if (!NAME.test(name) || name.includes('/')) throw new Error('The name is letters, digits, dots and dashes (the site or connector it is for).');
+  if (!NAME.test(name) || name.includes('/')) throw new Error('The name is letters, digits, dots and dashes (the site or service the key is for).');
   if (!/^https?:\/\//.test(url)) throw new Error('The address is an http(s) page to start from.');
   const alternates = (flags.alternate ?? []).filter(a => /^https?:\/\//.test(a));
   const dir = stateDirectory();

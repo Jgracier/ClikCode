@@ -87,7 +87,7 @@ it('sends a saved secret without asking anyone, and returns no value', async () 
   await saveNamedSecret(home, 'salad/api-key', VALUE, { url: 'https://salad.com' });
   const bin = join(root!, 'bin');
   await mkdir(bin);
-  await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\ncase "$3" in admin_platform_set_secret) { printf '%s\\n' "$@"; cat; } > "${root}/argv"; echo '{"status":"success","message":"stored"}';; *) echo '{}';; esac\n`);
+  await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\n[ "$1" = --version ] && { echo 1.0.36; exit 0; }\ncase "$3" in admin_platform_set_secret) { printf '%s\\n' "$@"; cat; } > "${root}/argv"; echo '{"status":"success","message":"stored"}';; *) echo '{}';; esac\n`);
   await chmod(join(bin, 'clikdeploy'), 0o755);
   process.env.PATH = `${bin}:${savedEnv.PATH}`;
   await attach(id); // the worker exists; nobody is asked anything

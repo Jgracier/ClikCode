@@ -440,20 +440,9 @@ async function readHidden(question: string): Promise<string> {
 }
 
 /** The vendor set-up queue: list it, or record a task. */
-export async function computerQueue(options: { status?: string; reason?: string; set?: string; vendor?: string; kind?: string; note?: string; owner?: string; importLedger?: string }): Promise<void> {
+export async function computerQueue(options: { status?: string; reason?: string; set?: string; vendor?: string; kind?: string; note?: string; owner?: string }): Promise<void> {
   const { describeTask, listTasks, saveTask, summarizeTasks } = await import('../agent/computer/work-queue.js');
   const stateDir = stateDirectory();
-  if (options.importLedger) {
-    const { readFile } = await import('node:fs/promises');
-    const ledger = JSON.parse(await readFile(options.importLedger, 'utf8')) as Record<string, { status?: string; note?: string }>;
-    const map: Record<string, string> = { done: 'done', blocked: 'blocked', 'no-self-serve': 'no-self-serve', 'todo-capture': 'queued' };
-    let count = 0;
-    for (const [vendor, entry] of Object.entries(ledger)) {
-      await saveTask(stateDir, { vendor, kind: 'oauth-app', status: (map[entry.status ?? ''] ?? 'queued') as never, ...(entry.note ? { note: entry.note } : {}) });
-      count++;
-    }
-    return void process.stdout.write(`Imported ${count} vendors into the queue.\n`);
-  }
   if (options.set) {
     if (!options.vendor) throw new Error('Say which vendor: --vendor <name>.');
     const saved = await saveTask(stateDir, { vendor: options.vendor, status: options.set as never, ...(options.kind ? { kind: options.kind as never } : {}), ...(options.reason ? { reason: options.reason as never } : {}), ...(options.note ? { note: options.note } : {}), ...(options.owner ? { owner: options.owner } : {}) });

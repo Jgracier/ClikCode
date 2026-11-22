@@ -19,18 +19,24 @@ beforeEach(async () => {
   await saveNamedSecret(dir, 'salad/api-key', VALUE, { url: 'https://salad.com' });
 });
 afterEach(async () => { process.env.PATH = oldPath; forgetSecrets(); lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); });
-const fake = async (name: string, script: string): Promise<void> => { await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`); await chmod(join(bin, name), 0o755); };
+/** A current clikdeploy (reads --args-json from stdin) unless the script answers --version itself. */
+const fake = async (name: string, script: string): Promise<void> => {
+  const version = name === 'clikdeploy' && !script.includes('--version') ? 'if [ "$1" = --version ]; then echo 1.0.36; exit 0; fi\n' : '';
+  await writeFile(join(bin, name), `#!/bin/sh\n${version}${script}\n`); await chmod(join(bin, name), 0o755);
+};
 const ctx = (): ToolContext => ({ stateDir: dir } as ToolContext);
 const SALAD = { secret: 'salad/api-key', send_to: [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }] } as never;
 
 it('sends a saved secret by name and relays what the destination says, never the value', async () => {
-  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; echo '{"status":"success","message":"stored ${VALUE}","data":{"appliedToWebProcess":true}}'`);
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","message":"stored ${VALUE}","data":{"appliedToWebProcess":true}}'`);
   const result = await storeSecretTool.run(SALAD, ctx());
   expect(result.isError).toBeUndefined();
   expect(result.output).toContain('SENT - clikdeploy-secret (SALAD_API_KEY)');
   expect(result.output).toContain('appliedToWebProcess=true');
   expect(result.output).not.toContain(VALUE);
-  expect(await readFile(join(dir, 'argv'), 'utf8')).toContain(VALUE);
+  // The key goes on stdin, never on the command line.
+  expect(await readFile(join(dir, 'argv'), 'utf8')).not.toContain(VALUE);
+  expect(await readFile(join(dir, 'stdin'), 'utf8')).toContain(VALUE);
 });
 
 it('says NOT SENT with the reason when a destination fails', async () => {
