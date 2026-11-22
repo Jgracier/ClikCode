@@ -1,7 +1,7 @@
 /** Sign-up or sign-in for a page with password boxes, on local fixture pages (no network). */
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { classifyPasswordPage, readPasswordPageContext } from './password-page.js';
+import { classifyPasswordPage, newPasswordPath, readPasswordPageContext, signInPath } from './password-page.js';
 
 let browser: Browser | undefined;
 beforeAll(async () => {
@@ -98,4 +98,19 @@ it('pure rules: multilingual sign-up and sign-in cues beat or yield to a filled 
   expect(classifyPasswordPage({ ...base, form: { ...form, inputs: 4 } }).kind).toBe('signup');
   expect(classifyPasswordPage({ ...base, form: { ...form, fieldText: 'username | user' } }).kind).toBe('signin');
   expect(classifyPasswordPage({ ...base, forgotLink: true, form: { ...form, termsBox: true } }).kind).toBe('signin');
+});
+
+it('classifies by the path, never the query or a reset step under /signin', () => {
+  const base = { boxes: 1, boxText: 'password', headings: '', forgotLink: false, prefilledAccount: false };
+  // "signin" only in the query: the page is a sign-up.
+  expect(signInPath('https://x.test/register?return_to=/signin')).toBe(false);
+  expect(newPasswordPath('https://x.test/register?return_to=/signin')).toBe(true);
+  expect(classifyPasswordPage({ ...base, url: 'https://x.test/register?return_to=/signin' }).kind).toBe('signup');
+  // A reset step under /signin is not a sign-in.
+  expect(signInPath('https://x.test/signin/reset-password?token=abc')).toBe(false);
+  expect(classifyPasswordPage({ ...base, url: 'https://x.test/signin/reset-password?token=abc' }).kind).toBe('signup');
+  // Real sign-in addresses still are.
+  for (const url of ['https://x.test/login', 'https://accounts.google.com/v3/signin/identifier?x=1', 'https://x.auth0.com/u/login/identifier', 'https://x.test/sign-in']) expect(signInPath(url), url).toBe(true);
+  expect(signInPath('https://login.twilio.com/u/reset-password/change')).toBe(false);
+  expect(classifyPasswordPage({ ...base, url: 'https://x.test/login?next=/signup' }).kind).toBe('signin');
 });

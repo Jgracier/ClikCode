@@ -72,16 +72,31 @@ function loginSubmit(form: FormSignals | undefined): boolean {
   return LOGIN_SUBMIT.test(text) && !SIGNUP_SUBMIT.test(text);
 }
 
+/** A page's path: what it is, by its own address. Never the host (login.twilio.com/u/reset-password is a reset page) and never the
+ * query (/register?return_to=/signin is a sign-up page). */
+export function pagePath(url: string): string {
+  try { return new URL(url).pathname; } catch { return ''; }
+}
+/** A path that makes or replaces a password: sign-up, register, a reset or set-password step (also under /signin/...). */
+const NEW_PASSWORD_PATH = /sign[-_ ]?up|register|create[-_ ]?account|(?:^|[/_-])join(?:$|[/_-])|password\/(?:edit|new|reset)|(?:reset|set|new|change|forgot)[-_ ]?password|(?:^|\/)(?:forgot|reset)(?:$|[/_-])/i;
+const SIGN_IN_PATH = /\/log[-_]?in\b|sign[-_]?in|identifier/i;
+/** The path is a sign-in step (/login, /signin, Google's /v3/signin/identifier), not a reset or sign-up that sits under one. */
+export const signInPath = (url: string): boolean => { const where = pagePath(url); return SIGN_IN_PATH.test(where) && !NEW_PASSWORD_PATH.test(where); };
+/** The path makes or replaces a password. */
+export const newPasswordPath = (url: string): boolean => NEW_PASSWORD_PATH.test(pagePath(url));
+
 /** The page's own words and layout decide. Sign-in wins on a /login address; a forgot-password link or an already known account
  * only gives way to explicit new/create/set/confirm wording. */
 export function classifyPasswordPage(page: PasswordPageContext): PasswordPageKind {
-  const where = (() => { try { return new URL(page.url).pathname; } catch { return ''; } })();
-  if (/\/login\b|signin|sign-in|identifier/i.test(page.url)) return { kind: 'signin', reason: 'a login address' };
+  const where = pagePath(page.url);
+  if (signInPath(page.url)) return { kind: 'signin', reason: 'a login address' };
   if (page.boxes < 1 || page.boxes > 2) return { kind: 'signin', reason: `${page.boxes} password boxes` };
   const strong = STRONG.test(page.boxText) ? 'a new/create/set/confirm password box'
     : STRONG.test(page.headings) ? 'a new/create/set password heading'
     : page.boxes === 2 ? 'two password boxes' : '';
   if (strong) return { kind: 'signup', reason: strong };
+  // The same address rule the fill uses (computer-web): a sign-up, register or reset path makes a password.
+  if (newPasswordPath(page.url)) return { kind: 'signup', reason: 'a sign-up or reset address' };
   if (page.forgotLink) return { kind: 'signin', reason: 'a forgot-password link' };
   if (loginSubmit(page.form)) return { kind: 'signin', reason: 'a log-in button' };
   // An email that is filled in (by the page or by this fill) is no sign that the account exists: a sign-up form shows its other cues.
