@@ -1,11 +1,12 @@
 /** When a tab shows a document rather than a web page (a PDF, plain text, JSON, XML, CSV, an image), the page's
- * accessibility tree is empty or useless. The document is fetched again through the browser's own request context
- * (same cookies, so a PDF behind a sign-in works) and read: a PDF as text with page markers, capped, a text-like
+ * accessibility tree is empty or useless. The document is fetched again as the tab (tab-fetch.ts: its egress and its
+ * context's cookies, so a PDF behind a sign-in works) and read: a PDF as text with page markers, capped, a text-like
  * document as its text. The PDF reader is pdf.js, through the `unpdf` package, loaded only when a PDF is opened. */
 import type { Page } from 'playwright-core';
 import { hideKeyLikeText } from './secret-finder.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import { sharedState } from './shared-state.js';
+import { fetchAsTab, TooLarge } from './tab-fetch.js';
 
 const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 const MAX_DOCUMENT_CHARS = 30_000;
@@ -78,12 +79,11 @@ async function load(page: Page, type: string): Promise<Cached> {
   const isPdf = type === 'application/pdf';
   if (!isPdf && !TEXTLIKE.test(type)) return { url, kind: 'other', note: `This tab shows a ${type} document, which cannot be read as a page.` };
   if (!/^https?:/i.test(url)) return { url, kind: 'other', note: `This ${type} document (${url.slice(0, 40)}…) cannot be fetched for reading.` };
-  const response = await page.context().request.get(url, { timeout: 30_000, maxRedirects: 5 });
-  if (!response.ok()) throw new Error(`The document could not be fetched again to be read (HTTP ${response.status()}).`);
-  const declared = Number(response.headers()['content-length']);
-  if (Number.isFinite(declared) && declared > MAX_DOCUMENT_BYTES) throw new Error(`The document is ${(declared / 1024 / 1024).toFixed(0)} MB, over the ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB limit for reading it.`);
-  const body = await response.body();
-  if (body.length > MAX_DOCUMENT_BYTES) throw new Error(`The document is over the ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB limit for reading it.`);
+  let response: Awaited<ReturnType<typeof fetchAsTab>>;
+  try { response = await fetchAsTab(page, url, { timeoutMs: 30_000, maxBytes: MAX_DOCUMENT_BYTES }); }
+  catch (error) { throw error instanceof TooLarge ? new Error(`The document is over the ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB limit for reading it.`) : error; }
+  if (!response.ok) throw new Error(`The document could not be fetched again to be read (HTTP ${response.status}).`);
+  const body = response.body;
   if (isPdf) {
     const pages = await pdfPages(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
     return { url, kind: 'pdf', pages, total: pages.length };

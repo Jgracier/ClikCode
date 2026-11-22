@@ -2,6 +2,7 @@
  * jigsaw slider is solved by pixels, the board games by rule, and only the icon challenges ask the models. */
 import type { Page } from 'playwright-core';
 import { toTarget, visitorClick, visitorDrag, type Asks, type Box, type Hands } from './human-check-hands.js';
+import { fetchAsTab } from './tab-fetch.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 
 /** Where a jigsaw piece fits in its background, by pixels, not by asking a model: the piece's outline (from its
@@ -54,9 +55,9 @@ async function solveGeetestSlide(page: Page, random: () => number, sleep: (ms: n
   if (!info || !info.bgUrl || !info.sliceUrl) return false;
   let background: Buffer, piece: Buffer;
   try {
-    const [a, b] = await Promise.all([page.context().request.get(info.bgUrl, { timeout: 10_000 }), page.context().request.get(info.sliceUrl, { timeout: 10_000 })]);
-    if (!a.ok() || !b.ok()) return false;
-    background = await a.body(); piece = await b.body();
+    const [a, b] = await Promise.all([fetchAsTab(page, info.bgUrl, { timeoutMs: 10_000 }), fetchAsTab(page, info.sliceUrl, { timeoutMs: 10_000 })]);
+    if (!a.ok || !b.ok) return false;
+    background = a.body; piece = b.body;
   } catch { return false; }
   const gap = await gapOffset(page, background, piece, { width: info.bg.width, height: info.bg.height, pieceWidth: info.slice.width, pieceHeight: info.slice.height, pieceTop: info.slice.y - info.bg.y });
   if (gap === undefined) return false;
@@ -227,7 +228,7 @@ async function solveGeetestMatch(page: Page, likeExample: Asks['likeExample'], r
   let example: Buffer | undefined;
   try {
     if (info.src.startsWith('data:')) example = Buffer.from(info.src.slice(info.src.indexOf(',') + 1), 'base64');
-    else { const res = await page.request.get(info.src, { timeout: 10_000 }); if (res.ok()) example = await res.body(); }
+    else { const res = await fetchAsTab(page, info.src, { timeoutMs: 10_000 }); if (res.ok) example = res.body; }
   } catch { example = undefined; }
   if (!example) return false;
   const mime = /\.png(?:$|\?)/i.test(info.src) || example[0] === 0x89 ? 'image/png' : 'image/jpeg';

@@ -1,6 +1,7 @@
 /** Arkose Labs (FunCaptcha). */
 import type { Frame } from 'playwright-core';
 import { spokenDigits } from './captcha-model.js';
+import { fetchAsTab } from './tab-fetch.js';
 import { frameShot, spot, toTarget, visitorClick, within, type Box, type Hands } from './human-check-hands.js';
 
 /** One step of an Arkose (FunCaptcha) game. Its puzzles share one shape: an instruction, sometimes a start
@@ -98,7 +99,7 @@ export async function arkoseAudio(hands: Hands, frame: Frame, box: Box): Promise
   let clip: Buffer | undefined;
   try {
     if (state.src.startsWith('data:')) clip = Buffer.from(state.src.slice(state.src.indexOf(',') + 1), 'base64');
-    else { const res = await page.request.get(new URL(state.src, frame.url()).href, { timeout: 15_000 }); if (res.ok()) clip = await res.body(); }
+    else { const res = await fetchAsTab(page, new URL(state.src, frame.url()).href, { timeoutMs: 15_000, frame }); if (res.ok) clip = res.body; }
   } catch { clip = undefined; }
   if (!clip) return false;
   const digits = spokenDigits(await asks.transcribe(clip, /\.wav(?:$|\?)/i.test(state.src) ? 'audio/wav' : 'audio/mpeg') ?? '');

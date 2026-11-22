@@ -1,7 +1,7 @@
 /** `clikcode computer page read|fetch`: render one page in ClikCode's browser, in a named tab and through a chosen egress, and report what
  * a script needs from it as data: the final address and status, the value of an expression evaluated in the page, the data files the
- * page loaded (JSON, YAML, plain text) and whether a human check stands in the way. `fetch` gets one address with the browser's own
- * request context (its cookies and egress). Nothing is clicked or typed. */
+ * page loaded (JSON, YAML, plain text) and whether a human check stands in the way. `fetch` gets one address as the tab would
+ * (its egress and its context's cookies). Nothing is clicked or typed. */
 import type { Page } from 'playwright-core';
 import { quiet } from '../../runtime/lifecycle-log.js';
 
@@ -56,14 +56,15 @@ export async function readPage(stateDir: string, url: string, options: PageReadO
   } finally { page.off('response', onResponse); }
 }
 
-/** One address fetched with the browser's request context. Text bodies only, at most `maxBytes`. */
+/** One address fetched as the tab: through its egress and with its context's cookies (tab-fetch.ts). Text bodies only, at most `maxBytes`. */
 export async function fetchInBrowser(stateDir: string, url: string, options: { tab: string; egress?: string; maxBytes?: number; timeoutMs?: number }): Promise<{ ok: boolean; status?: number; contentType?: string; text?: string; error?: string }> {
   if (!/^https?:\/\//i.test(url)) throw new Error('page fetch takes an http(s) address.');
   const page = await tabPage(stateDir, options.tab, options.egress);
+  const max = options.maxBytes ?? 12_000_000;
   try {
-    const response = await page.request.get(url, { timeout: options.timeoutMs ?? 12_000, maxRedirects: 4 });
-    const text = await response.text().catch(() => '');
-    const max = options.maxBytes ?? 12_000_000;
-    return { ok: response.ok(), status: response.status(), contentType: response.headers()['content-type'] ?? '', ...(text.length <= max ? { text } : { error: `the body is larger than ${max} characters` }) };
+    const { fetchAsTab } = await import('./tab-fetch.js');
+    const response = await fetchAsTab(page, url, { timeoutMs: options.timeoutMs ?? 12_000, maxBytes: max });
+    const text = response.body.toString('utf8');
+    return { ok: response.ok, status: response.status, contentType: response.contentType, ...(text.length <= max ? { text } : { error: `the body is larger than ${max} characters` }) };
   } catch (error) { return { ok: false, error: String(error instanceof Error ? error.message : error).split('\n')[0]!.slice(0, 200) }; }
 }
