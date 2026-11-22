@@ -111,6 +111,7 @@ export function buildBaseProgram(): Command {
       process.exit(process.exitCode ?? 0);
     }
     // An idle HTTP/2 session timing out is undici telling us it closed a connection nobody was using (InformationalError,
+    // UND_ERR_INFO): nothing failed. Thrown from a timer, it reached here and ended a 72-hour unattended run on 2026-11-19.
     if (isIdleSocketNotice(err)) {
       lifecycle('process.idle-socket', { message: (err as Error).message });
       return;

@@ -16,6 +16,7 @@ const GIB = 2 ** 30;
 
 /** 40 renderers, 6 GB or 6 hours old. CLIKCODE_BROWSER_MAX_RENDERERS, CLIKCODE_BROWSER_MAX_GB and CLIKCODE_BROWSER_MAX_HOURS change them.
  * MEASURED 2026-11-16: a Chrome 10 hours old with 25 renderers and 5.6 GB, under both other ceilings, took 80 seconds per call and
+ * did not answer its debugging port in 6; a long unattended run keeps its tabs in use, so no quiet moment ever let the size ceilings act. */
 export function recycleLimits(env: NodeJS.ProcessEnv = process.env): RecycleLimits {
   const number = (name: string, fallback: number): number => { const value = Number(env[name]); return Number.isFinite(value) && value > 0 ? value : fallback; };
   return { renderers: Math.floor(number('CLIKCODE_BROWSER_MAX_RENDERERS', 40)), bytes: number('CLIKCODE_BROWSER_MAX_GB', 6) * GIB, ageMs: number('CLIKCODE_BROWSER_MAX_HOURS', 6) * 3_600_000 };

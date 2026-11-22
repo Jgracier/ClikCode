@@ -208,7 +208,7 @@ export async function settledPast(page: Page, sleep: (ms: number) => Promise<voi
   return { past: 'blocked', seen };
 }
 
-/** The one answer to "is a human check in this visitor's way?", for every caller: the browser tool, the connector
+/** The one answer to "is a human check in this visitor's way?", for every caller: the browser tool, the page reader
  * runner and the sign-up qualifier. `stage` says how far along it is: a box to press, a puzzle that is up, or a
  * check the page draws itself. Undefined when there is none or it already holds its answer. */
 export async function detectHumanCheck(page: Page): Promise<{ widget: HumanCheckWidget; stage: 'checkbox' | 'puzzle' | 'page' } | undefined> {

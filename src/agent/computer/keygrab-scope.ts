@@ -1,5 +1,5 @@
 /** When a key-creation form offers a role, scope, team or permission selector, the key is made on the user's own test account with the
- * BROADEST choice it offers (Admin, Owner, Full access, All scopes, Global), never a narrower one: a narrow key would fail the connector's
+ * BROADEST choice it offers (Admin, Owner, Full access, All scopes, Global), never a narrower one: a narrow key would fail the caller's
  * live tests for a reason nobody can see. Destructive account-level settings ("Delete account") are never chosen. Pure; the policy applies it. */
 import type { KeyControl } from './keygrab.js';
 

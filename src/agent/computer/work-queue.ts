@@ -10,6 +10,7 @@ type TaskStatus = typeof TASK_STATUSES[number];
 // no-logo: the platform has no usable logo; unsupported-protocol: it is only gRPC, websocket/streaming or another protocol a spec cannot describe.
 const TASK_REASONS = ['captcha', 'sms', 'email', 'payment', 'identity', 'review', 'two-factor', 'no-logo', 'unsupported-protocol', 'other'] as const;
 export type TaskReason = typeof TASK_REASONS[number];
+const TASK_KINDS = ['oauth-app', 'api-key', 'test-account', 'webhook', 'other'] as const;
 type TaskKind = typeof TASK_KINDS[number];
 
 type Task = {

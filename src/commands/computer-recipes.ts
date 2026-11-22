@@ -63,7 +63,7 @@ export async function recipeDryRunCommand(host: string | undefined): Promise<voi
     if (isJsonDefaultMode()) emitResult({ dryRun: report }); else out(printDry(report));
     if (!report.ok) process.exitCode = 1;
   } finally {
-    await browser.closeComputerPage(stateDir, 'connectors').catch(quiet('commands/computer-recipes'));
+    await browser.closeComputerPage(stateDir, 'recipes').catch(quiet('commands/computer-recipes'));
     await browser.releaseComputerBrowser(stateDir).catch(quiet('commands/computer-recipes'));
   }
 }

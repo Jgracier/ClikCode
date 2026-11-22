@@ -291,7 +291,7 @@ describe('keygrab walls', () => {
 });
 
 describe('keygrab on a retired vendor and a Google chooser', () => {
-  it('asks to retire the connector when the vendor says it was retired and there is no key page', async () => {
+  it('says the site retired its API when it says so and there is no key page', async () => {
     const site = fakeSite({ 'https://vendor.example/': { text: 'Visual Studio App Center was retired on March 31, 2025. Welcome.', controls: ['Learn more'] } });
     const done = await run(site);
     expect(done.ok === false && done.stop.human).toMatchObject({ kind: 'retire', reasonCode: 'vendor-retired' });

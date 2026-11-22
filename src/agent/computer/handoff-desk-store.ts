@@ -28,8 +28,9 @@ export interface DeskItem {
   createdAt: number;
   status: 'waiting' | 'done' | 'closed';
   doneAt?: number;
-  /** A connector id whose key capture carries on once this is done. */
+  /** A name the caller resumes once this is done (a keygrab's name). */
   resume?: string;
+  /** The caller has been told this one is done (`computer desk-finished --take`). */
   resumeSent?: boolean;
 }
 export interface DeskInfo { pid: number; host: string; port: number; token: string }
@@ -124,7 +125,7 @@ export async function finishDeskItem(stateDir: string, id: string, status: 'done
   return next;
 }
 
-/** The finished items whose connector has not been sent back to work yet; each is marked as sent. */
+/** The finished items whose caller has not been told yet; each is marked as told. */
 export async function takeFinishedResumes(stateDir: string): Promise<DeskItem[]> {
   const taken: DeskItem[] = [];
   for (const item of await listDeskItems(stateDir)) {

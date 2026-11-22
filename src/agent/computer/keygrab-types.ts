@@ -1,5 +1,5 @@
 /** What keygrab and the other browser drivers report, as data: where a run stopped, the step only a person can take, and how a run ended.
- * No ClikDeploy or connector meaning lives here; callers map these to their own work. */
+ * Callers map these to their own work. */
 export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'vendor-contact' | 'decision' | 'retire' | 'worker-setup';
 /** `reasonCode` says what the wall is, set by whoever read the page (keygrab, a driver, an agent). */
 export interface HumanStep { kind: HumanKind; url?: string; instructions?: string; reasonCode: string; prefill?: string[] }

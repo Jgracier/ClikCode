@@ -1,7 +1,7 @@
 /** The Gateway's model list is not stable: it renames families (`claude-sonnet-5.5` is now listed as `claude-sonnet-5`, `claude-opus-5-5` as
  * `claude-opus-5`), changes dots to dashes, and has held 596 models one hour and 354 the next. Code that asks for a model by a fixed name
  * therefore asks for names the list no longer has: on 2026-11-17 that dropped every Claude voter from the captcha rosters and made every
- * connector agent fail at once. A wanted name is matched against what is listed now, here, and nowhere else. */
+ * headless agent fail at once. A wanted name is matched against what is listed now, here, and nowhere else. */
 
 /** A name with its punctuation taken out, so `claude-sonnet-5.5`, `claude-sonnet-5-5` and `Claude_Sonnet_5_5` compare equal. */
 const squash = (id: string): string => id.toLowerCase().replace(/[.\-_:\s]/g, '');

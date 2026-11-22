@@ -35,7 +35,7 @@ describe('the back-off after a captcha', () => {
 
 describe('a parked journal makes a resumed capture save the recipe', () => {
   it('exports the journal in one process and records the recipe from the imported copy', async () => {
-    const key = `${dir}#connectors`;
+    const key = `${dir}#keygrab`;
     beginJournal(key, 'https://probely.com/');
     noteStep(key, 'https://probely.com/', { do: 'click', target: 'Log in' });
     const data = exportJournal(key)!;

@@ -1,5 +1,5 @@
 /** What each human check turned out to be and how it ended, one line per solver run, so the next family to work
- * on is read from what the connectors actually met, not guessed. Lines hold the site's host, the check's family,
+ * on is read from what sign-ups actually met, not guessed. Lines hold the site's host, the check's family,
  * the outcome and the time taken -- never page text, an answer or a secret. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
