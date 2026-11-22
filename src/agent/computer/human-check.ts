@@ -15,7 +15,7 @@ import { newMeter, type AskOptions } from './captcha-model.js';
 import { arkoseAudio, playArkose } from './human-check-arkose.js';
 import { GEETEST_STATE, geetestStep } from './human-check-geetest.js';
 import { gridRound, readLayout, solveRecaptchaAudio } from './human-check-grid.js';
-import { boxOf, fitPuzzle, frameShot, gatewayAsks, spot, visitorClick, within, type Asks, type Box, type Hands } from './human-check-hands.js';
+import { boxOf, clearMarks, fitPuzzle, frameShot, gatewayAsks, restoreViewport, spot, visitorClick, within, type Asks, type Box, type Hands, type ViewportMemo } from './human-check-hands.js';
 import { hcaptchaRound, type HcaptchaMemo } from './human-check-hcaptcha.js';
 import { HOLD_BUTTON, KNOWN_BOX, POW_STATE, SLIDER, TEXT_CAPTCHA, markGone, solveChallengeBox, solvePressHold, solveSlider, solveTextCaptcha, waitProofOfWork } from './human-check-inpage.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
@@ -45,14 +45,15 @@ async function findCheckbox(page: Page): Promise<{ widget: HumanCheckWidget; box
     // Invisible reCAPTCHA shows only its "protected by" badge, which is checkbox-sized but has nothing to press.
     if (!kind || /[?&]size=invisible/.test(frame.url())) continue;
     const box = await boxOf(frame);
-    if (!box || box.width < 100 || box.height < 40 || box.height > 150 || box.y < 0) continue;
-    // Only a box a visitor can see and reach counts: not one inside a closed form, under a banner, or below the fold.
+    if (!box || box.width < 100 || box.height < 40 || box.height > 150) continue;
+    // Only a box a visitor can see and reach counts: not one inside a closed form or under a banner. One scrolled out of
+    // view, above the fold or below it, is scrolled back into view first, as a visitor would.
     const reachable = await frame.frameElement().then(el => el.evaluate((node: unknown) => {
       const g = globalThis as unknown as { innerHeight: number; innerWidth: number; document: { elementFromPoint(x: number, y: number): unknown } };
       const el = node as { getBoundingClientRect(): { left: number; top: number; width: number; height: number }; contains(other: unknown): boolean; scrollIntoView(options: unknown): void };
       const r = el.getBoundingClientRect();
       const x = r.left + Math.min(30, r.width / 2), y = r.top + r.height / 2;
-      if (y > g.innerHeight || x > g.innerWidth) { el.scrollIntoView({ block: 'center' }); return 'scrolled'; }
+      if (y > g.innerHeight || x > g.innerWidth || r.top < 0 || r.left < 0) { el.scrollIntoView({ block: 'center' }); return 'scrolled'; }
       const hit = g.document.elementFromPoint(x, y);
       if (hit === node || el.contains(hit)) return 'yes';
       // A widget inside a shadow root (Turnstile) is reported as its host element.
@@ -61,7 +62,13 @@ async function findCheckbox(page: Page): Promise<{ widget: HumanCheckWidget; box
       return 'no';
     })).catch(() => 'yes');
     if (reachable === 'no') continue;
-    if (reachable === 'scrolled') { const moved = await boxOf(frame); if (moved) return { widget: kind[0], box: moved }; }
+    if (reachable === 'scrolled') {
+      // A box that is still off the page after scrolling is parked there on purpose (a hidden widget): not one to press.
+      const moved = await boxOf(frame);
+      if (moved && moved.y >= 0 && moved.x >= 0) return { widget: kind[0], box: moved };
+      continue;
+    }
+    if (box.y < 0 || box.x < 0) continue;
     return { widget: kind[0], box };
   }
   // AWS WAF's splash is a page of its own with a Begin button instead of a frame.
@@ -113,17 +120,40 @@ async function puzzleByMarkup(frame: Frame): Promise<HumanCheckWidget | undefine
   })()`).catch(quiet('agent/computer/human-check')) as Promise<HumanCheckWidget | undefined>;
 }
 
-/** The page holds an accepted answer (the hidden field each widget fills in once it is satisfied). */
+/** Runs in a document: whether it holds an accepted answer (the hidden field each widget fills in once it is satisfied). */
+function answeredHere(): boolean {
+  const doc = (globalThis as unknown as { document: { querySelectorAll(selector: string): ArrayLike<{ value?: string; getBoundingClientRect?(): { width: number } }> } }).document;
+  // Arkose's `fc-token` holds the session token from the moment the widget loads, solved or not: it is no answer. What Arkose
+  // fills once the game is won is `verification-token` (and GitHub's Octocaptcha copies it into `octocaptcha-token`).
+  if (Array.from(doc.querySelectorAll('#g-recaptcha-response, [name="g-recaptcha-response"], [name="cf-turnstile-response"], [name="h-captcha-response"], [name="lot_number"], [name="geetest_validate"], [name="verification-token"], [name="octocaptcha-token"]')).some(field => (field.value ?? '').length > 8)) return true;
+  // Auth0's sign-in pages (Twilio and many more) copy the widget's token into their own hidden "captcha" field. A token is
+  // hundreds of characters; a typed answer to Auth0's own text captcha (same name) is a few, so only a long value counts.
+  if (Array.from(doc.querySelectorAll('input[type="hidden"][name="captcha"]')).some(field => (field.value ?? '').length > 100)) return true;
+  // GeeTest shows its success state on its own button instead of filling a field the page can see at once.
+  return Array.from(doc.querySelectorAll('[class*="geetest_lock_success"], [class*="geetest_success_radar"], [class*="geetest_btn_click"][class*="geetest_success"]')).some(el => (el.getBoundingClientRect?.().width ?? 0) > 0);
+}
+
+/** The frames whose fields belong to the page: same origin as the page (a sign-up form in its own frame), or a blank or srcdoc
+ * frame it wrote itself. A widget's own frames (google.com, hcaptcha.com) are not the page's form. */
+function pageFrames(page: Page): Frame[] {
+  let origin = '';
+  try { origin = new URL(page.url()).origin; } catch { return []; }
+  const main = typeof page.mainFrame === 'function' ? page.mainFrame() : undefined;
+  return page.frames().filter(frame => {
+    if (frame === main) return false;
+    const url = frame.url();
+    if (url === 'about:blank' || url === 'about:srcdoc') return true;
+    try { return new URL(url).origin === origin; } catch { return false; }
+  });
+}
+
+/** The page holds an accepted answer: in its own document or in one of its same-origin frames. */
 export async function humanCheckAnswered(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
-    const doc = (globalThis as unknown as { document: { querySelectorAll(selector: string): ArrayLike<{ value?: string; getBoundingClientRect?(): { width: number } }> } }).document;
-    if (Array.from(doc.querySelectorAll('#g-recaptcha-response, [name="g-recaptcha-response"], [name="cf-turnstile-response"], [name="h-captcha-response"], [name="lot_number"], [name="geetest_validate"]')).some(field => (field.value ?? '').length > 8)) return true;
-    // Auth0's sign-in pages (Twilio and many more) copy the widget's token into their own hidden "captcha" field. A token is
-    // hundreds of characters; a typed answer to Auth0's own text captcha (same name) is a few, so only a long value counts.
-    if (Array.from(doc.querySelectorAll('input[type="hidden"][name="captcha"]')).some(field => (field.value ?? '').length > 100)) return true;
-    // GeeTest shows its success state on its own button instead of filling a field the page can see at once.
-    return Array.from(doc.querySelectorAll('[class*="geetest_lock_success"], [class*="geetest_success_radar"], [class*="geetest_btn_click"][class*="geetest_success"]')).some(el => (el.getBoundingClientRect?.().width ?? 0) > 0);
-  }).catch(() => false);
+  if (await page.evaluate(answeredHere).catch(() => false)) return true;
+  for (const frame of pageFrames(page)) {
+    if (await Promise.resolve().then(() => frame.evaluate(answeredHere)).catch(() => false)) return true;
+  }
+  return false;
 }
 
 /** The checks a page draws itself, each by its own finder, in one look (runs in the page). */
@@ -133,7 +163,8 @@ const IN_PAGE = `(() => {
   if (${HOLD_BUTTON}) return 'hold';
   const pow = ${POW_STATE};
   if (pow && !pow.done) return 'pow';
-  if (${SLIDER}) return 'slider';
+  const slider = ${SLIDER};
+  if (slider && !slider.slid) return 'slider';
   const text = ${TEXT_CAPTCHA};
   if (text && !text.filled) return 'text';
   if (${KNOWN_BOX}) return 'box';
@@ -219,6 +250,8 @@ export async function detectHumanCheck(page: Page): Promise<{ widget: HumanCheck
   const checkbox = await findCheckbox(page);
   if (checkbox) return { widget: checkbox.widget, stage: 'checkbox' };
   const drawn = await page.evaluate(IN_PAGE).catch(() => null) as HumanCheckWidget | null;
+  // The finders mark what they found for a solver to use; a look leaves the page as it was.
+  await clearMarks(page);
   return drawn ? { widget: drawn, stage: 'page' } : undefined;
 }
 
@@ -241,7 +274,6 @@ async function pressOnce(page: Page, deps: { sleep?: (ms: number) => Promise<voi
   const found = await findCheckbox(page);
   if (!found) return { outcome: 'none' };
   if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: found.widget };
-  const startUrl = page.url();
   const x = found.box.x + Math.min(30, found.box.width * 0.15), y = found.box.y + found.box.height / 2;
   await page.mouse.move(x - 40, y - 12);
   await page.mouse.move(x, y, { steps: 8 });
@@ -250,14 +282,43 @@ async function pressOnce(page: Page, deps: { sleep?: (ms: number) => Promise<voi
     await sleep(500);
     if (await findPuzzle(page)) return { outcome: 'puzzle', widget: found.widget };
     if (await humanCheckAnswered(page)) return { outcome: 'cleared', widget: found.widget };
-    // A whole-page check ("Just a moment…") lets the visitor through by moving on or removing itself. A changed address or a missing
-    // box is where that starts, and also what a check looks like while it redraws: the caller watches what the page settles on.
-    if (page.url() !== startUrl || !await findCheckbox(page)) return { outcome: 'cleared', widget: found.widget };
+    // A whole-page check ("Just a moment…") lets the visitor through by moving on or removing itself. A missing box is not that by
+    // itself -- it is also what a check looks like while it redraws, or a frame that failed to read: only a page with no check on it
+    // at all is a candidate (and the caller still watches what the page settles on). A changed address with the box still there is
+    // the check deciding: watched on.
+    if (!await findCheckbox(page) && !await detectHumanCheck(page)) return { outcome: 'cleared', widget: found.widget };
   }
   return { outcome: 'still-there', widget: found.widget };
 }
 
 // ── solving ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The run's one clock and stop signal. Every wait inside a solve -- a grid's passes, the watch after confirm, the wait on a
+ * verifying page, proof of work, a hold, the settle -- sleeps through `sleep`, which throws `OutOfTime` once the budget is spent
+ * or the caller's signal fires; every model ask gets `signal`, which fires on either too. So no inner wait outlives the run. */
+export interface Budget { sleep: (ms: number) => Promise<void>; signal: AbortSignal; over: () => boolean; left: () => number }
+export class OutOfTime extends Error { constructor() { super('the human check ran out of time or was stopped'); this.name = 'OutOfTime'; } }
+export const isOutOfTime = (error: unknown): error is OutOfTime => error instanceof OutOfTime;
+
+export function budgetOf(ms: number, sleep: (ms: number) => Promise<void> = realSleep, signal?: AbortSignal, now: () => number = Date.now): Budget {
+  const began = now();
+  const timeout = AbortSignal.timeout(Math.max(1, ms));
+  const stop = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const left = (): number => Math.max(0, ms - (now() - began));
+  const over = (): boolean => !!signal?.aborted || left() <= 0;
+  return {
+    signal: stop, over, left,
+    sleep: async wanted => {
+      if (over()) throw new OutOfTime();
+      await new Promise<void>(resolve => {
+        const done = (): void => { stop.removeEventListener('abort', done); resolve(); };
+        stop.addEventListener('abort', done, { once: true });
+        sleep(Math.min(wanted, left())).then(done, done);
+      });
+      if (over()) throw new OutOfTime();
+    },
+  };
+}
 
 export interface SolveDeps {
   sleep?: (ms: number) => Promise<void>;
@@ -269,12 +330,19 @@ export interface SolveDeps {
   /** Source of randomness for the human-like pacing; tests inject a fixed one. */
   random?: () => number;
   signal?: AbortSignal;
+  /** The whole run's time limit (press, solve and settle together); four minutes by default. */
   waitMs?: number;
+  /** The clock the budget is kept by (a test seam). */
+  now?: () => number;
+  /** The run's budget, when a caller already started one (passHumanCheck's press shares it with the solve). */
+  budget?: Budget;
   /** One line per step (instruction, squares picked, what the widget said after Verify), for logs and diagnosis. */
   trace?: (line: string) => void;
   /** `refused`: Google refused the reCAPTCHA spoken clip on this connection lately, so it is not asked for (captcha-log recaptchaRefusedRecently). */
   audio?: 'untried' | 'refused';
 }
+
+const budgetFor = (deps: SolveDeps): Budget => deps.budget ?? budgetOf(deps.waitMs ?? 240_000, deps.sleep ?? realSleep, deps.signal, deps.now);
 
 /** Answer whatever human check is on the page the way a person does, family by family, until the page holds an
  * accepted answer or the budget runs out. Rounds continue while a widget keeps asking (reCAPTCHA often serves
@@ -288,11 +356,14 @@ export const RECAPTCHA_PICTURE_ROUNDS = 4;
 export const RECAPTCHA_REFUSED = `(() => Array.from(document.querySelectorAll('.rc-doscaptcha-header, .rc-doscaptcha-body')).some(el => el.getBoundingClientRect().height > 0))()`;
 
 export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise<HumanCheckResult> {
-  if (!deps.stateDir) return solveShownCheck(page, deps, { refreshed: 0, kinds: [] });
+  const budget = budgetFor(deps);
+  if (!deps.stateDir) return solveShownCheck(page, { ...deps, budget }, { refreshed: 0, kinds: [] });
   const log = await import('./captcha-log.js');
   const began = Date.now();
   let host = '';
   try { host = new URL(page.url()).host; } catch { host = ''; }
+  // The tally is read from disk once while it is unchanged (captcha-log keeps the parsed lines): hold-off, weak kinds and the
+  // reCAPTCHA refusal below share that one read.
   if (await log.shouldHoldOff(deps.stateDir, host)) {
     deps.trace?.(`holding off: ${host} refused the last three answers`);
     return { outcome: 'still-there' };
@@ -305,7 +376,7 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   // ends the widget. After one such refusal the clip is not asked for again for a while: the pictures alone keep the widget alive.
   const egress = egressOfPage(page);
   const audio = await log.recaptchaRefusedRecently(deps.stateDir, Date.now(), egress) ? 'refused' as const : 'untried' as const;
-  const result = await solveShownCheck(page, { ...deps, audio, trace: line => { const step = log.stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } }, memo, { meter, order });
+  const result = await solveShownCheck(page, { ...deps, budget, audio, trace: line => { const step = log.stepOf(line); if (step && steps.at(-1) !== step && steps.length < 12) steps.push(step); deps.trace?.(line); } }, memo, { meter, order });
   const family = log.familyOf(result.widget, steps);
   // A `none` with nothing asked and nothing done is "no check was on the page", not a run of a family: recording it
   // as one made the tally count pages the solver never saw a check on (23 of 29 "unknown" runs were these).
@@ -319,70 +390,114 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
 
 /** The whole way past a human check, for every caller: the one press a visitor makes, then -- unless `solve` is
  * false (the user turned captcha solving off) -- the answer to whatever the press brought up or the page draws
- * itself. A press that clears is counted in the tally too: it is by far the commonest ending. */
+ * itself. A press that clears is counted in the tally too: it is by far the commonest ending. The press, its watch
+ * and the solve share one budget and the caller's signal. */
 export async function passHumanCheck(page: Page, deps: SolveDeps & { solve?: boolean } = {}): Promise<HumanCheckResult> {
-  const pressed = await pressHumanCheck(page, deps.sleep ? { sleep: deps.sleep } : {});
+  const budget = budgetFor(deps);
+  let pressed: HumanCheckResult;
+  try { pressed = await pressHumanCheck(page, { sleep: budget.sleep }); }
+  catch (error) {
+    if (!isOutOfTime(error)) throw error;
+    // Out of time before the press was judged: not passed (nothing confirmed it).
+    return { outcome: 'still-there', seen: 'the time for the check ran out' };
+  }
   if (pressed.outcome === 'cleared') {
     if (deps.stateDir) { let host = ''; try { host = new URL(page.url()).host; } catch { host = ''; } await (await import('./captcha-log.js')).recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family: pressed.widget ?? 'unknown', outcome: 'cleared', seconds: 0, steps: ['press'], ...(egressOfPage(page) ? { egress: egressOfPage(page) } : {}) }); }
     return pressed;
   }
   if (deps.solve === false) return pressed;
-  const solved = await solveHumanCheck(page, deps);
+  const solved = await solveHumanCheck(page, { ...deps, budget });
   // The press met a check but the solver then found none to answer (the challenge closed or changed in between): that is a
   // check that was tried and not passed, never "a puzzle nobody tried".
   if (solved.outcome === 'none' && pressed.outcome !== 'none') return { outcome: 'still-there', ...(pressed.widget ? { widget: pressed.widget } : {}), ...(pressed.seen ? { seen: pressed.seen } : {}) };
   return { ...solved, ...(solved.widget ?? pressed.widget ? { widget: solved.widget ?? pressed.widget } : {}) } as HumanCheckResult;
 }
 
+interface InPageMemo { tries: number; held: boolean; holds: number; textTyped: boolean; /** Something was done in the page whose verdict never showed. */ acted: boolean }
+
 /** One go at the checks a page draws itself. A result ends the run; `acted` means something was done and the
- * page should be looked at again; undefined means nothing here could be answered. */
-async function inPageStep(hands: Hands, memo: { tries: number; held: boolean; holds: number; textTyped: boolean }): Promise<HumanCheckResult | 'acted' | undefined> {
+ * page should be looked at again; undefined means nothing here could be answered. A `cleared` is only ever a
+ * verdict the page showed: an answer field filled, or the check gone with nothing else in the way. */
+async function inPageStep(hands: Hands, memo: InPageMemo): Promise<HumanCheckResult | 'acted' | undefined> {
   const { page, random, sleep, trace, asks } = hands;
   const settled = async (done: () => Promise<boolean>): Promise<boolean> => {
     // An in-page check shows its verdict after its own animation: watch for it before judging.
     for (let waited = 0; waited < 7_000; waited += 500) { await sleep(500); if (await done()) return true; }
     return false;
   };
-  if (memo.tries++ === 0 && await waitProofOfWork(page, random, sleep, trace)) return { outcome: 'cleared', widget: 'pow' };
-  if (memo.held && !await page.evaluate(HOLD_BUTTON).catch(() => null)) return { outcome: 'cleared', widget: 'hold' };
-  // Three holds at most: a button that is still there after that is refusing this browser, and more holds only make it surer.
-  if (memo.holds < 3 && await solvePressHold(page, random, sleep, trace)) { memo.holds++; memo.held = true; await sleep(2_000); return 'acted'; }
-  if (await geetestStep(hands)) return await settled(() => humanCheckAnswered(page)) ? { outcome: 'cleared', widget: 'geetest' } : 'acted';
-  if (await solveSlider(hands)) return await settled(async () => await humanCheckAnswered(page) || await markGone(page, 'slider') || !await page.evaluate(SLIDER).catch(() => null)) ? { outcome: 'cleared', widget: 'slider' } : 'acted';
-  if (!memo.textTyped && await solveTextCaptcha(page, asks.text, random, sleep, trace)) { memo.textTyped = true; return { outcome: 'cleared', widget: 'text' }; }
-  if (await solveChallengeBox(hands)) return await settled(async () => await humanCheckAnswered(page) || await markGone(page, 'box')) ? { outcome: 'cleared', widget: 'box' } : 'acted';
-  return undefined;
+  const acted = (): 'acted' => { memo.acted = true; return 'acted'; };
+  const nothingLeft = async (): Promise<boolean> => !await detectHumanCheck(page);
+  try {
+    if (memo.tries++ === 0) {
+      const work = await waitProofOfWork(page, random, sleep, trace);
+      if (work === 'done') return { outcome: 'cleared', widget: 'pow' };
+      // The widget went away while it worked: past it only if nothing else stands in the way now.
+      if (work === 'gone') { if (await nothingLeft()) return { outcome: 'cleared', widget: 'pow' }; return acted(); }
+      if (work === 'unfinished') memo.acted = true;
+    }
+    if (memo.held && !await page.evaluate(HOLD_BUTTON).catch(() => null)) return { outcome: 'cleared', widget: 'hold' };
+    // Three holds at most: a button that is still there after that is refusing this browser, and more holds only make it surer.
+    if (memo.holds < 3 && await solvePressHold(page, random, sleep, trace)) { memo.holds++; memo.held = true; await sleep(2_000); return acted(); }
+    if (await geetestStep(hands)) return await settled(() => humanCheckAnswered(page)) ? { outcome: 'cleared', widget: 'geetest' } : acted();
+    // A slider is past when the page says so (its field) or its box went away; a handle left at the end of its track is not a verdict.
+    if (await solveSlider(hands)) return await settled(async () => await humanCheckAnswered(page) || await markGone(page, 'slider')) ? { outcome: 'cleared', widget: 'slider' } : acted();
+    if (!memo.textTyped) {
+      const typed = await solveTextCaptcha(page, asks.text, random, sleep, trace);
+      // The characters are in the field and read back as typed: the page's check is answered as far as a visitor can tell before
+      // sending the form (the site's verdict comes with the submit, which the caller makes). Anything else is not answered.
+      if (typed === 'typed') { memo.textTyped = true; return { outcome: 'cleared', widget: 'text' }; }
+      if (typed === 'mismatch') { memo.textTyped = true; trace?.('text captcha: the field did not hold what was typed'); return { outcome: 'still-there', widget: 'text' }; }
+    }
+    if (await solveChallengeBox(hands)) return await settled(async () => await humanCheckAnswered(page) || await markGone(page, 'box')) ? { outcome: 'cleared', widget: 'box' } : acted();
+    return undefined;
+  } finally { await clearMarks(page); }
 }
 
 /** Answers what is shown until the page is past it. An answer the widget accepted is confirmed on the page (`settledPast`); when the
  * check asks again instead, the new challenge is answered too, three times at most. */
-async function solveShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMemo, asking: Pick<AskOptions, 'meter' | 'order'> = {}): Promise<HumanCheckResult> {
-  const budgetMs = deps.waitMs ?? 240_000;
-  const began = Date.now();
+async function solveShownCheck(page: Page, deps: SolveDeps & { budget: Budget }, hcaptcha: HcaptchaMemo, asking: Pick<AskOptions, 'meter' | 'order'> = {}): Promise<HumanCheckResult> {
+  const { budget } = deps;
   for (let attempt = 1; ; attempt++) {
-    const result = await answerShownCheck(page, { ...deps, waitMs: Math.max(0, budgetMs - (Date.now() - began)) }, hcaptcha, asking);
+    const result = await answerShownCheck(page, deps, hcaptcha, asking);
     if (result.outcome !== 'cleared') return result;
-    const { past, seen } = await settledPast(page, deps.sleep ?? realSleep);
+    let settled: Awaited<ReturnType<typeof settledPast>>;
+    try { settled = await settledPast(page, budget.sleep); }
+    catch (error) { if (!isOutOfTime(error)) throw error; return { ...result, outcome: 'still-there', seen: 'the time for the check ran out before the page settled' }; }
+    const { past, seen } = settled;
     if (past === 'passed') return result;
     deps.trace?.(`answer accepted, but ${seen || 'the check is still in the way'}`);
-    if (past === 'blocked' || attempt >= 3 || deps.signal?.aborted || Date.now() - began >= budgetMs) return { ...result, outcome: 'still-there', ...(seen ? { seen } : {}) };
+    if (past === 'blocked' || attempt >= 3 || budget.over()) return { ...result, outcome: 'still-there', ...(seen ? { seen } : {}) };
   }
 }
 
 /** One run at the check that is shown. Its `cleared` is a candidate only: the widget holds an answer or went away. */
-async function answerShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaMemo, asking: Pick<AskOptions, 'meter' | 'order'> = {}): Promise<HumanCheckResult> {
-  const sleep = deps.sleep ?? realSleep;
+async function answerShownCheck(page: Page, deps: SolveDeps & { budget: Budget }, hcaptcha: HcaptchaMemo, asking: Pick<AskOptions, 'meter' | 'order'> = {}): Promise<HumanCheckResult> {
+  const { budget } = deps;
+  const sleep = budget.sleep;
   const random = deps.random ?? Math.random;
-  const hands: Hands = { page, random, sleep, asks: { ...gatewayAsks(deps.signal, asking), ...deps.asks }, ...(deps.trace ? { trace: deps.trace } : {}) };
-  const budgetMs = deps.waitMs ?? 240_000;
-  const began = Date.now();
+  const hands: Hands = { page, random, sleep, asks: { ...gatewayAsks(budget.signal, asking), ...deps.asks }, ...(deps.trace ? { trace: deps.trace } : {}) };
   let widget: HumanCheckWidget | undefined;
   const ended = (outcome: HumanCheckResult['outcome']): HumanCheckResult => ({ outcome, ...(widget ? { widget } : {}) });
+  const inPage: InPageMemo = { tries: 0, held: false, holds: 0, textTyped: false, acted: false };
+  const viewport: ViewportMemo = {};
+  try {
+    return await answerLoop(page, deps, hands, hcaptcha, inPage, viewport, () => widget, found => { widget ??= found; }, ended);
+  } catch (error) {
+    if (!isOutOfTime(error)) throw error;
+    deps.trace?.('out of time');
+    return ended(await humanCheckAnswered(page) ? 'cleared' : 'still-there');
+  } finally {
+    await restoreViewport(page, viewport);
+  }
+}
+
+async function answerLoop(page: Page, deps: SolveDeps & { budget: Budget }, hands: Hands, hcaptcha: HcaptchaMemo, inPage: InPageMemo, viewport: ViewportMemo,
+  current: () => HumanCheckWidget | undefined, saw: (widget: HumanCheckWidget | undefined) => void, ended: (outcome: HumanCheckResult['outcome']) => HumanCheckResult): Promise<HumanCheckResult> {
+  const { budget } = deps;
+  const { sleep, random } = hands;
   let repressed = 0, arkoseStuck = 0, unread = 0, verifyWaited = false;
-  const inPage = { tries: 0, held: false, holds: 0, textTyped: false };
   let pictureRounds = 0, audio: 'untried' | 'on' | 'refused' = deps.audio ?? 'untried';
-  while (Date.now() - began < budgetMs) {
-    if (deps.signal?.aborted) break;
+  while (!budget.over()) {
     const found = await findPuzzle(page);
     if (!found) {
       if (await humanCheckAnswered(page)) return ended('cleared');
@@ -391,14 +506,14 @@ async function answerShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaM
       if (await findCheckbox(page) && repressed < 3) {
         repressed++;
         const pressed = await pressOnce(page, { waitMs: 8_000, sleep });
-        widget ??= pressed.widget;
+        saw(pressed.widget);
         // A press the check took (it let the visitor through, or the page moved on) is the answer: nothing is left to solve.
         if (pressed.outcome === 'cleared') return ended('cleared');
         await sleep(1_500);
         continue;
       }
       // No widget: the page may draw its own check.
-      if (!widget && inPage.tries < 6) {
+      if (!current() && inPage.tries < 6) {
         const step = await inPageStep(hands, inPage);
         if (step === 'acted') continue;
         if (step) return step;
@@ -418,9 +533,10 @@ async function answerShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaM
       const stuck = !inPage.held && !await detectHumanCheck(page) && await wholePageLook(page) === 'check';
       // A page that never stopped verifying: what it says is written down, since this state could not be reproduced on demand.
       if (stuck) deps.trace?.(`still on a verifying page "${await page.title().catch(() => '')}": ${String(await page.evaluate(`(document.body && document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 160)`).catch(() => '')).slice(0, 160)}`);
-      return ended(inPage.held || stuck || await detectHumanCheck(page) ? 'still-there' : 'none');
+      // Something was done in the page (a hold, a slide, proof of work) whose verdict never showed: tried, not passed.
+      return ended(inPage.held || inPage.acted || stuck || await detectHumanCheck(page) ? 'still-there' : 'none');
     }
-    widget ??= found.widget;
+    saw(found.widget);
     if (await humanCheckAnswered(page)) return ended('cleared');
     // Google's "Try again later": the widget is finished here. Its page used to be read as an unknown challenge and shown to the voters to
     // click on (14 of 60 failed runs on 2026-11-19/20 ended "pictures > audio > click"), which only spent asks.
@@ -428,16 +544,19 @@ async function answerShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaM
       deps.trace?.('Google refused: try again later (automated queries)');
       return ended('still-there');
     }
-    // Every square must be on screen to be clicked: a challenge taller than a small window is given room first.
-    if (await fitPuzzle(page, found.box)) { await sleep(800); continue; }
+    // Every square must be on screen to be clicked: a challenge taller than a small window is given room first (and the
+    // window is put back when the run ends).
+    if (await fitPuzzle(page, found.box, viewport)) { await sleep(800); continue; }
     let confirm: { x: number; x2: number; y: number; y2: number };
     if (found.widget === 'arkose') {
       // After two rounds the pictures could not be answered, the spoken challenge is tried instead.
       const played = arkoseStuck >= 2 && await arkoseAudio(hands, found.frame, found.box) ? 'played' : await playArkose(hands, found.frame, found.box);
       if (played === 'stuck') { if (++arkoseStuck >= 4) return ended('still-there'); await sleep(2_000); }
       else await sleep(2_500);
-      // The game shows its next round or goes away by itself: there is no separate confirm to press here.
-      if (await humanCheckAnswered(page) || !await findPuzzle(page)) return ended('cleared');
+      // The game shows its next round or goes away by itself: there is no separate confirm to press here. Gone is not won: only
+      // Arkose's completion token, or a page with no check left on it, is a candidate for the settle.
+      if (await humanCheckAnswered(page)) return ended('cleared');
+      if (!await findPuzzle(page)) return ended(await detectHumanCheck(page) ? 'still-there' : 'cleared');
       continue;
     }
     // reCAPTCHA offers the same check as a spoken clip, as a LAST resort: after RECAPTCHA_PICTURE_ROUNDS picture rounds that did not
@@ -461,7 +580,7 @@ async function answerShownCheck(page: Page, deps: SolveDeps, hcaptcha: HcaptchaM
       confirm = round.confirm;
     } else {
       // A challenge with no layout this solver reads (a new kind, or one still loading): the voting models are
-      // shown the whole challenge and asked where a visitor would click. Three such looks, then it is left.
+      // shown the whole challenge and asked where a visitor would click -- clicks only, never a drag. Three such looks, then it is left.
       if (++unread > 3) return ended('still-there');
       await sleep(2_000);
       if (await readLayout(found.frame, found.box)) continue;

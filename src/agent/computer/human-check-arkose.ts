@@ -4,6 +4,19 @@ import { spokenDigits } from './captcha-model.js';
 import { fetchAsTab } from './tab-fetch.js';
 import { frameShot, spot, toTarget, visitorClick, within, type Box, type Hands } from './human-check-hands.js';
 
+/** The most candidates a carousel is stepped through (Arkose shows up to about a dozen). */
+const MAX_OPTIONS = 20;
+
+/** The carousel's length from its own short texts and labels ("2 of 6", "Image 2 of 6.", "3/5"); 0 when none says (runs in the
+ * page and in tests). */
+export const CAROUSEL_TOTAL = `((texts) => {
+  for (const text of texts) {
+    const m = /^\\s*(?:image|option|picture|choice)?\\s*(\\d+)\\s*(?:of|\\/)\\s*(\\d+)\\s*[.)]?\\s*$/i.exec(text);
+    if (m && Number(m[1]) >= 1 && Number(m[1]) <= Number(m[2]) && Number(m[2]) >= 2 && Number(m[2]) <= ${MAX_OPTIONS}) return Number(m[2]);
+  }
+  return 0;
+})`;
+
 /** One step of an Arkose (FunCaptcha) game. Its puzzles share one shape: an instruction, sometimes a start
  * button, then either arrows that step through candidate pictures with a Submit button, or a set of pictures to
  * click one of. With arrows, every candidate is looked at once, the voting models pick the one that answers the
@@ -18,8 +31,14 @@ export async function playArkose(hands: Hands, frame: Frame, box: Box): Promise<
     const label = e => ((e.getAttribute('aria-label') || '') + ' ' + (e.textContent || '')).replace(/\\s+/g, ' ').trim();
     const find = re => clickable.find(e => re.test(label(e)));
     const heading = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"], [role="text"], legend, p')).filter(seen).map(e => (e.textContent || '').replace(/\\s+/g, ' ').trim()).filter(t => t.length > 12).sort((a, b) => b.length - a.length)[0] || '';
-    const of = /(\\d+)\\s*(?:of|\\/)\\s*(\\d+)/.exec(document.body.innerText || '');
-    return { instruction: heading.slice(0, 240), start: r(find(/^(verify|start|begin|start puzzle|solve|continue|try again)\\b/i)), next: r(find(/next|right arrow/i) || document.querySelector('.right-arrow')), submit: r(find(/^submit\\b/i)), total: of ? Number(of[2]) : 0 };
+    const nextEl = find(/next|right arrow/i) || document.querySelector('.right-arrow');
+    const submitEl = find(/^submit\\b/i);
+    // The count is the carousel's own ("2 of 6", or an image labelled "Image 2 of 6"): read inside the widget that holds the
+    // arrows and Submit, from short texts and labels only -- never from any "N of M" in the page's body text.
+    let scope = nextEl ? nextEl.parentElement : null;
+    while (scope && submitEl && !scope.contains(submitEl)) scope = scope.parentElement;
+    const texts = scope ? Array.from(scope.querySelectorAll('*')).slice(0, 600).flatMap(e => [e.children.length === 0 ? (e.textContent || '') : '', e.getAttribute('aria-label') || '', e.getAttribute('alt') || '']).filter(t => t && t.length <= 40) : [];
+    return { instruction: heading.slice(0, 240), start: r(find(/^(verify|start|begin|start puzzle|solve|continue|try again)\\b/i)), next: r(nextEl), submit: r(submitEl), total: (${CAROUSEL_TOTAL})(texts) };
   })()`;
   type Read = { instruction: string; start: Box | null; next: Box | null; submit: Box | null; total: number };
   const read = async (): Promise<Read | undefined> => { try { return await frame.evaluate(READ) as Read; } catch { return undefined; } };
@@ -37,7 +56,8 @@ export async function playArkose(hands: Hands, frame: Frame, box: Box): Promise<
   if (state.next && state.submit) {
     // Step through every candidate once. Arkose's carousel wraps, so after the last one it is back at the first.
     const options: Array<{ mimeType: string; data: string }> = [];
-    const count = Math.min(state.total >= 2 ? state.total : 6, 10);
+    // The widget's own count when it shows one; otherwise stepped until the first picture comes round again.
+    const count = state.total >= 2 ? Math.min(state.total, MAX_OPTIONS) : MAX_OPTIONS;
     for (let i = 0; i < count; i++) {
       const picture = await shot();
       if (!picture) return 'stuck';

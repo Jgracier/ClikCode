@@ -23,14 +23,16 @@ export async function solvePressHold(page: Page, random: () => number, sleep: (m
   await sleep(150 + random() * 250);
   await page.mouse.down();
   const startUrl = page.url();
-  // Held until the button is gone, the page moves on, or 15 seconds pass; then a moment longer, as people do.
-  for (let held = 0; held < 15_000; held += 400) {
-    await sleep(400);
-    await page.mouse.move(x + (random() - 0.5) * 1.6, y + (random() - 0.5) * 1.6);
-    if (page.url() !== startUrl || !await page.evaluate(HOLD_BUTTON).catch(() => null)) break;
-  }
-  await sleep(200 + random() * 300);
-  await page.mouse.up();
+  // Released whatever happens: a run stopped mid-hold never leaves the button held down.
+  try {
+    // Held until the button is gone, the page moves on, or 15 seconds pass; then a moment longer, as people do.
+    for (let held = 0; held < 15_000; held += 400) {
+      await sleep(400);
+      await page.mouse.move(x + (random() - 0.5) * 1.6, y + (random() - 0.5) * 1.6);
+      if (page.url() !== startUrl || !await page.evaluate(HOLD_BUTTON).catch(() => null)) break;
+    }
+    await sleep(200 + random() * 300);
+  } finally { await page.mouse.up(); }
   return true;
 }
 
@@ -56,50 +58,87 @@ export const POW_STATE = `(() => {
   })()`;
 
 /** Proof-of-work checks (Friendly Captcha, ALTCHA): nothing to answer, the browser does a sum. Their box is
- * pressed if it wants a press, then the work is waited out (up to 45 seconds). */
-export async function waitProofOfWork(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
+ * pressed if it wants a press, then the work is waited out (up to 45 seconds). `done`: the widget says the work is
+ * finished. `gone`: the widget left the page while it worked (the caller decides whether anything is still in the
+ * way). `unfinished`: it never said so. False: there is no proof-of-work check. A page that cannot be read for a
+ * moment (it is navigating) is looked at again, never taken as finished. */
+export async function waitProofOfWork(page: Page, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<false | 'done' | 'gone' | 'unfinished'> {
   type Read = { done: boolean; press: Box | null; kind: string } | null;
+  const UNREADABLE = Symbol('unreadable');
   let state = await page.evaluate(POW_STATE).catch(() => null) as Read;
   if (!state) return false;
-  if (state.done) return true;
+  if (state.done) return 'done';
   trace?.(`proof of work (${state.kind}): ${state.press ? 'pressing its box and ' : ''}waiting for the browser to finish`);
   // Its box is pressed near the left edge, where the tick is.
   if (state.press) await visitorClick(page.mouse, toTarget({ ...state.press, width: Math.min(state.press.width, 60) }), random, sleep);
   for (let waited = 0; waited < 45_000; waited += 1_000) {
     await sleep(1_000);
-    state = await page.evaluate(POW_STATE).catch(() => null) as Read;
-    if (!state || state.done) return true;
+    const read = await page.evaluate(POW_STATE).catch(() => UNREADABLE) as Read | typeof UNREADABLE;
+    if (read === UNREADABLE) continue;
+    if (!read) return 'gone';
+    if (read.done) return 'done';
   }
-  return false;
+  return 'unfinished';
 }
+
+/** Whether a field beside a picture is a "type the characters you see" captcha (runs in the page and in tests). `field`:
+ * its own names (`nameId`: name and id), its label text (`label`: label, placeholder, aria-label), the short text of its
+ * block (`block`), its `autocomplete`, and whether its form takes a payment card (`formHasCard`). `picture`: the
+ * likeliest picture, whether its own names say captcha (`named`) and how far it is from the field (`distance`, px).
+ * A picture beside a "verification code" or "security code" field is not enough: a one-time code sent by text
+ * message and a card's security code sit beside logos and card pictures every day, and typing a guessed picture into
+ * them is the worst thing this solver could do. It takes a captcha-named field, an instruction that names the picture,
+ * or a code field beside a picture named for a captcha -- and never a one-time-code or payment field. */
+export const TEXT_CAPTCHA_RULE = `((field, picture) => {
+    const auto = String(field.autocomplete || '').toLowerCase();
+    if (/one-time-code/.test(auto) || /(^|\\s)cc-/.test(auto) || field.formHasCard) return false;
+    const payment = /card|cvv|cvc|csc|cc-?(?:num|exp|csc|name)|payment|billing|expir/i;
+    if (payment.test(field.nameId) || payment.test(field.label)) return false;
+    const oneTime = /one.?time|\\botp\\b|totp|2fa|mfa|passcode|authenticat|we (?:sent|texted|emailed)|sent (?:to|you)|text message|\\bsms\\b|check your (?:email|phone|inbox)/i;
+    if (oneTime.test(field.nameId) || oneTime.test(field.label) || oneTime.test(field.block)) return false;
+    if (!picture) return false;
+    const captchaNamed = /captcha|securimage|kaptcha|anti-?spam/i;
+    const pictured = /captcha|(?:text|characters|letters|code|word|numbers?)s? (?:\\w+ )?(?:that )?you see|in the (?:image|picture)|(?:image|picture) (?:below|above|shown)|shown in the (?:image|picture)|stop spam|not a robot|are you (?:a )?human/i;
+    if (captchaNamed.test(field.nameId) || captchaNamed.test(field.label)) return picture.distance <= 600;
+    if (pictured.test(field.label) || pictured.test(field.block)) return picture.named || picture.distance <= 400;
+    if (picture.named && /code|characters|text|word|verif/i.test(field.label + ' ' + field.nameId)) return picture.distance <= 400;
+    return false;
+  })`;
 
 /** Finds a "type the characters you see" captcha and marks its field and picture (runs in the page). */
 export const TEXT_CAPTCHA = `(() => {
     const seen = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 4 && r.height > 4 && s.visibility !== 'hidden' && s.display !== 'none' && el.type !== 'hidden'; };
-    const asks = /captcha|security ?code|verification ?code|verify ?code|characters|code (shown|above|below|in the image)|text (shown|in the image)|type the (code|text|characters)|enter the (code|text|characters)|antispam|human/i;
-    const labelOf = input => { const l = input.id && document.querySelector('label[for="' + CSS.escape(input.id) + '"]'); return [input.name, input.id, input.placeholder, input.getAttribute('aria-label'), l ? l.textContent : '', input.closest('label') ? input.closest('label').textContent : ''].join(' '); };
+    const rule = ${TEXT_CAPTCHA_RULE};
+    const labelOf = input => { const l = input.id && document.querySelector('label[for="' + CSS.escape(input.id) + '"]'); return [input.placeholder, input.getAttribute('aria-label'), l ? l.textContent : '', input.closest('label') ? input.closest('label').textContent : ''].join(' ').replace(/\\s+/g, ' '); };
     const boxes = Array.from(document.querySelectorAll('input:not([type]), input[type=text], input[type=tel], input[type=number]'));
     // The instruction is often not a <label> but text in the field's own block ("To help stop spam, please type the text you
     // see in the image below" in a form-group): the nearest container where this is the only visible box, read when short.
-    // That text must name the picture, so a one-time-code field ("enter the verification code we sent") is never taken for one.
-    const pictured = /captcha|(?:text|characters|letters|code|word)s? (?:\\w+ )?(?:that )?you see|in the (?:image|picture)|(?:image|picture) (?:below|above|shown)|stop spam|not a robot/i;
     const blockOf = input => { for (let el = input.parentElement, up = 0; el && up < 4; el = el.parentElement, up++) { if (boxes.filter(b => el.contains(b) && seen(b)).length > 1) return ''; const text = (el.innerText || '').replace(/\\s+/g, ' ').trim(); if (text) return text.length <= 400 ? text : ''; } return ''; };
-    const input = boxes.find(i => seen(i) && (asks.test(labelOf(i)) || pictured.test(blockOf(i))) && !/recaptcha|hcaptcha|turnstile|email|phone|name|company/i.test((i.name || '') + ' ' + (i.id || '')));
-    if (!input) return null;
-    const near = input.getBoundingClientRect();
     const pics = Array.from(document.querySelectorAll('img, canvas')).filter(p => { if (!seen(p)) return false; const r = p.getBoundingClientRect(); return r.width >= 50 && r.width <= 450 && r.height >= 18 && r.height <= 180; });
-    const score = p => { const r = p.getBoundingClientRect(); const named = /captcha|securimage|code|verif|kaptcha/i.test([p.src, p.alt, p.id, p.className].join(' ')) ? 0 : 400; return named + Math.hypot(r.x + r.width / 2 - (near.x + near.width / 2), r.y + r.height / 2 - (near.y + near.height / 2)); };
-    const pic = pics.sort((a, b) => score(a) - score(b))[0];
-    if (!pic || score(pic) > 600) return null;
-    input.setAttribute('data-clikcode-captcha-field', '1');
-    pic.setAttribute('data-clikcode-captcha-picture', '1');
-    return { filled: String(input.value || '').length > 0 };
+    const pictureFor = input => {
+      const near = input.getBoundingClientRect();
+      const of = p => { const r = p.getBoundingClientRect(); return { el: p, named: /captcha|securimage|kaptcha/i.test([p.src, p.alt, p.id, typeof p.className === 'string' ? p.className : ''].join(' ')), distance: Math.hypot(r.x + r.width / 2 - (near.x + near.width / 2), r.y + r.height / 2 - (near.y + near.height / 2)) }; };
+      return pics.map(of).sort((a, b) => (a.named ? 0 : 400) + a.distance - ((b.named ? 0 : 400) + b.distance))[0] || null;
+    };
+    const cardIn = form => !!(form && form.querySelector('[autocomplete^="cc-" i], [autocomplete*=" cc-" i], [name*="cardnumber" i], [name*="card_number" i], [name*="cvv" i], [name*="cvc" i]'));
+    let found = null;
+    for (const input of boxes) {
+      if (!seen(input) || /recaptcha|hcaptcha|turnstile|email|phone|name|company/i.test((input.name || '') + ' ' + (input.id || ''))) continue;
+      const picture = pictureFor(input);
+      const field = { nameId: (input.name || '') + ' ' + (input.id || ''), label: labelOf(input), block: blockOf(input), autocomplete: input.getAttribute('autocomplete') || '', formHasCard: cardIn(input.form) };
+      if (rule(field, picture && { named: picture.named, distance: picture.distance })) { found = { input, picture }; break; }
+    }
+    if (!found) return null;
+    found.input.setAttribute('data-clikcode-captcha-field', '1');
+    found.picture.el.setAttribute('data-clikcode-captcha-picture', '1');
+    return { filled: String(found.input.value || '').length > 0 };
   })()`;
 
 /** A classic "type the characters you see" captcha: a small picture beside a field asking for its code. The picture
- * is read by the vision model and typed in at a visitor's pace. Says whether it typed anything; whether the site
- * accepts it shows when the form is sent. */
-export async function solveTextCaptcha(page: Page, askText: (image: { mimeType: string; data: string }) => Promise<string | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<boolean> {
+ * is read by the vision models and typed in at a visitor's pace. `typed`: the field reads back what was typed.
+ * `mismatch`: something was typed but the field does not hold it (another field had focus, or the page rewrote it).
+ * False: nothing was typed. Whether the site accepts the code shows only when the form is sent. */
+export async function solveTextCaptcha(page: Page, askText: (image: { mimeType: string; data: string }) => Promise<string | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<'typed' | 'mismatch' | false> {
   const marked = await page.evaluate(TEXT_CAPTCHA).catch(() => null);
   if (!marked) return false;
   let shot: Buffer;
@@ -111,7 +150,9 @@ export async function solveTextCaptcha(page: Page, askText: (image: { mimeType: 
   await field.click({ timeout: 5_000 }).catch(quiet('agent/computer/human-check-inpage'));
   await field.fill('').catch(quiet('agent/computer/human-check-inpage'));
   for (const char of text) { await page.keyboard.type(char); await sleep(60 + random() * 140); }
-  return true;
+  const held = await field.inputValue({ timeout: 3_000 }).catch(quiet('agent/computer/human-check-inpage'));
+  const same = (a: string): string => a.replace(/\s+/g, '').toLowerCase();
+  return held !== undefined && same(held) === same(text) ? 'typed' : 'mismatch';
 }
 
 /** Finds a slider check drawn in the page (Alibaba's "slide to verify" and the like) and marks its box (runs in
@@ -128,9 +169,10 @@ export const SLIDER = `(() => {
   document.querySelectorAll('[data-clikcode-slider]').forEach(e => e.removeAttribute('data-clikcode-slider'));
   box.setAttribute('data-clikcode-slider', '1');
   const at = r(handle), along = r(track);
-  // A handle already at the far end of its track has been slid.
-  if (at.x + at.width / 2 > along.x + along.width - at.width) return null;
-  return { handle: at, track: along, box: r(box), text: (box.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160), picture: !!box.querySelector('canvas, img, [class*="bg"]') };
+  // A handle already at the far end of its track has been slid: nothing to drag, but no verdict either (only the page's own
+  // answer field, or the box going away, says the slide was accepted).
+  if (at.x + at.width / 2 > along.x + along.width - at.width) return { slid: true };
+  return { slid: false, handle: at, track: along, box: r(box), text: (box.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160), picture: !!box.querySelector('canvas, img, [class*="bg"]') };
 })()`;
 
 /** A slider check: a handle on a track, often under a picture with a gap. With a picture, the voting models say
@@ -138,8 +180,8 @@ export const SLIDER = `(() => {
  * track is dragged to its end. */
 export async function solveSlider(hands: Hands): Promise<boolean> {
   const { page, random, sleep, trace, asks } = hands;
-  const found = await page.evaluate(SLIDER).catch(() => null) as { handle: Box; track: Box; box: Box; text: string; picture: boolean } | null;
-  if (!found) return false;
+  const found = await page.evaluate(SLIDER).catch(() => null) as { slid: false; handle: Box; track: Box; box: Box; text: string; picture: boolean } | { slid: true } | null;
+  if (!found || found.slid) return false;
   const start = { x: found.handle.x + found.handle.width / 2, y: found.handle.y + found.handle.height / 2 };
   let distance = found.track.x + found.track.width - found.handle.width / 2 - start.x;
   if (found.picture) {

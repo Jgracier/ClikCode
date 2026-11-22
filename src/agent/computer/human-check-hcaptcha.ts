@@ -21,6 +21,15 @@ export interface HcaptchaMemo {
   avoid?: ReadonlySet<string>;
 }
 
+/** Whether the challenge is built to be dragged (runs in the challenge frame): a piece marked draggable, or one that shows a grab
+ * or move cursor. Structure, not words: a German or Japanese "drag" instruction reads the same here as an English one. */
+export const DRAG_STRUCTURE = `(() => {
+  const view = document.querySelector('.challenge-view, .challenge-container, .challenge') || document.body;
+  if (!view) return false;
+  if (view.querySelector('[draggable="true"], [class*="draggable" i], [class*="drag-item" i]')) return true;
+  return Array.from(view.querySelectorAll('*')).slice(0, 400).some(e => /^(?:grab|grabbing|move)$/.test(getComputedStyle(e).cursor));
+})()`;
+
 const rectOf = (selector: string): string => `(() => { const b = document.querySelector(${JSON.stringify(selector)}); if (!b) return null; const r = b.getBoundingClientRect(); return r.width > 0 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null; })()`;
 
 /** One round of a canvas challenge. `confirm` is the button to press after answering; `again` means the challenge
@@ -58,10 +67,11 @@ export async function hcaptchaRound(hands: Hands, frame: Frame, box: Box, memo: 
   // A picture that never settles is a puzzle about motion: it is answered from a few frames, not one still.
   const frames = [picture];
   if (moving) for (let i = 0; i < 4; i++) { await sleep(500); const next = await frameShot(frame, 80); if (!next) break; frames.push(next); }
-  // Whether to click or drag is the models' call, not a word list: the instruction comes in the visitor's own
-  // language. An English "drag" is asked as a drag first to save a round of asks.
-  // A drag that was asked for and not agreed on is a challenge to swap, never one to click: clicking cannot answer it.
-  const dragFirst = /\b(?:drag|slide|move the)\b/i.test(instruction);
+  // Whether to click or drag is read from the challenge itself, never from its words: the instruction comes in the visitor's own
+  // language. A challenge built to be dragged (a draggable piece, a grab cursor) is asked as a drag only -- one that is not agreed
+  // on is a challenge to swap, never one to click: clicking cannot answer it. Any other is asked where to click first, and as a
+  // drag only when no click was agreed.
+  const dragFirst = await frame.evaluate(DRAG_STRUCTURE).catch(() => false) === true;
   const points = dragFirst ? undefined : await asks.points(frames, instruction);
   const drags = points?.length ? undefined : await asks.drags(picture, instruction).catch(quiet('agent/computer/human-check-hcaptcha'));
   const submit = async (): Promise<Target> => {

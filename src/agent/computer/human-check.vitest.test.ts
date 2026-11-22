@@ -43,7 +43,8 @@ describe('the human-check checkbox', () => {
 
   it('does not call a changed address passed while the box is still there unanswered', async () => {
     const rewritten = fakePage([{ src: 'https://newassets.hcaptcha.com/captcha/v1/x/static/hcaptcha.html#frame=checkbox&id=1', box: { x: 40, y: 200, width: 303, height: 78 } }], s => { s.url = 'https://vendor.example/signup?__cf_chl_rt_tk=abc'; });
-    expect(await pressHumanCheck(rewritten.page, noSleep)).toEqual({ outcome: 'still-there', widget: 'hcaptcha', seen: 'the hcaptcha check is asking again' });
+    // The box is still there: the press is watched on (a changed address alone is no verdict) and never called passed.
+    expect(await pressHumanCheck(rewritten.page, noSleep)).toEqual({ outcome: 'still-there', widget: 'hcaptcha' });
   });
 
   it('says so when the press changed nothing, and when there is no checkbox', async () => {
@@ -303,11 +304,12 @@ describe('AWS WAF CAPTCHA', () => {
 
 describe('an hCaptcha round', () => {
   /** A challenge frame that says what it asks, takes clicks and drags, and shows the same picture every time (a still puzzle). */
-  function round(instruction: string, asks: { points?: Array<{ x: number; y: number }>; drags?: Array<{ n: number; from: { x: number; y: number }; to: { x: number; y: number } }> }) {
+  function round(instruction: string, asks: { points?: Array<{ x: number; y: number }>; drags?: Array<{ n: number; from: { x: number; y: number }; to: { x: number; y: number } }> }, dragBuilt = false) {
     const log: string[] = [];
     const frame = {
       evaluate: async (script: unknown) => {
         const text = String(script);
+        if (text.includes('draggable')) return dragBuilt;
         if (text.includes('prompt-text')) return instruction;
         if (text.includes('.refresh')) return { x: 300, y: 10, width: 20, height: 20 };
         if (text.includes('.button-submit')) return { x: 280, y: 520, width: 90, height: 40 };
@@ -324,7 +326,7 @@ describe('an hCaptcha round', () => {
 
   it('drags when the models agree on a drag, and never clicks', async () => {
     const { hcaptchaRound } = await import('./human-check-hcaptcha.js');
-    const r = round('Please drag the segments on the right to complete the line', { drags: [{ n: 1, from: { x: 0.8, y: 0.3 }, to: { x: 0.5, y: 0.4 } }] });
+    const r = round('Please drag the segments on the right to complete the line', { drags: [{ n: 1, from: { x: 0.8, y: 0.3 }, to: { x: 0.5, y: 0.4 } }] }, true);
     const out = await hcaptchaRound(r.hands, r.frame, box, { refreshed: 0, kinds: [] });
     expect(out).toHaveProperty('confirm');
     expect(r.log).toEqual(expect.arrayContaining(['asked-drags', 'down', 'up']));
@@ -333,7 +335,7 @@ describe('an hCaptcha round', () => {
 
   it('swaps a drag challenge it cannot agree on, instead of clicking where the models would have pointed', async () => {
     const { hcaptchaRound } = await import('./human-check-hcaptcha.js');
-    const r = round('Please drag the segments on the right to complete the line', { points: [{ x: 0.83, y: 0.32 }], drags: [] });
+    const r = round('Please drag the segments on the right to complete the line', { points: [{ x: 0.83, y: 0.32 }], drags: [] }, true);
     const memo = { refreshed: 0, kinds: [] as string[] };
     expect(await hcaptchaRound(r.hands, r.frame, box, memo)).toBe('again');
     expect(memo.refreshed).toBe(1);
@@ -457,5 +459,199 @@ describe('whether the page is past the check', () => {
     expect(result.outcome).toBe('still-there');
     expect(result.seen).toContain('still the site\'s verification page');
     expect(traced.some(line => line.startsWith('answer accepted, but the page is still'))).toBe(true);
+  });
+});
+
+// ── audited fixes ───────────────────────────────────────────────────────────────────────────────────────────
+
+describe('a text captcha is only a field the page says is one', () => {
+  const rule = async () => { const { TEXT_CAPTCHA_RULE } = await import('./human-check-inpage.js'); return (0, eval)(TEXT_CAPTCHA_RULE) as (field: Record<string, unknown>, picture: { named: boolean; distance: number } | null) => boolean; };
+  const field = (over: Record<string, unknown> = {}) => ({ nameId: 'code ', label: '', block: '', autocomplete: '', formHasCard: false, ...over });
+  const logo = { named: false, distance: 120 };
+
+  it('leaves one-time codes and card security codes alone, whatever picture is beside them', async () => {
+    const isCaptcha = await rule();
+    expect(isCaptcha(field({ label: 'Verification code' }), logo)).toBe(false);
+    expect(isCaptcha(field({ label: 'Security code' }), logo)).toBe(false);
+    expect(isCaptcha(field({ label: 'Verification code', autocomplete: 'one-time-code' }), { named: true, distance: 50 })).toBe(false);
+    expect(isCaptcha(field({ nameId: 'otp ', label: 'Code' }), { named: true, distance: 50 })).toBe(false);
+    expect(isCaptcha(field({ label: 'Security code', autocomplete: 'cc-csc' }), { named: true, distance: 50 })).toBe(false);
+    expect(isCaptcha(field({ label: 'Security code', formHasCard: true }), { named: true, distance: 50 })).toBe(false);
+    expect(isCaptcha(field({ label: 'Enter code', block: 'Enter the verification code we sent to your phone' }), { named: true, distance: 50 })).toBe(false);
+  });
+
+  it('takes a captcha-named field, an instruction naming the picture, or a code field beside a captcha picture', async () => {
+    const isCaptcha = await rule();
+    expect(isCaptcha(field({ nameId: 'captcha_answer ' }), logo)).toBe(true);
+    expect(isCaptcha(field({ nameId: 'VERIFY VERIFY', block: 'To help stop spam, please type the text here that you see in the image below.' }), logo)).toBe(true);
+    expect(isCaptcha(field({ label: 'Security code' }), { named: true, distance: 90 })).toBe(true);
+    expect(isCaptcha(field({ nameId: 'captcha ' }), null)).toBe(false);
+  });
+});
+
+describe('after typing a text captcha', () => {
+  const textPage = (holds: (typed: string) => string) => {
+    let typed = '';
+    const field = { click: async () => undefined, fill: async () => { typed = ''; }, inputValue: async () => holds(typed) };
+    const page = { evaluate: async () => ({ filled: false }), locator: () => ({ first: () => ({ ...field, screenshot: async () => Buffer.from('png') }) }), keyboard: { type: async (char: string) => { typed += char; } } };
+    return page as unknown as Page;
+  };
+  it('reports typed only when the field reads back what was typed', async () => {
+    const { solveTextCaptcha } = await import('./human-check-inpage.js');
+    expect(await solveTextCaptcha(textPage(typed => typed), async () => 'x7Kp2', () => 0.5, async () => undefined)).toBe('typed');
+    expect(await solveTextCaptcha(textPage(() => ''), async () => 'x7Kp2', () => 0.5, async () => undefined)).toBe('mismatch');
+  });
+});
+
+describe('the run has one budget', () => {
+  /** A clock that only moves when the solver sleeps. */
+  const clock = () => { let at = 0; const slept: number[] = []; return { now: () => at, sleep: async (ms: number) => { slept.push(ms); at += ms; }, total: () => slept.reduce((a, b) => a + b, 0) }; };
+
+  it('stops the press and its watch at the budget, not after them', async () => {
+    const stuck = fakePage([anchor()], () => undefined);
+    const time = clock();
+    expect((await passHumanCheck(stuck.page, { sleep: time.sleep, now: time.now, waitMs: 3_000, solve: false })).outcome).toBe('still-there');
+    expect(time.total()).toBeLessThanOrEqual(3_000);
+  });
+
+  it('stops inside a round (the watch after confirm) when the budget is spent', async () => {
+    const { page } = gridPage(() => undefined);
+    const time = clock();
+    const result = await solveHumanCheck(page, { ...noWait, sleep: time.sleep, now: time.now, waitMs: 5_000, asks: { tile: async () => false } });
+    expect(result.outcome).toBe('still-there');
+    expect(time.total()).toBeLessThanOrEqual(5_000);
+  });
+
+  it('stops every wait and hands the ask a signal that fires when the caller stops', async () => {
+    const { page } = gridPage(() => undefined);
+    const stop = new AbortController();
+    let seen: AbortSignal | undefined;
+    const sleep = async () => { stop.abort(); };
+    const result = await solveHumanCheck(page, { ...noWait, sleep, waitMs: 60_000, signal: stop.signal, asks: { tile: async () => false } });
+    expect(result.outcome).toBe('still-there');
+    const { budgetOf } = await import('./human-check.js');
+    const caller = new AbortController();
+    const budget = budgetOf(60_000, async () => undefined, caller.signal);
+    seen = budget.signal;
+    caller.abort();
+    expect(seen.aborted).toBe(true);
+    await expect(budget.sleep(10)).rejects.toThrow(/ran out of time or was stopped/);
+  });
+});
+
+describe('a checkbox scrolled out of view', () => {
+  it('is scrolled back into view when it sits above the fold, and then pressed', async () => {
+    const frame: FakeFrame = { src: 'https://www.google.com/recaptcha/api2/anchor?k=x', box: { x: 100, y: -200, width: 304, height: 78 } };
+    const clicks: Array<[number, number]> = [];
+    let answered = false;
+    const page = {
+      url: () => 'https://vendor.example/signup',
+      frames: () => [{ url: () => frame.src, evaluate: async () => null, frameElement: async () => ({ boundingBox: async () => frame.box, evaluate: async () => { frame.box = { ...frame.box!, y: 300 }; return 'scrolled'; } }) }],
+      evaluate: async () => answered,
+      mouse: { move: async () => undefined, click: async (x: number, y: number) => { clicks.push([x, y]); answered = true; } },
+    } as unknown as Page;
+    expect(await pressHumanCheck(page, noSleep)).toEqual({ outcome: 'cleared', widget: 'recaptcha' });
+    expect(clicks).toEqual([[130, 339]]);
+  });
+});
+
+describe('the answer field', () => {
+  const withDocument = async <T>(fields: Record<string, string>, run: () => Promise<T>): Promise<T> => {
+    const g = globalThis as unknown as { document?: unknown };
+    const before = g.document;
+    g.document = { querySelectorAll: (selector: string) => Object.entries(fields).filter(([name]) => selector.includes(`[name="${name}"]`)).map(([, value]) => ({ value })) };
+    try { return await run(); } finally { g.document = before; }
+  };
+  const pageWith = (frames: Array<{ url: string; fields: Record<string, string> }>) => ({
+    url: () => 'https://vendor.example/signup',
+    evaluate: async () => false,
+    mainFrame: () => undefined,
+    frames: () => frames.map(frame => ({ url: () => frame.url, evaluate: (fn: () => boolean) => withDocument(frame.fields, async () => fn()) })),
+  }) as unknown as Page;
+
+  it('is read in the page\'s own frames too, never in a widget\'s', async () => {
+    const { humanCheckAnswered } = await import('./human-check.js');
+    const token = 'x'.repeat(40);
+    expect(await humanCheckAnswered(pageWith([{ url: 'https://vendor.example/form', fields: { 'g-recaptcha-response': token } }]))).toBe(true);
+    expect(await humanCheckAnswered(pageWith([{ url: 'about:srcdoc', fields: { 'h-captcha-response': token } }]))).toBe(true);
+    expect(await humanCheckAnswered(pageWith([{ url: 'https://www.google.com/recaptcha/api2/anchor', fields: { 'g-recaptcha-response': token } }]))).toBe(false);
+  });
+
+  it("counts Arkose's completion token, not the session token it holds from the start", async () => {
+    const { humanCheckAnswered } = await import('./human-check.js');
+    const token = '123.456|r=us-east-1|meta=3|pk=x';
+    expect(await humanCheckAnswered(pageWith([{ url: 'https://vendor.example/form', fields: { 'fc-token': token } }]))).toBe(false);
+    expect(await humanCheckAnswered(pageWith([{ url: 'https://vendor.example/form', fields: { 'fc-token': token, 'verification-token': token } }]))).toBe(true);
+  });
+});
+
+describe('failing closed', () => {
+  it('does not take an unreadable page for finished proof of work', async () => {
+    const { waitProofOfWork } = await import('./human-check-inpage.js');
+    const reads = (seq: Array<unknown>) => { let i = 0; return { evaluate: async () => { const next = seq[Math.min(i++, seq.length - 1)]; if (next instanceof Error) throw next; return next; } } as unknown as Page; };
+    const working = { done: false, press: null, kind: 'ALTCHA' };
+    expect(await waitProofOfWork(reads([working, new Error('navigating')]), () => 0.5, async () => undefined)).toBe('unfinished');
+    expect(await waitProofOfWork(reads([working, new Error('navigating'), { ...working, done: true }]), () => 0.5, async () => undefined)).toBe('done');
+    expect(await waitProofOfWork(reads([working, null]), () => 0.5, async () => undefined)).toBe('gone');
+  });
+
+  it('does not drag a slider whose handle is already at the end, nor call it passed', async () => {
+    const { solveSlider } = await import('./human-check-inpage.js');
+    const page = { evaluate: async () => ({ slid: true }) } as unknown as Page;
+    expect(await solveSlider({ page, random: () => 0.5, sleep: async () => undefined, asks: {} as never })).toBe(false);
+  });
+
+  it('puts the viewport back after growing it for a tall challenge', async () => {
+    const { fitPuzzle, restoreViewport } = await import('./human-check-hands.js');
+    const sizes: Array<{ width: number; height: number }> = [];
+    const page = { evaluate: async () => [800, 500], viewportSize: () => ({ width: 800, height: 500 }), setViewportSize: async (size: { width: number; height: number }) => { sizes.push(size); } } as unknown as Page;
+    const memo = {};
+    expect(await fitPuzzle(page, { x: 10, y: 10, width: 400, height: 600 }, memo)).toBe(true);
+    await restoreViewport(page, memo);
+    expect(sizes).toEqual([{ width: 800, height: 720 }, { width: 800, height: 500 }]);
+    await restoreViewport(page, memo);
+    expect(sizes).toHaveLength(2);
+  });
+
+  it('leaves no marks on the page after looking for a check', async () => {
+    const { CLEAR_MARKS } = await import('./human-check-hands.js');
+    const scripts: unknown[] = [];
+    const page = { url: () => 'https://vendor.example/', frames: () => [], evaluate: async (script: unknown) => { scripts.push(script); return null; }, title: async () => '' } as unknown as Page;
+    await detectHumanCheck(page);
+    expect(scripts.at(-1)).toBe(CLEAR_MARKS);
+  });
+
+  it('never releases a held button late: a stopped click still lets go', async () => {
+    const { visitorClick } = await import('./human-check-hands.js');
+    let down = 0;
+    const mouse = { move: async () => undefined, down: async () => { down++; }, up: async () => { down--; } } as unknown as Page['mouse'];
+    let calls = 0;
+    const sleep = async () => { if (++calls === 2) throw new Error('stopped'); };
+    await expect(visitorClick(mouse, { x: 0, x2: 10, y: 0, y2: 10 }, () => 0.5, sleep)).rejects.toThrow('stopped');
+    expect(down).toBe(0);
+  });
+});
+
+describe('an hCaptcha drag is read from its structure', () => {
+  it('asks a drag-built challenge as a drag only, whatever language its words are in', async () => {
+    const { hcaptchaRound, DRAG_STRUCTURE } = await import('./human-check-hcaptcha.js');
+    const asked: string[] = [];
+    const frame = { evaluate: async (script: unknown) => script === DRAG_STRUCTURE ? true : String(script).includes('prompt-text') ? 'Ziehen Sie das Teil an seinen Platz' : { x: 300, y: 500, width: 80, height: 30 }, frameElement: async () => ({ screenshot: async () => Buffer.from('same') }) };
+    const page = { mouse: { move: async () => undefined, down: async () => undefined, up: async () => undefined } } as unknown as Page;
+    const asks = { points: async () => { asked.push('points'); return [{ x: 0.5, y: 0.5 }]; }, drags: async () => { asked.push('drags'); return [{ n: 1, from: { x: 0.1, y: 0.1 }, to: { x: 0.5, y: 0.5 } }]; } };
+    const round = await hcaptchaRound({ page, random: () => 0.5, sleep: async () => undefined, asks: asks as never }, frame as never, { x: 0, y: 0, width: 400, height: 600 }, { refreshed: 0, kinds: [] });
+    expect(typeof round === 'object').toBe(true);
+    expect(asked).toEqual(['drags']);
+  });
+});
+
+describe('an Arkose carousel', () => {
+  it("counts its options from the widget's own counter, not any \"N of M\" on the page", async () => {
+    const { CAROUSEL_TOTAL } = await import('./human-check-arkose.js');
+    const total = (0, eval)(CAROUSEL_TOTAL) as (texts: string[]) => number;
+    expect(total(['Pick the image that is the correct way up', 'Image 2 of 14.'])).toBe(14);
+    expect(total(['3 / 5'])).toBe(5);
+    expect(total(['Step 1 of 3 of the sign-up', 'Use the arrows'])).toBe(0);
+    expect(total(['7 of 3'])).toBe(0);
   });
 });

@@ -27,23 +27,56 @@ export interface CaptchaRecord {
 
 export function captchaLogPath(stateDir: string): string { return path.join(stateDir, 'computer', 'captcha-log.jsonl'); }
 
-export async function recordCaptcha(stateDir: string, record: CaptchaRecord): Promise<void> {
+/** The log is rotated past this size: everything older than the longest window any reader uses (30 days) is dropped. */
+export const CAPTCHA_LOG_MAX_BYTES = 1_000_000;
+const KEEP_MS = 30 * 86_400_000;
+
+export async function recordCaptcha(stateDir: string, record: CaptchaRecord, now = Date.now()): Promise<void> {
   try {
     const file = captchaLogPath(stateDir);
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     await fs.appendFile(file, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    if ((await fs.stat(file)).size > CAPTCHA_LOG_MAX_BYTES) await rotate(file, now);
   } catch { /* fail-open-ok: a log that cannot be written never fails a sign-up */ }
 }
 
-async function recordsSince(stateDir: string, since: number): Promise<CaptchaRecord[]> {
+/** Keeps the last 30 days (and, of those, no more than half the size limit, newest kept), written aside and moved into place. */
+async function rotate(file: string, now: number): Promise<void> {
+  const kept: string[] = [];
+  let bytes = 0;
+  const lines = (await fs.readFile(file, 'utf8')).split('\n').filter(line => line.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    let at = NaN;
+    try { at = Date.parse((JSON.parse(line) as CaptchaRecord).at); } catch { continue; } // fail-open-ok: a torn line is dropped
+    if (!(at >= now - KEEP_MS) || bytes + line.length + 1 > CAPTCHA_LOG_MAX_BYTES / 2) break;
+    kept.push(line); bytes += line.length + 1;
+  }
+  const aside = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(aside, kept.reverse().map(line => `${line}\n`).join(''), { mode: 0o600 });
+  await fs.rename(aside, file);
+}
+
+/** The parsed log, kept while the file is unchanged (same size and time): one solver run asks it three or four questions. */
+let parsed: { file: string; size: number; mtimeMs: number; records: CaptchaRecord[] } | undefined;
+async function readRecords(stateDir: string): Promise<CaptchaRecord[]> {
+  const file = captchaLogPath(stateDir);
+  let stat: { size: number; mtimeMs: number };
+  try { stat = await fs.stat(file); } catch { return []; }
+  if (parsed && parsed.file === file && parsed.size === stat.size && parsed.mtimeMs === stat.mtimeMs) return parsed.records;
   let text = '';
-  try { text = await fs.readFile(captchaLogPath(stateDir), 'utf8'); } catch { return []; }
-  const out: CaptchaRecord[] = [];
+  try { text = await fs.readFile(file, 'utf8'); } catch { return []; }
+  const records: CaptchaRecord[] = [];
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
-    try { const record = JSON.parse(line) as CaptchaRecord; if (Date.parse(record.at) >= since) out.push(record); } catch { /* fail-open-ok: a torn line is skipped */ }
+    try { records.push(JSON.parse(line) as CaptchaRecord); } catch { /* fail-open-ok: a torn line is skipped */ }
   }
-  return out;
+  parsed = { file, size: stat.size, mtimeMs: stat.mtimeMs, records };
+  return records;
+}
+
+async function recordsSince(stateDir: string, since: number): Promise<CaptchaRecord[]> {
+  return (await readRecords(stateDir)).filter(record => Date.parse(record.at) >= since);
 }
 
 /** Challenge kinds whose answers keep being refused: met in at least three runs in the last 30 days, none of

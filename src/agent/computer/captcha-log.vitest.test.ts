@@ -111,3 +111,34 @@ describe('the captcha log', () => {
     expect(JSON.parse(await fs.readFile(path.join(root, one!, 'question.json'), 'utf8'))).toMatchObject({ outcome: 'cleared', family: 'hcaptcha', roster: 'click', pictures: ['picture-1.png'] });
   });
 });
+
+describe('the captcha log on disk', () => {
+  it('is rotated past its size limit, keeping only the newest recent lines', async () => {
+    const { CAPTCHA_LOG_MAX_BYTES, captchaLogPath } = await import('./captcha-log.js');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
+    const now = Date.parse('2026-11-20T12:00:00Z');
+    const file = captchaLogPath(dir);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const old = JSON.stringify({ at: new Date(now - 40 * 86_400_000).toISOString(), host: 'old.example', family: 'recaptcha', outcome: 'none', seconds: 1, steps: ['x'.repeat(200)] });
+    await fs.writeFile(file, `${old}\n`.repeat(Math.ceil(CAPTCHA_LOG_MAX_BYTES / old.length) + 5));
+    await recordCaptcha(dir, { at: new Date(now).toISOString(), host: 'new.example', family: 'turnstile', outcome: 'cleared', seconds: 2, steps: ['press'] }, now);
+    const after = await fs.readFile(file, 'utf8');
+    expect(after.length).toBeLessThan(CAPTCHA_LOG_MAX_BYTES);
+    expect(after).toContain('new.example');
+    expect(after).not.toContain('old.example');
+  });
+
+  it('is read from disk once while it is unchanged', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-captcha-log-'));
+    const now = Date.parse('2026-11-20T12:00:00Z');
+    await recordCaptcha(dir, { at: new Date(now).toISOString(), host: 'a.example', family: 'recaptcha', outcome: 'still-there', seconds: 9, steps: ['pictures', 'refused'] });
+    const { vi } = await import('vitest');
+    const read = vi.spyOn(fs, 'readFile');
+    try {
+      await shouldHoldOff(dir, 'a.example', now);
+      await weakKinds(dir, now);
+      await recaptchaRefusedRecently(dir, now);
+      expect(read.mock.calls.filter(call => String(call[0]).endsWith('captcha-log.jsonl')).length).toBe(1);
+    } finally { read.mockRestore(); }
+  });
+});

@@ -3,6 +3,7 @@
 import type { Frame, Page } from 'playwright-core';
 import type { ImageInput } from '../model-client.js';
 import type { AskOptions, NumberedDrag, TileQuestion } from './captcha-model.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 export type Box = { x: number; y: number; width: number; height: number };
 export type Point = { x: number; y: number };
@@ -59,22 +60,43 @@ export async function visitorClick(mouse: Page['mouse'], at: { x: number; x2: nu
   await mouse.move(tx, ty, { steps: 3 + Math.floor(random() * 4) });
   await sleep(80 + random() * 220);
   await mouse.down();
-  await sleep(45 + random() * 90);
-  await mouse.up();
+  // A run stopped mid-click (its budget spent, or the caller's signal) never leaves the button held down.
+  try { await sleep(45 + random() * 90); } finally { await mouse.up(); }
   await sleep(120 + random() * 380);
 }
 
+/** The tab's viewport before a solve grew it, so it can be put back. */
+export interface ViewportMemo { before?: { width: number; height: number } | null }
+
 /** Make room for a challenge that hangs off a small window: the tab's viewport grows to hold the whole frame (only
- * this tab, and only when needed). Says whether it changed anything, so the caller re-reads the moved frame. */
-export async function fitPuzzle(page: Page, box: Box): Promise<boolean> {
+ * this tab, and only when needed). Says whether it changed anything, so the caller re-reads the moved frame. The size
+ * it had first goes in `memo`, for `restoreViewport` when the run ends. */
+export async function fitPuzzle(page: Page, box: Box, memo: ViewportMemo = {}): Promise<boolean> {
   try {
     const [width, height] = await page.evaluate('[innerWidth, innerHeight]') as [number, number];
     if (box.y >= 0 && box.x >= 0 && box.y + box.height <= height && box.x + box.width <= width) return false;
     const want = { width: Math.max(width, Math.ceil(box.width + 80)), height: Math.max(height, Math.ceil(box.height + 120)) };
     if (want.width === width && want.height === height) return false;
+    // A tab with no fixed viewport (it follows its window) is put back to the size it showed.
+    if (memo.before === undefined) memo.before = (typeof page.viewportSize === 'function' ? page.viewportSize() : null) ?? { width, height };
     await page.setViewportSize(want);
     return true;
   } catch { return false; }
+}
+
+/** Puts the tab's viewport back to what it was before `fitPuzzle` grew it (nothing when it never did). */
+export async function restoreViewport(page: Page, memo: ViewportMemo): Promise<void> {
+  const before = memo.before;
+  if (!before) return;
+  memo.before = undefined;
+  await Promise.resolve().then(() => page.setViewportSize(before)).catch(quiet('agent/computer/human-check-hands'));
+}
+
+/** The marks the in-page finders leave for a solver (`data-clikcode-captcha-field`, `-picture`, `-slider`, `-box`), removed
+ * once they have been used, so the page is left as it was found. */
+export const CLEAR_MARKS = `(() => { for (const name of ['data-clikcode-captcha-field', 'data-clikcode-captcha-picture', 'data-clikcode-slider', 'data-clikcode-box']) document.querySelectorAll('[' + name + ']').forEach(e => e.removeAttribute(name)); return true; })()`;
+export async function clearMarks(page: Page): Promise<void> {
+  await Promise.resolve().then(() => page.evaluate(CLEAR_MARKS)).catch(quiet('agent/computer/human-check-hands'));
 }
 
 /** A drag like a hand makes it: press on the piece, set off slowly, speed up, overshoot a little, settle back,
@@ -84,18 +106,20 @@ export async function visitorDrag(mouse: Page['mouse'], from: { x: number; y: nu
   await mouse.move(from.x, from.y, { steps: 5 + Math.floor(random() * 4) });
   await sleep(120 + random() * 200);
   await mouse.down();
-  await sleep(90 + random() * 150);
-  const overshoot = 3 + random() * 6, dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
-  const steps = 18 + Math.floor(random() * 10);
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps, ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-    const reach = ease * (1 + overshoot / len);
-    await mouse.move(from.x + dx * reach, from.y + dy * reach + Math.sin(t * Math.PI) * (random() - 0.5) * 6);
-    await sleep(8 + random() * 22);
-  }
-  await mouse.move(to.x + (random() - 0.5) * settle, to.y + (random() - 0.5) * settle, { steps: 4 });
-  await sleep(150 + random() * 250);
-  await mouse.up();
+  // Released whatever happens: a run stopped mid-drag never leaves the button held down.
+  try {
+    await sleep(90 + random() * 150);
+    const overshoot = 3 + random() * 6, dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
+    const steps = 18 + Math.floor(random() * 10);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps, ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      const reach = ease * (1 + overshoot / len);
+      await mouse.move(from.x + dx * reach, from.y + dy * reach + Math.sin(t * Math.PI) * (random() - 0.5) * 6);
+      await sleep(8 + random() * 22);
+    }
+    await mouse.move(to.x + (random() - 0.5) * settle, to.y + (random() - 0.5) * settle, { steps: 4 });
+    await sleep(150 + random() * 250);
+  } finally { await mouse.up(); }
 }
 
 /** A picture of a frame as the models get it. */
