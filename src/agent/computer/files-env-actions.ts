@@ -33,7 +33,7 @@ export async function runPermissions(page: Page, args: EnvArgs): Promise<string>
   const grant = parsePermissions(args.grant);
   const deny = parsePermissions(args.deny);
   if (grant.length || deny.length) await setSitePermissions(page, origin, { grant, deny });
-  return `${describePermissions(page, origin)}${grant.length ? ' Reload or open the page again for it to take effect.' : ''}`;
+  return `${await describePermissions(page, origin)}${grant.length ? ' Reload or open the page again for it to take effect.' : ''}`;
 }
 
 /** Everything not allowed yet is denied before the page is opened, so no permission bubble can block it. */
