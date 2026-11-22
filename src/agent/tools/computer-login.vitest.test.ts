@@ -59,7 +59,7 @@ const browser = vi.hoisted(() => {
     requireVerification: () => { finishUrl = 'https://accounts.google.com/v3/signin/challenge/dp'; } };
 });
 vi.mock('../computer/browser.js', () => ({ computerPage: async () => browser.page, arrivedPages: () => [], ownedPages: () => ({ pages: [browser.page], current: browser.page }) }));
-vi.mock('../computer/settings.js', () => ({ computerEnabled: async () => true, unattendedEnabled: async () => false, generatedPasswordsAllowed: async () => true }));
+vi.mock('../computer/settings.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../computer/settings.js')>()), computerEnabled: async () => true, unattendedEnabled: async () => false, generatedPasswordsAllowed: async () => true }));
 
 import { computerWebTool } from './computer-web.js';
 
