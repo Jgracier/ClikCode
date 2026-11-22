@@ -8,6 +8,7 @@ import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { JournalData } from './recipe-recorder.js';
+import type { KeygrabDelivery } from './keygrab-types.js';
 
 export const BACKOFF_HOURS = 1;
 export const MAX_PARKED = 6;
@@ -19,6 +20,8 @@ export interface ParkedRecord {
   trail: string[]; controls: string[]; visited: string[]; menus: string[]; why: string;
   signedIn?: boolean;
   journal?: JournalData;
+  /** The chat tab the run used; the resumed run reattaches it, not a default one. */ tab?: string;
+  /** Where the caller asked the key to go (secret name, destinations, key name): a resumed run delivers it there. Names only. */ delivery?: KeygrabDelivery;
 }
 
 const dir = (stateDir: string): string => path.join(stateDir, 'computer', 'parked');

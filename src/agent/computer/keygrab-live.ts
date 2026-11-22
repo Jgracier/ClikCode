@@ -201,12 +201,14 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
       }
       for (const item of finished) await desk.removeDeskItem(options.stateDir, item.id);
     }
-    const port = await liveKeygrabPort({ ...options, id });
+    // A resumed run delivers where the first run was asked to, unless this caller says otherwise.
+    const delivery = options.delivery ?? budget.resume?.delivery;
+    const port = await liveKeygrabPort({ ...options, id, ...(delivery ? { delivery } : {}) });
     const knownKeyPages = await knownKeyPagesFor(options.stateDir, [url, ...(budget.alternates ?? [])]);
     const { computerTunable } = await import('./settings.js');
     const log = await computerTunable(options.stateDir, 'keygrabLog') ? (line: string): void => void process.stderr.write(`${line}\n`) : undefined;
     const done = await runKeygrab(port, {
-      id, url, ...(log ? { log } : {}), ...(options.delivery?.keyName ? { keyName: options.delivery.keyName } : {}), maxMs: budget.maxMs, ...(knownKeyPages.length ? { knownKeyPages } : {}), ...(budget.maxSteps ? { maxSteps: budget.maxSteps } : {}), ...(budget.alternates?.length ? { alternates: budget.alternates } : {}),
+      id, url, ...(log ? { log } : {}), ...(delivery?.keyName ? { keyName: delivery.keyName } : {}), maxMs: budget.maxMs, ...(knownKeyPages.length ? { knownKeyPages } : {}), ...(budget.maxSteps ? { maxSteps: budget.maxSteps } : {}), ...(budget.alternates?.length ? { alternates: budget.alternates } : {}),
       ...(budget.resume ? { resume: { visited: budget.resume.visited, menus: budget.resume.menus, ...(budget.resume.signedIn ? { signedIn: true } : {}) } } : {}),
     });
     if (done.ok) {
@@ -222,6 +224,7 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
       id, marker, parkedAt: new Date().toISOString(), url: stop.url, vendorUrl: url, ...(budget.alternates?.length ? { alternates: budget.alternates } : {}),
       trail: [...(budget.resume?.trail ?? []), ...(stop.trail ?? [])].slice(-40), controls: stop.controls, visited: stop.visited ?? [], menus: stop.menus ?? [], ...((stop.signedIn || budget.resume?.signedIn) ? { signedIn: true } : {}), why: stop.message.slice(0, 300),
       ...(recorder.exportJournal(journalKey) ? { journal: recorder.exportJournal(journalKey)! } : {}),
+      tab: TAB, ...(delivery ? { delivery } : {}),
     };
     // What a person can do in the page goes on the handoff desk, so the tab is one tap away and carries on by itself once they are done.
     const deskKind = stop.kind === 'captcha' ? 'captcha' as const : stop.kind === 'mfa' ? 'code' as const : stop.kind === 'password' ? 'sign-in' as const : undefined;
