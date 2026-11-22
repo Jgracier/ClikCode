@@ -14,20 +14,19 @@ export async function profileLoginAnswers(stateDir: string, fields: readonly Log
   // The email is one answer for one box. A form with several account boxes (an account ID beside a username) wants things the
   // profile does not hold, and the same email in each would be a failed sign-in: it is left to the private prompt.
   if (fields.filter(field => field.kind !== 'password' && field.key !== 'password').length > 1) return undefined;
-  // The default profile (Personal) first: listProfiles sorts by label, which would put an admin profile such as "ClikDeploy" ahead of it.
+  // One profile answers the whole form, or none does: a sign-in made with one profile's email and another's password is a failed
+  // sign-in at best, and at worst hands one account's password to another account's page. A profile the caller NAMED (an AWS
+  // root account, say) answers; else the default one (Personal; listProfiles sorts by label, which would put an admin profile
+  // such as "ClikDeploy" ahead of it). When that profile lacks an answer, the form goes to the private prompt.
   const listed = await listProfiles(stateDir);
-  // A profile the caller NAMED (an AWS root account, say) answers before the default one: its email and its password go together,
-  // so a sign-in is never made with one profile's email and another's password.
   const named = label ? listed.find(profile => profile.label.toLowerCase() === label.trim().toLowerCase()) : undefined;
-  const first = named ?? defaultProfile(listed);
-  const profiles = first ? [first, ...listed.filter(profile => profile !== first)] : listed;
-  const email = profiles.map(profile => profile.fields.sso_email ?? profile.fields.email).find(Boolean);
-  // The password comes from the chosen profile when it has one; only without it does another profile's answer.
-  const holder = (named?.secrets?.[PASSWORD_SECRET] ? named : undefined) ?? profiles.find(profile => profile.secrets?.[PASSWORD_SECRET]);
+  const profile = named ?? defaultProfile(listed);
+  if (!profile) return undefined;
+  const email = profile.fields.sso_email ?? profile.fields.email;
   const answers: Record<string, string> = {};
   for (const field of fields) {
     if (field.kind === 'password' || field.key === 'password') {
-      const password = holder ? await readProfileSecret(stateDir, holder, PASSWORD_SECRET) : undefined;
+      const password = profile.secrets?.[PASSWORD_SECRET] ? await readProfileSecret(stateDir, profile, PASSWORD_SECRET) : undefined;
       if (!password) return undefined;
       registerSecret(password);
       answers[field.key] = password;

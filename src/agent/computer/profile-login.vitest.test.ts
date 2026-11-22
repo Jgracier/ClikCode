@@ -61,6 +61,27 @@ describe('profileLoginAnswers', () => {
   });
 });
 
+describe('profileLoginAnswers never mixes profiles', () => {
+  it('takes email and password from one profile: Personal without a password does not borrow another profile\'s', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'plogin-'));
+    await saveProfile(stateDir, { label: 'Personal', fields: { email: 'me@x.test' } });
+    const admin = await saveProfile(stateDir, { label: 'Admin', fields: { email: 'admin@x.test' } });
+    await saveProfileSecret(stateDir, admin.id, 'password', 'admin-pw');
+    expect(await profileLoginAnswers(stateDir, [field('email'), field('password', 'password')])).toBeUndefined();
+    expect(await profileLoginAnswers(stateDir, [field('password', 'password')])).toBeUndefined();
+    expect(await profileLoginAnswers(stateDir, [field('email')])).toEqual({ email: 'me@x.test' });
+    expect(await profileLoginAnswers(stateDir, [field('email'), field('password', 'password')], 'Admin')).toEqual({ email: 'admin@x.test', password: 'admin-pw' });
+  });
+
+  it('a named profile with a password but no email does not take Personal\'s email', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'plogin-'));
+    await saveProfile(stateDir, { label: 'Personal', fields: { email: 'me@x.test' } });
+    const aws = await saveProfile(stateDir, { label: 'AWS', fields: { given_name: 'Root' } });
+    await saveProfileSecret(stateDir, aws.id, 'password', 'aws-pw');
+    expect(await profileLoginAnswers(stateDir, [field('email'), field('password', 'password')], 'AWS')).toBeUndefined();
+  });
+});
+
 describe('unattended parking', () => {
   it('names the vendor from the site and the reason from the labels', () => {
     expect(vendorOf('https://oauth.pipedrive.com/auth/login')).toBe('pipedrive');
