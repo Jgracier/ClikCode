@@ -250,6 +250,12 @@ export async function computerSecretGenerate(name: string, flags: { url: string;
   print({ name, url: origin, sha256: createHash('sha256').update(token).digest('hex') });
 }
 
+/** Pins a token made before tokens were pinned to the site it was made for (see pinEarlierToken); prints the origin only. */
+export async function computerSecretPin(name: string, flags: { url: string }): Promise<void> {
+  const origin = await (await import('../agent/computer/credential-vault.js')).pinEarlierToken(stateDirectory(), name, flags.url.replace(/\/+$/, ''), GENERATED_TOKEN);
+  print({ name, pinned: origin });
+}
+
 /** One HTTPS request to the site a saved token belongs to, with the token as a Bearer credential. The token is never shown, and it goes
  * only to the https origin recorded with it when it was saved, so this cannot send a key anywhere else. */
 export async function computerSecretCall(name: string, flags: { path: string; method?: string; header?: string[]; dataFile?: string; timeout?: string }): Promise<void> {

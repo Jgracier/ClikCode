@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { lockCredentialVault, pinnedToken, saveNamedSecret, setSecretUrl } from '../agent/computer/credential-vault.js';
-import { computerSecretCall, computerSecretGenerate, GENERATED_TOKEN } from './computer-ops.js';
+import { computerSecretCall, computerSecretGenerate, computerSecretPin, GENERATED_TOKEN } from './computer-ops.js';
 
 let dir = '';
 const oldHome = process.env.CLIKCODE_HOME;
@@ -39,4 +39,17 @@ it('a secret merely tagged generated-token (any save can write that) is never se
   await saveNamedSecret(dir, 'hook/token', 'replaced-value-456', { url: 'https://hooks.example.com' });
   await expect(computerSecretCall('hook/token', { path: '/x' })).rejects.toThrow('was not made by');
   expect(sent).toEqual([]);
+});
+
+it('a token made before tokens were pinned is pinned only by the person, only to the site recorded with it', async () => {
+  // As `secrets generate` saved it before pins existed: the tag and the site, no pin.
+  await saveNamedSecret(dir, 'old/token', 'earlier-generated-token-789', { url: 'https://hooks.example.com', vendor: GENERATED_TOKEN });
+  await expect(computerSecretCall('old/token', { path: '/x' })).rejects.toThrow('was not made by');
+  await expect(computerSecretPin('old/token', { url: 'https://evil.example.net' })).rejects.toThrow('not pinned');
+  await saveNamedSecret(dir, 'captured/key', 'captured-key-value-000', { url: 'https://hooks.example.com' });
+  await expect(computerSecretPin('captured/key', { url: 'https://hooks.example.com' })).rejects.toThrow('not made by');
+  await computerSecretPin('old/token', { url: 'https://hooks.example.com/' });
+  await computerSecretCall('old/token', { path: '/ping' });
+  expect(sent).toEqual(['https://hooks.example.com/ping']);
+  await expect(computerSecretPin('old/token', { url: 'https://other.example.com' })).rejects.toThrow('already pinned');
 });

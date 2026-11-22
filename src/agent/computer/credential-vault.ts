@@ -363,6 +363,28 @@ export async function saveGeneratedToken(stateDir: string, name: string, value: 
     await saveNamedSecretHeld(stateDir, saved, value, { url, vendor: meta.vendor }, { pin: { origin: url, mac: pinMac(key, saved, url, value) } });
   });
 }
+/** Pins a token `secrets generate` made before tokens were pinned: the person names the origin it is for, and it must be the
+ * site already recorded with it and the record must still carry the generate tag. A token with a genuine pin is left as it is.
+ * Answers the pinned origin. */
+export async function pinEarlierToken(stateDir: string, name: string, origin: string, generatedVendor: string): Promise<string> {
+  const url = webOrigin(origin);
+  if (!url || !url.startsWith('https://')) throw new CredentialError('Pin a token to an https origin.');
+  return withVaultLock(stateDir, async () => {
+    const key = await vaultKey(stateDir, false);
+    const { file, aad } = secretFile(stateDir, name);
+    let record: { name?: string; value?: string; meta?: SecretMeta; pin?: TokenPin };
+    try { record = JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as typeof record; } catch { throw new CredentialError(`No saved token is called "${name}".`); }
+    const value = record.value;
+    if (typeof value !== 'string' || !value) throw new CredentialError(`"${name}" holds no token.`);
+    const current = await pinnedToken(stateDir, name);
+    if (current) { if (current.origin !== url) throw new CredentialError(`"${name}" is already pinned to ${current.origin}.`); return current.origin; }
+    if (record.meta?.vendor !== generatedVendor) throw new CredentialError(`"${name}" was not made by \`clikcode computer secrets generate\`, so it is not pinned.`);
+    if (webOrigin(record.meta?.url ?? '') !== url) throw new CredentialError(`"${name}" is recorded for ${record.meta?.url ?? 'no site'}, not ${url}; it is not pinned.`);
+    const saved = record.name ?? name;
+    await writeSealed(file, seal(key, aad, JSON.stringify({ ...record, pin: { origin: url, mac: pinMac(key, saved, url, value) } })));
+    return url;
+  });
+}
 /** The origin a generated token is pinned to, with the token, when the pin is genuine and still matches the saved value; else undefined. */
 export async function pinnedToken(stateDir: string, name: string): Promise<{ origin: string; value: string } | undefined> {
   const { file, aad } = secretFile(stateDir, name);

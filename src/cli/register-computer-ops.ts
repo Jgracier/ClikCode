@@ -75,6 +75,9 @@ export function registerComputerAbilities(program: Command, computer: Command): 
   token.command('generate <name>').description('Make one and keep it for --url; prints only its SHA-256')
     .requiredOption('--url <origin>', 'The https origin it is for').option('--prefix <text>', 'Text before the random part').option('--bytes <n>', 'Random bytes (default 32)')
     .action(async (name: string, flags: { url: string; prefix?: string; bytes?: string }) => (await import('../commands/computer-ops.js')).computerSecretGenerate(name, flags));
+  token.command('pin <name>').description('Pin a token made before tokens were pinned to its own site (--url must be the site recorded with it)')
+    .requiredOption('--url <origin>', 'The https origin it was made for')
+    .action(async (name: string, flags: { url: string }) => (await import('../commands/computer-ops.js')).computerSecretPin(name, flags));
   token.command('call <name>').description('One HTTPS request to the token\'s own site with it as a Bearer credential; prints {status, contentType, body}')
     .requiredOption('--path <path>', 'The path on that site').option('--method <method>', 'GET, POST, PUT, PATCH or DELETE')
     .option('--header <line>', 'name: value (repeatable)', many).option('--data-file <file>', 'The request body (- for standard input)').option('--timeout <seconds>', 'Default 90')
