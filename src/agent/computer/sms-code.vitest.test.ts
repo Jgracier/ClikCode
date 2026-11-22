@@ -157,6 +157,19 @@ describe('a texted code is handed out once, and only a new one for this site', (
     expect(codesFromRows(rows, { site: 'https://app.acme.com/' }).map(c => c.code)).toEqual(['555555']);
     expect(codesFromRows(rows, { from: 'any' }).map(c => c.code)).toEqual(['444444', '555555']);
   });
+  it('on the sign-up number, takes a text that does not name the site after the ones that do; on the Mac it never does', async () => {
+    const dir = await setup();
+    await setTwilioSms(dir, { number: '+17192497747', account: `AC${'0'.repeat(32)}` });
+    const at = Math.floor(Date.now() / 1000);
+    const unnamed = row(at + 1, '22395', 'Your verification code is 818181');
+    const twilio = await waitForTextedCode(dir, { since: Date.now(), site: 'https://app.acme.com/signup', sleep: async () => undefined, ask: async () => ({ rows: '' }), askTwilio: async () => ({ rows: unnamed }) });
+    expect(twilio).toMatchObject({ code: '818181' });
+    const both = [row(at + 3, '22395', 'Your code is 919191'), row(at + 2, '22395', 'Your Acme code is 727272')].join('\n');
+    expect(await waitForTextedCode(dir, { since: Date.now(), site: 'https://app.acme.com/signup', sleep: async () => undefined, ask: async () => ({ rows: '' }), askTwilio: async () => ({ rows: both }) })).toMatchObject({ code: '727272' });
+    const macOnly = await setup();
+    const mac = await waitForTextedCode(macOnly, { since: Date.now(), seconds: 2, site: 'https://app.acme.com/signup', sleep: () => new Promise(r => setTimeout(r, 100)), ask: async () => ({ rows: row(at + 1, '22395', 'Your bank code is 646464') }) });
+    expect(mac).toMatchObject({ error: expect.stringMatching(/No new texted code/) });
+  }, 10_000);
   it('asks a source again after an error instead of giving it up for the whole wait', async () => {
     const dir = await setup();
     const at = Math.floor(Date.now() / 1000);

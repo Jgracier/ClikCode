@@ -235,9 +235,15 @@ export async function waitForTextedCode(stateDir: string, options: { since: numb
         continue;
       }
       state.answered = true; failures = 0;
-      for (const found of codesFromRows(answer.rows, filter)) {
-        if (found.at < since) continue;
-        if (await claimMessage(stateDir, `${source}:${found.at}:${squash(found.from)}:${found.code}`, 'sms')) return found;
+      // The sign-up number receives nothing but sign-up texts, and each code is claimed once and must postdate the request, so a
+      // text that does not name the site ("Your code is 4821" from a short code) is taken there after the ones that do. The Mac
+      // reads the user's own phone, where unrelated codes arrive: there the site must be named.
+      const passes = filter.site && !filter.from && source.startsWith('twilio:') ? [filter, {}] : [filter];
+      for (const pass of passes) {
+        for (const found of codesFromRows(answer.rows, pass)) {
+          if (found.at < since) continue;
+          if (await claimMessage(stateDir, `${source}:${found.at}:${squash(found.from)}:${found.code}`, 'sms')) return found;
+        }
       }
       await Promise.race([sleep(4_000), interrupted]);
     }

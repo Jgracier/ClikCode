@@ -1834,7 +1834,7 @@ async function handoffAction(args: WebArgs, ctx: ToolContext): Promise<ToolRunRe
     const url = await waitAtMost(running.link, 45_000, ctx.signal).catch((error: unknown) => { stop.abort(); if (handoffs.get(handoffKey) === running) handoffs.delete(handoffKey); throw error; });
     if (url === TIMED_OUT) { stop.abort(); if (handoffs.get(handoffKey) === running) handoffs.delete(handoffKey); throw new Error('The handoff link did not come up.'); }
     running.url = url;
-    return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included; one use, ends after 10 idle minutes): ${url}\n${HANDOFF_NEXT}` };
+    return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included; reusable until Done, ends after 10 idle minutes): ${url}\n${HANDOFF_NEXT}` };
   }
   const outcome = await waitAtMost(running.done, 90_000, ctx.signal).catch((error: unknown): typeof STOPPED => { if (error instanceof StoppedError) return STOPPED; throw error; });
   if (outcome === STOPPED) return { output: `Stopped waiting. The handoff is still open at ${running.url ?? 'its link'}; call handoff again to wait, or handoff with clear: true to take the tab back.` };
