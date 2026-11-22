@@ -361,7 +361,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     with: { type: ['object', 'string'], description: 'send_secret: values for the destination slots, e.g. {key:"SALAD_API_KEY"}.' },
     values: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'send_secret with to clikdeploy-connection: the plain connection values, e.g. {org_api_key:"..."} or {app_id:"secret:<saved name>"}.' },
     ask: { type: 'boolean', description: 'profile: ask the user now for name, email, phone and address and save them as a profile (also happens when none exists).' },
-    from: { type: 'string', description: 'open_email_link, read_email_code, read_sms_code: sender (name or address) of the email in the signed-in Gmail.' },
+    from: { type: 'string', description: 'open_email_link, read_email_code: sender (name or address) of the email in the signed-in Gmail. read_sms_code: the texting number or short code, or a word the text contains; default: the text must name the page\'s site; "any" takes any sender.' },
     subject: { type: 'string', description: 'open_email_link, read_email_code: words from the subject.' },
     link: { type: 'string', description: 'open_email_link: words or domain of the link to open (default: the first real link in the message).' },
     account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },
@@ -645,6 +645,8 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       let work: Promise<ToolRunResult> | undefined;
       try {
         throwIfStopped(ctx.signal);
+        // When the page was last acted on (the click on "Send code"): read_sms_code takes only texts sent after it.
+        if (ACTS_ON_PAGE.has(args.action)) pageActedAt.set(page, Date.now());
         work = args.action === 'fill' ? fillWhole(page, args, ctx) : act(page, args, ctx);
         const done = await Promise.race([stopped, work]);
         // The page the batch ended on, which is not `page` when a popup took over.
@@ -823,6 +825,10 @@ export function inOrder<T>(key: string, job: (hold: (work: Promise<unknown>, ms?
   void tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
   return run;
 }
+
+/** Actions that can make a page send a code (a click, a key, a form), and when each page last had one. */
+const ACTS_ON_PAGE: ReadonlySet<string> = new Set(['click', 'press', 'fill', 'choose', 'steps', 'upload', 'drag', 'open', 'reload', 'login', 'evaluate']);
+const pageActedAt = sharedState('page-acted-at', () => new WeakMap<Page, number>());
 
 const handoffs = sharedState('handoffs', () => new Map<string, { link: Promise<string>; url?: string; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>());
 
@@ -1639,9 +1645,11 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       return { output: `Connected ${done.connector}: ClikDeploy shows an active connection. ${done.steps.filter(Boolean).join(' ')}` };
     }
     case 'read_sms_code': {
-      // Texts arrive a few seconds after the page sends them; only codes sent in the last three minutes count.
+      // Only a text sent after the page was last acted on (the click that asked for it) counts, else the last three minutes; a code
+      // handed out once never comes back, so a resend gets the new one. Without from, the text must name the page's site.
       const { waitForTextedCode } = await import('../computer/sms-code.js');
-      const found = await waitForTextedCode(ctx.stateDir, { since: Date.now() - 180_000, ...(args.seconds ? { seconds: args.seconds } : {}), ...(args.from ? { from: args.from } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+      const since = pageActedAt.get(page) ?? Date.now() - 180_000;
+      const found = await waitForTextedCode(ctx.stateDir, { since, ...(args.seconds ? { seconds: args.seconds } : {}), ...(args.from ? { from: args.from } : { site: page.url() }), ...(ctx.signal ? { signal: ctx.signal } : {}) });
       if ('error' in found) throw new Error(found.error);
       return { output: `Code: ${found.code} (texted by ${found.from}). Type it into the page that asked for it.` };
     }

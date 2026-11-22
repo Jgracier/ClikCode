@@ -3,7 +3,7 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { askTwilio, codeFromRows, messagesQuery, setSmsSource, setTwilioSms, smsProblem, smsSource, textedCode, twilioSms, waitForTextedCode } from './sms-code.js';
+import { askTwilio, codeFromRows, codesFromRows, messagesQuery, setSmsSource, setTwilioSms, smsProblem, smsSource, textedCode, twilioSms, waitForTextedCode } from './sms-code.js';
 
 const row = (at: number, from: string, text: string) => `${at}\u001f${from}\u001f${text}`;
 
@@ -35,7 +35,7 @@ describe('reading a texted code', () => {
     await setSmsSource(dir, 'justin@imac');
     expect(await smsSource(dir)).toBe('justin@imac');
     let asks = 0;
-    const found = await waitForTextedCode(dir, { since: 1_000_000, sleep: async () => undefined, ask: async (_t, since) => { asks++; expect(since).toBe(980); return { rows: asks < 3 ? '' : row(1001, '22395', 'Code: 7731') }; } });
+    const found = await waitForTextedCode(dir, { since: 1_000_000, sleep: async () => undefined, ask: async (_t, since) => { asks++; expect(since).toBe(995); return { rows: asks < 3 ? '' : row(1001, '22395', 'Code: 7731') }; } });
     expect(found).toEqual({ code: '7731', from: '22395', at: 1001 });
     await setSmsSource(dir, undefined);
     expect(await smsSource(dir)).toBeUndefined();
@@ -96,9 +96,9 @@ describe('a Twilio number as the sign-up phone', () => {
     expect(viaTwilio).toMatchObject({ code: '482913' });
     const viaMac = await waitForTextedCode(dir, { since: Date.now(), seconds: 5, sleep: async () => undefined, ask: async () => ({ rows: `${at}\u001f+1555\u001fcode: 7788` }), askTwilio: async () => ({ rows: '' }) });
     expect(viaMac).toMatchObject({ code: '7788' });
-    const neither = await waitForTextedCode(dir, { since: Date.now(), seconds: 5, sleep: async () => undefined, ask: async () => ({ error: 'The Mac is asleep' }), askTwilio: async () => ({ error: 'Twilio said 401' }) });
+    const neither = await waitForTextedCode(dir, { since: Date.now(), seconds: 5, sleep: () => new Promise(r => setTimeout(r, 100)), ask: async () => ({ error: 'The Mac is asleep' }), askTwilio: async () => ({ error: 'Twilio said 401' }) });
     expect(neither).toMatchObject({ error: expect.stringMatching(/Twilio said 401|Mac is asleep/) });
-  });
+  }, 15_000);
 });
 
 it('does not wait for a hung Mac when Twilio already has the code', async () => {
@@ -124,3 +124,53 @@ it('keeps polling Twilio while the Mac request remains hung', async () => {
   expect(result).toMatchObject({ code: '482913' });
   expect(calls).toBe(3);
 }, 1000);
+
+describe('a texted code is handed out once, and only a new one for this site', () => {
+  const setup = async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-sms-'));
+    onTestFinished(() => fs.rm(dir, { recursive: true, force: true }));
+    await setSmsSource(dir, 'user@mac');
+    return dir;
+  };
+  it('never returns the same code twice: a resend gets the new one, a second agent does not get the first one', async () => {
+    const dir = await setup();
+    const at = Math.floor(Date.now() / 1000);
+    let rows = row(at, '22395', 'Your Acme code is 111111');
+    const ask = async () => ({ rows });
+    const first = await waitForTextedCode(dir, { since: Date.now(), sleep: async () => undefined, ask });
+    expect(first).toMatchObject({ code: '111111' });
+    let polls = 0;
+    const second = await waitForTextedCode(dir, { since: Date.now() - 1000, sleep: async () => { if (++polls === 2) rows = `${row(at + 1, '22395', 'Your Acme code is 222222')}\n${rows}`; }, ask });
+    expect(second).toMatchObject({ code: '222222' });
+  });
+  it('does not take a text sent before the request', async () => {
+    const dir = await setup();
+    const now = Math.floor(Date.now() / 1000);
+    const result = await waitForTextedCode(dir, { since: Date.now(), seconds: 5, sleep: async () => { await new Promise(r => setTimeout(r, 200)); }, ask: async () => ({ rows: row(now - 60, '22395', 'Your code is 333333') }) });
+    expect(result).toMatchObject({ error: expect.stringMatching(/No new texted code/) });
+  }, 10_000);
+  it('with a site, takes only a text naming it', async () => {
+    const dir = await setup();
+    const at = Math.floor(Date.now() / 1000);
+    const rows = [row(at + 2, '+15550001111', 'Your Other code is 444444'), row(at + 1, '22395', 'Your Acme verification code is 555555')].join('\n');
+    expect(await waitForTextedCode(dir, { since: Date.now(), site: 'https://app.acme.com/signup', sleep: async () => undefined, ask: async () => ({ rows }) })).toMatchObject({ code: '555555' });
+    expect(codesFromRows(rows, { site: 'https://app.acme.com/' }).map(c => c.code)).toEqual(['555555']);
+    expect(codesFromRows(rows, { from: 'any' }).map(c => c.code)).toEqual(['444444', '555555']);
+  });
+  it('asks a source again after an error instead of giving it up for the whole wait', async () => {
+    const dir = await setup();
+    const at = Math.floor(Date.now() / 1000);
+    let asks = 0;
+    const result = await waitForTextedCode(dir, { since: Date.now(), sleep: async () => undefined, ask: async () => (++asks < 3 ? { error: 'ssh: connection reset' } : { rows: row(at, '22395', 'Code: 6677') }) });
+    expect(result).toMatchObject({ code: '6677' });
+    expect(asks).toBe(3);
+  });
+  it('reports a source error only when every source failed throughout', async () => {
+    const dir = await setup();
+    await setTwilioSms(dir, { number: '+17192497747', account: `AC${'0'.repeat(32)}` });
+    const allFailed = await waitForTextedCode(dir, { since: Date.now(), seconds: 5, sleep: () => new Promise(r => setTimeout(r, 100)), ask: async () => ({ error: 'The Mac is asleep' }), askTwilio: async () => ({ error: 'Twilio said 401' }) });
+    expect(allFailed).toMatchObject({ error: expect.stringMatching(/Twilio said 401.*Mac is asleep|Mac is asleep.*Twilio said 401/) });
+    const oneAnswered = await waitForTextedCode(dir, { since: Date.now(), seconds: 5, sleep: () => new Promise(r => setTimeout(r, 100)), ask: async () => ({ error: 'The Mac is asleep' }), askTwilio: async () => ({ rows: '' }) });
+    expect(oneAnswered).toMatchObject({ error: expect.stringMatching(/No new texted code/) });
+  }, 20_000);
+});

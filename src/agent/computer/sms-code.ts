@@ -45,17 +45,48 @@ export function textedCode(text: string): string | undefined {
 
 export interface TextedCode { code: string; from: string; at: number }
 
-/** The newest code among the rows the query returned (unix seconds, sender, text), optionally from one sender. */
-export function codeFromRows(output: string, from?: string): TextedCode | undefined {
-  const wanted = from?.toLowerCase().replace(/[^a-z0-9+]/g, '');
+/** Who the text must come from: `from` (a sender number, short code or word in the text) and/or `site` (the page the code is for:
+ * its vendor name must be in the sender or the text, as "Your Acme code is 4821" has it). `from: "any"` takes any sender. */
+export interface TextFilter { from?: string; site?: string }
+
+const squash = (value: string): string => value.toLowerCase().replace(/[^a-z0-9+]/g, '');
+function wantedText(sender: string, text: string, filter: TextFilter): boolean {
+  const { from, site } = filter;
+  if (from && from.toLowerCase() !== 'any') {
+    const wanted = squash(from);
+    if (!(wanted && squash(sender).includes(wanted)) && !text.toLowerCase().includes(from.toLowerCase())) return false;
+  }
+  if (site && !(from && from.toLowerCase() !== 'any')) {
+    const vendor = vendorName(site);
+    if (vendor && !squash(sender).includes(vendor) && !squash(text).includes(vendor)) return false;
+  }
+  return true;
+}
+/** The vendor a page belongs to (acme for https://app.acme.co.uk/signup), squashed; undefined for an address that is not one. */
+function vendorName(site: string): string | undefined {
+  try {
+    const parts = new URL(site).hostname.replace(/^www\./, '').split('.');
+    const name = parts.length > 2 && ['co', 'com', 'org', 'net'].includes(parts.at(-2)!) ? parts.at(-3)! : parts.at(-2) ?? parts[0]!;
+    return squash(name) || undefined;
+  } catch { return squash(site) || undefined; }
+}
+
+/** Every code among the rows the query returned (unix seconds, sender, text), newest first, that passes `filter`. */
+export function codesFromRows(output: string, filter: TextFilter | string = {}): TextedCode[] {
+  const wanted = typeof filter === 'string' ? { from: filter } : filter;
+  const found: TextedCode[] = [];
   for (const line of output.split('\n')) {
     const [at, sender = '', text = ''] = line.split('\u001f');
-    if (!at || !text.trim()) continue;
-    if (wanted && !sender.toLowerCase().replace(/[^a-z0-9+]/g, '').includes(wanted) && !text.toLowerCase().includes(from!.toLowerCase())) continue;
+    if (!at || !text.trim() || !wantedText(sender, text, wanted)) continue;
     const code = textedCode(text);
-    if (code) return { code, from: sender, at: Number(at) };
+    if (code) found.push({ code, from: sender, at: Number(at) });
   }
-  return undefined;
+  return found.sort((x, y) => y.at - x.at);
+}
+
+/** The newest code among the rows, optionally from one sender. */
+export function codeFromRows(output: string, filter: TextFilter | string = {}): TextedCode | undefined {
+  return codesFromRows(output, filter)[0];
 }
 
 /** Why the Mac would not answer, in words the user can act on. */
@@ -133,48 +164,77 @@ export async function askTwilio(stateDir: string, sms: TwilioSms, sinceUnixSecon
   } catch (error) { return { error: `Reading ${sms.number}'s texts from Twilio failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}` }; }
 }
 
-/** Waits for a texted code that arrived after `since` (unix ms), up to `seconds`, on every source set up: the Twilio number sign-ups
- * use, and the Mac that receives the user's own texts (a site that refused the Twilio number as VoIP texts the user's phone). Never
+/** Seconds a text's timestamp may run before the request time and still count (the Mac's or Twilio's clock against this one). */
+export const CLOCK_SLACK_S = 5;
+
+/** Waits for a texted code that arrived after `since` (unix ms: when the page was asked to send it), up to `seconds`, on every source
+ * set up: the Twilio number sign-ups use, and the Mac that receives the user's own texts (a site that refused the Twilio number as
+ * VoIP texts the user's phone). A code handed out once is recorded (per source, under a lock, as emails are) and never handed out
+ * again, so a resend gets the new code and two agents never get the same one. `from` / `site` say whose text it must be. A source
+ * that errors is asked again with backoff until the deadline; errors are reported only when every source failed throughout. Never
  * returns the message itself. */
-export async function waitForTextedCode(stateDir: string, options: { since: number; seconds?: number; from?: string; signal?: AbortSignal; sleep?: (ms: number) => Promise<void>; ask?: typeof askMessages; askTwilio?: (sms: TwilioSms, since: number) => Promise<{ rows: string } | { error: string }> }): Promise<TextedCode | { error: string }> {
+export async function waitForTextedCode(stateDir: string, options: { since: number; seconds?: number; from?: string; site?: string; signal?: AbortSignal; sleep?: (ms: number) => Promise<void>; ask?: typeof askMessages; askTwilio?: (sms: TwilioSms, since: number) => Promise<{ rows: string } | { error: string }> }): Promise<TextedCode | { error: string }> {
   const [target, twilio] = await Promise.all([smsSource(stateDir), twilioSms(stateDir)]);
-  if (!target && !twilio) return { error: 'No phone is set up to read text messages: run clikcode computer sms twilio:+<number> (a Twilio number) or clikcode computer sms <user@host> (a Mac with Text Message Forwarding).' };
+  if (!target && !twilio) return { error: 'No phone is set up to read text messages: run clikcode computer sms twilio:+<number>:<account sid> (a Twilio number) or clikcode computer sms <user@host> (a Mac with Text Message Forwarding).' };
+  const { claimMessage } = await import('./email-consumed.js');
   const stop = new AbortController();
   const seconds = Math.min(Math.max(options.seconds ?? 90, 5), 180);
   const budget = AbortSignal.timeout(seconds * 1000);
+  const deadline = Date.now() + seconds * 1000;
   const signals = [stop.signal, budget, ...(options.signal ? [options.signal] : [])];
   const signal = AbortSignal.any(signals);
   const sleep = options.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
-  const since = Math.floor(options.since / 1000) - 20;
+  const since = Math.floor(options.since / 1000) - CLOCK_SLACK_S;
+  const filter: TextFilter = { ...(options.from ? { from: options.from } : {}), ...(options.site ? { site: options.site } : {}) };
   const names = [twilio?.number, target].filter(Boolean).join(' or ');
   let onAbort!: () => void;
   const interrupted = new Promise<never>((_resolve, reject) => {
     onAbort = () => reject(signal.reason);
     if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
   });
-  const poll = async (ask: () => Promise<{ rows: string } | { error: string }>): Promise<TextedCode> => {
+  interrupted.catch(() => undefined);
+  /** Per source: whether it ever answered, and its last error. */
+  const health = new Map<string, { answered: boolean; error?: string }>();
+  const poll = async (source: string, ask: () => Promise<{ rows: string } | { error: string }>): Promise<TextedCode> => {
+    const state = { answered: false } as { answered: boolean; error?: string };
+    health.set(source, state);
+    let failures = 0;
     for (;;) {
       signal.throwIfAborted();
-      const answer = await Promise.race([ask(), interrupted]);
-      if ('error' in answer) throw new Error(answer.error);
-      const found = codeFromRows(answer.rows, options.from);
-      if (found) return found;
+      // The clock, not only the timer: a poll that never yields to the event loop must still end on time.
+      if (Date.now() >= deadline) throw new Error('deadline');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const answer = await Promise.race([ask(), interrupted]).catch((error: unknown) => {
+        if (signal.aborted) throw error;
+        return { error: error instanceof Error ? error.message : String(error) };
+      });
+      if ('error' in answer) {
+        // A dropped SSH connection or a Twilio 5xx is asked again, slower each time, until the wait is over.
+        state.error = answer.error;
+        failures++;
+        await Promise.race([sleep(Math.min(4_000 * 2 ** Math.min(failures - 1, 3), 30_000)), interrupted]);
+        continue;
+      }
+      state.answered = true; failures = 0;
+      for (const found of codesFromRows(answer.rows, filter)) {
+        if (found.at < since) continue;
+        if (await claimMessage(stateDir, `${source}:${found.at}:${squash(found.from)}:${found.code}`, 'sms')) return found;
+      }
       await Promise.race([sleep(4_000), interrupted]);
     }
   };
   // Each source polls independently: a sleeping Mac cannot delay a code available through Twilio, or vice versa.
   const readers: Array<Promise<TextedCode>> = [];
-  if (twilio) readers.push(poll(() => options.askTwilio ? options.askTwilio(twilio, since) : askTwilio(stateDir, twilio, since, signal)));
-  if (target) readers.push(poll(() => (options.ask ?? askMessages)(target, since, signal)));
+  if (twilio) readers.push(poll(`twilio:${twilio.number}`, () => options.askTwilio ? options.askTwilio(twilio, since) : askTwilio(stateDir, twilio, since, signal)));
+  if (target) readers.push(poll(`mac:${target}`, () => (options.ask ?? askMessages)(target, since, signal)));
   try {
     return await Promise.race([Promise.any(readers), interrupted]);
-  } catch (error) {
+  } catch {
     if (options.signal?.aborted) return { error: 'Texted-code wait was cancelled.' };
-    if (!budget.aborted && error instanceof AggregateError) {
-      const first = error.errors[0];
-      return { error: first instanceof Error ? first.message : 'No text source answered.' };
-    }
-    return { error: `No texted code arrived on ${names} in time${options.from ? ` from ${options.from}` : ''}.${target ? ' Check that the iPhone forwards texts to that Mac (Settings > Messages > Text Message Forwarding).' : ''}` };
+    const states = [...health.values()];
+    if (states.length && states.every(item => !item.answered && item.error)) return { error: states.map(item => item.error).join(' ') };
+    const who = options.from ? ` from ${options.from}` : options.site ? ` naming ${vendorName(options.site) ?? options.site}` : '';
+    return { error: `No new texted code arrived on ${names} in time${who}.${options.site && !options.from ? ' If the text does not name the site, give from (the sender, or "any").' : ''}${target ? ' Check that the iPhone forwards texts to that Mac (Settings > Messages > Text Message Forwarding).' : ''}` };
   } finally {
     stop.abort();
     signal.removeEventListener('abort', onAbort);

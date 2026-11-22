@@ -135,7 +135,8 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
     smsCode: async (since: number) => {
       const { smsSource, twilioSms, waitForTextedCode } = await import('./sms-code.js');
       if (!await smsSource(options.stateDir) && !await twilioSms(options.stateDir)) return undefined;
-      const found = await waitForTextedCode(options.stateDir, { since, seconds: 90, ...(options.signal ? { signal: options.signal } : {}) });
+      // The text must name this vendor: two keygrabs on the one sign-up number must not take each other's codes.
+      const found = await waitForTextedCode(options.stateDir, { since, seconds: 90, site: (await page()).url(), ...(options.signal ? { signal: options.signal } : {}) });
       return 'error' in found ? undefined : found.code;
     },
     resetLink: async () => {
