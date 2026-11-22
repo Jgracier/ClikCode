@@ -1,6 +1,7 @@
 /** The network ways out ("egress") a browser tab can leave through: home (this computer's own connection), an `ssh -D` SOCKS tunnel
  * ClikCode keeps up to a host the user names, or a proxy used as is. Google's reCAPTCHA judges the connection, not the browser, and the
  * home connection is a shared carrier address it often refuses; a vendor stopped there is tried again through the next way out
+ * (a caller such as ClikDeploy's connector worker). All in house: no paid proxy, no captcha service, no cloud browser.
  *
  * A tunnel is an ordinary ssh client in a process of its own, started the first time an egress is needed, reused while it lives,
  * started again when it has died, and ended (that one process, never a group) when the process that owns it exits. */

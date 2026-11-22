@@ -7,6 +7,7 @@ and closes the browser, `on` brings them back.
 | Tool | What it is for |
 |---|---|
 | `browser_use` | A Chrome with its own saved profile (Edge if Chrome is missing), shared by every terminal and VS Code window, never your personal profile. **Each chat gets its own tab**: a chat only sees, acts on and follows tabs it opened itself, so chats working at once do not collide. `close` closes that chat's tab only (see [Page control](#page-control) for tabs, history, scripts, screenshots and the console). |
+| `account_use` | Everything that signs in or keeps something for later, on the same browser tab and profile as `browser_use`: `login`, `forget_login`, `profile`, `oauth_connect`; `email_connect`, `read_email_code`, `open_email_link`; `capture_secret`, `send_secret`; `queue`, `notes`, `recipe`. |
 | `computer_use` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install: `clikcode computer driver install`): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. See [Desktop control](#desktop-control-computer_use) for the actions and what each OS can do. |
 
 They were called `computer_web` and `computer_desktop` before 2026-10-26, and `computer_web` was one tool until

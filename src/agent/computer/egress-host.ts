@@ -1,5 +1,6 @@
 /** Egress contexts owned by the browser host, the process that owns Chrome and outlives every worker. It keeps the ssh tunnels and one
  * browser context per egress for its whole life, so a vendor's sign-in on an egress survives the worker that made it: keygrab in the loop
+ * and an agent's MCP server (another process) share one context and its cookies.
  *
  * Why the host, and why raw CDP: Playwright makes its own contexts with `disposeOnDetach: true` (Chrome drops them when the connection that
  * made them closes), so a context a worker made died with that worker. The host makes them with `Target.createBrowserContext` and

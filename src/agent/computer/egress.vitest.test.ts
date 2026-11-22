@@ -8,7 +8,6 @@ import { createServer as createTcp, connect as netConnect, type AddressInfo, typ
 import { EventEmitter } from 'node:events';
 import { addEgress, egressList, egressProblem, egressSetting, parseEgress, removeEgress } from './settings.js';
 import { checkEgress, egressServer, fetchVia, sshTunnelArgs, TunnelManager, type TunnelChild, type TunnelDeps } from './egress.js';
-import { afterRun, pickEgress, readVendorEgress, recordVendorEgress } from './connector-egress.js';
 
 let dir: string;
 beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-egress-')); });
@@ -198,51 +197,5 @@ describe('reading a page through an egress', () => {
       { name: 'prod', via: 'ssh prod-host', ok: true, ip: '157.173.195.175' },
       { name: 'broken', via: 'ssh nowhere', ok: false, error: 'The ssh tunnel to nowhere ended before it was ready.' },
     ]);
-  });
-});
-
-describe('which egress a vendor runs on', () => {
-  const names = ['home', 'prod', 'phone'];
-  const now = Date.parse('2026-11-20T12:00:00Z');
-
-  it('starts at home, moves to the next egress after each captcha wall, and starts over once all were tried', () => {
-    let state = undefined as ReturnType<typeof afterRun>;
-    expect(pickEgress(state, names, now)).toEqual({ egress: 'home', another: true });
-    state = afterRun(state, 'home', 'captcha', names, now);
-    expect(pickEgress(state, names, now)).toEqual({ egress: 'prod', another: true });
-    state = afterRun(state, 'prod', 'captcha', names, now);
-    expect(pickEgress(state, names, now)).toEqual({ egress: 'phone', another: false });
-    state = afterRun(state, 'phone', 'captcha', names, now);
-    // Every way out met the wall: it stands, and the next round begins at home again.
-    expect(state).toBeUndefined();
-    expect(pickEgress(state, names, now)).toEqual({ egress: 'home', another: true });
-  });
-
-  it('keeps the egress that worked first for later runs, and still moves on from it after a wall', () => {
-    let state = afterRun(afterRun(undefined, 'home', 'captcha', names, now), 'prod', 'worked', names, now);
-    expect(state).toMatchObject({ egress: 'prod', tried: [] });
-    expect(pickEgress(state, names, now)).toEqual({ egress: 'prod', another: true });
-    state = afterRun(state, 'prod', 'captcha', names, now);
-    expect(pickEgress(state, names, now)).toEqual({ egress: 'home', another: true });
-    // A run that neither met a wall nor got through changes nothing.
-    expect(afterRun(state, 'home', 'other', names, now)).toBe(state);
-  });
-
-  it('forgets walls after a day, and an egress that is no longer configured', () => {
-    const state = afterRun(undefined, 'home', 'captcha', names, now);
-    expect(pickEgress(state, names, now + 25 * 3_600_000)).toEqual({ egress: 'home', another: true });
-    expect(pickEgress({ egress: 'gone', tried: [], at: new Date(now).toISOString() }, names, now)).toEqual({ egress: 'home', another: true });
-  });
-
-  it('home alone has nothing left to try', () => {
-    expect(pickEgress(undefined, ['home'], now)).toEqual({ egress: 'home', another: false });
-  });
-
-  it('is kept on disk per vendor', async () => {
-    await recordVendorEgress(dir, 'acme', 'home', 'captcha', names, now);
-    expect(await readVendorEgress(dir, 'acme')).toEqual({ tried: ['home'], at: new Date(now).toISOString() });
-    await recordVendorEgress(dir, 'acme', 'prod', 'worked', names, now);
-    expect(await readVendorEgress(dir, 'acme')).toEqual({ egress: 'prod', tried: [], at: new Date(now).toISOString() });
-    expect(await readVendorEgress(dir, 'other')).toBeUndefined();
   });
 });

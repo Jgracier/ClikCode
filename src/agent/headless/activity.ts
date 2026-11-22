@@ -4,6 +4,7 @@
  * code) from one that has stalled, and every server can refuse calls past the one budget they share. Any MCP server may join: it only
  * appends to the file. */
 import { appendFile, readFile } from 'node:fs/promises';
+import { quiet } from '../../runtime/lifecycle-log.js';
 
 export const ACTIVITY_ENV = 'CLIKCODE_AGENT_ACTIVITY';
 export const MAX_CALLS_ENV = 'CLIKCODE_AGENT_MAX_CALLS';
@@ -21,5 +22,5 @@ export async function readActivity(file: string): Promise<Activity> {
 }
 
 export async function markActivity(file: string | undefined, mark: '+' | '.'): Promise<void> {
-  if (file) await appendFile(file, mark).catch(() => undefined);
+  if (file) await appendFile(file, mark).catch(quiet('agent/headless/activity'));
 }

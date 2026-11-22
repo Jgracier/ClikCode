@@ -12,13 +12,14 @@ const find = (root: Command, ...path: string[]): Command | undefined =>
 const hidden = (command: Command | undefined): boolean => Boolean((command as unknown as { _hidden?: boolean } | undefined)?._hidden);
 
 describe('the public command surface', () => {
+  it('keeps the vendor set-up commands out of --help but runnable, and holds no ClikDeploy connector pipeline', () => {
     const root = program();
+    for (const path of [['computer', 'queue'], ['computer', 'recipe'], ['computer', 'unattended']]) {
       expect(find(root, ...path), path.join(' ')).toBeDefined();
       expect(hidden(find(root, ...path)), path.join(' ')).toBe(true);
     }
-    expect(find(root, 'connectors', 'run')?.options.map((option) => option.long)).toContain('--loop');
-    expect(find(root, 'connectors', 'agent-mcp')).toBeDefined();
-    expect(root.helpInformation()).not.toMatch(/connectors|mcp-serve/);
+    for (const gone of [['connectors'], ['computer', 'preflight'], ['computer', 'proof']]) expect(find(root, ...gone), gone.join(' ')).toBeUndefined();
+    expect(find(root, 'computer')!.helpInformation()).not.toMatch(/queue|recipe/);
     expect(hidden(find(root, 'computer', 'driver'))).toBe(false);
   });
 

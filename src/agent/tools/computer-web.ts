@@ -65,6 +65,7 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'u
 type WebArgs = {
   /** help: an action name, or "guide". */
   topic?: string;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'show' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'card' | 'open_email_link' | 'read_email_code' | 'read_sms_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'forget_login' | 'add_login' | 'cloud' | 'human_check' | 'auth_code' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; mfa_account?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; address?: string; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
@@ -479,9 +480,6 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
         if (!found.length) return { output: words.length ? `No saved key matches "${args.target}". Capture one with capture_secret.` : 'No keys are saved yet. Capture one with capture_secret.' };
         const shown = found.slice(0, 150).map(({ name, meta }) => `${name}${meta ? `  ${meta.url ?? 'no site recorded'}  (saved ${meta.createdAt.slice(0, 10)}${meta.rotatedAt ? `, rotated ${meta.rotatedAt.slice(0, 10)}` : ''})` : ''}`);
         return { output: `${found.length} saved key${found.length === 1 ? '' : 's'}${found.length > shown.length ? `, first ${shown.length}; add words to target to narrow` : ''}. Values are never shown; send one on with send_secret.\n${shown.join('\n')}` };
-      }
-        // Deterministic readiness check (browser, Google sign-in, Gmail, build, deps link); a throwaway tab, no chat tab needed.
-        return { output: JSON.stringify(result, null, 2), ...(result.ok ? {} : { isError: true }) };
       }
       if (args.action === 'queue') {
         const { describeTask, listTasks, saveTask, summarizeTasks } = await import('../computer/work-queue.js');
@@ -1717,16 +1715,6 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
         const saved = await recordVerified(ctx.stateDir, key, { kind: 'capture', url: page.url(), hint: `${triggerLabel ? `Click "${triggerLabel}" to make the key show, then capture_secret. ` : ''}Verified: ${check.verdict === 'works' ? 'the key works' : 'a key was found and stored'}.` }).catch(quiet('agent/tools/computer-web'));
         if (saved) recipeLint = lintRecipe(saved).map(finding => finding.message);
       }
-      // A key that reached a ClikDeploy connector takes the page it was made on with it: that page becomes the connector's
-      // "where to get your key" link (access.keysUrl), so the next person is sent straight to it. Deterministic: every delivered key.
-      const keysPages: string[] = [];
-      if (!refused) {
-        const connectors = [...new Set((plan ?? []).flatMap((destination, index) => /^clikdeploy-connection/.test(destination.to) && sent[index]?.ok && typeof destination.with?.integration === 'string' ? [destination.with.integration] : []))];
-        for (const integration of connectors) {
-          const done = await recordKeysPage(ctx.stateDir, integration, page.url());
-          keysPages.push(done.recorded ? `KEY PAGE recorded on ${integration}: ${done.recorded}` : `Key page not recorded on ${integration}: ${done.skipped}`);
-        }
-      }
       // An authenticator seed has one home. Once ClikDeploy holds it, the copy this computer kept for the hand-over is removed,
       // so a stolen laptop vault cannot make the account's codes.
       const seedOnly = !!plan?.length && plan.every(destination => destination.to === VENDOR_MFA_DESTINATION);
@@ -1739,7 +1727,6 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
           : check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
         ...(recipeLint.length ? [`Recipe saved (tidied; the recorded steps are kept in the .bak file). Still to fix: ${recipeLint.join('; ')}.`] : []),
         ...sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`),
-        ...keysPages,
         ...(handedOver ? ['ClikDeploy now keeps this setup key; the copy in ClikCode Secrets Manager was removed. Use auth_code with the same account for its codes.'] : []),
         ...(refused ? [] : sent.some(delivery => !delivery.ok) ? ['The key is still saved. Fix the cause, then send it again with send_secret.'] : sent.length ? [] : ['Nothing was sent anywhere: use send_to to send it on, or send_secret later.']),
       ];

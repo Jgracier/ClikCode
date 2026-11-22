@@ -236,10 +236,6 @@ export async function computerTool(tool: string, args: Record<string, unknown>, 
   if (!result.ok) process.exitCode = 1;
 }
 
-  else process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  if (!result.ok) process.exitCode = 1;
-}
-
 /** Remove saved logins for a site without a prompt or a chat; only the count is printed. */
 export async function computerLoginsRemove(site: string, account?: string): Promise<void> {
   const { forgetSavedLogins } = await import('../agent/computer/credential-vault.js');
@@ -466,15 +462,6 @@ export async function computerQueue(options: { status?: string; reason?: string;
   const all = await listTasks(stateDir, { ...(options.status ? { status: options.status as never } : {}), ...(options.reason ? { reason: options.reason as never } : {}) });
   if (isJsonDefaultMode()) return emitResult({ computer: { tasks: all } });
   process.stdout.write(`${summarizeTasks(all)}\n${all.map(describeTask).join('\n')}\n`);
-}
-
-/** Ask ClikDeploy whether its current spec has current full proof, and keep that answer in the local queue. */
-export async function computerConnectorProof(id: string): Promise<void> {
-  const { proof, task } = await syncConnectorProof(stateDirectory(), id);
-  if (isJsonDefaultMode()) return emitResult({ computer: { connectorProof: proof, task } });
-  const left = proof.missing?.length ? proof.missing.map((m) => `  - ${m.item}: ${m.fix}`).join('\n') : proof.problems.map((p) => `  - ${p}`).join('\n');
-  const finished = proof.done?.length ? `\nFinished: ${proof.done.join(', ')}` : '';
-  process.stdout.write(`${id}: ${proof.ready ? 'finished' : 'not finished'}${proof.coverage ? ` (${proof.coverage.passing}/${proof.coverage.total} live checks)` : ''}${finished}\n${left ? `Left to do:\n${left}\n` : ''}${proof.next ? `Next: ${proof.next}\n` : ''}`);
 }
 
 /** `clikcode computer email connect|status|disconnect [--address a@b]`: the mailboxes the browser tool reads emailed codes and links from. */
