@@ -456,3 +456,15 @@ describe('waiting on a handoff', () => {
     await expect(waiting).rejects.toThrow('Stopped.');
   });
 });
+
+describe('steps sent as a JSON string', () => {
+  const steps = JSON.stringify([{ do: 'click', target: 'e1' }, { do: 'upload', target: 'e2', text: '/home/user/secret.pdf' }]);
+  it('are counted as steps, not characters', () => {
+    expect(computerWebTool.label({ action: 'steps', steps } as never)).toBe('2 steps on the page');
+  });
+  it('show their uploaded files to the permission prompt', async () => {
+    const tool = computerWebTool as unknown as { paths(args: unknown): string[]; describe(args: unknown): Promise<string> };
+    expect(tool.paths({ action: 'steps', steps })).toEqual(['/home/user/secret.pdf']);
+    expect(await tool.describe({ action: 'steps', steps })).toContain('sends /home/user/secret.pdf');
+  });
+});

@@ -421,7 +421,7 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'console': return 'Read the console';
       case 'scroll': return `Scroll ${args.direction ?? 'down'}`;
       case 'wait': return `Wait for ${args.text ? `"${args.text}"` : `${args.seconds ?? 30}s`}`;
-      case 'steps': return `${args.steps?.length ?? 0} steps on the page`;
+      case 'steps': return `${stepList(args)?.length ?? 0} steps on the page`;
       case 'login': return 'Sign in';
       case 'handoff': return 'Hand off to the user';
       case 'show': return args.clear ? 'Close the live view' : 'Show the tab to the user';
@@ -789,9 +789,17 @@ function webTool(kind: ToolKind) {
 export const browserUseTool = webTool('browser');
 export const accountUseTool = webTool('account');
 
+/** The steps of a call, read once and the same way everywhere (the permission prompt, the label, the run): a model may send them as a
+ * JSON string. Undefined when they are not a list. */
+export function stepList(args: Pick<WebArgs, 'steps'>): Step[] | undefined {
+  let value: unknown = args.steps;
+  if (typeof value === 'string') { try { value = JSON.parse(value); } catch { return undefined; } }
+  return Array.isArray(value) ? value as Step[] : undefined;
+}
+
 /** The files an upload names by path, so the permission system can show them and apply its path rules. */
 function uploadPaths(args: WebArgs): string[] {
-  const steps = typeof args.steps === 'string' ? [] : Array.isArray(args.steps) ? args.steps : [];
+  const steps = stepList(args) ?? [];
   const named = [args.action === 'upload' ? args.text : undefined, ...steps.map(step => step?.do === 'upload' ? step.text : undefined)];
   return named.filter((text): text is string => typeof text === 'string' && path.isAbsolute(text));
 }
@@ -1572,13 +1580,13 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       requestDocumentPages(page, args.pages); return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
     }
     case 'steps':
-      const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
+      const list = stepList(args);
       if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
       return runSteps(page, list, ctx, args.tab, args.label);
     case 'network': {
       // Does the steps (or just waits and reloads nothing) while recording the page's API calls: the vendor's own web app
       // shows the real endpoint, method and answer shape when documentation is thin. Header values are never shown.
-      const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
+      const list = stepList(args);
       const { recordNetwork, describeCalls } = await import('../computer/network-capture.js');
       const { result, calls, dropped } = await recordNetwork(page, async () => Array.isArray(list) && list.length ? runSteps(page, list, ctx, args.tab, args.label) : (await sleep((args.seconds ?? 5) * 1000, ctx.signal, () => new StoppedError()), undefined), { ...(args.find ? { find: args.find } : {}), ...(args.bodies ? { bodies: true } : {}) });
       return { output: `${result?.output ? `${result.output}\n\n` : ''}${describeCalls(calls, dropped)}`, ...(result?.isError ? { isError: true } : {}) };
