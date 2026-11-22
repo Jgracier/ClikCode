@@ -77,6 +77,8 @@ async function fakeWorld(mode: 'consent' | 'login' | 'granular' | 'warning' | 'g
     typed, base, mailtoClicks: () => mailtoClicks,
     start: async (id: string) => ({ url: ((await (await fetch(`${base}/connect/${id}`)).json()) as { data: { authorizationUrl: string } }).data.authorizationUrl, stop: () => undefined }),
     status: async (id: string) => ({ connected: ((await (await fetch(`${base}/status/${id}`)).json()) as { connected: boolean }).connected }),
+    // The client these fake consent pages name, and the loopback callback this server lands on.
+    get platform() { return { appNames: ['ClikDeploy', 'Vendor', 'Acme'], ownsCallback: (u: URL) => u.origin === base, start: this.start, status: this.status }; },
     close: () => { server.closeAllConnections(); server.close(); },
   };
 }
@@ -86,7 +88,7 @@ it.skipIf(!enabled)('chooses the named account, presses through the notices and 
   try {
     const page = await browser!.newPage();
     const lines: string[] = [];
-    const done = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 40_000, progress: line => lines.push(line) });
+    const done = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', platform: world.platform, timeoutMs: 40_000, progress: line => lines.push(line) });
     expect(done.connector).toBe('slack');
     expect(await page.title()).not.toBe('wrong');
     expect(lines.join('')).toContain('Chose the account');
@@ -99,7 +101,7 @@ it.skipIf(!enabled)('stops at a login password with a plain reason and types not
   const world = await fakeWorld('login');
   try {
     const page = await browser!.newPage();
-    const error = await oauthConnect('slack', page, { email: 'me@example.com', start: world.start, status: world.status, timeoutMs: 20_000 }).then(() => undefined, (e: Error) => e);
+    const error = await oauthConnect('slack', page, { email: 'me@example.com', platform: world.platform, timeoutMs: 20_000 }).then(() => undefined, (e: Error) => e);
     expect(error?.message).toContain('login password');
     expect(error?.message).toContain('Nothing was typed');
     expect(error?.message).not.toContain('me@example.com');
@@ -112,7 +114,7 @@ it.skipIf(!enabled)('ticks Select all on a granular-consent page before pressing
   try {
     const page = await browser!.newPage();
     const lines: string[] = [];
-    const done = await oauthConnect('slack', page, { providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 40_000, progress: line => lines.push(line) });
+    const done = await oauthConnect('slack', page, { providerHost: 'accounts.google.com', platform: world.platform, timeoutMs: 40_000, progress: line => lines.push(line) });
     expect(done.connector).toBe('slack');
     expect(lines.join('')).toContain('Ticked the scope checkboxes');
   } finally { world.close(); }
@@ -122,7 +124,7 @@ it.skipIf(!enabled)('never presses the developer\'s email address on the unverif
   const world = await fakeWorld('warning');
   try {
     const page = await browser!.newPage();
-    const done = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 40_000 });
+    const done = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', platform: world.platform, timeoutMs: 40_000 });
     expect(done.connector).toBe('slack');
     expect(await page.locator('body').innerText()).toContain('Slack connected');
     // A press of that link would hand the address to the computer's mail program (and, with nothing to open it, a chooser).
@@ -135,7 +137,7 @@ it.skipIf(!enabled)('Google flow: the account chip on later pages is not pressed
   try {
     const page = await browser!.newPage();
     const lines: string[] = [];
-    const done = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 50_000, progress: line => lines.push(line) });
+    const done = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', platform: world.platform, timeoutMs: 50_000, progress: line => lines.push(line) });
     expect(done.connector).toBe('slack');
     expect(lines.filter(l => l.includes('Chose the account')).length).toBe(1);
     expect(lines.join('')).toContain('Ticked the scope checkboxes');
@@ -148,7 +150,7 @@ it.skipIf(!enabled)('Google flow: a chooser that comes back is answered once mor
   try {
     const page = await browser!.newPage();
     const lines: string[] = [];
-    await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 50_000, progress: line => lines.push(line) });
+    await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', platform: world.platform, timeoutMs: 50_000, progress: line => lines.push(line) });
     expect(lines.filter(l => l.includes('Chose the account')).length).toBe(2);
   } finally { world.close(); }
 }, 70_000);
@@ -159,7 +161,7 @@ it.skipIf(!enabled)('Google flow: a password challenge is retried once from the 
     const first = await browser!.newPage();
     const lines: string[] = [];
     const reopen = async (old: import('playwright-core').Page) => { await old.close(); return browser!.newPage(); };
-    const done = await oauthConnect('slack', first, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 50_000, reopen, progress: line => lines.push(line) });
+    const done = await oauthConnect('slack', first, { email: 'me@example.com', providerHost: 'accounts.google.com', platform: world.platform, timeoutMs: 50_000, reopen, progress: line => lines.push(line) });
     expect(done.connector).toBe('slack');
     expect(first.isClosed()).toBe(true);
     expect(lines.join('')).toContain('fresh tab');
@@ -171,7 +173,7 @@ it.skipIf(!enabled)('Google flow: a password challenge that comes back after the
   try {
     const page = await browser!.newPage();
     // No way to reopen: the first challenge is the answer.
-    const error = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 20_000 }).then(() => undefined, (e: Error) => e);
+    const error = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', platform: world.platform, timeoutMs: 20_000 }).then(() => undefined, (e: Error) => e);
     expect(error?.message).toContain('login password');
     expect(error?.message).toContain('Nothing was typed');
     expect(await page.locator('#p').inputValue()).toBe('');

@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { listTasks } from './work-queue.js';
 import { OPENS_ANOTHER_APP, authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, scopeTicks, scopesTicked, googleStep, type ScopeBox, stopReason, type Control, type PressOptions } from './oauth-consent.js';
 
+/** The client being granted in these pages: ClikDeploy, as the default platform names it. */
+const CD = { appNames: ['ClikDeploy'] } as const;
 const press = (...names: string[]): Control[] => names.map(name => ({ name, leaf: false }));
 const pick = (host: string, controls: Control[], text = '', options: PressOptions = {}): string | undefined => {
   const next = nextPress(host, controls, text, options);
@@ -99,14 +101,19 @@ describe('callbackState', () => {
     expect(callbackState(`${redirect}?code=x&state=y`, redirect, 'Slack connected. You can close this window.')).toBe('connected');
     expect(callbackState(`${redirect}?error=access_denied`, redirect, 'Connection failed: access denied')).toBe('problem');
     expect(callbackState(`${redirect}?code=x`, redirect, 'Loading')).toBe('waiting');
-    expect(callbackState('https://x.test/oauth/callback?code=1', undefined, 'Connected')).toBe('connected');
+    // Without a redirect_uri only the platform's own callback counts; a vendor's /callback page is not the landing.
+    const owns = (u: URL): boolean => u.hostname === 'clikdeploy.example';
+    expect(callbackState('https://clikdeploy.example/oauth/callback?code=1', undefined, 'Connected', owns)).toBe('connected');
+    expect(callbackState('https://x.test/oauth/callback?code=1', undefined, 'Connected', owns)).toBe('elsewhere');
+    expect(callbackState('https://x.test/oauth/callback?code=1', undefined, 'Connected')).toBe('elsewhere');
   });
 });
 
 describe('authorizationUrl', () => {
   it('reads the URL from JSON or from a plain line', () => {
     expect(authorizationUrl('{"status":"ok","data":{"authorizationUrl":"https://v.example/auth?a=1&b=2"}}')).toBe('https://v.example/auth?a=1&b=2');
-    expect(authorizationUrl('Open this URL to authorize:\nhttps://v.example/auth?x=1.\n')).toBe('https://v.example/auth?x=1');
+    const plain = 'https://v.example/auth?client_id=c1&redirect_uri=https%3A%2F%2Fclikdeploy.com%2Fapi%2Foauth%2Fcallback';
+    expect(authorizationUrl(`Open this URL to authorize:\n${plain}.\n`)).toBe(plain);
     expect(authorizationUrl('{"status":"error","message":"nope"}')).toBeUndefined();
   });
 
@@ -116,6 +123,14 @@ describe('authorizationUrl', () => {
     expect(authorizationUrl(`Error: ${problem}`)).toBeUndefined();
     expect(authorizationUrl('see https://errors.clikdeploy.com/VALIDATION_ERROR for details')).toBeUndefined();
     expect(authorizationUrl('{"data":{"state":"s","authorizationUrl":"https://v.example/a"},"type":"https://errors.clikdeploy.com/X"}')).toBeUndefined();
+  });
+
+  it('takes no plain-text address that is not an https OAuth request back to the platform\'s own callback', () => {
+    expect(authorizationUrl('Docs: https://docs.example/help then wait')).toBeUndefined();
+    expect(authorizationUrl('Open http://v.example/auth?client_id=c1&redirect_uri=https%3A%2F%2Fclikdeploy.com%2Fcb')).toBeUndefined();
+    expect(authorizationUrl('Open https://v.example/auth?client_id=c1&redirect_uri=https%3A%2F%2Fevil.example%2Fcb')).toBeUndefined();
+    expect(authorizationUrl('{"data":{"authorizationUrl":"http://v.example/auth"}}')).toBeUndefined();
+    expect(authorizationUrl('{"data":{"authorizationUrl":"https://v.example/auth?redirect_uri=https%3A%2F%2Fevil.example%2Fcb"}}')).toBeUndefined();
   });
 
   it('prefers the authorizationUrl field over other URLs in the document', () => {
@@ -142,7 +157,7 @@ describe('a stuck page is reported with its words', () => {
       evaluate: async (_fn: unknown, arg?: unknown) => (arg === undefined ? text : (options.controls ?? [])),
       locator: () => ({ count: async () => 0 }),
     } as unknown as import('playwright-core').Page;
-    const error = await oauthConnect('vendor', page, { start: async () => ({ url: 'https://api.vendor.example/v1/oauth/authorize?redirect_uri=https%3A%2F%2Fcd.example%2Fcallback', stop: () => undefined }), status: async () => ({ connected: false }), timeoutMs: 20_000, ...(options.stateDir ? { stateDir: options.stateDir } : {}) }).then(() => undefined, (e: Error) => e);
+    const error = await oauthConnect('vendor', page, { start: async () => ({ url: 'https://api.vendor.example/v1/oauth/authorize?redirect_uri=https%3A%2F%2Fcd.example%2Fcallback', stop: () => undefined }), platform: { ownsCallback: (u: URL) => u.hostname === 'cd.example' }, status: async () => ({ connected: false }), timeoutMs: 20_000, ...(options.stateDir ? { stateDir: options.stateDir } : {}) }).then(() => undefined, (e: Error) => e);
     return error!;
   };
 
@@ -169,7 +184,7 @@ describe('a stuck page is reported with its words', () => {
       expect((error as ConsentStop).reason).toBe('payment');
       expect(error.message).toContain('Recorded in the human queue');
       const [task] = await listTasks(dir);
-      expect(task).toMatchObject({ vendor: 'vendor', kind: 'oauth-app', status: 'needs-human', reason: 'payment', connectors: ['vendor'] });
+      expect(task).toMatchObject({ vendor: 'vendor', kind: 'oauth-app', status: 'needs-human', reason: 'payment' });
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
@@ -188,26 +203,48 @@ describe('a stuck page is reported with its words', () => {
   });
 });
 
+describe('grants only the expected client', () => {
+  it('presses nothing on a consent page for some other app, even on a known provider', () => {
+    const options = { ...CD, requireClient: true };
+    expect(pick('github.com', press('Authorize evil-app', 'Cancel'), 'evil-app wants access to your account', options)).toBeUndefined();
+    expect(pick('accounts.google.com', press('Cancel', 'Continue'), 'Other App wants access to your Google Account', options)).toBeUndefined();
+    expect(pick('app.vendor.io', press('Allow', 'Deny'), 'Some App wants access', options)).toBeUndefined();
+    expect(pick('accounts.google.com', press('Go to evil.example (unsafe)'), 'Google hasn\'t verified this app ClikDeploy', options)).toBeUndefined();
+    // The expected client named: granted.
+    expect(pick('github.com', press('Authorize ClikDeploy', 'Cancel'), 'ClikDeploy wants access', options)).toBe('Authorize ClikDeploy');
+    expect(pick('accounts.google.com', press('Cancel', 'Continue'), 'ClikDeploy wants access to your Google Account', options)).toBe('Continue');
+    expect(pick('accounts.google.com', press('Go to ClikDeploy (unsafe)'), 'Google hasn\'t verified this app', options)).toBe('Go to ClikDeploy (unsafe)');
+    expect(pick('accounts.google.com', [{ name: 'Advanced', leaf: true }], 'Google hasn\'t verified this app', options)).toBe('Advanced');
+  });
+
+  it('opens no authorization URL that is not https or sends the code to another callback', async () => {
+    const page = { url: () => 'about:blank', isClosed: () => false, goto: async () => { throw new Error('must not open'); } } as unknown as import('playwright-core').Page;
+    const run = (url: string) => oauthConnect('vendor', page, { start: async () => ({ url, stop: () => undefined }), status: async () => ({ connected: false }), timeoutMs: 1_000 }).then(() => '', (e: Error) => e.message);
+    expect(await run('http://v.example/auth?redirect_uri=https%3A%2F%2Fclikdeploy.com%2Fcb')).toContain('not https');
+    expect(await run('https://v.example/auth?redirect_uri=https%3A%2F%2Fevil.example%2Fcb')).toContain('not the platform\'s callback');
+  });
+});
+
 describe('generic consent recognition', () => {
   const supabaseText = 'Organization to grant API access to\naccess permissions\nShow detailed permissions\nAuthorize ClikDeploy\nCancel';
   const supabase = press('Show detailed permissions', 'Authorize ClikDeploy', 'Cancel');
 
   it('recognizes the Supabase authorize page on an unknown host and presses Authorize ClikDeploy', () => {
-    expect(pick('supabase.com', supabase, supabaseText)).toBe('Authorize ClikDeploy');
-    expect(nextPress('supabase.com', supabase, supabaseText)?.consent).toBe(true);
+    expect(pick('supabase.com', supabase, supabaseText, CD)).toBe('Authorize ClikDeploy');
+    expect(nextPress('supabase.com', supabase, supabaseText, CD)?.consent).toBe(true);
   });
 
   it('accepts Allow / Approve / Continue as <account> beside a refusal, when the page names the app or the callback', () => {
     for (const label of ['Approve', 'Accept', 'Grant access', 'Continue as Jo Doe', 'Authorize']) {
-      expect(pick('app.vendor.io', press(label, 'Deny'), 'ClikDeploy wants access')).toBe(label);
+      expect(pick('app.vendor.io', press(label, 'Deny'), 'ClikDeploy wants access', CD)).toBe(label);
     }
-    expect(pick('app.vendor.io', press('Approve', 'Cancel'), 'Redirecting to clikdeploy.example after approval')).toBe('Approve');
+    expect(pick('app.vendor.io', press('Approve', 'Cancel'), 'Redirecting to clikdeploy.example after approval', CD)).toBe('Approve');
     expect(readConsent(press('Approve', 'Cancel'), 'Redirect to app.example', { redirectHost: 'app.example' }).consent).toBe(true);
   });
 
   it('does not treat a page that never names the app, or has no refusal, as consent', () => {
-    expect(readConsent(press('Approve', 'Cancel'), 'Approve this purchase order').consent).toBe(false);
-    expect(readConsent(press('Approve'), 'ClikDeploy wants access').consent).toBe(false);
+    expect(readConsent(press('Approve', 'Cancel'), 'Approve this purchase order', CD).consent).toBe(false);
+    expect(readConsent(press('Approve'), 'ClikDeploy wants access', CD).consent).toBe(false);
   });
 
   it('never presses on a payment, missing-credits or captcha page', () => {
@@ -243,30 +280,30 @@ describe('Google granular consent and the unverified-app chain', () => {
 
   it('ticks only "Select all" when it is offered and nothing is ticked', () => {
     const boxes = [box(0, 'Select all'), box(1, 'View your Google Fit activity'), box(2, 'View your sleep data')];
-    expect(scopeTicks(boxes, granular)).toEqual([0]);
+    expect(scopeTicks(boxes, granular, CD)).toEqual([0]);
     expect(scopesTicked(boxes)).toBe(false);
     expect(scopesTicked(boxes.map(b => ({ ...b, checked: true })))).toBe(true);
   });
 
   it('ticks every unticked scope box when there is no Select all, and leaves ticked ones', () => {
-    expect(scopeTicks([box(0, 'View activity', true), box(1, 'View sleep'), box(2, 'View location')], granular)).toEqual([1, 2]);
+    expect(scopeTicks([box(0, 'View activity', true), box(1, 'View sleep'), box(2, 'View location')], granular, CD)).toEqual([1, 2]);
   });
 
   it('ticks the rest when Select all is ticked but a scope is not', () => {
-    expect(scopeTicks([box(0, 'Select all', true), box(1, 'View activity', true), box(2, 'View sleep')], granular)).toEqual([2]);
+    expect(scopeTicks([box(0, 'Select all', true), box(1, 'View activity', true), box(2, 'View sleep')], granular, CD)).toEqual([2]);
   });
 
   it('does nothing when all is ticked, there are no boxes, or the boxes are not scopes', () => {
-    expect(scopeTicks([box(0, 'Select all', true), box(1, 'View activity', true)], granular)).toEqual([]);
-    expect(scopeTicks([], granular)).toEqual([]);
-    expect(scopeTicks([box(0, 'Remember me'), box(1, 'Send me marketing offers')], granular)).toEqual([]);
+    expect(scopeTicks([box(0, 'Select all', true), box(1, 'View activity', true)], granular, CD)).toEqual([]);
+    expect(scopeTicks([], granular, CD)).toEqual([]);
+    expect(scopeTicks([box(0, 'Remember me'), box(1, 'Send me marketing offers')], granular, CD)).toEqual([]);
   });
 
   it('never ticks on a page that does not name the app, or on payment, credits or captcha pages', () => {
     const boxes = [box(0, 'Select all'), box(1, 'View data')];
-    expect(scopeTicks(boxes, 'Some other app wants access to your account Continue')).toEqual([]);
-    expect(scopeTicks(boxes, 'ClikDeploy: add a payment method. Card number Select all')).toEqual([]);
-    expect(scopeTicks(boxes, 'ClikDeploy wants access. You have no credits. Select all')).toEqual([]);
+    expect(scopeTicks(boxes, 'Some other app wants access to your account Continue', CD)).toEqual([]);
+    expect(scopeTicks(boxes, 'ClikDeploy: add a payment method. Card number Select all', CD)).toEqual([]);
+    expect(scopeTicks(boxes, 'ClikDeploy wants access. You have no credits. Select all', CD)).toEqual([]);
     expect(scopeTicks(boxes, 'ClikDeploy wants access. Please verify you are human. I\'m not a robot')).toEqual([]);
   });
 

@@ -1,8 +1,11 @@
-/** Presses through a vendor's OAuth consent screens in the ClikCode browser, already signed in, so connecting a ClikDeploy
- * connector is one action. What may be pressed is a table of data (per provider family), not logic: add a row to teach it a
+/** Presses through a vendor's OAuth consent screens in the ClikCode browser, already signed in, so connecting an OAuth
+ * connection is one action. The platform being granted access (by default ClikDeploy: its CLI starts the connection, its
+ * callback lands it, its name is on the consent) is caller-supplied data (`ConsentPlatform`), not assumed by the logic. What may be pressed is a table of data (per provider family), not logic: add a row to teach it a
  * screen. It never types: a login password, a verification code, a captcha or a screen it does not know is where it stops,
  * with a plain reason that holds no page text beyond the address and the names of what can be pressed. Success is not the
- * vendor's word for it: the callback page must be reached and ClikDeploy must then show an active connection. */
+ * vendor's word for it: the platform's own callback page must be reached and the platform must then show an active connection.
+ * Nothing is granted on a page that does not name the client being granted, and no authorization URL is opened unless it is
+ * https (loopback excepted) and sends its answer back to the platform's own callback. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import type { Page } from 'playwright-core';
@@ -58,8 +61,16 @@ export { OPENS_ANOTHER_APP };
 
 const NOT_CHOOSER = /\b(sign out|log ?out|switch|remove|use another|add (?:an )?account|different account)\b/i;
 
-/** The platform's own name as a vendor's consent page shows it ("Authorize ClikDeploy"). */
-const PLATFORM_APP = 'ClikDeploy';
+/** Whether a page's words (or an affirmative control) name the client being granted: one of its names, or the host of the
+ * callback it was sent to. A consent screen for any other app is never granted. */
+function namesClient(controls: readonly Control[], pageText: string, options: { appNames?: readonly string[]; redirectHost?: string }): boolean {
+  const names = (options.appNames ?? []).filter(Boolean).map(n => n.toLowerCase());
+  const lower = pageText.toLowerCase();
+  return names.some(n => lower.includes(n)) || (!!options.redirectHost && lower.includes(options.redirectHost.toLowerCase()))
+    || controls.some(c => !c.leaf && names.some(n => c.name.toLowerCase().includes(n)));
+}
+/** "Go to <app> (unsafe)": the app named on Google's unverified-app notice. */
+const UNSAFE_NOTICE_APP = /^go to (.*) \(unsafe\)$/i;
 
 /** An affirmative consent control: Authorize [app], Allow [access], Approve, Accept, Grant access, Continue as <account>. Never "Continue with <provider>" (a sign-in). */
 const AFFIRMATIVE = /^(?:authori[sz]e(?: [\w .'&-]{1,60})?|allow(?: access| all)?|approve(?: [\w .'&-]{1,40})?|accept(?: and continue)?|grant(?: access| permission)?|continue as [\w .'@+-]{1,80})$/i;
@@ -72,7 +83,7 @@ interface ConsentReading { consent: boolean; /** index into controls of the cont
  * control and a negative one. Not vendor-specific. A payment, missing credits, unknown-client or captcha page never qualifies. */
 export function readConsent(controls: readonly Control[], pageText: string, options: { appNames?: readonly string[]; redirectHost?: string } = {}): ConsentReading {
   if (classifyStuck(pageText) || detectBlocker(pageText) === 'a captcha') return { consent: false };
-  const names = (options.appNames ?? [PLATFORM_APP]).filter(Boolean);
+  const names = (options.appNames ?? []).filter(Boolean);
   const lower = pageText.toLowerCase();
   const mentions = names.some(n => lower.includes(n.toLowerCase())) || (!!options.redirectHost && lower.includes(options.redirectHost.toLowerCase()))
     || controls.some(c => !c.leaf && names.some(n => c.name.toLowerCase().includes(n.toLowerCase())) && AFFIRMATIVE.test(c.name));
@@ -95,7 +106,7 @@ const NOT_A_SCOPE = /\b(newsletter|marketing|promotion|offers?|subscribe|remembe
 export function scopeTicks(boxes: readonly ScopeBox[], pageText: string, options: { appNames?: readonly string[]; redirectHost?: string } = {}): number[] {
   if (!boxes.length || classifyStuck(pageText) || detectBlocker(pageText) === 'a captcha') return [];
   const lower = pageText.toLowerCase();
-  const names = (options.appNames ?? [PLATFORM_APP]).filter(Boolean);
+  const names = (options.appNames ?? []).filter(Boolean);
   if (!(names.some(n => lower.includes(n.toLowerCase())) || (!!options.redirectHost && lower.includes(options.redirectHost.toLowerCase())))) return [];
   const scopes = boxes.filter(b => !NOT_A_SCOPE.test(b.name));
   const all = scopes.find(b => SELECT_ALL.test(b.name.trim()));
@@ -112,7 +123,11 @@ const SIGN_IN_PROVIDERS = [/^(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?
 
 /** `account: false` says the page is known not to be an account chooser (Google's consent and "signing back in" pages show the account as a
  * clickable chip that opens the chooser again), so no account is chosen there. */
-export interface PressOptions { email?: string; skipAccount?: boolean; account?: boolean; appNames?: readonly string[]; redirectHost?: string }
+export interface PressOptions { email?: string; skipAccount?: boolean; account?: boolean; appNames?: readonly string[]; redirectHost?: string;
+  /** Grant only for this client: a grant or notice press is made only on a page that names it (`appNames`, or `redirectHost`), and
+   * "Go to <app> (unsafe)" only for that app. Off for sign-in flows (Sign in with Google on a vendor's own site), where the client
+   * is the site itself. */
+  requireClient?: boolean }
 
 /** Which kind of press: `account` (an account tile), `notice` (Advanced, Go to (unsafe), I understand), `grant` (Continue, Allow, Authorize...), `sign-in`. */
 type PressPhase = 'account' | 'notice' | 'grant' | 'sign-in';
@@ -145,7 +160,14 @@ export function nextPress(host: string, controls: readonly Control[], pageText: 
   for (const action of table) {
     if (action.when && !action.when.test(pageText)) continue;
     const i = controls.findIndex(c => (action.leaf || !c.leaf) && c.name.length <= 80 && !NEVER.test(c.name) && action.name.test(c.name));
-    if (i >= 0) return { index: i, note: action.note, phase: action.notice ? 'notice' : 'grant', ...(AFFIRMATIVE.test(controls[i]!.name) ? { consent: true } : {}) };
+    if (i < 0) continue;
+    if (options.requireClient) {
+      const unsafe = UNSAFE_NOTICE_APP.exec(controls[i]!.name.trim());
+      if (unsafe && !(options.appNames ?? []).some(n => n && unsafe[1]!.toLowerCase().includes(n.toLowerCase()))) return undefined;
+      // "Advanced" and "I understand" open or dismiss a notice and grant nothing; every other press needs the client named.
+      if (!(action.notice && !unsafe) && !namesClient(controls, pageText, options)) return undefined;
+    }
+    return { index: i, note: action.note, phase: action.notice ? 'notice' : 'grant', ...(AFFIRMATIVE.test(controls[i]!.name) ? { consent: true } : {}) };
   }
   const read = readConsent(controls, pageText, { ...(options.appNames ? { appNames: options.appNames } : {}), ...(options.redirectHost ? { redirectHost: options.redirectHost } : {}) });
   if (read.consent && read.index !== undefined) return { index: read.index, note: 'Granted access on the consent screen.', phase: 'grant', consent: true };
@@ -179,13 +201,14 @@ export function stopReason(pageText: string, hasPasswordBox: boolean, hasCodeBox
   return undefined;
 }
 
-/** Whether the page is ClikDeploy's callback landing (the authorization's redirect_uri), and what it says. */
-export function callbackState(url: string, redirectUri: string | undefined, pageText: string): 'connected' | 'problem' | 'waiting' | 'elsewhere' {
+/** Whether the page is the platform's callback landing (the authorization's redirect_uri), and what it says. Without a
+ * redirect_uri only a callback path on an origin the platform owns counts: a vendor's own /callback page is not the landing. */
+export function callbackState(url: string, redirectUri: string | undefined, pageText: string, ownsCallback: (url: URL) => boolean = () => false): 'connected' | 'problem' | 'waiting' | 'elsewhere' {
   let here: URL;
   try { here = new URL(url); } catch { return 'elsewhere'; }
   let target: URL | undefined;
   try { target = redirectUri ? new URL(redirectUri) : undefined; } catch { target = undefined; }
-  const onCallback = target ? here.origin === target.origin && here.pathname === target.pathname : /\/oauth\/callback\b|\/callback\b/.test(here.pathname);
+  const onCallback = target ? here.origin === target.origin && here.pathname === target.pathname : ownsCallback(here) && /\/oauth\/callback\b|\/callback\b/.test(here.pathname);
   if (!onCallback) return 'elsewhere';
   if (/\b(error|denied|failed|invalid|expired|not connected|something went wrong)\b/i.test(pageText) && !/\bconnected\b/i.test(pageText.replace(/not connected/gi, ''))) return 'problem';
   if (/\b(connected|success|successfully|authori[sz]ed|you can (?:now )?close|all set)\b/i.test(pageText)) return 'connected';
@@ -211,15 +234,34 @@ function isErrorDocument(value: unknown): boolean {
   return v.success === false || v.status === 'error' || (typeof v.type === 'string' && ERROR_ADDRESS.test(v.type)) || typeof v.error === 'string' || (typeof v.status === 'number' && v.status >= 400);
 }
 
-/** The authorization URL out of whatever `clikdeploy integrations connect --no-browser` prints (JSON or a plain line). An error document has none. */
-export function authorizationUrl(text: string): string | undefined {
+/** Why an authorization URL is not one to open, or undefined. It must be https (plain http only on this computer's loopback) and,
+ * when it names a redirect_uri, send the answer to an origin the platform owns; a bare address from a line of CLI output must be
+ * an OAuth request (client_id and redirect_uri) at all, so a docs or status link printed beside it is never taken for it. */
+export function authorizationProblem(raw: string, ownsCallback: (url: URL) => boolean, options: { strict?: boolean } = {}): string | undefined {
+  let url: URL;
+  try { url = new URL(raw); } catch { return 'it is not an address'; }
+  const loopback = /^(?:127\.\d+\.\d+\.\d+|localhost|\[::1\])$/i.test(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) return `it is not https (${url.protocol}//${url.host})`;
+  const redirect = url.searchParams.get('redirect_uri');
+  if (options.strict && (!url.searchParams.get('client_id') || !redirect)) return `${url.host}${url.pathname} is not an OAuth authorization request (no client_id and redirect_uri)`;
+  if (redirect) {
+    let back: URL;
+    try { back = new URL(redirect); } catch { return 'its redirect_uri is not an address'; }
+    if (!ownsCallback(back)) return `it sends the authorization to ${back.host}, which is not the platform's callback`;
+  }
+  return undefined;
+}
+
+/** The authorization URL out of whatever `clikdeploy integrations connect --no-browser` prints (JSON or a plain line). An error document
+ * has none. From plain text only an https OAuth request whose redirect_uri the platform owns is taken. */
+export function authorizationUrl(text: string, ownsCallback: (url: URL) => boolean = ownsClikDeployCallback): string | undefined {
   const json = jsonOf(text);
   if (json !== undefined) {
     if (isErrorDocument(json)) return undefined;
     const walk = (value: unknown): string | undefined => {
       if (value && typeof value === 'object') {
         const record = value as Record<string, unknown>;
-        for (const key of URL_KEYS) { const v = record[key]; if (typeof v === 'string' && /^https?:\/\//.test(v) && !ERROR_ADDRESS.test(v)) return v; }
+        for (const key of URL_KEYS) { const v = record[key]; if (typeof v === 'string' && /^https?:\/\//.test(v) && !ERROR_ADDRESS.test(v) && !authorizationProblem(v, ownsCallback)) return v; }
         for (const v of Object.values(record)) { const found = walk(v); if (found) return found; }
       }
       return undefined;
@@ -227,7 +269,7 @@ export function authorizationUrl(text: string): string | undefined {
     const found = walk(json);
     if (found) return found;
   }
-  for (const m of text.matchAll(/https?:\/\/[^\s"'<>]+/g)) { const url = m[0].replace(/[.,;)]+$/, ''); if (!ERROR_ADDRESS.test(url)) return url; }
+  for (const m of text.matchAll(/https?:\/\/[^\s"'<>]+/g)) { const url = m[0].replace(/[.,;)]+$/, ''); if (!ERROR_ADDRESS.test(url) && !authorizationProblem(url, ownsCallback, { strict: true })) return url; }
   return undefined;
 }
 
@@ -240,13 +282,29 @@ export function startFailure(text: string): string {
 }
 
 interface ConnectStart { url: string; stop: () => void }
+
+/** ClikDeploy's own callback: an https origin on clikdeploy.com. */
+export const ownsClikDeployCallback = (url: URL): boolean => url.protocol === 'https:' && /(^|\.)clikdeploy\.com$/i.test(url.hostname);
+
+/** The platform an OAuth connection is made for: what starts it, what confirms it, the names its consent screen shows, and
+ * which callback addresses are its own. */
+export interface ConsentPlatform {
+  /** The client's names as a vendor's consent page shows them ("Authorize ClikDeploy"). */
+  appNames: readonly string[];
+  /** Whether a redirect_uri or a landing page is the platform's own callback. */
+  ownsCallback: (url: URL) => boolean;
+  start: (connector: string, signal?: AbortSignal) => Promise<ConnectStart>;
+  status: (connector: string, signal?: AbortSignal) => Promise<{ connected: boolean; reason?: string }>;
+}
+
 interface OAuthConsentOptions {
   /** The state directory: where a payment-class stop is recorded in the human work queue (absent: not recorded). */ stateDir?: string;
   email?: string; /** Closes the given (stale) tab and opens a fresh one the caller owns and closes later; with it, a Google re-verify or error page is retried once from the authorization URL in the fresh tab. */ reopen?: (old: Page) => Promise<Page>; /** Treat every page as this provider's host (a test stands a fake vendor in for accounts.google.com). */ providerHost?: string; timeoutMs?: number; signal?: AbortSignal; progress?: (line: string) => void;
-  /** Starts the connect and returns the authorization URL (default: `clikdeploy integrations connect <id> --no-browser`). */
-  start?: (connector: string, signal?: AbortSignal) => Promise<ConnectStart>;
-  /** Asks ClikDeploy whether the connector now has an active connection (default: `clikdeploy integrations show`). */
-  status?: (connector: string, signal?: AbortSignal) => Promise<{ connected: boolean; reason?: string }>;
+  /** The platform being connected; each part left out is ClikDeploy's (CLIKDEPLOY_PLATFORM). */
+  platform?: Partial<ConsentPlatform>;
+  /** Shorthand for platform.start / platform.status. */
+  start?: ConsentPlatform['start'];
+  status?: ConsentPlatform['status'];
 }
 
 /** Runs the clikdeploy CLI (the saved admin key is its own sign-in) and waits for it to print the authorization URL. */
@@ -274,6 +332,11 @@ function startViaCli(connector: string, signal?: AbortSignal): Promise<ConnectSt
     signal?.addEventListener('abort', stop, { once: true });
   });
 }
+
+/** The default platform: ClikDeploy's CLI starts the connection and reads it back; its callback is on clikdeploy.com. */
+export const CLIKDEPLOY_PLATFORM: ConsentPlatform = {
+  appNames: ['ClikDeploy'], ownsCallback: ownsClikDeployCallback, start: startViaCli, status: (id, signal) => connectionState(id, signal),
+};
 
 export async function readControls(page: Page): Promise<Control[]> {
   return page.evaluate(readPageControls, { pressable: PRESSABLE, otherApp: OPENS_ANOTHER_APP.source, cap: 1500, identifiers: true });
@@ -362,7 +425,7 @@ async function clickNode(node: ReturnType<Page['locator']>, timeout = 3_000): Pr
 
 /** Ticks the scope boxes a consent page shows (if it is a recognized consent page): one box per round, in view, then the boxes are read again,
  * because "Select all" ticks the rest itself and a second press on one of those would untick it. Stops with why a box is still unticked. */
-async function tickScopes(page: Page, text: string, options: { redirectHost?: string }): Promise<{ ticked: number } | { stop: string }> {
+async function tickScopes(page: Page, text: string, options: { appNames?: readonly string[]; redirectHost?: string }): Promise<{ ticked: number } | { stop: string }> {
   let ticked = 0;
   let boxes = await readScopeBoxes(page).catch(() => [] as ScopeBox[]);
   const rounds = boxes.length + 3;
@@ -464,14 +527,14 @@ function stopDetail(page: Page, controls: readonly Control[], pageText: string, 
   };
 }
 
-/** Connects `connector` for the signed-in ClikDeploy account by driving its OAuth consent in `page`. */
+/** Connects `connector` for the signed-in platform account (ClikDeploy unless `platform` says otherwise) by driving its OAuth consent in `page`. */
 export async function oauthConnect(connector: string, page: Page, options: OAuthConsentOptions = {}): Promise<{ connector: string; steps: string[] }> {
   try {
     return await driveConsent(connector, page, options);
   } catch (error) {
     // A vendor that wants payment or credits is a person's act: put it on the human queue with the reason, then report it.
     if (error instanceof ConsentStop && error.reason === 'payment' && options.stateDir) {
-      const saved = await saveTask(options.stateDir, { vendor: connector, kind: 'oauth-app', status: 'needs-human', reason: 'payment', note: `oauth_connect stopped: ${error.message}`, connectors: [connector] }).then(() => true, () => false);
+      const saved = await saveTask(options.stateDir, { vendor: connector, kind: 'oauth-app', status: 'needs-human', reason: 'payment', note: `oauth_connect stopped: ${error.message}` }).then(() => true, () => false);
       if (saved) throw new ConsentStop(`${error.message} Recorded in the human queue as needs-human [payment].`, 'payment', error.detail);
     }
     throw error;
@@ -483,11 +546,16 @@ const MAX_ACCOUNT_PRESSES = 2;
 
 async function driveConsent(connector: string, firstPage: Page, options: OAuthConsentOptions): Promise<{ connector: string; steps: string[] }> {
   if (!CONNECTOR_ID.test(connector)) throw new Error('oauth_connect needs target: a connector id such as slack or github.');
-  const started = await (options.start ?? startViaCli)(connector, options.signal);
-  const status = options.status ?? ((id, signal) => connectionState(id, signal));
+  const platform: ConsentPlatform = { ...CLIKDEPLOY_PLATFORM, ...options.platform, ...(options.start ? { start: options.start } : {}), ...(options.status ? { status: options.status } : {}) };
+  const started = await platform.start(connector, options.signal);
+  const status = platform.status;
+  const appNames = platform.appNames.filter(Boolean);
   const steps: string[] = [];
   let page = firstPage;
   try {
+    // Opened only when it is https and answers to the platform's own callback: a URL that sends the code anywhere else is refused.
+    const problem = authorizationProblem(started.url, platform.ownsCallback);
+    if (problem) throw new ConsentStop(`The authorization URL was not opened: ${problem}.`);
     let redirectUri: string | undefined;
     let redirectHost: string | undefined;
     try { const u = new URL(started.url).searchParams.get('redirect_uri'); if (u) { redirectUri = u; redirectHost = new URL(u).host; } } catch { /* fail-open-ok: not an address: no redirect to match */ }
@@ -515,7 +583,7 @@ async function driveConsent(connector: string, firstPage: Page, options: OAuthCo
       const url = page.url();
       const text = await page.evaluate(() => ((globalThis as unknown as { document: { body?: { innerText?: string } } }).document.body?.innerText ?? '').slice(0, 6000)).catch(() => '');
       lastText = text;
-      const at = callbackState(url, redirectUri, text);
+      const at = callbackState(url, redirectUri, text, platform.ownsCallback);
       if (at === 'problem') throw new ConsentStop(`The callback page reported a problem instead of a connection (${new URL(url).host}${new URL(url).pathname}). Check the consent was allowed and try again.`);
       if (at === 'connected' || at === 'waiting') {
         // The landing page loads and then ClikDeploy stores the tokens: ask ClikDeploy, not the page.
@@ -554,12 +622,12 @@ async function driveConsent(connector: string, firstPage: Page, options: OAuthCo
         if (++stopSeen >= 2) throw new ConsentStop(`Stopped at ${why}. Nothing was typed. ${stuckOn(page, controls, text)}`, classifyStuck(text)?.reason, stopDetail(page, controls, text, hasPassword ? 'password' : hasCode ? 'mfa' : undefined));
       } else {
         stopSeen = 0;
-        const next = nextPress(options.providerHost ?? host, controls, text, { ...(options.email ? { email: options.email } : {}), account: step === undefined || step === 'chooser', ...(redirectHost ? { redirectHost } : {}) });
+        const next = nextPress(options.providerHost ?? host, controls, text, { ...(options.email ? { email: options.email } : {}), account: step === undefined || step === 'chooser', appNames, requireClient: true, ...(redirectHost ? { redirectHost } : {}) });
         const control = next && controls[next.index];
         if (next && control && !(lastPress.key === `${url}|${control.name}` && Date.now() - lastPress.at < 2_500)) {
           if (next.phase === 'account' && ++accountPresses > MAX_ACCOUNT_PRESSES) throw new ConsentStop(`The account chooser keeps coming back after the account was chosen. ${stuckOn(page, controls, text)}`);
           if (next.phase === 'grant') {
-            const ticks = await tickScopes(page, text, redirectHost ? { redirectHost } : {});
+            const ticks = await tickScopes(page, text, { appNames, ...(redirectHost ? { redirectHost } : {}) });
             if ('stop' in ticks) throw new ConsentStop(`${ticks.stop} ${stuckOn(page, controls, text)}`);
             if (ticks.ticked) { steps.push('Ticked the scope checkboxes.'); options.progress?.('Ticked the scope checkboxes.\n'); }
           }
