@@ -15,6 +15,11 @@ describe('a wanted model name against the Gateway\'s list', () => {
     expect(listedModel('Claude_Sonnet_4_6', LISTED)).toBe('claude-sonnet-4-6');
   });
 
+  it('finds the same name under one maker\'s prefix, and not when two makers list it', () => {
+    expect(listedModel('whisper-1', ['openai/whisper-1', 'whisper-large-v3'])).toBe('openai/whisper-1');
+    expect(listedModel('whisper-1', ['openai/whisper-1', 'azure/whisper-1'])).toBeUndefined();
+    expect(listedModel('whisper-1', ['whisper-1', 'openai/whisper-1'])).toBe('whisper-1');
+  });
   it('follows a family that dropped its minor version, as claude-sonnet-5-5 became claude-sonnet-5', () => {
     expect(listedModel('claude-sonnet-5-5', LISTED)).toBe('claude-sonnet-5');
     expect(listedModel('claude-opus-5-5', LISTED)).toBe('claude-opus-5');

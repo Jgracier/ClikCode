@@ -167,6 +167,7 @@ describe('listening to an audio challenge', () => {
     const { askTranscript, transcribeOrder } = await import('./captcha-model.js');
     expect(transcribeOrder(['whisper-large-v3', 'whisper-1', 'gpt-4o-transcribe'], [{ id: 'whisper-1', access: 'paid' }, { id: 'gpt-4o-transcribe' }, { id: 'whisper-large-v3', access: 'free' }])).toEqual(['whisper-large-v3', 'whisper-1', 'gpt-4o-transcribe']);
     expect(transcribeOrder(['whisper-large-v3', 'whisper-1'], [{ id: 'gpt-4o-transcribe' }])).toEqual([]);
+    expect(transcribeOrder(['whisper-large-v3', 'whisper-1'], [{ id: 'openai/whisper-1' }, { id: 'whisper-large-v3' }])).toEqual(['whisper-large-v3', 'openai/whisper-1']);
     const seen: Array<{ model: string; headers: Record<string, string>; signal: AbortSignal }> = [];
     const fetchImpl = (async (_url: unknown, init: { body: FormData; headers: Record<string, string>; signal: AbortSignal }) => {
       seen.push({ model: String(init.body.get('model')), headers: init.headers, signal: init.signal });

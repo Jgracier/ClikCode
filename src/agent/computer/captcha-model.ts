@@ -6,7 +6,7 @@
  * answer counts only when voters agree. Waiting stops as soon as enough of them do, so the slowest model never
  * holds a puzzle up. */
 import { quiet } from '../../runtime/lifecycle-log.js';
-import { listedModel } from '../../gateway/model-names.js';
+import { listedModel, listedModels } from '../../gateway/model-names.js';
 import type { ImageInput, ModelClient } from '../model-client.js';
 import { COMPUTER_TUNABLES } from './settings.js';
 
@@ -528,9 +528,9 @@ const TRANSCRIBE_MS = 45_000;
  * the rest in the setting's order. A model the Gateway does not list is never asked. */
 export function transcribeOrder(wanted: readonly string[], speech: GatewayListing['speech']): string[] {
   const listed = speech ?? [];
+  const resolved = listedModels(wanted, listed.map(model => model.id));
   const free = new Set(listed.filter(subsidized).map(model => model.id));
-  const served = new Set(listed.map(model => model.id));
-  return [...wanted.filter(model => free.has(model)), ...wanted.filter(model => served.has(model) && !free.has(model))];
+  return [...resolved.filter(id => free.has(id)), ...resolved.filter(id => !free.has(id))];
 }
 
 export interface TranscriptOptions { signal?: AbortSignal; fetchImpl?: typeof fetch; connection?: { baseUrl: string; apiKey: string }; listing?: () => Promise<GatewayListing>; models?: readonly string[] }

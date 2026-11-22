@@ -7,7 +7,7 @@
 const squash = (id: string): string => id.toLowerCase().replace(/[.\-_:\s]/g, '');
 
 /** The listed model that stands for `wanted`, or undefined when the Gateway lists nothing like it. In order: the same name; the same name
- * apart from punctuation; the longest listed name that `wanted` begins with when only a minor version is left over (a family that dropped
+ * apart from punctuation; the same name under one maker's prefix (`openai/whisper-1`); the longest listed name that `wanted` begins with when only a minor version is left over (a family that dropped
  * its minor number: `claude-sonnet-5-5` -> `claude-sonnet-5`). A different generation is never a match (`claude-haiku-5-5` is not
  * `claude-haiku-4-5`), and neither is a variant (`-batch`, `:thinking`). */
 export function listedModel(wanted: string, listed: readonly string[]): string | undefined {
@@ -15,6 +15,9 @@ export function listedModel(wanted: string, listed: readonly string[]): string |
   const target = squash(wanted);
   const same = listed.find(id => squash(id) === target);
   if (same) return same;
+  // The same model under its maker's prefix (`whisper-1` listed as `openai/whisper-1`), when only one maker lists it.
+  const prefixed = listed.filter(id => id.includes('/') && squash(id.slice(id.lastIndexOf('/') + 1)) === target);
+  if (prefixed.length === 1) return prefixed[0];
   let best: { id: string; length: number } | undefined;
   for (const id of listed) {
     const stem = squash(id);
