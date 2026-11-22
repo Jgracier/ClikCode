@@ -1,6 +1,7 @@
 /** Whether the installed `clikdeploy` can read `tools run --args-json -` from stdin (1.0.35 and later; 1.0.34
  * tries to parse "-" as JSON). Asked once per installed binary: the answer is cached against the binary's path and
- * modification time, so installing a newer CLI is noticed without restarting. */
+ * modification time, so installing a newer CLI is noticed without restarting. Only a definite answer is cached: a check that
+ * timed out or failed says nothing about the CLI, and the caller must not treat it as "old" (that would put a key on argv). */
 import fs from 'node:fs';
 import path from 'node:path';
 import { runCli } from './run-cli.js';
@@ -30,18 +31,26 @@ function resolveOnPath(command: string): string | undefined {
   return undefined;
 }
 
-const cache = new Map<string, boolean>();
-export const forgetCliStdinSupport = (): void => cache.clear();
+/** `yes`: it reads `-` from stdin. `old`: it answered with a version too old for that. `unknown`: it could not be asked
+ * (timed out, failed, or printed no version); `missing`: not on PATH. Neither is cached, so a slow first start is asked again. */
+export type CliStdinSupport = 'yes' | 'old' | 'missing' | 'unknown';
 
-export async function cliReadsArgsJsonFromStdin(command: string, signal?: AbortSignal): Promise<boolean> {
+const cache = new Map<string, 'yes' | 'old'>();
+export const forgetCliStdinSupport = (): void => cache.clear();
+/** A cold `clikdeploy` start (node, a large bundle, a busy disk) can take well over 15 s. */
+const VERSION_CHECK_TIMEOUT_MS = 45_000;
+
+export async function cliStdinSupport(command: string, signal?: AbortSignal, options: { timeoutMs?: number } = {}): Promise<CliStdinSupport> {
   const found = resolveOnPath(command);
-  if (!found) return false;
+  if (!found) return 'missing';
   let key = found;
   try { key = `${found}:${fs.statSync(found).mtimeMs}`; } catch { /* fail-open-ok: use the path alone */ }
   const known = cache.get(key);
   if (known !== undefined) return known;
-  const result = await runCli(command, ['--version'], { signal, timeoutMs: 15_000, maxChars: 2_000 });
-  const supported = !result.missing && result.code === 0 && versionAtLeast(result.text);
-  cache.set(key, supported);
-  return supported;
+  const result = await runCli(command, ['--version'], { signal, timeoutMs: options.timeoutMs ?? VERSION_CHECK_TIMEOUT_MS, maxChars: 2_000 });
+  if (result.missing) return 'missing';
+  if (result.code !== 0 || !parseCliVersion(result.text)) return 'unknown';
+  const answer = versionAtLeast(result.text) ? 'yes' : 'old';
+  cache.set(key, answer);
+  return answer;
 }

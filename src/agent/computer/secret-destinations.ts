@@ -5,15 +5,15 @@
  * with: { key: "SALAD_API_KEY" } }]`). The key is put in by the worker at the
  * moment of capture, so it is in nothing the agent writes or reads.
  *
- * Nothing is built in. A handful of destinations ship as plain data below, and the
- * user adds their own with one line (`clikcode computer destination add`), kept in
- * `computer/destinations.json`. The agent cannot add or change one, so what can ever
+ * A handful of defaults ship as plain data below (ClikDeploy and GitHub CLIs, the
+ * ClikCode account store); no other code path runs a command. The user adds their own
+ * with one line (`clikcode computer destination add`), kept in `computer/destinations.json`. The agent cannot add or change one, so what can ever
  * run is decided by the user, not by a page the agent happens to be reading. */
 import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runCli } from './run-cli.js';
-import { cliReadsArgsJsonFromStdin } from './cli-stdin-support.js';
+import { cliStdinSupport, type CliStdinSupport } from './cli-stdin-support.js';
 import { namedSecretNames, readNamedSecret } from './credential-vault.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import { sleep } from '../../runtime/sleep.js';
@@ -418,6 +418,15 @@ function describeEmptyReply(result: { code: number | null; text: string }): stri
   return `ClikDeploy's connect call returned an empty or non-JSON reply (${status ? `HTTP ${status}` : 'HTTP status not shown by the command'}, exit ${result.code ?? 'none'}${text ? `, it said: "${text.slice(0, 160)}"` : ', it printed nothing'})`;
 }
 
+/** Why a key was not sent: the CLI could not take it on stdin, and the command line is no place for it. */
+function noStdinMessage(program: string, support: Exclude<CliStdinSupport, 'yes'>): string {
+  if (support === 'missing') return `The ${program} command is not installed on this computer.`;
+  const why = support === 'old'
+    ? `the installed ${program} is older than 1.0.35 and cannot read --args-json from stdin`
+    : `\`${program} --version\` did not answer (timed out, failed, or printed no version), so it is not known to read --args-json from stdin`;
+  return `${why}; the key is never put on the command line, where other processes can read it. Update ${program} (or retry once it answers), then send it again with send_secret. The key is still saved.`;
+}
+
 export async function sendToDestinations(stateDir: string, list: readonly Destination[], value: string, signal?: AbortSignal, options: { retryDelayMs?: number } = {}): Promise<Delivery[]> {
   const all = await loadDestinations(stateDir);
   const out: Delivery[] = [];
@@ -455,7 +464,7 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
     }
     // The connect request is one JSON object, wherever the template keeps it: on stdin (`--args-json -`) or inline in the flag.
     // The connection values join it as `baseUrlVariables`, the name the connect tool reads; it is then sent on stdin when the
-    // installed CLI reads it there (the key stays out of the command line) and inline only for a CLI too old for that.
+    // installed CLI reads it there; a CLI that cannot is refused, since the key never goes on the command line.
     const dash = args.indexOf('--args-json');
     if (template.verify === 'connection' && dash >= 0 && args[dash + 1] !== undefined) {
       const inStdin = args[dash + 1] === '-';
@@ -464,13 +473,19 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
       try { body = JSON.parse(text) as Record<string, unknown>; } catch { out.push({ label, ok: false, message: `NOT connected: the destination "${d.to}" has no JSON in its --args-json (saved destinations: \`clikcode computer destination list\`).` }); continue; }
       if (extra.values && Object.keys(extra.values).length) body = { ...body, baseUrlVariables: extra.values };
       const json = JSON.stringify(body);
-      if (await cliReadsArgsJsonFromStdin(program!, signal)) { args[dash + 1] = '-'; stdin = json; } else { args[dash + 1] = json; stdin = undefined; }
+      const support = await cliStdinSupport(program!, signal);
+      if (support !== 'yes') { out.push({ label, ok: false, message: `NOT connected: ${noStdinMessage(program!, support)}` }); continue; }
+      args[dash + 1] = '-'; stdin = json;
     } else if (stdin !== undefined && extra.values && Object.keys(extra.values).length) {
       out.push({ label, ok: false, message: `NOT connected: the destination "${d.to}" has no --args-json to carry the values.` }); continue;
     }
     if (stdin === '') stdin = undefined;
-    // Any other template: \`--args-json -\` is read from stdin on clikdeploy 1.0.35 and later; for an older CLI the JSON goes inline.
-    if (stdin !== undefined && dash >= 0 && args[dash + 1] === '-' && !(await cliReadsArgsJsonFromStdin(program!, signal))) { args[dash + 1] = stdin; stdin = undefined; }
+    // Any other template: \`--args-json -\` is read from stdin on clikdeploy 1.0.35 and later. The JSON carries the key, so it
+    // never goes inline on argv (every process on the computer can read that): an older or unanswering CLI is a failed delivery.
+    if (stdin !== undefined && dash >= 0 && args[dash + 1] === '-') {
+      const support = await cliStdinSupport(program!, signal);
+      if (support !== 'yes') { out.push({ label, ok: false, message: `NOT delivered: ${noStdinMessage(program!, support)}` }); continue; }
+    }
     let result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
     // An empty or non-JSON reply (a 502 while the proxy restarts) is retried once; the CLI cannot say more than its own words.
     if (!result.missing && template.verify === 'connection' && emptyReply(result)) {

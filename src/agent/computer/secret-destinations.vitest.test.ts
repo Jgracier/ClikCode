@@ -13,9 +13,13 @@ let bin = '';
 const oldPath = process.env.PATH;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'clikcode-dest-')); bin = join(dir, 'bin'); await mkdir(bin); process.env.PATH = `${bin}:${oldPath}`; registerSecret(VALUE); });
 afterEach(async () => { forgetCliStdinSupport(); process.env.PATH = oldPath; forgetSecrets(); lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); });
-/** The installed clikdeploy CLI takes the JSON inline in --args-json (it cannot read `-`): the fake records that argument where stdin used to be read. */
-const recordArgsJson = (): string => `p=0; for a in "$@"; do if [ "$p" = 1 ]; then printf '%s' "$a" > "${dir}/stdin"; p=0; fi; [ "$a" = --args-json ] && p=1; done`;
-const fake = async (name: string, script: string): Promise<void> => { await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`); await chmod(join(bin, name), 0o755); };
+/** The fake records what arrived on stdin, where the --args-json JSON (and so the key) is sent. */
+const recordArgsJson = (): string => `cat > "${dir}/stdin"`;
+/** A fake clikdeploy answers `--version` as a current CLI (one that reads --args-json from stdin) unless its script answers it. */
+const fake = async (name: string, script: string): Promise<void> => {
+  const version = name === 'clikdeploy' && !script.includes('--version') ? 'if [ "$1" = --version ]; then echo 1.0.36; exit 0; fi\n' : '';
+  await writeFile(join(bin, name), `#!/bin/sh\n${version}${script}\n`); await chmod(join(bin, name), 0o755);
+};
 
 it('ships a few destinations as plain data, each naming the slots the agent fills', async () => {
   const all = await loadDestinations(dir);
@@ -58,7 +62,7 @@ it('fills the key in JSON-escaped, and the slots from the agent, then relays the
   expect(result!.message).not.toContain(VALUE);
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
   expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'admin_compute_save_credentials']);
-  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
   expect(argv.join(' ')).not.toContain(json);
   const sent = JSON.parse(await readFile(join(dir, 'stdin'), 'utf8')) as { provider: string; credentials: Record<string, string> };
   expect(sent).toEqual({ provider: 'GCP', credentials: { serviceAccountJson: json } });
@@ -83,7 +87,7 @@ it('registers a connector\'s OAuth app: the client id from the agent, the secret
   expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'admin_platform_save_connector_credentials']);
   expect(argv).toContain('--confirm');
   expect(argv.some(arg => /password|totp/i.test(arg))).toBe(false);
-  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
   expect(argv.join(' ')).not.toContain(secret);
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'googlesheets', clientId: '1234-abc.apps.googleusercontent.com', clientSecret: secret });
   // A slot that is not a plain id is refused before anything runs.
@@ -99,14 +103,14 @@ it('a client id the agent never saw: client_id may name a saved secret, read fro
   const [result] = await sendToDestinations(dir, plan, 'GOCSPX-clientsecret0123456789abcd');
   expect(result).toMatchObject({ ok: true, label: 'clikdeploy-connector (googlesheets, secret:google/connectors-client-id)' });
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'googlesheets', clientId: '1234567890-abcdefghij.apps.googleusercontent.com', clientSecret: 'GOCSPX-clientsecret0123456789abcd' });
   // A name that is not saved is refused before anything runs, and a slot that is not a vault slot never reads one.
   expect(await destinationProblem(dir, [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: 'secret:no/such' } }])).toContain('not in the Secrets Manager');
   // Any other slot takes "secret:..." as the plain text it is: the vault is never read for it.
   await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'secret:google/connectors-client-id' } }], 'a-value');
   const other = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(other[other.indexOf('--args-json') + 1]).not.toBe('-');
+  expect(other[other.indexOf('--args-json') + 1]).toBe('-');
   const sent = JSON.parse(await readFile(join(dir, 'stdin'), 'utf8')) as { key: string; value: string };
   expect(sent).toEqual({ key: 'secret:google/connectors-client-id', value: 'a-value' });
   expect(JSON.stringify(sent)).not.toContain('apps.googleusercontent.com');
@@ -116,7 +120,7 @@ it('reads a key containing {{...}} text as plain text, not as a slot', async () 
   await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{}'`);
   await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'MY_KEY' } }], 'abc{{key}}def');
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ key: 'MY_KEY', value: 'abc{{key}}def' });
 });
 
@@ -179,7 +183,7 @@ it('connects a vendor key as a ClikDeploy connection through the product\'s own 
   expect(result).toMatchObject({ ok: true, label: 'clikdeploy-connection (ipinfo)' });
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
   expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'connect_connector']);
-  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
   expect(argv.join(' ')).not.toContain(secret);
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'ipinfo', apiKey: secret });
 });
@@ -192,12 +196,12 @@ it('a username the vendor hides from the browser (Mux\'s token id): the basic-au
   const [result] = await sendToDestinations(dir, plan, 'the-token-secret-0123456789');
   expect(result).toMatchObject({ ok: true });
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'mux', username: '3f2a9c1e-token-id-uuid', password: 'the-token-secret-0123456789' });
   // A plain username still goes through as written, and a name that is not saved is refused before anything runs.
   await sendToDestinations(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'upstash', username: 'me@example.com' } }], 'k-0123456789abcdef');
   const plain = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(plain[plain.indexOf('--args-json') + 1]).not.toBe('-');
+  expect(plain[plain.indexOf('--args-json') + 1]).toBe('-');
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toMatchObject({ username: 'me@example.com' });
   expect(await destinationProblem(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'mux', username: 'secret:no/such' } }])).toContain('not in the Secrets Manager');
 });
@@ -359,10 +363,26 @@ it('a CLI that reports 1.0.35 or later gets the key on stdin and never on argv',
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ key: 'SALAD_API_KEY', value: VALUE });
 });
 
-it('an old CLI (1.0.34) still gets the JSON inline, since it cannot read "-"', async () => {
-  await fake('clikdeploy', `if [ "$1" = --version ]; then echo 1.0.34; exit 0; fi; printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{"status":"success","message":"saved"}'`);
+it('an old CLI (1.0.34) is refused: the JSON carrying the key never goes inline on the command line', async () => {
+  await fake('clikdeploy', `if [ "$1" = --version ]; then echo 1.0.34; exit 0; fi; printf '%s\\n' "$@" > "${dir}/argv"; echo '{"status":"success","message":"saved"}'`);
   const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }], VALUE);
-  expect(result).toMatchObject({ ok: true });
+  expect(result).toMatchObject({ ok: false });
+  expect(result!.message).toContain('older than 1.0.35');
+  await expect(readFile(join(dir, 'argv'), 'utf8')).rejects.toThrow();
+});
+
+it('a version check that fails or times out is not cached as "old", and never sends the key on argv', async () => {
+  // The first --version fails (a cold start that was killed); the second answers. Nothing is ever run with the key inline.
+  await fake('clikdeploy', `if [ "$1" = --version ]; then if [ -f "${dir}/warm" ]; then echo 1.0.36; exit 0; fi; touch "${dir}/warm"; exit 1; fi; printf '%s\\n' "$@" >> "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","message":"saved"}'`);
+  const plan = [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }];
+  const [first] = await sendToDestinations(dir, plan, VALUE);
+  expect(first).toMatchObject({ ok: false });
+  expect(first!.message).toContain('did not answer');
+  await expect(readFile(join(dir, 'argv'), 'utf8')).rejects.toThrow();
+  const [second] = await sendToDestinations(dir, plan, VALUE);
+  expect(second).toMatchObject({ ok: true });
+  const argv = await readFile(join(dir, 'argv'), 'utf8');
+  expect(argv).not.toContain(VALUE);
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ key: 'SALAD_API_KEY', value: VALUE });
 });
 
