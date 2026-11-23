@@ -1,0 +1,181 @@
+/** Automatic recall: before a request goes to the model, the messages of this conversation that the
+ * model's context no longer holds (turn/compaction.ts recallBoundary) are searched with the request,
+ * and the few that clearly match it ride along AFTER the user's words -- what the vendor has cached of
+ * the thread is untouched. Most requests attach nothing.
+ *
+ * A match must stand out, or nothing is attached:
+ * - by its words: an identifier, path or quoted phrase of the request that only a few messages before
+ *   the boundary have, and none the context still holds;
+ * - by meaning: the conversation search's own gate (vectors.ts semanticMatches: a floor, and a clear
+ *   lift over the conversation's median message).
+ *
+ * Never fails or holds up a turn: the whole search runs within RECALL_BUDGET_MS, waits for the embedder
+ * only for what is left of it, and is lexical alone (or nothing) without one. */
+import { conversationGroups, findConversation } from './conversations.js';
+import { conversationView, indexOfWord, type ConversationView, type MessageDoc } from './corpus.js';
+import { isContinuation } from './hindsight.js';
+import { queryVector } from './hybrid.js';
+import { semanticMatches } from './vectors.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
+import { wrapRecallNote } from '../turn/resource-note-text.js';
+
+export const RECALL_BUDGET_MS = 1200;
+/** At most this many messages, in at most this many characters (about 1.5k tokens). */
+export const RECALL_MAX_MESSAGES = 3;
+export const RECALL_MAX_CHARS = 6000;
+/** A request shorter than this says too little to search with. */
+const MIN_QUERY_CHARS = 12;
+/** A word of the request found in more messages than this is no evidence of one place. */
+const MAX_WORD_HITS = 3;
+/** The embedder is waited for at most this long, within the budget. */
+const MAX_EMBED_WAIT_MS = 600;
+
+export interface RecallHit { position: number; score: number; by: 'words' | 'meaning'; at: number; length?: number }
+
+export interface RecallOutcome {
+  /** The note to append, or undefined when nothing stood out. */
+  note?: string;
+  hits: RecallHit[];
+  /** Why nothing was searched. */
+  skipped?: 'no-boundary' | 'short' | 'continuation' | 'no-conversation' | 'timeout';
+}
+
+/** Identifiers, paths, numbers with letters, and quoted phrases of a request: what can only match a
+ * place in the conversation by being the same thing. Lower-cased. */
+export function distinctiveWords(query: string): string[] {
+  const words = new Set<string>();
+  for (const match of query.matchAll(/["`']([^"`'\n]{4,80})["`']/g)) words.add(match[1]!.trim().toLowerCase());
+  for (const match of query.matchAll(/[A-Za-z0-9_][A-Za-z0-9_./:#@-]*[A-Za-z0-9_]/g)) {
+    const word = match[0];
+    if (word.length < 4) continue;
+    const marked = /[0-9_./:#@-]/.test(word) && /[A-Za-z]/.test(word) || /[a-z][A-Z]/.test(word) || /^[0-9a-f]{7,40}$/i.test(word);
+    if (marked) words.add(word.toLowerCase());
+  }
+  return [...words];
+}
+
+/** Matches by words: each distinctive word of the request found in at most MAX_WORD_HITS messages
+ * before the boundary and in none after it. A message scores the words it has. */
+export function lexicalHits(view: ConversationView, outside: readonly number[], inside: readonly number[], words: readonly string[]): RecallHit[] {
+  const scores = new Map<number, RecallHit>();
+  for (const word of words) {
+    if (inside.some((position) => indexOfWord(view.entries[position]!.message.text, word) >= 0)) continue;
+    const found: Array<{ position: number; at: number }> = [];
+    for (const position of outside) {
+      const at = indexOfWord(view.entries[position]!.message.text, word);
+      if (at >= 0) found.push({ position, at });
+      if (found.length > MAX_WORD_HITS) break;
+    }
+    if (!found.length || found.length > MAX_WORD_HITS) continue;
+    for (const { position, at } of found) {
+      const prior = scores.get(position);
+      if (prior) prior.score += 1;
+      else scores.set(position, { position, score: 1, by: 'words', at });
+    }
+  }
+  return [...scores.values()].sort((left, right) => right.score - left.score || right.position - left.position);
+}
+
+function excerpt(message: MessageDoc, at: number, length: number | undefined, room: number): string {
+  const text = message.text;
+  const span = Math.min(room, Math.max(length ?? 0, 400));
+  const start = Math.max(0, Math.min(at - Math.floor((span - (length ?? 0)) / 2), text.length - span));
+  const body = text.slice(start, start + span).replace(/\s+/g, ' ').trim();
+  return `${start > 0 ? '…' : ''}${body}${start + span < text.length ? '…' : ''}`;
+}
+
+/** The note for `hits`: each message's number, who said it, and the part that matched. */
+export function recallNote(view: ConversationView, hits: readonly RecallHit[], hasHindsight: boolean): string {
+  const room = Math.floor(RECALL_MAX_CHARS / Math.max(1, hits.length));
+  const lines = [...hits].sort((left, right) => left.position - right.position).map((hit) => {
+    const message = view.entries[hit.position]!.message;
+    const where = hit.at >= message.contentLength ? `${message.role} (tool call)` : message.role;
+    return `#${hit.position} ${where}: ${excerpt(message, hit.at, hit.length, room)}`;
+  });
+  const reach = hasHindsight ? ' hindsight(at=<number>) reads one whole.' : '';
+  return wrapRecallNote([
+    `From earlier in this conversation, before what your context now holds; matched to this request by ClikCode, not written by the user.${reach}`,
+    ...lines,
+  ].join('\n'));
+}
+
+async function search(sessionId: string, query: string, boundary: number, hasHindsight: boolean, deadline: number): Promise<RecallOutcome> {
+  const found = findConversation(await conversationGroups(), sessionId);
+  if (!found) return { hits: [], skipped: 'no-conversation' };
+  const view = await conversationView(found.group);
+  const own = view.positions.get(found.branch?.id ?? sessionId) ?? view.positions.get(sessionId) ?? [];
+  const cut = Math.min(boundary, own.length);
+  const outside = own.slice(0, cut);
+  const inside = own.slice(cut);
+  if (!outside.length) return { hits: [], skipped: 'no-boundary' };
+  const hits = lexicalHits(view, outside, inside, distinctiveWords(query)).slice(0, RECALL_MAX_MESSAGES);
+  const wait = Math.min(MAX_EMBED_WAIT_MS, deadline - Date.now());
+  if (hits.length < RECALL_MAX_MESSAGES && wait > 0) {
+    const vector = await queryVector(query, wait);
+    if (vector) {
+      const allowed = new Set(outside);
+      const taken = new Set(hits.map((hit) => hit.position));
+      for (const match of await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: 20 })) {
+        if (hits.length >= RECALL_MAX_MESSAGES) break;
+        if (!allowed.has(match.position) || taken.has(match.position)) continue;
+        hits.push({ position: match.position, score: Math.round(match.score * 1000) / 1000, by: 'meaning', at: match.offset, length: match.length });
+      }
+    }
+  }
+  return hits.length ? { hits, note: recallNote(view, hits, hasHindsight) } : { hits };
+}
+
+/** `turnText` with what recall found appended, or as it is. `boundary`: how many of the chat's first
+ * messages the context holds only as a summary or not at all (recallBoundary). Never throws. */
+export async function withRecall(
+  input: { sessionId: string; query: string; boundary: number; hasHindsight: boolean; budgetMs?: number }, turnText: string,
+): Promise<string> {
+  const outcome = await recall(input);
+  return outcome.note ? `${turnText}\n\n${outcome.note}` : turnText;
+}
+
+/** What recall finds for this request, within the budget. Never throws. */
+export async function recall(input: { sessionId: string; query: string; boundary: number; hasHindsight: boolean; budgetMs?: number }): Promise<RecallOutcome> {
+  const started = Date.now();
+  const query = input.query.trim();
+  let outcome: RecallOutcome;
+  if (input.boundary <= 0) outcome = { hits: [], skipped: 'no-boundary' };
+  else if (query.length < MIN_QUERY_CHARS) outcome = { hits: [], skipped: 'short' };
+  else if (isContinuation(query)) outcome = { hits: [], skipped: 'continuation' };
+  else {
+    const budget = input.budgetMs ?? RECALL_BUDGET_MS;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<RecallOutcome>((resolve) => { timer = setTimeout(() => resolve({ hits: [], skipped: 'timeout' }), budget); });
+    const work = search(input.sessionId, query, input.boundary, input.hasHindsight, started + budget)
+      .catch((error: unknown): RecallOutcome => {
+        lifecycle('turn.recall.error', { message: error instanceof Error ? error.message : String(error) });
+        return { hits: [] };
+      });
+    outcome = await Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+  }
+  if (outcome.skipped !== 'no-boundary') {
+    lifecycle('turn.recall', {
+      boundary: input.boundary, ms: Date.now() - started, attached: outcome.hits.length, chars: outcome.note?.length ?? 0,
+      ...(outcome.skipped ? { skipped: outcome.skipped } : {}),
+      ...(outcome.hits.length ? { hits: outcome.hits.map((hit) => `${hit.position}:${hit.by}:${hit.score}`).join(',') } : {}),
+    });
+  }
+  return outcome;
+}
+
+/** For ClikCode's own agent, which keeps every turn in its memory and reads the newest part that fits
+ * its budget (agent/context-view.ts stableTail): how many of the transcript's first messages are
+ * outside that part. The memory's size against the transcript's scales each message. 0 when it fits. */
+export function agentRecallBoundary(messages: ReadonlyArray<{ content?: string }>, memoryBytes: number, budgetTokens: number | undefined, bytesPerToken: number): number {
+  if (!budgetTokens || budgetTokens <= 0 || memoryBytes <= budgetTokens * bytesPerToken) return 0;
+  const sizes = messages.map((message) => Buffer.byteLength(message.content ?? '', 'utf8') + 16);
+  const transcriptBytes = sizes.reduce((sum, size) => sum + size, 0);
+  if (!transcriptBytes) return 0;
+  const scale = memoryBytes / transcriptBytes;
+  let used = 0;
+  for (let index = sizes.length - 1; index >= 0; index -= 1) {
+    used += sizes[index]! * scale;
+    if (used > budgetTokens * bytesPerToken) return index + 1;
+  }
+  return 0;
+}

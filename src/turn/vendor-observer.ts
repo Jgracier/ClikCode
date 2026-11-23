@@ -1,6 +1,7 @@
 /** What one vendor turn's transports report, folded into the checkpoint and the
  * screen: the shared observer, usage and pending work. */
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
+import { COMPACTED } from './compaction.js';
 import { markTurn } from '../runtime/turn-latency.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -108,6 +109,14 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     onPhase: (phase: string) => { if (!compacting) prompter?.phase(phase); },
     onNotice: (message: string) => {
       diagnostic('vendor.notice', message);
+      // The vendor compacted its thread by itself (its own threshold, turn/compaction.ts), mid-turn: the
+      // conversation keeps it as it keeps one ClikCode ran -- the next turn is told where the whole
+      // conversation is, and recall (search/recall.ts) searches what came before it.
+      if (message === COMPACTED && !compacting) {
+        session.compaction = { at: new Date().toISOString(), through: session.messages?.length ?? 0, noteRecord: true };
+        lifecycle('turn.vendor-compacted', { harness: harness.command, through: session.compaction.through, context: session.lastUsage?.contextUsed });
+        checkpoint.touch();
+      }
       if (!compacting) prompter?.activity(message);
     },
     onPlan: (entries: readonly HarnessPlanEntry[]) => {

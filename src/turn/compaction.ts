@@ -198,6 +198,13 @@ interface CompactableSession {
   compaction?: CompactionRecord;
 }
 
+/** How many of the conversation's first messages the model's context holds only as a summary, or
+ * not at all: its latest compaction, or a thread started from a record fitted to the threshold.
+ * What automatic recall searches (search/recall.ts). 0: the context holds every message. */
+export function recallBoundary(session: { messages?: readonly unknown[]; compaction?: CompactionRecord; recallFrom?: number }): number {
+  return Math.min(session.messages?.length ?? 0, Math.max(session.compaction?.through ?? 0, session.recallFrom ?? 0));
+}
+
 /** Turns the person ran since the latest compaction. */
 export function turnsSinceCompaction(session: CompactableSession): number {
   const record = session.compaction;

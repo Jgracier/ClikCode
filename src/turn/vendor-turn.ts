@@ -25,6 +25,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { createVendorTurnContext, type VendorTurnContext } from './vendor-turn-context.js';
 import { withMoveNote } from './resource-notes.js';
 import { withCompactionNote } from './compaction-run.js';
+import { recallBoundary } from './compaction.js';
 import { noteAccountSwitch } from './account-switch-note.js';
 
 /** The thread under the account this turn runs on (session/carry.ts). */
@@ -177,7 +178,11 @@ export async function sendVendorTurn(input: AccountTurnInput): Promise<'switch' 
     // the turn sends -- the taken-up conversation included (session/move.ts).
     ctx.turnText = withMoveNote(ctx.session, ctx.turnText);
     // The first request after a compaction names where the whole conversation is kept.
-    if (!ctx.run.compaction) ctx.turnText = await withCompactionNote(ctx.session, ctx.turnText, reachesBuiltInMcp(ctx.harness, sessionTurnTransport(ctx.harness, ctx.session)));
+    const hasHindsight = reachesBuiltInMcp(ctx.harness, sessionTurnTransport(ctx.harness, ctx.session));
+    if (!ctx.run.compaction) ctx.turnText = await withCompactionNote(ctx.session, ctx.turnText, hasHindsight);
+    // What the context no longer holds of the conversation and the request clearly points at, after the
+    // request so the thread's cached prefix stays (search/recall.ts). Time-boxed; most turns add nothing.
+    if (!ctx.run.compaction) ctx.turnText = await (await import('../search/recall.js')).withRecall({ sessionId: ctx.session.id, query: ctx.text, boundary: recallBoundary(ctx.session), hasHindsight }, ctx.turnText);
     // Moved off a spent account before the first attempt: the agent is told which, and how much the new one has.
     noteAccountSwitch(ctx);
     const observer = createVendorObserver(ctx);

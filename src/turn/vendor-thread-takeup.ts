@@ -82,6 +82,9 @@ export async function takeUp(
   // A conversation that did not arrive whole was compacted, and the chat says so (a compaction
   // ClikCode ran itself already did).
   const carried = carriedLine(record.turns.length, start);
+  // What the fresh thread holds only fitted, or not at all, is what recall searches (search/recall.ts).
+  if (carried) session.recallFrom = session.messages?.length ?? 0;
+  else delete session.recallFrom;
   if (carried && options.reportCarry !== false && !rewrite) ctx.prompter?.activity(carried);
   if (rewrite) delete session.compaction!.rewrite;
   if (start.kind === 'native') {

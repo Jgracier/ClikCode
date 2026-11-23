@@ -212,6 +212,9 @@ export interface HarnessSession {
   lastUsage?: TurnUsage & { at: string };
   /** The conversation's latest compaction (turn/compaction.ts). */
   compaction?: import('../turn/compaction.js').CompactionRecord;
+  /** The vendor thread was started from a record that did not carry the conversation whole: the
+   * messages before this one reached it fitted or not at all (turn/compaction.ts recallBoundary). */
+  recallFrom?: number;
   /** What the harness said about itself on its own stream, rather than what it
    * was asked for. `model` is the model it actually ran -- a session set to
    * `automatic`, or one whose vendor silently substituted, showed the request

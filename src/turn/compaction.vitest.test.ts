@@ -236,3 +236,24 @@ describe('after a native compaction', () => {
     }
   });
 });
+
+describe('a vendor that compacts by itself, mid-turn', () => {
+  it('is kept as a compaction: the next turn is told where the whole conversation is, and recall starts there', async () => {
+    const { createVendorObserver } = await import('./vendor-observer.js');
+    const { recallBoundary } = await import('./compaction.js');
+    const session = { id: 'v1', messages: turns(3), workspace: '/w' } as never as import('../session/model.js').HarnessSession;
+    let touched = 0;
+    const ctx = {
+      session, harness: { command: 'claude' }, prompter: undefined, run: {}, state: {}, account: { id: 'a' }, model: null, startedAt: 0,
+      checkpoint: { touch: () => { touched += 1; }, persistNow: async () => undefined, response: () => undefined, activity: () => undefined },
+    } as never;
+    createVendorObserver(ctx).sharedObserver.onNotice('Compacted');
+    expect(session.compaction).toMatchObject({ through: 6, noteRecord: true });
+    expect(recallBoundary(session)).toBe(6);
+    expect(touched).toBe(1);
+    // ClikCode's own compaction turn records itself (compaction-run.ts recordCompaction).
+    const own = { id: 'v2', messages: turns(1) } as never as import('../session/model.js').HarnessSession;
+    createVendorObserver({ ...(ctx as object), session: own, run: { compaction: true } } as never).sharedObserver.onNotice('Compacted');
+    expect(own.compaction).toBeUndefined();
+  });
+});

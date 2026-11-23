@@ -24,6 +24,7 @@ import { agentTurnFailureKind } from './failover.js';
 import { usageExhaustedMessage } from './usage-exhausted.js';
 import { signInGatewayForTurn } from '../gateway/sign-in-for-turn.js';
 import { seedAgentConversation } from './agent-history.js';
+import { BYTES_PER_TOKEN } from './transfer.js';
 import { ConversationStore } from '../agent/conversation.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
@@ -148,6 +149,7 @@ async function runAgentTurnOn(input: {
   const memory = new ConversationStore(stateDirectory(), session.id);
   let held: Awaited<ReturnType<typeof seedAgentConversation>> = { total: 0, seeded: 0 };
   let memoryBytes = 0;
+  let agentText = turnText;
   let seededOk = false;
   // Steers handed to the agent's queue: any the model never saw go back to the queue (onSteersUndelivered).
   const accepted: Array<import('./live-input.js').LiveTurnSubmission> = [];
@@ -164,6 +166,15 @@ async function runAgentTurnOn(input: {
     session.agentThreadTurns = held.total;
     memoryBytes = await memory.size();
     seededOk = true;
+    // What the agent's view of its memory has left behind and the request clearly points at, after the
+    // request (search/recall.ts). Time-boxed; most turns add nothing.
+    const hints = modelClient.contextHints;
+    const readable = hints?.readableTokens ?? (hints?.contextWindow ? Math.floor(hints.contextWindow * 0.75) : undefined);
+    const { agentRecallBoundary, withRecall } = await import('../search/recall.js');
+    agentText = await withRecall({
+      sessionId: session.id, query: text, hasHindsight: true,
+      boundary: agentRecallBoundary(session.messages ?? [], memoryBytes, readable, BYTES_PER_TOKEN),
+    }, turnText);
     // The Gateway refused this machine's sign-in before anything ran: sign in
     // (sign-in-for-turn.ts) and ask again, once, as a vendor turn does.
     // Not the shared failover step (account-routing.ts accountAfterFailure), on purpose: that step
@@ -178,7 +189,7 @@ async function runAgentTurnOn(input: {
     let harnessTurn: Awaited<ReturnType<typeof runAgentSessionTurn>>;
     for (;;) {
       harnessTurn = await runAgentSessionTurn({
-        session, prompt: turnText, modelClient, modelClientForStep,
+        session, prompt: agentText, modelClient, modelClientForStep,
         currentPermissionMode: async () => liveSettings.permissionMode,
         currentSandbox: () => sessionSandboxMode(liveSettings.sandbox),
         currentPlanMode: () => liveSettings.planMode === true,
