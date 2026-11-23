@@ -20,6 +20,8 @@ import { ago, hitSnippets, mentionCount, parseAnchor, renderFullMessage, renderM
 import { formatElapsed } from '../harness/protocol/format.js';
 import { oneLine, presentTopics, rangeLabel, topicsBefore, type HindsightMessage, type PresentedTopic } from './hindsight.js';
 import { maskSecrets } from './secrets.js';
+import { backfill, catchUp, queryVector } from './hybrid.js';
+import { semanticMatches } from './vectors.js';
 
 /** How long a turn has run, or `unknown` for a start that does not parse. */
 const workingFor = (ms: number): string => (Number.isFinite(ms) ? formatElapsed(ms) : 'unknown');
@@ -71,7 +73,7 @@ const IN_SNIPPETS = 20;
 
 const searchTool: ConversationTool = {
   name: 'search_conversations',
-  description: 'Search the user\'s other ClikCode conversations (every provider, tool calls included) by words or a phrase. Returns the best matches: id, title, provider, last active, mention count, and up to 3 snippets with anchors "<id>:<message>" (e.g. "6e647d75:60") to pass to read_conversation as `at`. Title matches rank first, then the exact phrase, then all words; recent ranks higher. With `in`, lists up to 20 anchors inside that one conversation.',
+  description: 'Search the user\'s other ClikCode conversations (every provider, tool calls included) by words or a phrase, and by meaning. Returns the best matches: id, title, provider, last active, mention count, and up to 3 snippets with anchors "<id>:<message>" (e.g. "6e647d75:60") to pass to read_conversation as `at`. Title matches rank first, then the exact phrase, then all words and messages related in meaning (marked "related"); recent ranks higher. With `in`, lists up to 20 anchors inside that one conversation.',
   inputSchema: {
     type: 'object', additionalProperties: false, required: ['query'],
     properties: {
@@ -96,7 +98,9 @@ const searchTool: ConversationTool = {
       scope = { conversationId: found.group.id };
     } else scope = await excluded(context, args.includeCurrent);
     const limit = integer(args.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
-    const result = await searchConversations(query, { ...scope, ...(sinceMs !== undefined ? { sinceMs } : {}), now });
+    const semantic = await queryVector(query);
+    const result = await searchConversations(query, { ...scope, ...(sinceMs !== undefined ? { sinceMs } : {}), now, ...(semantic ? { semantic } : {}) });
+    void backfill();
     if (!result) return { text: 'search_conversations needs a query.', isError: true };
     const phrase = maskSecrets(result.query.text);
     if (!result.hits.length) return { text: within ? `"${phrase}" does not come up in ${within}.` : `No conversation mentions "${phrase}" (searched ${result.searched}).` };
@@ -243,6 +247,7 @@ const activeTool: ConversationTool = {
 
 const LIST_CAP = 12;
 const QUERY_CAP = 15;
+const RELATED_CAP = 8;
 const READ_CAP = 40;
 
 function optionalInteger(value: unknown): number | undefined {
@@ -319,13 +324,13 @@ async function hindsightMessages(session: HarnessSession, group: ConversationGro
 
 const hindsightTool: ConversationTool = {
   name: 'hindsight',
-  description: 'This conversation only, cut into topics from the stored transcript. No arguments opens the topic in progress and lists earlier ones, newest first, with message numbers. back=1 opens the topic before the one in progress: its requests, what finished, what was left unfinished, the user\'s direction-changing lines quoted with their message numbers, tool calls, and the files the turn log still has for those requests. before ("12h", "2d", or a date) keeps topics from before then. query finds a phrase in this chat. from and to, or at, read the stored messages and their tool calls; a span that was compacted is the summary that replaced it. One of back, query, or from/to. A record of this chat, not of the current tree.',
+  description: 'This conversation only, cut into topics from the stored transcript. No arguments opens the topic in progress and lists earlier ones, newest first, with message numbers. back=1 opens the topic before the one in progress: its requests, what finished, what was left unfinished, the user\'s direction-changing lines quoted with their message numbers, tool calls, and the files the turn log still has for those requests. before ("12h", "2d", or a date) keeps topics from before then. query finds a phrase in this chat, then messages related to it in meaning, grouped by topic. from and to, or at, read the stored messages and their tool calls; a span that was compacted is the summary that replaced it. One of back, query, or from/to. A record of this chat, not of the current tree.',
   inputSchema: {
     type: 'object', additionalProperties: false,
     properties: {
       back: { type: 'integer', minimum: 0, description: 'Open the topic this many before the one in progress: 1 is the one just before it. 0 or left out is the list.' },
       before: { type: 'string', description: 'Only topics from before this: "12h", "2d", "1w" or a date. Narrows the list and back.' },
-      query: { type: 'string', description: 'A phrase to find in this chat, with message numbers.' },
+      query: { type: 'string', description: 'A phrase, identifier or description to find in this chat, with message numbers.' },
       at: { type: 'string', description: 'One stored message: a message number or an anchor ("6e647d75:14").' },
       from: { type: 'integer', minimum: 0, description: 'First stored message to read, inclusive.' },
       to: { type: 'integer', minimum: 0, description: 'Last stored message to read, inclusive.' },
@@ -385,20 +390,37 @@ const hindsightTool: ConversationTool = {
       const needle = query.toLowerCase().replace(/\s+/g, ' ');
       const pattern = new RegExp(needle.split(' ').map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'), 'i');
       const view = await conversationView(found.group);
-      const hits: string[] = [];
-      for (const message of messages) {
+      const textOf = (message: HindsightMessage): string => view.entries[message.index]?.message.text ?? message.content;
+      const exact = messages.filter((message) => textOf(message).search(pattern) >= 0);
+      const exactLines = exact.slice(0, QUERY_CAP).map((message) => {
         const doc = view.entries[message.index]?.message;
-        const haystack = doc?.text ?? message.content;
-        const at = haystack.search(pattern);
-        if (at < 0) continue;
-        const line = doc ? snippetLine(message.index, doc, at) : `#${message.index} ${message.role}: ${oneLine(message.content, 160)}`;
-        hits.push(line);
-        if (hits.length >= QUERY_CAP) break;
+        const at = textOf(message).search(pattern);
+        return { index: message.index, line: doc ? snippetLine(message.index, doc, at) : `#${message.index} ${message.role}: ${oneLine(message.content, 160)}` };
+      });
+      // In meaning: what the words missed. Exact matches always come first.
+      const vector = await queryVector(query);
+      let related: { index: number; line: string }[] = [];
+      if (vector) {
+        await catchUp(found.group);
+        const numbers = new Set(messages.map((message) => message.index));
+        const matched = new Set(exact.map((message) => message.index));
+        related = (await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: RELATED_CAP * 2 }))
+          .filter((match) => numbers.has(match.position) && !matched.has(match.position))
+          .slice(0, RELATED_CAP)
+          .map((match) => ({ index: match.position, line: snippetLine(match.position, view.entries[match.position]!.message, match.offset, 0, 160) }));
       }
-      if (!hits.length) return { text: maskSecrets(`${header}\n"${oneLine(query, 80)}" does not come up in this chat.\n${note}`) };
-      const more = messages.filter((message) => (view.entries[message.index]?.message.text ?? message.content).search(pattern) >= 0).length;
-      const extra = more > hits.length ? `\n(${more - hits.length} more)` : '';
-      return { text: maskSecrets(`${header}\n"${oneLine(query, 80)}" in this chat:\n${hits.map((hit) => `  ${hit}`).join('\n')}${extra}\n${note}`) };
+      void backfill();
+      if (!exactLines.length && !related.length) return { text: maskSecrets(`${header}\n"${oneLine(query, 80)}" does not come up in this chat.\n${note}`) };
+      // Index is the topic's back number: 0 the latest, 1 the one before.
+      const topics = [presented.current, ...[...presented.earlier].reverse()];
+      const lines = [header];
+      if (exactLines.length) {
+        lines.push(`"${oneLine(query, 80)}" in this chat:`, ...byTopic(exactLines, topics));
+        if (exact.length > exactLines.length) lines.push(`(${exact.length - exactLines.length} more)`);
+      } else lines.push(`"${oneLine(query, 80)}" does not come up word for word in this chat.`);
+      if (related.length) lines.push('Related in meaning:', ...byTopic(related, topics));
+      lines.push(note);
+      return { text: maskSecrets(lines.join('\n')) };
     }
     if (reading) {
       const anchor = args.at === undefined || args.at === null || args.at === '' ? undefined : parseAnchor(args.at);
@@ -457,10 +479,29 @@ const hindsightTool: ConversationTool = {
   },
 };
 
-function snippetLine(index: number, message: { role: string; text: string; contentLength: number }, at: number): string {
+/** Hits under the topic each falls in (newest topic first in `topics`,
+ * which is back=0, 1, ...), topics in the order their first hit comes. */
+function byTopic(hits: readonly { index: number; line: string }[], topics: ReadonlyArray<PresentedTopic | undefined>): string[] {
+  const groups = new Map<number, string[]>();
+  for (const hit of hits) {
+    const back = topics.findIndex((topic) => topic?.from !== undefined && topic.to !== undefined && hit.index >= topic.from && hit.index <= topic.to);
+    const lines = groups.get(back) ?? [];
+    lines.push(`  ${hit.line}`);
+    groups.set(back, lines);
+  }
+  const out: string[] = [];
+  for (const [back, lines] of groups) {
+    const topic = topics[back];
+    out.push(topic ? `${rangeLabel(topic)} · ${oneLine(topic.requests[0]?.text ?? '', 70)} · ${back === 0 ? 'the latest topic' : `hindsight(back=${back})`}` : 'outside any topic:');
+    out.push(...lines);
+  }
+  return out;
+}
+
+function snippetLine(index: number, message: { role: string; text: string; contentLength: number }, at: number, before = 40, after = 80): string {
   const source = message.text;
-  const start = Math.max(0, at - 40);
-  const excerpt = source.slice(start, at + 80).replace(/\s+/g, ' ').trim();
+  const start = Math.max(0, at - before);
+  const excerpt = source.slice(start, at + after).replace(/\s+/g, ' ').trim();
   const where = at >= message.contentLength ? `${message.role} (tool call)` : message.role;
   return `#${index} ${where}: ${start > 0 ? '…' : ''}${excerpt}`;
 }

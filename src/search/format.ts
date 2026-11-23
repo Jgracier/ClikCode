@@ -79,7 +79,7 @@ export function hitSnippets(hit: ConversationHit, view: ConversationView, count 
     if (mention.position === last) continue;
     last = mention.position;
     const message = view.entries[mention.position]?.message;
-    if (message) out.push(`@${anchorOf(hit.conversationId, mention.position)} ${snippet(message, mention)}`);
+    if (message) out.push(`@${anchorOf(hit.conversationId, mention.position)} ${mention.related !== undefined ? 'related · ' : ''}${snippet(message, mention)}`);
   }
   return out;
 }
@@ -90,7 +90,12 @@ export function mentionCount(hit: Pick<ConversationHit, 'mentions' | 'exactCount
   const count = hit.mentions.length;
   if (hit.exactCount) return `${count} mention${count === 1 ? '' : 's'}${words > 1 ? ' of the phrase' : ''}`;
   if (!count) return 'no mentions in its messages';
-  return `${count} message${count === 1 ? '' : 's'} with all the words (not the phrase)`;
+  const related = hit.mentions.filter((mention) => mention.related !== undefined).length;
+  const worded = count - related;
+  return [
+    ...(worded ? [`${worded} message${worded === 1 ? '' : 's'} with all the words${words > 1 ? ' (not the phrase)' : ''}`] : []),
+    ...(related ? [`${related} related in meaning`] : []),
+  ].join(', ');
 }
 
 /** One message for read_conversation: what was said, then its tool calls

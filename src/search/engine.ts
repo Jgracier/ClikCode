@@ -13,10 +13,17 @@
  * has any; only when it has none, each message holding every word. So the
  * count, the snippets and the /search walk are all of one kind. A
  * conversation's branches share history; it is searched as one merged
- * numbering (corpus.ts conversationView), so a shared message counts once. */
+ * numbering (corpus.ts conversationView), so a shared message counts once.
+ *
+ * Given the query as a vector (hybrid.ts), a conversation with no exact
+ * phrase also gets its messages nearest in meaning (vectors.ts) as related
+ * mentions, after its word matches, best first. They rank with the word
+ * matches, below every title and exact-phrase tier: an exact identifier,
+ * path or error string always outranks a neighbour in meaning. */
 
 import { conversationGroups, conversationTitle, type ConversationGroup } from './conversations.js';
 import { conversationView, indexOfWord, type MessageDoc } from './corpus.js';
+import { MIN_SIMILARITY, semanticMatches } from './vectors.js';
 
 export interface Mention {
   /** The chat (branch) the message is stored in, and where in it: what the
@@ -29,6 +36,8 @@ export interface Mention {
   offset: number;
   length: number;
   exact: boolean;
+  /** Found by meaning, not words: the cosine similarity (vectors.ts). */
+  related?: number;
 }
 
 export interface ConversationHit {
@@ -41,7 +50,7 @@ export interface ConversationHit {
   harness?: string;
   updatedAt: string;
   updatedAtMs: number;
-  /** In the conversation's merged order. All exact when exactCount > 0. */
+  /** In the conversation's merged order (related ones after, best first). All exact when exactCount > 0. */
   mentions: Mention[];
   exactCount: number;
   /** The title is the query, or holds every word of it. */
@@ -67,6 +76,8 @@ interface SearchOptions {
   excludeConversationId?: string;
   excludeSessionId?: string;
   now?: number;
+  /** The query as a vector: adds related mentions (see the top). */
+  semantic?: { vector: Float32Array; embedderId: string };
 }
 
 export interface SearchResult {
@@ -132,7 +143,11 @@ export function titleMatch(title: string, query: ParsedQuery): ConversationHit['
 
 const TITLE_TIER = { exact: 3_000_000, words: 2_000_000 } as const;
 
-async function conversationHit(group: ConversationGroup, query: ParsedQuery, now: number): Promise<ConversationHit | undefined> {
+/** What a related mention adds to a conversation's score: 1 at the threshold, up to 5 for the same meaning. */
+const relatedWeight = (similarity: number): number => 1 + 4 * Math.max(0, (similarity - MIN_SIMILARITY) / (1 - MIN_SIMILARITY));
+const RELATED_CAP = 5;
+
+async function conversationHit(group: ConversationGroup, query: ParsedQuery, now: number, semantic?: SearchOptions['semantic']): Promise<ConversationHit | undefined> {
   const view = await conversationView(group);
   let mentions: Mention[] = [];
   for (const [position, entry] of view.entries.entries()) {
@@ -140,11 +155,21 @@ async function conversationHit(group: ConversationGroup, query: ParsedQuery, now
   }
   const exactCount = mentions.filter((mention) => mention.exact).length;
   if (exactCount) mentions = mentions.filter((mention) => mention.exact);
+  let related = 0;
+  if (!exactCount && semantic) {
+    const worded = new Set(mentions.map((mention) => mention.position));
+    for (const match of await semanticMatches(group, view, semantic.vector, semantic.embedderId, { limit: RELATED_CAP })) {
+      if (worded.has(match.position)) continue;
+      const entry = view.entries[match.position]!;
+      mentions.push({ sessionId: entry.sessionId, messageIndex: entry.index, position: match.position, offset: match.offset, length: match.length, exact: false, related: match.score });
+      related += relatedWeight(match.score);
+    }
+  }
   const newest = group.newest;
   const named = titleMatch(conversationTitle(newest, Number.POSITIVE_INFINITY), query);
   if (!mentions.length && !named) return undefined;
   // Title, then exact (whole tiers), then weighted mentions.
-  const score = (named ? TITLE_TIER[named] : 0) + (exactCount ? 1_000_000 : 0) + (exactCount ? exactCount * 3 : mentions.length) * recencyBoost(group.updatedAtMs, now);
+  const score = (named ? TITLE_TIER[named] : 0) + (exactCount ? 1_000_000 : 0) + (exactCount ? exactCount * 3 : mentions.length - mentions.filter((mention) => mention.related !== undefined).length + related) * recencyBoost(group.updatedAtMs, now);
   return {
     conversationId: group.id, sessionId: newest.id, title: conversationTitle(newest),
     provider: newest.provider ?? null, model: newest.model ?? null,
@@ -164,7 +189,7 @@ export async function searchConversations(text: string, options: SearchOptions =
   const hits: ConversationHit[] = [];
   // In parallel: each transcript is its own file, and on a warm cache this
   // is a stat per file.
-  const found = await Promise.all(groups.map((group) => conversationHit(group, query, now)));
+  const found = await Promise.all(groups.map((group) => conversationHit(group, query, now, options.semantic)));
   for (const hit of found) if (hit) hits.push(hit);
   hits.sort((left, right) => right.score - left.score || right.updatedAtMs - left.updatedAtMs);
   return { query, hits, searched: groups.length };

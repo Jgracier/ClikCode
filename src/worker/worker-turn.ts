@@ -195,6 +195,8 @@ export function createTurnRunner(ctx: WorkerContext) {
     lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
     // Only a completed Claude Code turn refreshes its prompt cache window.
     void ctx.keepWarm?.turnEnded(turnOutcome === 'completed' ? lastHarness : undefined).catch(quiet('worker/worker-turn'));
+    // Its new messages, embedded for search by meaning (search/hybrid.ts); in the background, never failing the turn.
+    void import('../search/hybrid.js').then((hybrid) => hybrid.indexAfterTurn(sessionId)).catch(quiet('worker/worker-turn'));
     endTurnClock(turnId);
     ctx.idle.vendorUsed();
     ctx.activeQueuedTurnId = undefined;
