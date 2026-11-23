@@ -136,6 +136,19 @@ describe('indexConversation', () => {
     expect(await semanticMatches(await group(A), view, query!, 'fake-1')).toEqual([]);
   });
 
+  it('in a long chat, a match must stand out from the rest, not just clear the floor', async () => {
+    const messages: TranscriptMessage[] = Array.from({ length: 40 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `step ${index}: the postgres table migration` }));
+    messages[17] = { role: 'assistant', content: 'Reset the oauth password for the login page' };
+    await store(chat(A, 'Long', messages));
+    await indexConversation(await group(A), embedder);
+    const view = await conversationView(await group(A));
+    const [login] = await embedder.embed(['authenticate credentials']);
+    expect((await semanticMatches(await group(A), view, login!, 'fake-1')).map((match) => match.position)).toEqual([17]);
+    // Close to nearly every message is close to none in particular.
+    const [database] = await embedder.embed(['sql schema']);
+    expect(await semanticMatches(await group(A), view, database!, 'fake-1')).toEqual([]);
+  });
+
   it('stops at its deadline and picks up where it left off', async () => {
     const messages: TranscriptMessage[] = Array.from({ length: 40 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `message number ${index} about the postgres schema` }));
     await store(chat(A, 'Long', messages));

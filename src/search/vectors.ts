@@ -254,25 +254,35 @@ export interface SemanticMatch { position: number; offset: number; length: numbe
 
 /** Below this, bge-small's cosine is no evidence of the same subject. */
 export const MIN_SIMILARITY = 0.62;
+/** bge-small scores any two texts high, and how high moves with the query:
+ * on a real 4,000-message chat, words that mean nothing there (an unknown
+ * identifier, "zebra migration") reach 0.65-0.70 at the top, while the right
+ * topic for a paraphrase sits at 0.73-0.75. What tells them apart is the lift
+ * over the query's median message: 0.22-0.28 for a real match, at most 0.16
+ * for noise. So a match must clear the median by LIFT, once a chat has
+ * MEDIAN_FROM messages for a median to mean something. */
+const LIFT = 0.2;
+const MEDIAN_FROM = 32;
 
 /** This conversation's messages nearest `query`, best first, at most one per
- * message, among what its file has for the messages it has now. */
+ * message (its best chunk), only those still in the conversation as it is. */
 export async function semanticMatches(group: Pick<ConversationGroup, 'id'>, view: ConversationView, query: Float32Array, embedderId: string, options: { limit?: number; min?: number } = {}): Promise<SemanticMatch[]> {
   const have = await load(vectorFilePath(group.id));
   if (have.embedder !== embedderId || !have.records.size) return [];
   const positions = new Map<string, number>();
   for (const [position, entry] of view.entries.entries()) if (!positions.has(entry.message.fingerprint)) positions.set(entry.message.fingerprint, position);
   const best = new Map<number, SemanticMatch>();
-  const min = options.min ?? MIN_SIMILARITY;
   for (const record of have.records.values()) {
     const position = positions.get(record.fingerprint);
     if (position === undefined) continue;
     record.unit ??= unit(record);
     if (record.unit.length !== query.length) continue;
     const score = cosine(record.unit, query);
-    if (score < min) continue;
     const prior = best.get(position);
     if (!prior || score > prior.score) best.set(position, { position, offset: record.offset, length: record.length, score });
   }
-  return [...best.values()].sort((left, right) => right.score - left.score).slice(0, options.limit ?? 20);
+  const ranked = [...best.values()].sort((left, right) => right.score - left.score);
+  const median = ranked.length >= MEDIAN_FROM ? ranked[Math.floor(ranked.length / 2)]!.score : -1;
+  const min = Math.max(options.min ?? MIN_SIMILARITY, median + LIFT);
+  return ranked.filter((match) => match.score >= min).slice(0, options.limit ?? 20);
 }
