@@ -569,11 +569,17 @@ interface Stream {
   base: TurnUsage;
 }
 
+/** The longest a compaction the agent runs after its answer is waited for. */
+const COMPACTION_SETTLE_MS = 10 * 60_000;
+
 interface ActiveTurn extends Stream {
   input: AcpTurnInput;
   /** Claude can report a failed /compact as a tool error while ending the
    * prompt successfully. Preserve an account refusal for the turn boundary. */
   compactionFailure?: Error;
+  /** A compaction the agent runs after answering the prompt (catalog `compactCommand.settledBy`):
+   * settled by that notification's `status`. */
+  compactionSettled?: { promise: Promise<void>; done: () => void; fail: (error: Error) => void };
   promptStarted: boolean;
   done: boolean;
   sessionId?: string;
@@ -1057,6 +1063,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (connectingShown) input.onPhase?.('thinking');
     // The turn ends with the agent's answer to session/prompt, or the user
     // stopping it: no silence ceiling. No wall-clock timeout: a prompt legitimately runs for hours.
+    const compact = input.acp?.compactCommand;
+    if (compact?.settledBy && input.prompt.trim() === compact.prompt) {
+      let done!: () => void;
+      let fail!: (error: Error) => void;
+      const promise = new Promise<void>((resolve, reject) => { done = resolve; fail = reject; });
+      promise.catch(quiet('harness/transport/acp-client'));
+      turn.compactionSettled = { promise, done, fail };
+    }
     turn.prompt = call('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
     let changing = Promise.resolve();
     const apply = (changes: LiveSettingsFields): void => {
@@ -1109,6 +1123,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // (what waits in the queue runs as the next turn).
     if (live.steering) input.onSteerReady?.(undefined);
     if (turn.compactionFailure) throw turn.compactionFailure;
+    // The agent compacts after answering (Devin): the turn is that compaction, until it says it ended.
+    if (turn.compactionSettled && completed.stopReason !== 'cancelled') {
+      const stopped = new Promise<void>((resolve) => {
+        if (input.signal?.aborted) resolve();
+        input.signal?.addEventListener('abort', () => resolve(), { once: true });
+        setTimeout(resolve, COMPACTION_SETTLE_MS).unref();
+      });
+      await Promise.race([turn.compactionSettled.promise, stopped]);
+      if (input.signal?.aborted) throw turnCancelledError();
+    }
     if (completed.stopReason === 'cancelled') {
       // Nothing here asked for it and nothing was said or done first: the agent
       // gave up the prompt by itself (Junie does, signed out and in a sandbox
@@ -1536,6 +1560,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * content, but each is proof of life, and some say something worth showing. */
   private extension(method: string, params: Json): void {
     if (method === '_auth/status_update') return this.authStatus(params);
+    const settling = this.turn?.compactionSettled;
+    if (settling && method === this.turn?.input.acp?.compactCommand?.settledBy) {
+      // Devin: `status: "completed"`; Kiro: `status: { type: "completed" }`.
+      const status = typeof params.status === 'string' ? params.status : (params.status as Json | undefined)?.type;
+      if (status === 'completed') settling.done();
+      else if (status === 'failed' || status === 'error') settling.fail(new Error(`${this.turn.input.command} reported that its compaction failed`));
+      return;
+    }
     // `_claude/sdkMessage` (raw SDK frames, only the ones asked for in
     // ACP_SESSION_META) carries the background-task level; the rest and
     // `_claude/rateLimit` are activity only: the structured readings ride

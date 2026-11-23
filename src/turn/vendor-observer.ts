@@ -104,7 +104,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
       }
       prompter?.setBackgroundWork?.(backgroundNow);
     },
-    onResponseDelta: sink.response,
+    onResponseDelta: compacting ? () => undefined : sink.response,
     onPhase: (phase: string) => { if (!compacting) prompter?.phase(phase); },
     onNotice: (message: string) => {
       diagnostic('vendor.notice', message);
