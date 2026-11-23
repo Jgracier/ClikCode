@@ -56,6 +56,14 @@ await Promise.all([
   build({ ...common, sourcemap: false, entryPoints: ['src/webview/styles.css'], outfile: 'dist/webview.css', loader: { '.css': 'css' } }),
 ]);
 await mkdir('dist', { recursive: true });
+// The page is a browser: no `process`. A shared helper that reads it unguarded (a default
+// `environment = process.env`) throws while rendering and takes the whole chat down -- the
+// integration suite saw only timeouts. Every use has to sit behind `typeof process`.
+{
+  const page = await readFile('dist/webview.js', 'utf8');
+  const bare = [...page.matchAll(/(?<![\w$.])process\.\w+/g)].filter((m) => !/typeof process/.test(page.slice(Math.max(0, m.index - 80), m.index)));
+  if (bare.length) throw new Error(`build: dist/webview.js reads Node's process, which a webview does not have:\n${bare.map((m) => `  ${page.slice(Math.max(0, m.index - 60), m.index + 30).replace(/\s+/g, ' ')}`).join('\n')}`);
+}
 const codicons = 'node_modules/@vscode/codicons/dist';
 await Promise.all([copyFile(`${codicons}/codicon.css`, 'dist/codicon.css'), copyFile(`${codicons}/codicon.ttf`, 'dist/codicon.ttf')]);
 if (tests) {

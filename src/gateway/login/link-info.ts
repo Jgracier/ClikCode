@@ -20,7 +20,9 @@ export function loginCallbackPort(url: string): number | undefined {
   } catch { return undefined; }
 }
 
-export function loginPortForwardHint(url: string, environment: NodeJS.ProcessEnv = process.env): string | undefined {
+/** Also drawn by the VS Code extension's webview, a browser page with no `process`: reading
+ * `process.env` there threw and took the whole page down with the sign-in card. */
+export function loginPortForwardHint(url: string, environment: NodeJS.ProcessEnv = typeof process === 'undefined' ? {} : process.env): string | undefined {
   const port = loginCallbackPort(url);
   if (!port) return undefined;
   return environment.CLIKDEPLOY_REMOTE_TERMINAL === '1'
