@@ -245,7 +245,7 @@ describe('answering an approval', () => {
       await asked;
       after(100);
       expect(rl.status()).not.toContain('waiting for');
-      expect(rl.status()).toMatch(/thinking|writing/);
+      expect(rl.status()).toMatch(/Working|writing/);
     } finally { rl.close(); }
   });
 });

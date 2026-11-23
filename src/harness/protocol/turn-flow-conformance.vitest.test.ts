@@ -368,7 +368,7 @@ const aiderText = cliFixture('aider', 'aider text', { command: 'aider', parser: 
   'Aider v0.86.0', 'Here is the answer.', 'Tokens: 1.2k sent, 45 received.',
 ], { expected: caps(false, false, false, true, false) });
 
-/** A text-only CLI (Continue `cn`): nothing structured at all. */
+/** A text-only CLI: nothing structured at all. */
 const plainText = cliFixture('plain-text', 'plain text CLI', { command: 'cn', parser: 'text', turn: { output: 'text' } as never }, ['Hello', 'World'],
   { expected: caps(false, false, false, false, false) });
 
@@ -436,7 +436,6 @@ const PROOFS: Readonly<Record<string, readonly string[]>> = {
   auggie: ['acp-plain', 'acp-usage-update'],
   vibe: ['acp-plain', 'acp-usage-meta'],
   openhands: ['acp-plain', 'acp-usage-meta'],
-  cn: ['plain-text'],
   dcode: ['acp-plain'],
   devin: ['acp-plain'],
   junie: ['acp-plain'],
