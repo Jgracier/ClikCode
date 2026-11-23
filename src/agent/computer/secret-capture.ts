@@ -18,6 +18,9 @@ import { registerSecret } from './secret-scrubber.js';
 
 const LOOK_POLLS = 20;
 
+/** The suffix of a key set aside because its vendor refused it (the connector worker keeps a refused <id>/key as <id>/key-rejected). */
+export const REJECTED_SUFFIX = '-rejected';
+
 export async function captureSecret(input: {
   stateDir: string; page: Page; name: string; signal?: AbortSignal;
   /** The click that makes the site show or hand over the key, done after the page is watched. */
@@ -107,6 +110,9 @@ export async function captureSecret(input: {
     for (const other of await namedSecretNames(input.stateDir)) {
       if (other.toLowerCase() !== input.name.toLowerCase() && await readNamedSecret(input.stateDir, other).catch(quiet('agent/computer/secret-capture')) === value) { alreadySavedAs = other; break; }
     }
+    // The same value as a key set aside because its vendor refused it (<name>-rejected) is that dead key again, not a new one: sending it
+    // on could only be refused once more (Chipbot's page kept showing its refused key, and the capture told the agent to carry on with it).
+    if (alreadySavedAs && alreadySavedAs.toLowerCase().endsWith(REJECTED_SUFFIX)) throw new LoginError(`Not saved: this is the key the vendor already refused (set aside as "${alreadySavedAs}"). Make a new key: create another one, or rotate/regenerate this one, and capture that.`);
     const check = await (input.check ?? ((url, key, options) => checkKey(url, key, fetch, options)))(input.page.url(), value, { fresh: clicked });
     // A value its own service refuses, from a page that already showed it, is not the key (an id, a page
     // blob): saving it would only hide the problem. A key just made by the click is different: the site

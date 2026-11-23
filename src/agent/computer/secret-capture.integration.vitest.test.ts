@@ -207,6 +207,15 @@ it.skipIf(!enabled)('takes the secret from a pair of Copy buttons, says where it
   await expect(readNamedSecret(stateDir, 'pair/other')).rejects.toThrow();
 }, 60_000);
 
+it.skipIf(!enabled)('refuses a capture that is the key already set aside as refused, and asks for a new one', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const first = await open('/pair');
+  await captureSecret({ stateDir, page: first, name: 'pair/key-rejected', trigger: () => tap(first, '#go'), ask: neverAsked });
+  const again = await open('/pair');
+  await expect(captureSecret({ stateDir, page: again, name: 'pair/key', trigger: () => tap(again, '#go'), ask: neverAsked })).rejects.toThrow(/already refused \(set aside as "pair\/key-rejected"\)/);
+  await expect(readNamedSecret(stateDir, 'pair/key')).rejects.toThrow();
+}, 60_000);
+
 it.skipIf(!enabled)('refuses to save a value its own service rejects when the page already showed it, and saves one it accepts', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const refused = { verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' } as const;
