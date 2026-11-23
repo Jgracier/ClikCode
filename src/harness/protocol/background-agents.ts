@@ -29,6 +29,7 @@
  *    pendingBackgroundAgentCount?, pendingWorkflowCount?}` -- the CLI's own
  *    end-of-turn record; a count that is zero is left out of it. */
 import { asRecord, type JsonRecord } from './json-lines.js';
+import { stripAnsi, terminalCellWidth, visibleSlice } from '../../tui/render/width.js';
 
 /** A background command by its pid, as a surface says what it is waiting on (transport/background-commands.ts).
  * Times are epoch ms. */
@@ -37,10 +38,12 @@ export interface BackgroundCommand {
   pgid?: number;
   label: string;
   startedAt?: number;
-  /** Cpu use over the last look, percent of one core. */
+  /** Cpu use over the last look, percent of one core: the stale policy's (background-commands.ts), never shown. */
   cpuPercent?: number;
   /** When its output file last changed; absent: it has written nothing. */
   lastOutputAt?: number;
+  /** The newest non-empty line it printed, plain text (commandLastLine). */
+  lastLine?: string;
   /** Why it is stale (it has outlived its use), when it is. */
   stale?: string;
 }
@@ -54,6 +57,19 @@ export interface BackgroundWork {
   /** The terminals' commands by pid, when they could be read: what a status line names. */
   commands?: BackgroundCommand[];
   workflows?: number;
+  /** Commands that ended since the last report: told once, with this report only (mergeBackgroundWork never
+   * carries them on). A level that holds nothing else still carries them, so the last command's end is told. */
+  ended?: EndedCommand[];
+}
+
+/** A background command that ended: how long it ran, and why it failed when it did. `at` is epoch ms. */
+export interface EndedCommand {
+  label: string;
+  at: number;
+  /** How long it ran, when its start was known. */
+  ms?: number;
+  /** Why it failed (`exit 1`, `stopped: stale ...`); absent: it finished. */
+  failed?: string;
 }
 
 export function formatAge(ms: number): string {
@@ -64,22 +80,51 @@ export function formatAge(ms: number): string {
   return hours < 48 ? `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ''}` : `${Math.floor(hours / 24)}d`;
 }
 
-/** `waiting on background command: <label> · running 32h · cpu 100% · no output` -- what a surface says
- * while a command is all that is running. More than one: the oldest, and how many. */
-export function describeCommands(commands: readonly BackgroundCommand[], now: number = Date.now()): string | undefined {
+/** After this long with no new output a command's line says how long it has been quiet. Shorter silence says
+ * nothing: a wait that prints between checks is not hung. */
+export const QUIET_AFTER_MS = 5 * 60_000;
+
+/** The newest non-empty line of `text` (a command's output tail), plain: escapes stripped, a carriage-return
+ * redraw taken at its last state, spaces collapsed. Undefined when it printed nothing but blanks. */
+export function commandLastLine(text: string): string | undefined {
+  const lines = stripAnsi(text).split('\n');
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const redraws = lines[index]!.split('\r');
+    for (let at = redraws.length - 1; at >= 0; at--) {
+      const line = redraws[at]!.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (line) return line;
+    }
+  }
+  return undefined;
+}
+
+/** `<label> · <newest line> · quiet 7m · +1 more` -- what a surface says while background commands are all that
+ * is running (its spinner and clock around it). The oldest command is named; its newest line is cut to fit `width`
+ * cells (the label first, at most 40). Silence is said only once it is QUIET_AFTER_MS long. */
+export function describeCommands(commands: readonly BackgroundCommand[], now: number = Date.now(), width = 100): string | undefined {
   if (!commands.length) return undefined;
   const first = [...commands].sort((a, b) => (a.startedAt ?? now) - (b.startedAt ?? now))[0]!;
-  const label = first.label.replace(/\s+/g, ' ').trim();
-  const parts = [
-    `${label.length > 60 ? `${label.slice(0, 59)}…` : label}`,
-    ...(first.startedAt !== undefined ? [`running ${formatAge(now - first.startedAt)}`] : []),
-    ...(first.cpuPercent !== undefined ? [`cpu ${Math.round(first.cpuPercent)}%`] : []),
-    first.lastOutputAt !== undefined ? `output ${formatAge(now - first.lastOutputAt)} ago` : 'no output',
+  const label = fit(first.label.replace(/\s+/g, ' ').trim() || 'background command', 40);
+  const silentSince = first.lastOutputAt ?? first.startedAt;
+  const tail = [
+    ...(silentSince !== undefined && now - silentSince >= QUIET_AFTER_MS ? [`quiet ${formatAge(now - silentSince)}`] : []),
     ...(first.stale ? ['stale'] : []),
     ...(commands.length > 1 ? [`+${commands.length - 1} more`] : []),
   ];
-  return `waiting on background command: ${parts.join(' · ')}`;
+  const fixed = [label, ...tail].join(' · ');
+  const room = width - terminalCellWidth(fixed) - 3;
+  const line = first.lastLine && room >= 8 ? fit(first.lastLine, room) : undefined;
+  return [label, ...(line ? [line] : []), ...tail].join(' · ');
 }
+
+/** `<label> · done in 17m` / `<label> · failed: exit 1`: a command's end, in one line. */
+export function describeEndedCommand(ended: EndedCommand, width = 100): string {
+  const outcome = ended.failed ? `failed: ${ended.failed}` : ended.ms !== undefined ? `done in ${formatAge(ended.ms)}` : 'done';
+  const label = fit(ended.label.replace(/\s+/g, ' ').trim() || 'background command', Math.max(8, Math.min(40, width - terminalCellWidth(outcome) - 3)));
+  return fit(`${label} · ${outcome}`, width);
+}
+
+const fit = (text: string, width: number): string => visibleSlice(text, Math.max(1, width));
 
 /** What one vendor record says: each kind it names, zero included (a level
  * that lists no terminal says there are none). */
@@ -104,6 +149,7 @@ export function mergeBackgroundWork(current: BackgroundWork | undefined, update:
   }
   const commands = update.commands !== undefined ? update.commands : current?.commands;
   if (merged.terminals && commands?.length) merged.commands = commands;
+  if (update.ended?.length) merged.ended = update.ended;
   return Object.keys(merged).length ? merged : undefined;
 }
 

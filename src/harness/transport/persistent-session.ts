@@ -10,13 +10,17 @@ import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js
 import { spawnPortable } from './spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from './jsonrpc-peer.js';
 import type { BackgroundTurnChannel, BackgroundTurnEnd, OutOfTurnRelay, VendorBackgroundTurnHandler } from './background-turn.js';
-import { commandLine, commandRoots, outputFile, processGroup, processGroupMembers, readProcessGroup, toolCallWork } from './process-group.js';
+import { commandLine, commandRoots, outputFile, processAlive, processGroup, processGroupMembers, readProcessGroup, toolCallWork } from './process-group.js';
 import { readFile } from 'node:fs/promises';
 import { redactSecrets } from '../../agent/security.js';
 import type { EndedWork, RunningWork } from './handoff-work.js';
 import { BackgroundWorkTracker } from './background-work.js';
 import { CommandSampler, commandPolicy, killCommand, type CommandPolicy, type CommandStats, type KillReport } from './background-commands.js';
+import type { EndedCommand } from '../protocol/background-agents.js';
 import { spawnFailure } from '../../runtime/machine-folder.js';
+
+/** A command's end as a look saw it: with its output file, which names the vendor's task (acp-client.ts). */
+export type CommandEnd = EndedCommand & { outputFile?: string };
 
 /** How often a retired process's commands are looked at. */
 const RETIRED_POLL_MS = 3_000;
@@ -82,9 +86,17 @@ export interface PersistentSessionOptions {
   killProcess?: (target: number, signal: NodeJS.Signals) => void;
 }
 
-/** How often the commands a vendor left running are looked at: their age, cpu and output for a status line,
+/** How often the commands a vendor left running are looked at in full: their age and output for a status line,
  * and the stale policy that ends the ones that outlived their use. */
 const COMMAND_WATCH_MS = 60_000;
+
+/** How often, between those looks, the commands' output is read for its newest line (and their pids for an end):
+ * a stat and, when it grew, a 4 KB read per command. */
+const OUTPUT_WATCH_MS = 5_000;
+
+/** What a status line shows of the commands: which run, what each last printed and when, and whether one is stale. */
+const commandsSignature = (commands: readonly CommandStats[]): string =>
+  JSON.stringify(commands.map((item) => [item.pid, item.lastOutputAt, item.lastLine, item.stale]));
 
 /** What a persistent session's owner reads of the work its vendor left running (vendor-process.ts). */
 export interface VendorWorkSession {
@@ -170,8 +182,11 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   private readonly policy?: CommandPolicy;
   private readonly killProcess?: PersistentSessionOptions['killProcess'];
   private commandTimer?: NodeJS.Timeout;
+  private outputTimer?: NodeJS.Timeout;
   /** The commands last seen, for a change to be told once. */
   private commandsSeen = '';
+  /** The commands last seen, by pid: one gone from the next look has ended. */
+  private commandsLast = new Map<number, CommandStats>();
 
   constructor(options: PersistentSessionOptions, private readonly label: string) {
     this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
@@ -211,24 +226,57 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     return reaped;
   }
 
-  /** What the commands look like now, told to the transport (commandsChanged) when it changed. */
-  protected commandsChanged(_commands: readonly CommandStats[], _reaped: readonly ReapedCommand[]): void {}
+  /** What the commands look like now, told to the transport (commandsChanged) when it changed, with the ones that
+   * ended since the last look. */
+  protected commandsChanged(_commands: readonly CommandStats[], _reaped: readonly ReapedCommand[], _ended: readonly CommandEnd[] = []): void {}
 
   /** Whether the sub-agent that started `command` has ended, so nothing is left to want it (the transport
    * knows its owners; none by default). A command that asked to be kept is not asked about. */
   protected ownerEnded(_command: CommandStats): boolean { return false; }
 
-  /** Look at the commands now: those whose owner ended and the stale ones are ended, the rest told. */
+  /** Look at the commands now: those whose owner ended and the stale ones are ended, the rest told -- and the ones
+   * gone since the last look told as ended (a reaped one as failed, with why). */
   protected async watchCommands(): Promise<void> {
     if (this.isClosed) return;
     const orphaned = await this.reapCommands('all', 'the sub-agent that started it ended', (command) => !command.keep && this.ownerEnded(command));
     const reaped = [...orphaned, ...await this.reapCommands('stale', 'stale background command')];
     const commands = await this.backgroundCommands();
-    const seen = JSON.stringify(commands.map((item) => [item.pid, Math.round(item.cpuPercent ?? 0), item.lastOutputAt, item.stale]));
-    if (seen !== this.commandsSeen || reaped.length) {
+    const now = Date.now();
+    const present = new Set(commands.map((item) => item.pid));
+    const ending = new Map(reaped.map((item) => [item.command.pid, item.reason]));
+    const ended: CommandEnd[] = [...this.commandsLast.values(), ...reaped.map((item) => item.command)]
+      .filter((item, index, all) => !present.has(item.pid) && all.findIndex((other) => other.pid === item.pid) === index)
+      .map((item) => ({
+        label: item.label, at: now, ...(item.startedAt !== undefined ? { ms: now - item.startedAt } : {}),
+        ...(ending.has(item.pid) ? { failed: `stopped (${ending.get(item.pid)})` } : {}),
+        ...(item.outputFile ? { outputFile: item.outputFile } : {}),
+      }));
+    this.commandsLast = new Map(commands.map((item) => [item.pid, item]));
+    const seen = commandsSignature(commands);
+    if (seen !== this.commandsSeen || reaped.length || ended.length) {
       this.commandsSeen = seen;
-      this.commandsChanged(commands, reaped);
+      this.commandsChanged(commands, reaped, ended);
     }
+    this.armOutputWatch();
+  }
+
+  /** Between looks: the commands' output read again for a new line, and a pid that is gone sends for a look now. */
+  private armOutputWatch(): void {
+    if (this.outputTimer || this.isClosed || !this.commandsLast.size) return;
+    this.outputTimer = setTimeout(() => {
+      this.outputTimer = undefined;
+      if (this.isClosed || !this.commandsLast.size) return;
+      const commands = [...this.commandsLast.values()];
+      const look = commands.some((item) => !processAlive(item.pid))
+        ? this.watchCommands()
+        : Promise.all(commands.map((item) => this.sampler.readOutput(item))).then((changed) => {
+          const seen = commandsSignature(commands);
+          if (changed.some(Boolean) && seen !== this.commandsSeen) { this.commandsSeen = seen; this.commandsChanged(commands, [], []); }
+          this.armOutputWatch();
+        });
+      void look.catch(quiet('harness/transport/persistent-session'));
+    }, OUTPUT_WATCH_MS);
+    this.outputTimer.unref?.();
   }
 
   /** The watch runs while a turn left processes running; it ends itself when there are none. */
@@ -238,7 +286,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       this.commandTimer = undefined;
       void this.watchCommands().catch(quiet('harness/transport/persistent-session')).finally(() => {
         if (!this.isClosed && this.leftRunning.size) { this.commandTimer = setTimeout(tick, this.commandWatchMs); this.commandTimer.unref?.(); }
-        else if (this.commandsSeen) { this.commandsSeen = ''; this.commandsChanged([], []); }
+        else if (this.commandsSeen) { this.commandsSeen = ''; this.commandsLast.clear(); this.commandsChanged([], []); }
       });
     };
     this.commandTimer = setTimeout(tick, firstMs);
@@ -479,6 +527,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     this.isClosed = true;
     if (this.commandTimer) clearTimeout(this.commandTimer);
     this.commandTimer = undefined;
+    if (this.outputTimer) clearTimeout(this.outputTimer);
+    this.outputTimer = undefined;
     if (this.turn) this.cancelTurn(this.turn);
     this.finishBackground('closed');
     this.clearPending();

@@ -98,6 +98,22 @@ describe('the status line motion', () => {
     } finally { rl.close(); }
   });
 
+  it('says the background command, its newest line and the clock while it is all that runs, then its end', () => {
+    const { rl, line } = open();
+    try {
+      const now = Date.now();
+      rl.setBackgroundWork({ terminals: 1, commands: [{ pid: 9, label: 'publish', startedAt: now, cpuPercent: 100, lastOutputAt: now, lastLine: '\u001b[1mrunning tests\u001b[0m' }] });
+      expect(line()).toMatch(/^\S+ {2}publish · running tests · \d+s/);
+      expect(line()).not.toMatch(/cpu|no output/);
+      rl.setBackgroundWork({ terminals: 1, commands: [{ pid: 9, label: 'publish', startedAt: now, lastOutputAt: now, lastLine: 'linking' }] });
+      expect(line()).toContain('publish · linking ·');
+      rl.setBackgroundWork({ ended: [{ label: 'publish', at: Date.now(), ms: 17 * 60_000, failed: 'exit 2' }] });
+      expect(line()).toContain('publish · failed: exit 2 ·');
+      vi.advanceTimersByTime(9_000);
+      expect(line()).not.toContain('publish');
+    } finally { rl.close(); }
+  });
+
   it('shows the spinner, one word and the clock: no token meter, the key that stops it', () => {
     const { rl, line } = open();
     try {

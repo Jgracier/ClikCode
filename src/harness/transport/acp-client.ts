@@ -23,14 +23,14 @@ import { turnCancelledError } from '../../agent/cancellation.js';
 import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import { panicMessage } from './rust-panic.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd } from './background-turn.js';
-import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions, type VendorWorkSession } from './persistent-session.js';
+import { PersistentSession, runOneTurn, turnFailure, type CommandEnd, type PersistentSessionOptions, type VendorWorkSession } from './persistent-session.js';
 import { diagnostic, lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { globalMcpServersForAcp } from './acp-mcp-servers.js';
 import { BackgroundAgentRows } from '../events/background-agent-rows.js';
 import { endedAgentWork, VendorTasks, type RunningWork } from './handoff-work.js';
 import { BackgroundWorkTracker } from './background-work.js';
 import type { CommandStats } from './background-commands.js';
-import { backgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
+import { backgroundWork, type BackgroundWork, type EndedCommand } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
 import { classifyEvidence } from '../../turn/account-evidence.js';
@@ -51,6 +51,23 @@ const START_NOTICE_MS = 1_000;
  * after it -- the SDK versions that send the patch alone, on a session that then goes quiet --
  * waits this long. */
 const TASK_NOTIFICATION_WAIT_MS = 1_000;
+
+/** How long a command's end that the look saw first waits for the vendor's `task_notification`, which says how it
+ * exited; past this it is told without. */
+const COMMAND_EXIT_WAIT_MS = 3_000;
+
+/** The task a Claude Code background shell's output file names (`.../tasks/<id>.output`). */
+const shellTaskId = (file: string | undefined): string | undefined => file ? /\/tasks\/([^/]+)\.output$/.exec(file)?.[1] : undefined;
+
+/** Why a background shell failed, from its `task_notification` (`... completed (exit code 1)`); undefined: it
+ * finished. */
+export function shellFailure(status: string, summary: string): string | undefined {
+  const code = /exit code (-?\d+)/i.exec(summary)?.[1];
+  if (code !== undefined && code !== '0') return `exit ${code}`;
+  if (status === 'killed') return 'killed';
+  if (status === 'failed') return code === '0' ? undefined : 'error';
+  return undefined;
+}
 
 /** The raw SDK frames claude-agent-acp is asked to forward as
  * `_claude/sdkMessage` (`_meta.claudeCode.emitRawSDKMessages`, a type/subtype
@@ -784,9 +801,49 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   /** The commands behind the terminals were looked at (persistent-session.ts): the level names them by pid, and the
    * window that follows the work (the user's turn, else the background turn, else the worker) is told. */
-  protected override commandsChanged(commands: readonly CommandStats[]): void {
+  protected override commandsChanged(commands: readonly CommandStats[], _reaped: readonly unknown[] = [], ended: readonly CommandEnd[] = []): void {
     this.work.setCommands(commands.map(({ outputFile: _file, keep: _keep, ...shown }) => shown));
-    const level = this.work.fullLevel();
+    // A Claude shell's end is told with how it exited: from its notification when that came first, else once it comes.
+    const told: EndedCommand[] = [];
+    for (const end of ended) {
+      const id = shellTaskId(end.outputFile);
+      const { outputFile: _file, ...shown } = end;
+      if (!id || end.failed) { told.push(shown); continue; }
+      if (this.shellExits.has(id)) {
+        const failed = this.shellExits.get(id);
+        this.shellExits.delete(id);
+        told.push({ ...shown, ...(failed ? { failed } : {}) });
+        continue;
+      }
+      const timer = setTimeout(() => { this.heldEnds.delete(id); this.tellLevel([shown]); }, COMMAND_EXIT_WAIT_MS);
+      timer.unref?.();
+      this.heldEnds.set(id, { end: shown, timer });
+    }
+    this.tellLevel(told);
+  }
+
+  /** How each Claude background shell that ended exited (undefined: it finished), by task id, until its end is told. */
+  private readonly shellExits = new Map<string, string | undefined>();
+  /** Command ends waiting on their shell's notification, by task id. */
+  private readonly heldEnds = new Map<string, { end: EndedCommand; timer: NodeJS.Timeout }>();
+
+  /** A background shell's notification: how it exited, for its end (commandsChanged). */
+  private shellEnded(id: string, status: string, summary: string): void {
+    const failed = shellFailure(status, summary);
+    const held = this.heldEnds.get(id);
+    if (held) {
+      clearTimeout(held.timer);
+      this.heldEnds.delete(id);
+      this.tellLevel([{ ...held.end, ...(failed ? { failed } : {}) }]);
+      return;
+    }
+    this.shellExits.set(id, failed);
+    if (this.shellExits.size > 50) this.shellExits.delete(this.shellExits.keys().next().value!);
+  }
+
+  /** The level as it is now, with the commands that just ended, told to the window that follows the work. */
+  private tellLevel(ended: readonly EndedCommand[] = []): void {
+    const level: BackgroundWork = { ...this.work.fullLevel(), ...(ended.length ? { ended: [...ended] } : {}) };
     const listener = this.turn && !this.turn.done ? this.turn.observer.onBackgroundWork : this.background?.observer.onBackgroundWork;
     if (listener) listener.call(this.turn && !this.turn.done ? this.turn.observer : this.background!.observer, level);
     else this.reportBackground?.(level);
@@ -1696,6 +1753,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   private settleTask(message: Json): void {
     const ended = this.vendorTasks.frame(message);
+    if (ended?.work.kind === 'command') this.shellEnded(ended.work.id, ended.status, ended.summary);
     if (!ended || ended.work.kind !== 'agent') return;
     void endedAgentWork(ended.work, ended.status, ended.summary, ended.outputFile)
       .then((work) => this.agentEnded(work)).catch(quiet('harness/transport/acp-client'));

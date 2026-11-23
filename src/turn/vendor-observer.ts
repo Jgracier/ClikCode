@@ -95,8 +95,8 @@ export function createVendorObserver(ctx: VendorTurnContext) {
       backgroundNow = mergeBackgroundWork(backgroundNow, update);
       if (session.pendingTurn) {
         // Terminals stay live-only: a saved turn must not claim one is
-        // still running on the next open.
-        const { terminals: _live, ...ends } = backgroundNow ?? {};
+        // still running on the next open. A command's end is told once, live.
+        const { terminals: _live, ended: _ended, ...ends } = backgroundNow ?? {};
         const kept = mergeBackgroundWork(undefined, ends);
         if (kept) session.pendingTurn.background = kept; else delete session.pendingTurn.background;
         if (kept?.agents) session.pendingTurn.pendingBackground = kept.agents; else delete session.pendingTurn.pendingBackground;

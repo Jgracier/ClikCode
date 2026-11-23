@@ -2,8 +2,12 @@
  * tracked command is ended (its own group, never the vendor's; never by name). Real children. */
 import { spawn } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
-import { CommandSampler, KEEP_MARK, describeCommands, formatAge, killCommand, staleVerdict, type CommandPolicy } from './background-commands.js';
-import { createAcpSession } from './acp-client.js';
+import { appendFile, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { CommandSampler, KEEP_MARK, describeCommands, formatAge, killCommand, staleVerdict, type CommandPolicy, type CommandStats } from './background-commands.js';
+import { commandLastLine, type BackgroundWork } from '../protocol/background-agents.js';
+import { createAcpSession, shellFailure } from './acp-client.js';
 import { processAlive } from './process-group.js';
 
 const POLICY: CommandPolicy = { maxLifetimeMs: 2 * 3_600_000, hotMs: 30 * 60_000, hotCpuPercent: 90 };
@@ -26,14 +30,65 @@ describe('staleVerdict', () => {
 });
 
 describe('describeCommands', () => {
-  it('says what is being waited on: label, age, cpu and silence', () => {
-    const now = 1_000_000_000_000;
-    expect(describeCommands([{ pid: 9, label: 'node scripts/pre-push-related.mjs --all', startedAt: now - 32 * HOUR, cpuPercent: 100 }], now))
-      .toBe('waiting on background command: node scripts/pre-push-related.mjs --all · running 32h · cpu 100% · no output');
-    expect(describeCommands([{ pid: 9, label: 'a', startedAt: now - 60_000, lastOutputAt: now - 5_000 }, { pid: 10, label: 'b', startedAt: now - 5_000 }], now))
-      .toBe('waiting on background command: a · running 1m · output 5s ago · +1 more');
+  const now = 1_000_000_000_000;
+  it('says the command and the newest line it printed, never its cpu', () => {
+    expect(describeCommands([{ pid: 9, label: 'publish', startedAt: now - 6 * 60_000, cpuPercent: 100, lastOutputAt: now - 2_000, lastLine: 'running tests' }], now))
+      .toBe('publish · running tests');
+    expect(describeCommands([{ pid: 9, label: 'a', startedAt: now - 60_000, lastOutputAt: now - 5_000, lastLine: 'ok' }, { pid: 10, label: 'b', startedAt: now - 5_000 }], now))
+      .toBe('a · ok · +1 more');
     expect(describeCommands([], now)).toBeUndefined();
     expect(formatAge(90 * 60_000)).toBe('1h 30m');
+  });
+
+  it('says nothing of silence until it has lasted five minutes, then how long', () => {
+    expect(describeCommands([{ pid: 9, label: 'sleep 600', startedAt: now - 4 * 60_000 }], now)).toBe('sleep 600');
+    expect(describeCommands([{ pid: 9, label: 'sleep 600', startedAt: now - 7 * 60_000 }], now)).toBe('sleep 600 · quiet 7m');
+    expect(describeCommands([{ pid: 9, label: 'pnpm test', startedAt: now - 3_600_000, lastOutputAt: now - 5 * 60_000, lastLine: 'waiting for db' }], now))
+      .toBe('pnpm test · waiting for db · quiet 5m');
+    expect(describeCommands([{ pid: 9, label: 'x', startedAt: now - 32 * HOUR, cpuPercent: 100 }], now)).not.toMatch(/cpu|no output/);
+  });
+
+  it('cuts the line to the room it has', () => {
+    const line = describeCommands([{ pid: 9, label: 'build', startedAt: now - 1000, lastOutputAt: now, lastLine: 'x'.repeat(200) }], now, 40)!;
+    expect(line.startsWith('build · xxx')).toBe(true);
+    expect(line.length).toBeLessThanOrEqual(40);
+    expect(line.endsWith('…')).toBe(true);
+  });
+});
+
+describe('shellFailure', () => {
+  it('reads how a Claude background shell exited from its notification', () => {
+    expect(shellFailure('completed', 'Background command "x" completed (exit code 0)')).toBeUndefined();
+    expect(shellFailure('completed', 'Background command "x" completed (exit code 1)')).toBe('exit 1');
+    expect(shellFailure('failed', 'Background command "x" failed with exit code 127')).toBe('exit 127');
+    expect(shellFailure('killed', '')).toBe('killed');
+  });
+});
+
+describe('commandLastLine', () => {
+  it('is the newest non-empty line, plain', () => {
+    expect(commandLastLine('one\n\u001b[32mtwo  ok\u001b[0m\n\n  \n')).toBe('two ok');
+    expect(commandLastLine('progress 10%\rprogress 90%\r')).toBe('progress 90%');
+    expect(commandLastLine('\n \n')).toBeUndefined();
+  });
+});
+
+describe('CommandSampler output', () => {
+  it('reads the newest line of a command\'s output file, again only when it changed', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-cmd-out-'));
+    try {
+      const file = join(dir, 'task.output');
+      await writeFile(file, 'starting\nrunning tests\n');
+      const sampler = new CommandSampler();
+      const stats: CommandStats = { pid: 424242, label: 'x', outputFile: file };
+      expect(await sampler.readOutput(stats)).toBe(true);
+      expect(stats).toMatchObject({ lastLine: 'running tests' });
+      expect(await sampler.readOutput(stats)).toBe(false);
+      await appendFile(file, '12 passed\n\n');
+      await utimes(file, new Date(), new Date(Date.now() + 5_000));
+      expect(await sampler.readOutput(stats)).toBe(true);
+      expect(stats.lastLine).toBe('12 passed');
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
 
@@ -78,10 +133,11 @@ const agent = (command: string): string => `
   } });
 `;
 
-async function leaving(command: string, commandPolicy: CommandPolicy) {
+async function leaving(command: string, commandPolicy: CommandPolicy, onBackgroundWork?: (work: BackgroundWork) => void) {
   const session = createAcpSession({ commandWatchMs: 150, commandPolicy });
   const turn = await session.runTurn({
     binary: process.execPath, command: 'fake', argv: ['-e', agent(command)], cwd: process.cwd(), prompt: 'go', environment: {}, permissionMode: 'ask',
+    ...(onBackgroundWork ? { onBackgroundWork } : {}),
   });
   expect(turn.text).toBe('ok');
   await vi.waitFor(async () => expect(await session.backgroundWorkRunning()).toBe(true), { timeout: 5_000 });
@@ -104,6 +160,18 @@ describe.skipIf(process.platform !== 'linux')('a command a turn left running', (
       await vi.waitFor(async () => expect(await session.backgroundWorkRunning()).toBe(false), { timeout: 5_000 });
     } finally { await session.close(); }
   });
+
+  it('is told with the newest line it printed, and once it ends, that it ended and how long it ran', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-cmd-told-'));
+    const levels: BackgroundWork[] = [];
+    const { session } = await leaving(`exec >${join(dir, 'job.output')}; echo first; echo 'step two'; sleep 1.5; true`, POLICY, (work) => levels.push(work));
+    try {
+      // The level names commands only beside the vendor's terminal count (which this fake agent never sends): read them directly.
+      await vi.waitFor(async () => expect((await session.backgroundCommands())[0]?.lastLine).toBe('step two'), { timeout: 8_000 });
+      await vi.waitFor(() => expect(levels.flatMap((level) => level.ended ?? [])).toEqual([expect.objectContaining({ label: expect.stringContaining('sleep 1.5'), ms: expect.any(Number) })]), { timeout: 12_000 });
+      expect(levels.flatMap((level) => level.ended ?? [])[0]!.failed).toBeUndefined();
+    } finally { await session.close(); await rm(dir, { recursive: true, force: true }); }
+  }, 20_000);
 
   it('is ended by the watch on its own once it is stale', async () => {
     const { session } = await leaving('sleep 62; true', { maxLifetimeMs: 1, hotMs: 1e12, hotCpuPercent: 90 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   activityResult, answerWriting, decisionRow, isApprovalWaitPhase, endsWithSummary, estimateTokens, liveTokenTarget, smoothTokens, tokenMeterLabel, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
-  backgroundTerminalsLabel, waitingOnCommands,
+  backgroundTerminalsLabel, waitingOnCommands, ENDED_SHOWN_MS,
 } from './turn-flow.js';
 import type { TurnUsage } from './turn-usage.js';
 
@@ -178,8 +178,8 @@ describe('a list call is an explore-group member (standard section 6)', () => {
 
 describe('a turn that waits on background commands only', () => {
   it('says what it waits on in place of thinking, and nothing of the kind once it is doing something', () => {
-    const waitingOn = waitingOnCommands([{ pid: 9, label: 'node x.mjs', startedAt: Date.now() - 32 * 3_600_000, cpuPercent: 100 }]);
-    expect(waitingOn).toBe('waiting on background command: node x.mjs · running 32h · cpu 100% · no output');
+    const waitingOn = waitingOnCommands([{ pid: 9, label: 'node x.mjs', startedAt: Date.now() - 60_000, cpuPercent: 100, lastOutputAt: Date.now(), lastLine: 'step 3 of 9' }]);
+    expect(waitingOn).toBe('node x.mjs · step 3 of 9');
     expect(turnStatus({ phase: 'thinking', waitingOn }).label).toBe(waitingOn);
     expect(turnStatus({ phase: 'background work', waitingOn }).label).toBe(waitingOn);
     expect(turnStatus({ phase: 'thinking' }).label).toBe('Working');
@@ -187,5 +187,14 @@ describe('a turn that waits on background commands only', () => {
     expect(turnStatus({ phase: 'thinking', waitingOn, toolPhase: 'Running tests' }).label).toBe('Running tests');
     expect(turnStatus({ phase: 'thinking', waitingOn, asking: true }).label).toBe('waiting for you');
     expect(waitingOnCommands([])).toBeUndefined();
+  });
+
+  it('says a command\'s end for a moment, in the same place: done in, or failed and why', () => {
+    const now = 1_000_000_000_000;
+    expect(waitingOnCommands([], now, 80, [{ label: 'publish', at: now - 1_000, ms: 17 * 60_000 }])).toBe('publish · done in 17m');
+    expect(waitingOnCommands(undefined, now, 80, [{ label: 'pnpm test', at: now, ms: 5_000, failed: 'exit 1' }])).toBe('pnpm test · failed: exit 1');
+    expect(waitingOnCommands([], now, 80, [{ label: 'publish', at: now - ENDED_SHOWN_MS, ms: 1 }])).toBeUndefined();
+    // A command still running is what is said.
+    expect(waitingOnCommands([{ pid: 1, label: 'b', startedAt: now }], now, 80, [{ label: 'a', at: now }])).toBe('b');
   });
 });

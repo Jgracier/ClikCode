@@ -337,6 +337,9 @@ export function setBackgroundWork(this: TerminalHarnessPrompter, work: Backgroun
   if (this.backgroundTerminals === terminals && JSON.stringify(this.backgroundWork) === JSON.stringify(work)) return;
   this.backgroundTerminals = terminals;
   this.backgroundWork = work;
+  // A command's end is told once (a snapshot may tell it again): kept here for the moment the status line says it.
+  const fresh = (work?.ended ?? []).filter((ended) => !this.endedCommands.some((seen) => seen.at === ended.at && seen.label === ended.label));
+  if (fresh.length) this.endedCommands = [...this.endedCommands, ...fresh].slice(-5);
   this.schedulePaint();
 }
 

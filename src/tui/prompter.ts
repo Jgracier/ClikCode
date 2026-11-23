@@ -17,7 +17,7 @@ import type { HarnessPrompter, JournalState, PickerOption, PickerSettings } from
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, commonPrefixLength, rebaseActivityOffsets } from './render/activity-log.js';
 import type { OpenTool, Thought } from '../harness/protocol/activity-view.js';
-import type { BackgroundWork } from '../harness/protocol/background-agents.js';
+import type { BackgroundWork, EndedCommand } from '../harness/protocol/background-agents.js';
 import { logProcessWarnings } from './warnings.js';
 import { CallGrouping, GroupRegistry } from './render/call-groups.js';
 import { GroupExpansion } from './render/group-rows.js';
@@ -81,6 +81,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Background terminals the vendor says are running (the footer indicator). */
   backgroundTerminals = 0;
   backgroundWork?: BackgroundWork;
+  /** Background commands that ended lately, newest last: the status line says each end for a moment (waitingOnCommands). */
+  endedCommands: EndedCommand[] = [];
   /** Orders answer text against call starts for answerWriting: a counter, so
    * two events in one millisecond keep their order. */
   statusOrder = 0;
@@ -487,6 +489,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.thought = undefined;
       this.thoughtStart = undefined;
       this.backgroundWork = undefined;
+      this.endedCommands = [];
       this.backgroundTerminals = 0;
       this.planEntries = [];
       this.planStart = undefined;

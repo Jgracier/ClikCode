@@ -67,14 +67,17 @@ export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, wi
   // phase the turn reported. The clock stays on this line. The call's row
   // does not keep a second one.
   const tool = this.toolStatus();
+  // The room the label has: the row less the spinner and the clock.
+  const room = Math.max(12, width - 3 - terminalCellWidth(` · ${elapsed}`));
+  const waitingOn = !turn.cancelled && !tool && !this.thought ? waitingOnCommands(this.backgroundWork?.commands, now, room, this.endedCommands) : undefined;
   const status = turnStatus({
     phase: turn.label,
     ...(!turn.cancelled && tool ? { toolPhase: tool.phase } : {}),
     ...(this.thought && !turn.cancelled ? { thought: this.thought.text } : {}),
     asking: Boolean(this.pendingApproval),
     writing: answerWriting({ writingAt: turn.writingAt, callAt: turn.callAt }),
-    // Only background commands running: say what is waited on, not 'thinking'.
-    ...(!turn.cancelled && !tool && !this.thought && waitingOnCommands(this.backgroundWork?.commands) ? { waitingOn: waitingOnCommands(this.backgroundWork?.commands)! } : {}),
+    // Only background commands running (or one just ended): say what is waited on, not 'thinking'.
+    ...(waitingOn ? { waitingOn } : {}),
   });
   // An approval or a sign-in: the wait is on the user.
   const asking = this.waitingOnUser();

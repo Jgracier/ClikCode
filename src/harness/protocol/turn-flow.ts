@@ -7,7 +7,7 @@
 import type { FileDiff } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import { compactCount, formatElapsed } from './format.js';
-import { describeCommands, type BackgroundCommand } from './background-agents.js';
+import { describeCommands, describeEndedCommand, type BackgroundCommand, type EndedCommand } from './background-agents.js';
 import type { TurnUsage } from './turn-usage.js';
 import { SHIMMER_WIDTH } from './timings.js';
 import { STOPPED } from './wording.js';
@@ -304,9 +304,16 @@ export function backgroundTerminalsLabel(count: number | undefined): string | un
   return terminals ? `${plural(terminals, 'background terminal')} running` : undefined;
 }
 
-/** What a turn that has nothing of its own to do says while background commands are all it waits on, by pid, with
- * their age, cpu and silence (`waiting on background command: <label> · running 32h · cpu 100% · no output`): the
- * generic 'thinking' says the model is working, and it is not. Used as turnStatus's `waitingOn`. */
-export function waitingOnCommands(commands: readonly BackgroundCommand[] | undefined, now: number = Date.now()): string | undefined {
-  return commands?.length ? describeCommands(commands, now) : undefined;
+/** What a turn that has nothing of its own to do says while background commands are all it waits on: the command,
+ * the newest line it printed, and its silence only once that is long (`publish · running tests` / `publish · quiet 7m`)
+ * -- the generic 'thinking' says the model is working, and it is not. A command that just ended says so for a moment
+ * in the same place (`publish · done in 17m`, `publish · failed: exit 1`). Used as turnStatus's `waitingOn`; the
+ * spinner and the turn's clock stay around it. `width` is the room the label has. */
+export function waitingOnCommands(commands: readonly BackgroundCommand[] | undefined, now: number = Date.now(), width?: number, ended?: readonly EndedCommand[]): string | undefined {
+  if (commands?.length) return describeCommands(commands, now, width);
+  const last = ended?.filter((item) => now - item.at < ENDED_SHOWN_MS).at(-1);
+  return last ? describeEndedCommand(last, width) : undefined;
 }
+
+/** How long a command's end stays on the status line before the line goes back to what the turn is doing. */
+export const ENDED_SHOWN_MS = 8_000;

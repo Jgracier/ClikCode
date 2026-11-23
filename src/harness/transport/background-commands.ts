@@ -2,15 +2,16 @@
  *
  * A vendor reports "1 background terminal" and nothing else; the processes behind it are known by
  * their pids (persistent-session.ts leftCommands). This reads each one from /proc -- age, cpu, the
- * last time its output file changed -- so a status line can say what is being waited on, and so a
+ * last time its output file changed and the newest line in it -- so a status line can say what is
+ * being waited on (the line, not the cpu, which only the stale policy reads), and so a
  * command that has run for hours at full cpu without a word (2026-10-30: a vitest worker spinning
  * for 32 h under a stopped sub-agent held a chat 'thinking' all that time) is marked stale and ended.
  *
  * Everything that ends a process here ends it BY PID, from a tracked command: its own process group
  * when it leads one that is not the vendor's, else the process and the processes below it. Never by
  * name or pattern. */
-import { readFile, readdir, stat } from 'node:fs/promises';
-import { describeCommands, formatAge, type BackgroundCommand } from '../protocol/background-agents.js';
+import { open, readFile, readdir, stat } from 'node:fs/promises';
+import { commandLastLine, describeCommands, formatAge, type BackgroundCommand } from '../protocol/background-agents.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { commandLine, outputFile, processAlive } from './process-group.js';
 import { sleep } from '../../runtime/sleep.js';
@@ -80,9 +81,27 @@ async function bootTimeMs(): Promise<number | undefined> {
   return Number.isFinite(seconds) ? (bootTime = seconds * 1000) : undefined;
 }
 
-/** The cpu use of a command between two samples, remembered per pid here. */
+/** How much of an output file's end is read for its newest line. */
+const TAIL_BYTES = 4096;
+
+/** The newest non-empty line in the last TAIL_BYTES of `file`, which is `size` bytes long. */
+async function fileLastLine(file: string, size: number): Promise<string | undefined> {
+  const handle = await open(file, 'r').catch(quiet('harness/transport/background-commands'));
+  if (!handle) return undefined;
+  try {
+    const length = Math.min(size, TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, size - length);
+    const line = commandLastLine(buffer.subarray(0, bytesRead).toString('utf8'));
+    return line && line.length > 300 ? line.slice(0, 300) : line;
+  } finally { await handle.close().catch(quiet('harness/transport/background-commands')); }
+}
+
+/** The cpu use of a command between two samples, and its output's newest line, remembered per pid here. */
 export class CommandSampler {
   private readonly last = new Map<number, { at: number; ticks: number }>();
+  /** The newest line read from each pid's output, by the file's size and mtime when it was read. */
+  private readonly lines = new Map<number, { size: number; mtimeMs: number; line?: string }>();
 
   /** `pid` as it is now. Linux only for age and cpu; elsewhere just the label. */
   async sample(pid: number, extras: { label?: string; outputFile?: string } = {}, now: number = Date.now(), policy: CommandPolicy = commandPolicy()): Promise<CommandStats> {
@@ -100,18 +119,33 @@ export class CommandSampler {
       if (before && now > before.at) stats.cpuPercent = Math.max(0, ((times.cpuTicks - before.ticks) / TICKS_PER_SECOND) / ((now - before.at) / 1000) * 100);
       else if (stats.startedAt !== undefined && now > stats.startedAt) stats.cpuPercent = Math.max(0, (times.cpuTicks / TICKS_PER_SECOND) / ((now - stats.startedAt) / 1000) * 100);
     }
-    if (output) {
-      const info = await stat(output).catch(quiet('harness/transport/background-commands'));
-      if (info && info.size > 0) stats.lastOutputAt = info.mtimeMs;
-    }
+    await this.readOutput(stats);
     if (text.includes(KEEP_MARK)) stats.keep = true;
     const stale = staleVerdict(stats, now, policy);
     if (stale) stats.stale = stale;
     return stats;
   }
 
+  /** `stats` with its output read again (when it last changed, its newest line); the file is read only when it
+   * grew or changed since the last read. True when what it shows changed. */
+  async readOutput(stats: CommandStats): Promise<boolean> {
+    if (!stats.outputFile) return false;
+    const before = [stats.lastOutputAt, stats.lastLine];
+    const info = await stat(stats.outputFile).catch(quiet('harness/transport/background-commands'));
+    if (info && info.size > 0) {
+      stats.lastOutputAt = info.mtimeMs;
+      const seen = this.lines.get(stats.pid);
+      // A tail that is all blanks keeps the last line that said something.
+      const line = seen && seen.size === info.size && seen.mtimeMs === info.mtimeMs ? seen.line : await fileLastLine(stats.outputFile, info.size) ?? seen?.line;
+      this.lines.set(stats.pid, { size: info.size, mtimeMs: info.mtimeMs, ...(line ? { line } : {}) });
+      if (line) stats.lastLine = line;
+    }
+    return before[0] !== stats.lastOutputAt || before[1] !== stats.lastLine;
+  }
+
   forget(alive: ReadonlySet<number>): void {
     for (const pid of [...this.last.keys()]) if (!alive.has(pid)) this.last.delete(pid);
+    for (const pid of [...this.lines.keys()]) if (!alive.has(pid)) this.lines.delete(pid);
   }
 }
 

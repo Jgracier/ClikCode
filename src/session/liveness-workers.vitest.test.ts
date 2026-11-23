@@ -108,7 +108,7 @@ describe('a chat whose turn is over but whose background work runs', () => {
     const workers = await liveWorkers();
     expect(workers.background('spinning')?.commands?.[0]?.pid).toBe(3555608);
     const pending = await livePendingTurns([{ id: 'spinning', status: 'active' } as HarnessSession], workers.isLive, workers.background, workers.runningTurn);
-    expect(pending.get('spinning')?.waitingOn).toBe('waiting on background command: node scripts/pre-push-related.mjs · running 32h · cpu 100% · no output');
+    expect(pending.get('spinning')?.waitingOn).toBe('node scripts/pre-push-related.mjs · quiet 32h');
   });
 
   it('does not treat a stale pending journal as a live turn without the worker turn marker', async () => {
