@@ -68,7 +68,11 @@ export type IdeRequest =
    * keeps its saved workspace, a new one starts in this machine's home. */
   | { type: 'open'; requestId: string; workspace?: string; mode: 'new' | 'continue' | 'resume'; sessionId?: string; features?: readonly IdeFeature[];
     /** What the client kept of this chat from last time (`session-delta`): the reply is only what follows it, when it is the start of the chat. */
-    held?: import('./session-delta.js').HeldChat }
+    held?: import('./session-delta.js').HeldChat;
+    /** Revision 13: the ClikDeploy key this chat's ClikDeploy tools run as, instead of the machine's sign-in
+     * (agent/mcp/chat-clikdeploy-key.ts): the ClikDeploy canvas running its agent on this machine's
+     * subscription hands in its turn's key. An older bridge ignores it. */
+    clikdeploy?: { url: string; key: string } }
   /** A composer line, exactly as typed: conversation, `/command`, or `!shell`.
    * During a turn it steers (or queues); `id` comes back on the worker's
    * `submission` event. */

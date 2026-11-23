@@ -93,11 +93,13 @@ export function createClikDeployProxy(options: ClikDeployProxyOptions = {}): (me
     return { transport: current.transport, connection, headers: current.headers };
   }
 
-  /** The headers of this call: the admin unlock and the chat's mode as they are now. */
+  /** The headers of this call: the admin unlock and the chat's mode as they are now. A key the chat
+   * was handed (the canvas turn's) carries neither: the machine's admin unlock is the machine's, and
+   * the turn that handed the key already runs under the mode its person chose there. */
   async function prepare(headers: Record<string, string>, connection: ClikDeployConnection): Promise<void> {
-    const token = connection.config.get('adminMfaToken');
+    const token = connection.chat ? undefined : connection.config.get('adminMfaToken');
     if (typeof token === 'string' && token) headers['x-admin-mfa'] = token; else delete headers['x-admin-mfa'];
-    const mode = await permissionMode().catch(quiet(AREA));
+    const mode = connection.chat ? undefined : await permissionMode().catch(quiet(AREA));
     if (mode) headers[PERMISSION_MODE_HEADER] = mode; else delete headers[PERMISSION_MODE_HEADER];
   }
 

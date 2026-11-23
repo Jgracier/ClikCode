@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CLIKDEPLOY_CONFIG_DIR_ENV, clikDeploySessionServer } from './clikdeploy-session.js';
+import { CLIKDEPLOY_CHAT_ENV, CLIKDEPLOY_CONFIG_DIR_ENV, clikDeployConnection, clikDeploySessionServer } from './clikdeploy-session.js';
+import { forgetChatClikDeployKey, readChatClikDeployKey, saveChatClikDeployKey, validChatClikDeployKey } from './chat-clikdeploy-key.js';
 import { ampMcpConfig, codexMcpLaunch, globalMcpServers } from '../../harness/transport/acp-mcp-servers.js';
 import { nativeMcpConfig } from '../../harness/transport/native/mcp-config.js';
 
@@ -10,7 +11,7 @@ const URL_ = 'http://127.0.0.1:9';
 const KEY = 'cdk_test_secret_key_123';
 let root: string;
 const saved: Record<string, string | undefined> = {};
-const names = ['XDG_CONFIG_HOME', 'CLIKDEPLOY_API_URL_OVERRIDE', 'CLIKCODE_HOME', 'CLIKCODE_MCP_ENTRY'];
+const names = ['XDG_CONFIG_HOME', 'CLIKDEPLOY_API_URL_OVERRIDE', 'CLIKCODE_HOME', 'CLIKCODE_MCP_ENTRY', 'CLIKCODE_SESSION_ID'];
 
 async function signIn(): Promise<void> {
   await mkdir(join(root, 'config', 'clikdeploy-nodejs'), { recursive: true });
@@ -66,5 +67,39 @@ describe('the ClikDeploy session server', () => {
     await signIn();
     await writeFile(join(root, 'state', 'mcp.json'), JSON.stringify({ mcpServers: { clikdeploy: { command: 'mine', args: [] } } }));
     expect(await globalMcpServers('some-harness', undefined, '/nonexistent-home')).toEqual([{ name: 'clikdeploy', transport: 'stdio', command: 'mine', args: [], env: {} }]);
+  });
+});
+
+describe('a ClikDeploy key handed to one chat (the canvas turn running on this machine)', () => {
+  const HANDED = { url: 'https://clikdeploy.example', key: 'cdk_canvas_turn_key' };
+
+  it('only keeps an https (or loopback) URL and a key, and refuses a chat id that is not one', () => {
+    expect(validChatClikDeployKey({ url: 'https://a.example/', key: ' k ' })).toEqual({ url: 'https://a.example', key: 'k' });
+    expect(validChatClikDeployKey({ url: 'http://a.example', key: 'k' })).toBeUndefined();
+    expect(validChatClikDeployKey({ url: 'http://127.0.0.1:3000', key: 'k' })).toBeDefined();
+    expect(validChatClikDeployKey({ url: 'https://a.example', key: '' })).toBeUndefined();
+    expect(() => saveChatClikDeployKey('../escape', HANDED)).toThrow();
+  });
+
+  it('gives a chat ClikDeploy tools on a machine never signed in, running as the handed key', async () => {
+    saveChatClikDeployKey('chat-1', HANDED);
+    process.env.CLIKCODE_SESSION_ID = 'chat-1';
+    const spec = clikDeploySessionServer();
+    expect((spec as { env?: Record<string, string> } | undefined)?.env?.[CLIKDEPLOY_CHAT_ENV]).toBe('chat-1');
+    // The key never goes in the spec (it is copied into vendor command lines).
+    expect(JSON.stringify(spec)).not.toContain(HANDED.key);
+    const connection = clikDeployConnection({ ...process.env, [CLIKDEPLOY_CHAT_ENV]: 'chat-1' });
+    expect(connection).toMatchObject({ url: HANDED.url, key: HANDED.key, chat: true });
+  });
+
+  it('wins over the machine sign-in for that chat only; other chats keep the machine sign-in', async () => {
+    await signIn();
+    saveChatClikDeployKey('chat-2', HANDED);
+    expect(clikDeployConnection({ ...process.env, [CLIKDEPLOY_CHAT_ENV]: 'chat-2' }).key).toBe(HANDED.key);
+    const machine = clikDeployConnection({ ...process.env, [CLIKDEPLOY_CHAT_ENV]: 'other-chat' });
+    expect(machine.key).toBe(KEY);
+    expect(machine.chat).toBeUndefined();
+    forgetChatClikDeployKey('chat-2');
+    expect(readChatClikDeployKey('chat-2')).toBeUndefined();
   });
 });

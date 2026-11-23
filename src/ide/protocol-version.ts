@@ -46,6 +46,7 @@
  *      older bridge started without that variable would answer as a one-chat bridge
  *  12  `upload-*` and `send.attachments`: a chat on another device sends files to this machine, and the
  *      turn that names them takes them (an image is shown to the model, any other file is kept for the agent)
+ *  13  `open.clikdeploy`: the key the opened chat's ClikDeploy tools run as (the ClikDeploy canvas's turn)
  *
  * ClikCode and the extension are published separately (the CLI first, in the
  * same ClikDeploy run), so a bump reaches npm before the extension that
@@ -53,7 +54,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 12,
+  revision: 13,
   oldestSupported: 1,
   oldestRevision: 11,
 } as const;

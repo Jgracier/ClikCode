@@ -55,6 +55,7 @@ import { messageOf, TurnFailed } from './bridge-support.js';
 import { WorkerLink } from './bridge-worker.js';
 import { warmSessionWorker } from '../worker/client.js';
 import { shouldWarmVendorChat } from '../worker/warm-policy.js';
+import { saveChatClikDeployKey, validChatClikDeployKey } from '../agent/mcp/chat-clikdeploy-key.js';
 import type { BridgeHost } from './bridge-host.js';
 import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
 
@@ -257,7 +258,7 @@ export class IdeBridge {
             // The client's copy is the start of the chat only if its log was not rewritten since (a new generation).
             if (request.held && request.sessionId && request.held.sessionId === request.sessionId && this.features.has('session-delta')
               && request.held.gen && (await loadChatLog(request.sessionId).catch(quiet('ide/bridge')))?.gen === request.held.gen) this.delta.adopt(request.held);
-            await this.open(request.workspace ?? '', request.mode, request.sessionId);
+            await this.open(request.workspace ?? '', request.mode, request.sessionId, request.clikdeploy);
             // `gen`: what a viewer keeps with its copy to say next time which log it is the start of.
             const gen = this.sessionId ? (await loadChatLog(this.sessionId).catch(quiet('ide/bridge')))?.gen : undefined;
             this.channel.send({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId: this.sessionId, ...(gen ? { gen } : {}) } });
@@ -486,7 +487,7 @@ export class IdeBridge {
 
   // ---- conversations -------------------------------------------------------
 
-  private async open(workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string): Promise<void> {
+  private async open(workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string, clikdeploy?: unknown): Promise<void> {
     // A folder this machine does not have is its home instead, said as a notice (session/attach.ts).
     const notices: string[] = [];
     // Where the time of an open goes, one event: a chat with work running is slower to open, and this says which step.
@@ -497,6 +498,12 @@ export class IdeBridge {
       try { return await work(); } finally { steps[name] = Date.now() - at; }
     };
     const id = await timed('openMs', () => openConversation(workspace, mode, ref, { sameWorkspace: true, pin: true, notice: (message) => notices.push(message) }));
+    // Before the chat's worker starts: its ClikDeploy tools are set up with the key it was handed.
+    if (clikdeploy !== undefined) {
+      const handed = validChatClikDeployKey(clikdeploy);
+      if (!handed) throw new Error('The ClikDeploy key for this chat is not valid.');
+      saveChatClikDeployKey(id, handed);
+    }
     const { session } = await timed('currentMs', () => this.current(id));
     // As a terminal does on open: a conversation with no provider gets the one
     // the user is signed in to, without asking; with none, the first message

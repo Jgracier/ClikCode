@@ -14,22 +14,30 @@ import { dirname } from 'node:path';
 import type { McpServerSpec } from './config.js';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { stateDirectory } from '../../session/store/paths.js';
+import { readChatClikDeployKey } from './chat-clikdeploy-key.js';
 
 export const CLIKDEPLOY_SESSION_MCP_NAME = 'clikdeploy';
 /** Where the sign-in configs are, for a proxy started under a vendor's redirected HOME or XDG directories. */
 export const CLIKDEPLOY_CONFIG_DIR_ENV = 'CLIKCODE_CLIKDEPLOY_CONFIG_DIR';
 export const CLIKCODE_CONFIG_DIR_ENV = 'CLIKCODE_GATEWAY_CONFIG_DIR';
+/** The chat whose own ClikDeploy key (chat-clikdeploy-key.ts) this proxy uses, when it was handed one. */
+export const CLIKDEPLOY_CHAT_ENV = 'CLIKCODE_CLIKDEPLOY_CHAT';
 
-export interface ClikDeployConnection { url: string; key: string; config: Conf; codeConfig: Conf }
+/** `chat`: the key is one the chat was handed (the canvas turn's), not this machine's sign-in. */
+export interface ClikDeployConnection { url: string; key: string; config: Conf; codeConfig: Conf; chat?: true }
 
 const configAt = (projectName: string, cwd: string | undefined): Conf =>
   new Conf({ projectName, configFileMode: 0o600, ...(cwd ? { cwd } : {}) });
 
-/** The ClikDeploy account this machine is signed in to: the `clikdeploy` CLI's
- * sign-in first, then ClikCode's Gateway sign-in. Throws when there is none. */
+/** The ClikDeploy account a chat's tools run as: the key the chat was handed, when it was
+ * (chat-clikdeploy-key.ts, read on every call so the next turn's key is used at once); else
+ * this machine's sign-in, the `clikdeploy` CLI's first, then ClikCode's Gateway sign-in.
+ * Throws when there is none. */
 export function clikDeployConnection(env: NodeJS.ProcessEnv = process.env): ClikDeployConnection {
   const cli = configAt('clikdeploy', env[CLIKDEPLOY_CONFIG_DIR_ENV]);
   const code = configAt('clikcode', env[CLIKCODE_CONFIG_DIR_ENV]);
+  const handed = readChatClikDeployKey(env[CLIKDEPLOY_CHAT_ENV]);
+  if (handed) return { url: handed.url, key: handed.key, config: cli, codeConfig: code, chat: true };
   const cliUrl = (env.CLIKDEPLOY_API_URL_OVERRIDE || env.CLIKDEPLOY_API_URL || getApiUrl(cli)).replace(/\/+$/, '');
   const config = getApiKeyForUrl(cli, cliUrl) ? cli : code;
   const url = config === cli ? cliUrl : getApiUrl(code);
@@ -38,11 +46,14 @@ export function clikDeployConnection(env: NodeJS.ProcessEnv = process.env): Clik
   return { url, key, config, codeConfig: code };
 }
 
-/** The stdio server that gives a harness session ClikDeploy's tools; undefined while not signed in. */
+/** The stdio server that gives a harness session ClikDeploy's tools; undefined while neither
+ * this chat (CLIKCODE_SESSION_ID, set by its worker) was handed a key nor the machine is signed in. */
 export function clikDeploySessionServer(entry: string | undefined = process.env.CLIKCODE_MCP_ENTRY || process.argv[1]): McpServerSpec | undefined {
   if (!entry) return undefined;
+  const chat = process.env.CLIKCODE_SESSION_ID;
+  const handed = chat && readChatClikDeployKey(chat) ? chat : undefined;
   let connection: ClikDeployConnection;
-  try { connection = clikDeployConnection(); } catch { return undefined; }
+  try { connection = clikDeployConnection(handed ? { ...process.env, [CLIKDEPLOY_CHAT_ENV]: handed } : process.env); } catch { return undefined; }
   return {
     name: CLIKDEPLOY_SESSION_MCP_NAME, transport: 'stdio', command: process.execPath, args: [entry, 'clikdeploy-mcp-serve'],
     env: {
@@ -50,6 +61,7 @@ export function clikDeploySessionServer(entry: string | undefined = process.env.
       CLIKCODE_HOME: stateDirectory(),
       [CLIKDEPLOY_CONFIG_DIR_ENV]: dirname(connection.config.path),
       [CLIKCODE_CONFIG_DIR_ENV]: dirname(connection.codeConfig.path),
+      ...(handed ? { [CLIKDEPLOY_CHAT_ENV]: handed } : {}),
     },
   };
 }
