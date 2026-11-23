@@ -4,7 +4,7 @@
  * takes that child instead of starting another. Nothing runs a vendor here:
  * the take-up and the child are stand-ins. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AiHarnessAccount } from '../harness/definition.js';
@@ -60,6 +60,12 @@ const stateOf = (sessions: HarnessSession[], accounts: AiHarnessAccount[]): Harn
 
 beforeEach(() => {
   vi.stubEnv('CLIKCODE_HOME', mkdtempSync(join(tmpdir(), 'cc-warm-')));
+  // The account's sign-in on disk, as a warm-up requires (mayRunInBackground): its own, not
+  // whatever key or Claude profile the machine running the tests has in its environment.
+  const claudeDir = mkdtempSync(join(tmpdir(), 'cc-warm-claude-'));
+  writeFileSync(join(claudeDir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'access', refreshToken: 'refresh' } }));
+  vi.stubEnv('CLAUDE_CONFIG_DIR', claudeDir);
+  vi.stubEnv('ANTHROPIC_API_KEY', undefined);
   seen.takeUps = 0;
   seen.prepared = [];
 });
