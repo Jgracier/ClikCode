@@ -102,6 +102,10 @@ const common = {
   target: 'node22',
   logLevel: 'info',
   metafile: true,
+  // The router is this checkout's own package. Through node_modules, a worktree that borrows another
+  // checkout's node_modules bundled THAT checkout's router -- on 2026-11-23 an install from main
+  // carried a catalog 79 commits old, without the vendor compaction thresholds.
+  alias: { '@clikcode/router': join(root, 'packages/clikrouter/src') },
   define: { __CLIKCODE_VERSION__: JSON.stringify(pkg.version), __CLIKCODE_COMMIT__: JSON.stringify(commit) },
 };
 
