@@ -55,7 +55,7 @@ import { impliedHarnessCommand } from './infer-provider.js';
 import { capabilitiesText } from './capabilities-text.js';
 import { forkPoint, forkPointOptions, userMessageIndexes } from './fork-at.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
-import { canCompact, compactConversation } from './compact.js';
+import { compactConversation } from './compact.js';
 import { searchConversations } from '../../search/engine.js';
 import { searchResultsText } from '../../search/navigate.js';
 import { exportTranscript } from './export-transcript.js';
@@ -218,9 +218,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
   if (intercepted) return intercepted;
   // Availability is decided BEFORE any picker opens, so `/model` on a
   // harness without a model selector says so instead of offering a list.
-  // /compact: an agent that announced its own compaction command compacts, whatever its catalog says (compactConversation sends it).
-  const availability: SlashAvailability = route.entry.handlerKey === 'compact' && canCompact(id, session) ? { available: true }
-    : route.entry.availability(session, harness, route.args, slashRouteContextFor(session, harness).nativeCommands);
+  const availability: SlashAvailability = route.entry.availability(session, harness, route.args, slashRouteContextFor(session, harness).nativeCommands);
   // The one refusal worth turning into a question: the command needs a
   // provider and none is chosen. The command is queued on the chat the
   // picker produced (choosing a provider can branch it) rather than run on
@@ -406,9 +404,9 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     review: async () => ({ prompt: isClikCodeAgent(session) ? reviewPrompt(args) : `/review${args ? ` ${args}` : ''}`, echo: false }),
     init: async () => ({ prompt: isClikCodeAgent(session) ? initPrompt(session) : '/init', echo: false }),
     compact: async () => {
-      // No confirmation line: the compacted conversation on screen is that.
-      await compactConversation(id, session, args, (targetId, promptText) => host.runTurn(targetId, promptText));
-      return {};
+      // A compaction turn says itself ("Compacting…", then "Compacted"); a threshold or nothing to do is one line.
+      const said = await compactConversation(id, session, args, (targetId, promptText) => host.runTurn(targetId, promptText));
+      return said ? { notice: said } : {};
     },
     export: async () => {
       // Esc on the overwrite question cancels the export, quietly.

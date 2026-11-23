@@ -12,6 +12,7 @@ import { claudeShaped, parseJsonRecord } from '../protocol/json-lines.js';
 import { TaskListTracker } from '../protocol/plan-events.js';
 import { nativeSessionIdsFromValues } from '../protocol/session-ids.js';
 import { nativeUsageFromValue, StreamUsageTally, type TurnUsage } from '../protocol/turn-usage.js';
+import { COMPACTED, COMPACTING } from '../../turn/compaction.js';
 
 interface NativeResponseUpdate { text: string; mode: 'append' | 'replace' }
 type Json = Record<string, unknown>;
@@ -382,8 +383,8 @@ function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn:
  * history was replaced by a summary. Read for every Claude-shaped harness. */
 function claudeCompaction(value: Json): { phase?: string; notice?: string } | undefined {
   if (value.type !== 'system' || typeof value.parent_tool_use_id === 'string') return undefined;
-  if (value.subtype === 'compact_boundary') return { notice: 'Conversation compacted to fit the context window' };
-  if (value.subtype === 'status' && value.status === 'compacting') return { phase: 'compacting the conversation' };
+  if (value.subtype === 'compact_boundary') return { notice: COMPACTED };
+  if (value.subtype === 'status' && value.status === 'compacting') return { phase: COMPACTING };
   return undefined;
 }
 

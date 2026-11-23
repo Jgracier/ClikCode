@@ -253,7 +253,10 @@ export const conversationHandlers = {
     // Said only when something needs saying; going back is already on the screen, and the prompt is in the message box.
     return emitHarnessOutput({ panel: redone.text ? 'redo' : 'redo-done', text: redone.text, prompt: redone.prompt });
   },
-  compact: async ({ id, session, args }) => compactConversation(id, session, args, sendSessionTurn),
+  compact: async ({ id, session, args }) => {
+    const said = await compactConversation(id, session, args, sendSessionTurn);
+    if (said) emitHarnessOutput({ panel: 'compact', text: said });
+  },
   context: async ({ session }) => emitHarnessOutput({ panel: 'context', text: contextUsageText(session), usage: session.lastUsage ?? null }),
   capabilities: async ({ session }) => emitHarnessOutput({ panel: 'capabilities', text: capabilitiesText(session) }),
   redraw: async () => emitHarnessOutput({ panel: 'redraw', text: 'Nothing to repaint outside the interactive session.' }),

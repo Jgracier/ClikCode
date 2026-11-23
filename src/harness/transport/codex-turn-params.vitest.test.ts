@@ -35,8 +35,11 @@ describe('Codex per-turn parameters and native compaction', () => {
       expect(second).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } });
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(models).toEqual([{ models: { availableModels: [{ modelId: 'gpt-x', name: 'GPT X' }] } }]);
-      expect(await codex.compactThread('T')).toBe(true);
-      expect(await codex.compactThread('other')).toBe(false);
+      // A compaction turn is Codex's own thread/compact/start, settled on thread/compacted: no turn/start.
+      const compacted = await codex.runTurn({ ...base, prompt: '/compact', compact: true, permissionMode: 'ask' as const });
+      expect(compacted).toEqual({ text: '', nativeSessionId: 'T' });
+      const after = JSON.parse((await codex.runTurn({ ...base, permissionMode: 'ask' as const })).text);
+      expect(after).toMatchObject({ threadId: 'T' });
     } finally {
       await codex.close();
     }

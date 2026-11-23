@@ -306,17 +306,16 @@ describe('commands ClikCode used to emulate on a vendor', () => {
   it('are the vendor\'s own where it has them, and not available where it does not', () => {
     const bare = harness();
     const native = harness({ nativeSlashPassthrough: true });
-    for (const name of ['compact', 'review', 'init']) {
+    for (const name of ['review', 'init']) {
       expect(availability(name, bare), name).toMatchObject({ available: false, reason: `/${name} is not available for Vendor.` });
       expect(availability(name, native), name).toEqual({ available: true });
     }
-    expect(availability('compact', harness({ nativeOperations: ['compact'] }))).toEqual({ available: true });
   });
 
-  it('lists /compact as available for an agent that announced its own compaction command', () => {
-    const rows = slashPalette(session(), harness(), { native: [{ name: 'compress' }] });
-    expect(rows.find((row) => row.value === '/compact')?.detail).not.toMatch(/^unavailable/);
-    expect(slashPalette(session(), harness()).find((row) => row.value === '/compact')?.detail).toMatch(/^unavailable/);
+  it('offers /compact on every harness (ClikCode compacts where the vendor cannot), naming the threshold', () => {
+    expect(availability('compact', harness())).toEqual({ available: true });
+    const row = slashPalette(session(), harness()).find((item) => item.value === '/compact');
+    expect(row?.detail).toMatch(/compact this conversation now; \/compact <tokens> sets when it compacts by itself \(now \d+k\)/);
   });
 });
 

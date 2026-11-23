@@ -57,10 +57,12 @@ const bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
  * - `argvLimit`: the harness takes its prompt as a command-line argument
  *   (maxPromptArgvBytes, 96 KB: Linux caps one argument at 128 KiB), so the
  *   whole prompt has to fit there or the turn fails before it starts. */
-export function transferBudget(input: { contextWindow?: number; argvLimit?: number }): number {
-  const fromWindow = input.contextWindow && input.contextWindow > 0
+export function transferBudget(input: { contextWindow?: number; argvLimit?: number; capTokens?: number }): number {
+  const byWindow = input.contextWindow && input.contextWindow > 0
     ? Math.floor(input.contextWindow * TRANSFER_WINDOW_SHARE * BYTES_PER_TOKEN)
     : TRANSFER_UNKNOWN_WINDOW_BYTES;
+  // Never more than the compaction threshold (turn/compaction.ts handoffTokens).
+  const fromWindow = input.capTokens && input.capTokens > 0 ? Math.min(byWindow, input.capTokens * BYTES_PER_TOKEN) : byWindow;
   const sized = Math.min(TRANSFER_MAX_BYTES, Math.max(TRANSFER_MIN_BYTES, fromWindow));
   return input.argvLimit ? Math.min(sized, Math.max(8 * 1024, input.argvLimit - ARGV_HEADROOM_BYTES)) : sized;
 }

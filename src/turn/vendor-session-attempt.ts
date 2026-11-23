@@ -73,6 +73,7 @@ export async function runVendorSessionAttempt(input: {
       }
       const codexInput: CodexAppServerTurnInput = {
         ...launch.input, prompt: turnText, images, signal, onSessionId,
+        ...(run.compaction ? { compact: true } : {}),
         ...sharedObserver,
         onSteerReady,
       };

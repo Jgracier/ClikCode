@@ -3,6 +3,7 @@
 import { writeFullRecord } from '../session/full-record.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { carriedLine, startConversationThread } from './thread-start.js';
+import { compactAt } from './compaction.js';
 import { targetContextWindow } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import { nativeSessionStore } from '../session/discovery/registry.js';
@@ -55,12 +56,17 @@ export async function takeUp(
   // any provider made of it is never put in place of turns: a handoff carries
   // the conversation itself.
   const recordPath = record.turns.length ? await writeFullRecord(view, stateDirectory()) : undefined;
+  // Never more than the compaction threshold; a compaction ClikCode does itself (no native one,
+  // compaction-run.ts compactByRewrite) fits it to half of that, so it is not due again at once.
+  const threshold = compactAt(state.globalSettings);
+  const rewrite = Boolean(session.compaction?.rewrite);
+  const capTokens = rewrite ? Math.floor(threshold / 2) : threshold;
   const start = await startConversationThread({
     record, request, interrupted: options.interrupted, harness, model: ctx.model,
     session,
     ...(recordPath ? { recordPath } : {}),
     workspace: session.workspace ?? process.cwd(), environment: turnEnvironment(harness, ctx.account),
-    ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}),
+    ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}), capTokens,
     ...(writer ? { writer } : {}),
     version: async () => (await inspectNativeHarness(harness)).version,
     displayName: (command) => localHarnessForCommand(command)?.displayName,
@@ -71,9 +77,11 @@ export async function takeUp(
     ...(recordPath ? { record: recordPath } : {}),
     ...(start.kind === 'transfer' ? { budget: start.budget, bytes: Buffer.byteLength(start.prompt, 'utf8'), contextWindow } : { omitted: start.omitted, contextWindow }),
   });
-  // Whatever of the conversation did not arrive whole is said in the chat, not only to the model.
-  const carried = carriedLine(record.turns.length, start, harness.displayName, recordPath);
-  if (carried && options.reportCarry !== false) ctx.prompter?.activity(carried);
+  // A conversation that did not arrive whole was compacted, and the chat says so (a compaction
+  // ClikCode ran itself already did).
+  const carried = carriedLine(record.turns.length, start);
+  if (carried && options.reportCarry !== false && !rewrite) ctx.prompter?.activity(carried);
+  if (rewrite) delete session.compaction!.rewrite;
   if (start.kind === 'native') {
     session.nativeSessionId = start.written.nativeId;
     session.nativeThreadAccountId = ctx.account.id;

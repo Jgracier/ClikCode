@@ -7,7 +7,6 @@ import { dispatchLine, type SlashHost } from './dispatch.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { nativeAvailableCommands } from '../../turn/vendor-process.js';
 
 const chat = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: 'anthropic', model: null, effort: 'medium',
@@ -75,14 +74,17 @@ describe('one dispatch for every client', () => {
     await expect(dispatchLine(host, 's1', '/review')).rejects.toThrow(/not available for Aider/);
   });
 
-  it('relays /compact to an agent that announced its own compaction command, though its catalog has none', async () => {
-    await writeState(stateWith(chat({ workspace, nativeHarness: 'aider', provider: 'aider', nativeSessionId: 'n1' })));
-    nativeAvailableCommands.set('s1', [{ name: 'compress', description: 'compress the context' }]);
-    try {
-      const runTurn = vi.fn(async () => undefined);
-      await dispatchLine(recordingHost({ runTurn }), 's1', '/compact keep the api notes');
-      expect(runTurn).toHaveBeenCalledWith('s1', '/compress keep the api notes');
-    } finally { nativeAvailableCommands.delete('s1'); }
+  it('/compact sends the compaction as a turn; with nothing to compact it says so; /compact <tokens> sets the threshold', async () => {
+    const messages = [{ role: 'user' as const, content: 'hi' }, { role: 'assistant' as const, content: 'Hello.' }];
+    await writeState(stateWith(chat({ workspace, nativeHarness: 'aider', provider: 'aider', nativeSessionId: 'n1', messages })));
+    const runTurn = vi.fn(async () => undefined);
+    expect(await dispatchLine(recordingHost({ runTurn }), 's1', '/compact')).toEqual({});
+    expect(runTurn).toHaveBeenCalledWith('s1', '/compact');
+    await writeState(stateWith(chat({ workspace, nativeHarness: 'aider', provider: 'aider' })));
+    expect(await dispatchLine(recordingHost({ runTurn }), 's1', '/compact')).toEqual({ notice: 'Nothing to compact yet.' });
+    expect(await dispatchLine(recordingHost(), 's1', '/compact 120k')).toEqual({ notice: 'Compacts at 120k tokens.' });
+    expect((await readState({ transcripts: [] })).globalSettings.compactAt).toBe(120_000);
+    await expect(dispatchLine(recordingHost(), 's1', '/compact soon')).rejects.toThrow('usage: /compact [tokens, such as 150k]');
   });
 
   it('puts /capabilities in the host\'s panel', async () => {

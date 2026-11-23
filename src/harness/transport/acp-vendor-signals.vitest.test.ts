@@ -74,8 +74,8 @@ describe('ACP status updates and extension notifications', () => {
       update({ sessionUpdate: 'subagent_spawned', name: 'reviewer' }),
       update({ sessionUpdate: 'config_option_update', configOptions: [] }),
     ] });
-    expect(notices).toEqual(['Rate limit near: 80% of the window', 'Conversation compacted to fit the context window']);
-    expect(phases).toEqual(['compacting the conversation', 'compacting the conversation', 'background task: dev server', 'sub-agent: reviewer']);
+    expect(notices).toEqual(['Rate limit near: 80% of the window', 'Compacted']);
+    expect(phases).toEqual(['Compacting…', 'Compacting…', 'background task: dev server', 'sub-agent: reviewer']);
   });
 
   it("keeps a background Agent's row running past its launch call, until its own task_notification", async () => {

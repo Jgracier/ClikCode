@@ -35,6 +35,7 @@ import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
 import { classifyEvidence } from '../../turn/account-evidence.js';
 import { ACP_AUTH_REQUIRED_CODE } from '../../turn/failover.js';
+import { COMPACTED, COMPACTING } from '../../turn/compaction.js';
 
 type Json = Record<string, any>;
 
@@ -1325,12 +1326,12 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       }
       case 'compaction_update': {
         const status = String(update.status ?? '');
-        if (status === 'completed') input.onNotice?.('Conversation compacted to fit the context window');
-        else if (status !== 'cancelled' && status !== 'failed') input.onPhase?.('compacting the conversation');
+        if (status === 'completed') input.onNotice?.(COMPACTED);
+        else if (status !== 'cancelled' && status !== 'failed') input.onPhase?.(COMPACTING);
         return true;
       }
       case 'compaction_summary_chunk':
-        input.onPhase?.('compacting the conversation');
+        input.onPhase?.(COMPACTING);
         return true;
       case 'async_task_spawned':
       case 'async_task_progress':

@@ -21,6 +21,7 @@ import { BackgroundTurnChannel } from './background-turn.js';
 import { BackgroundWorkTracker } from './background-work.js';
 import { CANCEL_SETTLE_MS, PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions, type VendorWorkSession } from './persistent-session.js';
 import type { EndedWork, RunningWork } from './handoff-work.js';
+import { COMPACTED } from '../../turn/compaction.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -45,6 +46,8 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
   prepareOnly?: boolean;
   /** Warm the process and handshake without creating/loading a thread. */
   initializeOnly?: boolean;
+  /** This turn is Codex's own compaction of the thread (turn/compaction.ts), not a prompt. */
+  compact?: boolean;
   /** Per-harness Codex config overrides (`config` of thread/start|resume),
    * e.g. `{ 'tools.web_search': true, profile: 'work' }`. */
   configOverrides?: Record<string, unknown>;
@@ -61,9 +64,6 @@ export interface CodexSession extends VendorWorkSession {
   steer(text: string): Promise<void>;
   /** Interrupt the active turn; the child survives if it acknowledges in 2s. */
   cancel(): void;
-  /** Compact the thread natively (`thread/compact/start`) and settle on the vendor's own
-   * `thread/compacted`. False when no server holds that thread (nothing was done). */
-  compactThread(threadId: string): Promise<boolean>;
 }
 
 interface CodexAppServerTurnResult {
@@ -496,22 +496,6 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     return rows;
   }
 
-  async compactThread(threadId: string): Promise<boolean> {
-    const live = this.live;
-    if (!live || live.peer.closed || live.threadId !== threadId) return false;
-    if (this.turn && !this.turn.done) throw new Error('Codex is working; compact when the turn ends');
-    if (this.compactWaiter) throw new Error('Codex is already compacting this conversation');
-    const compacted = new Promise<void>((resolve, reject) => { this.compactWaiter = { done: resolve, fail: reject }; });
-    compacted.catch(quiet('harness/transport/codex-app-server'));
-    try {
-      await compactCodexThread(live.peer, threadId);
-      await compacted;
-    } finally {
-      this.compactWaiter = undefined;
-    }
-    return true;
-  }
-
   protected runningAgents(): RunningWork[] {
     return this.work.running('agent').map((agent): RunningWork => ({ ...agent, kind: 'agent' }));
   }
@@ -722,6 +706,20 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     this.threadId = threadId;
     if (input.prepareOnly) return { text: '', nativeSessionId: threadId };
     await input.onSessionId?.(threadId);
+    if (input.compact) {
+      // Codex's own compaction (`thread/compact/start`) as this turn: it ends on `thread/compacted`,
+      // or on the turn/completed of the turn Codex runs it in.
+      const compacted = new Promise<void>((resolve, reject) => { this.compactWaiter = { done: resolve, fail: reject }; });
+      compacted.catch(quiet('harness/transport/codex-app-server'));
+      try {
+        markTurn('prompt-sent');
+        await compactCodexThread(peer, threadId);
+        await Promise.race([compacted, completion]);
+      } finally {
+        this.compactWaiter = undefined;
+      }
+      return { text: '', nativeSessionId: threadId };
+    }
     stillRunning();
     markTurn('ready');
     await this.promptSent();
@@ -1213,7 +1211,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   private compacted(target: Stream): void {
     if (target.compacted) return;
     target.compacted = true;
-    target.observer.onNotice?.('Codex compacted the conversation to fit its context window');
+    target.observer.onNotice?.(COMPACTED);
   }
 }
 

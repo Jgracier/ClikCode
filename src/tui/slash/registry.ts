@@ -6,7 +6,8 @@
  * harness names -- availability is decided from catalog fields only. */
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
-import { AGENT_COMPACT_UNAVAILABLE, isClikCodeAgent, isGatewayService } from '../../session/route.js';
+import { isClikCodeAgent, isGatewayService } from '../../session/route.js';
+import { compactDescription } from '../../turn/compaction.js';
 import { harnessSupportsEffort, harnessSupportsModelSelection } from '../../runtime/lazy-bridge.js';
 import { sessionPermissionModes } from '../../session/options.js';
 
@@ -112,20 +113,6 @@ const localOnly = (session: HarnessSession | undefined): SlashAvailability => {
   if (!isClikCodeAgent(session)) return { available: true };
   return { available: false, reason: isGatewayService(session) ? GATEWAY_MANAGED : CLIKCODE_LOCAL_AGENT };
 };
-/** /compact relays only to a vendor's native compaction, where it has one:
- * it runs the slash command itself, its server has a compact operation, or
- * the agent advertised its own compaction command (`compact`, Gemini's
- * `compress`) this session -- the same cases compact.ts canCompact accepts. */
-const vendorCompacts = (harness: Pick<AiLocalHarnessDefinition, 'nativeSlashPassthrough' | 'nativeOperations'>): boolean =>
-  Boolean(harness.nativeSlashPassthrough || harness.nativeOperations?.includes('compact'));
-const vendorCompaction = (
-  session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, _args?: string, native: readonly string[] = [],
-): SlashAvailability => {
-  if (isClikCodeAgent(session)) return { available: false, reason: AGENT_COMPACT_UNAVAILABLE };
-  if (!harness) return { available: false, reason: 'Choose a provider before compacting.', needs: 'provider' };
-  const advertised = native.some((name) => /^\/?(?:compact|compress)$/i.test(name));
-  return vendorCompacts(harness) || advertised ? { available: true } : { available: false, reason: `/compact is not available for ${harness.displayName}.` };
-};
 /** A command ClikCode's own agent implements and a vendor runs itself: relayed
  * to a vendor that takes slash commands, not available for one that does not. */
 const ownOrNative = (name: string) => (
@@ -197,7 +184,8 @@ export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'r
 
 export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('new', 'Conversation', 'start a fresh conversation (the current one stays resumable)', { aliases: ['clear', 'reset'], argHint: '[first message]' }),
-  entry('compact', 'Conversation', "the provider's own compaction of this conversation", { argHint: '[focus]', availability: vendorCompaction }),
+  // The description names the threshold as it stands (turn/compaction.ts).
+  Object.defineProperty(entry('compact', 'Conversation', '', { argHint: '[tokens]' }), 'description', { get: compactDescription, enumerable: true }),
   entry('history', 'Conversation', 'show this conversation'),
   entry('hindsight', 'Conversation', 'this conversation by topic, with the files each changed; numbered as /fork and /redo take them'),
   entry('copy', 'Conversation', 'copy the last answer'),

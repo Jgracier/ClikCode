@@ -365,7 +365,7 @@ describe('what a Codex turn reports as it runs', () => {
     expect(thoughts).toEqual([['Plan', 'r1'], ['Plan the fix', 'r1']]);
     expect(notices).toEqual([
       'Codex moved this turn from gpt-5.5 to gpt-5.5-mini (highRiskCyberActivity)',
-      'Codex compacted the conversation to fit its context window',
+      'Compacted',
     ]);
     expect(activity.find((event) => event.id === 'm1' && event.output)).toMatchObject({ kind: 'tool-start', label: 'docs › search', output: ['fetching page 2'] });
     // The aggregated turn diff adds no row: each file change shows its own.

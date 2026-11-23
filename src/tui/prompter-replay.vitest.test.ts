@@ -167,7 +167,7 @@ describe('a compaction ClikCode ran itself', () => {
   });
 
   it('is drawn as its notice, not as a /compact the user typed; a typed one stays theirs', () => {
-    const why = 'Compacted automatically: the context was 670k tokens, over the 250k setting (/settings global compact)';
+    const why = 'Compacted';
     const screen = reopened([
       { role: 'user', content: 'fix the parser' }, { role: 'assistant', content: 'Fixed.' },
       { role: 'user', content: '/compact', automatic: why }, { role: 'assistant', content: 'Compacted.' },
@@ -178,8 +178,8 @@ describe('a compaction ClikCode ran itself', () => {
     expect(reopened([{ role: 'user', content: '/compact' }, { role: 'assistant', content: 'Compacted.' }])).toContain('› /compact');
   });
 
-  it('is drawn as its notice while it runs, from the turn\'s journal', () => {
-    const why = 'Compacted before switching accounts: personal is nearly out of usage';
+  it('draws "Compacting…" while it runs and no row for its request', () => {
+    const why = 'Compacted';
     const written: string[] = [];
     Object.assign(process.stdout, { isTTY: true, columns: 100, rows: 40 });
     process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
@@ -193,12 +193,14 @@ describe('a compaction ClikCode ran itself', () => {
       rl.render(base as never);
       // A window following the worker's turn: it was named no prompt (worker-turn.ts).
       rl.submitted(undefined);
-      rl.startWaiting('compacting before the account switch', () => undefined, async () => ({ kind: 'sent' }) as never);
+      rl.startWaiting('Compacting…', () => undefined, async () => ({ kind: 'sent' }) as never);
       rl.render({ ...base, pendingTurn: { prompt: '/compact', automatic: why, startedAt: '', updatedAt: '', outputStarted: false } } as never, undefined, { running: true });
       vi.advanceTimersByTime(400);
       const screen = strip(written.join('')).replace(/\s+/g, ' ');
-      expect(screen).toContain(why);
+      // The status line's own rule (turn-flow.ts turnStatus): the spinner and the clock stand for the ellipsis.
+      expect(screen).toContain('Compacting · 0s');
       expect(screen).not.toContain('› /compact');
+      expect(screen).not.toContain('› Compacted');
     } finally { rl.close(); }
   });
 });

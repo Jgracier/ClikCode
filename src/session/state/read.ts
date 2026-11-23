@@ -14,6 +14,7 @@ import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, baselineOf, rememberBas
 import { hidden } from '../store/data.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readLocalApiToken, readSecretsFile } from './secrets.js';
+import { noteCompactAt } from '../../turn/compaction.js';
 import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionMode, normalizedSessionPermission, normalizedStatus } from './settings.js';
 
 async function assembleState(index: StateIndex, secrets: HarnessSecrets, transcripts: 'all' | ReadonlySet<string>): Promise<HarnessState> {
@@ -47,6 +48,7 @@ async function assembleState(index: StateIndex, secrets: HarnessSecrets, transcr
     globalSettings: cloneData(index.globalSettings),
     providerSettings: cloneData(index.providerSettings ?? {}),
   } as HarnessState;
+  noteCompactAt(state.globalSettings);
   return attachHidden(state, secrets, index.invocationRollups);
 }
 

@@ -30,8 +30,11 @@ export function frameMessages(p: TerminalHarnessPrompter, session: HarnessSessio
     ...(p.submittedPrompt ? { sticky: p.submittedPrompt } : {}),
     lastMessage: stableMessages[stableMessages.length - 1],
   });
+  // A compaction ClikCode runs draws no row while it runs (the waiting line says "Compacting…"),
+  // and its notice ("Compacted") once it is done.
+  const automaticPending = Boolean(pending?.automatic && pendingPrompt === pending.prompt);
   const persistedMessages = pendingPrompt
-    ? [...stableMessages, { role: 'user' as const, content: pendingPrompt, ...(pending?.automatic && pendingPrompt === pending.prompt ? { automatic: pending.automatic } : {}) }]
+    ? automaticPending ? stableMessages : [...stableMessages, { role: 'user' as const, content: pendingPrompt }]
     : p.transcriptMessages(session);
   // Tool events often arrive before the first prose token. They still belong
   // to the in-flight assistant message. Render an empty temporary assistant
@@ -98,7 +101,7 @@ export function savedMessageRows(
   } else {
     if (message.role === 'user' && index > 0) rows.push('');
     // A title tag never renders, however it got into the saved reply: a vendor that repeated its first reply's tag, or an older
-    // transcript. An older automatic /compact record is its notice, not the user's words.
+    // transcript. A compaction ClikCode ran is its notice, not the user's words.
     rows.push(...(message.role === 'assistant'
       ? builders.messageRows(withoutOtherOrgThinkingNotice(stripRepeatedTitles(message.content)), '·')
       : message.automatic ? builders.noticeRows(message.automatic) : builders.userRows(message.content)));

@@ -1,47 +1,34 @@
-/** `/compact`: the vendor's own compaction, relayed. */
+/** `/compact` and `/compact <tokens>` (turn/compaction.ts): compact the conversation now, or
+ * set the one threshold at which ClikCode compacts every conversation by itself. */
 
 import type { HarnessSession } from '../../session/model.js';
-import { hasConversationContent } from '../../session/options.js';
-import { nativeAvailableCommands, persistentTransports } from '../../turn/vendor-process.js';
-import { sessionHarness } from './context.js';
-import { AGENT_COMPACT_UNAVAILABLE, isClikCodeAgent } from '../../session/route.js';
+import { readState } from '../../session/state/read.js';
+import { writeState } from '../../session/state/write.js';
+import { isClikCodeAgent, AGENT_COMPACT_UNAVAILABLE } from '../../session/route.js';
+import {
+  COMPACT_REQUEST, MIN_COMPACT_AT_TOKENS, NOTHING_TO_COMPACT, compactFailedLine, noteCompactAt, parseCompactAt, tokenLabel,
+} from '../../turn/compaction.js';
+import { hasThreadToCompact } from '../../turn/compaction-run.js';
 
-/** `/compact`. Only a harness that compacts itself does: one that runs slash
- * commands gets `/compact`, and a server with a compact operation (Codex
- * `thread/compact/start`, on the transport's live child) is asked to. Where a
- * vendor has neither, there is no compaction to relay and nothing is sent.
- * The built-in agent has no native compaction operation. */
+/** What `/compact [args]` did: a line to show, or nothing (a compaction turn was sent and says itself). */
 export async function compactConversation(
-  id: string, session: HarnessSession, focus: string, send: (id: string, prompt: string) => Promise<void>,
-): Promise<void> {
-  if (isClikCodeAgent(session)) throw new Error(AGENT_COMPACT_UNAVAILABLE);
-  if (!hasConversationContent(session)) throw new Error('There is nothing to compact yet.');
-  const harness = sessionHarness(session);
-  const command = compactCommand(id, session);
-  if (command) {
-    await send(id, `${command}${focus ? ` ${focus}` : ''}`);
-    return;
-  }
-  if (harness?.nativeOperations?.includes('compact') && session.nativeSessionId) {
-    const live = persistentTransports.get(id);
-    const compactor = live?.transport === 'codex-app-server' ? (live.session as unknown as { compactThread?: (threadId: string) => Promise<boolean> }) : undefined;
-    if (compactor?.compactThread && await compactor.compactThread(session.nativeSessionId)) return;
-  }
-  throw new Error(`/compact is not available for ${harness?.displayName ?? 'this provider'}.`);
+  id: string, session: HarnessSession, args: string, send: (id: string, prompt: string) => Promise<void>,
+): Promise<string | undefined> {
+  if (args.trim()) return setCompactThreshold(args);
+  if (isClikCodeAgent(session)) throw new Error(compactFailedLine(AGENT_COMPACT_UNAVAILABLE));
+  if (!hasThreadToCompact(session)) return NOTHING_TO_COMPACT;
+  await send(id, COMPACT_REQUEST);
+  return undefined;
 }
 
-/** The slash command that compacts this conversation in its harness, if it has one: `/compact` for a
- * harness that takes its own slash commands, else whatever compaction command the agent itself
- * advertised this session (ACP `available_commands_update`: `compact`, or Gemini's `compress`). */
-function compactCommand(id: string, session: HarnessSession): string | undefined {
-  if (!session.nativeSessionId) return undefined;
-  if (sessionHarness(session)?.nativeSlashPassthrough) return '/compact';
-  const advertised = (nativeAvailableCommands.get(id) ?? []).find((command) => command.name === 'compact' || command.name === 'compress');
-  return advertised ? `/${advertised.name}` : undefined;
-}
-
-/** Whether this conversation's harness can compact it (compactConversation would not refuse). */
-export function canCompact(id: string, session: HarnessSession): boolean {
-  if (isClikCodeAgent(session) || !session.nativeSessionId) return false;
-  return Boolean(compactCommand(id, session)) || Boolean(sessionHarness(session)?.nativeOperations?.includes('compact'));
+/** `/compact <tokens>`: kept for every harness and every conversation (globalSettings.compactAt). */
+async function setCompactThreshold(word: string): Promise<string> {
+  const tokens = parseCompactAt(word);
+  if (tokens === undefined) throw new Error('usage: /compact [tokens, such as 150k]');
+  if (tokens < MIN_COMPACT_AT_TOKENS) throw new Error(`The threshold must be at least ${tokenLabel(MIN_COMPACT_AT_TOKENS)} tokens.`);
+  const state = await readState({ transcripts: [] });
+  state.globalSettings.compactAt = tokens;
+  await writeState(state);
+  noteCompactAt(state.globalSettings);
+  return `Compacts at ${tokenLabel(tokens)} tokens.`;
 }

@@ -425,8 +425,11 @@ export async function completeTurnCheckpoint(
   session: HarnessSession, checkpoint: DurableTurnCheckpoint, response: string,
   sources: { vendor?: () => Promise<string | undefined> } = {},
 ): Promise<string> {
-  session.attachments = [];
-  session.shellNotes = [];
+  // A turn ClikCode sent itself (a compaction) did not carry what waits for the next request.
+  if (!session.pendingTurn?.automatic) {
+    session.attachments = [];
+    session.shellNotes = [];
+  }
   // The note a moved chat's first turn carried (session/move.ts) was said.
   delete session.moveNote;
   await nameSession(session, sources);

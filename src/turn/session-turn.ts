@@ -3,12 +3,14 @@
  * console loop. The route decides what runs it: ClikCode's own agent (the
  * Gateway, ClikCode Local) or an account's harness, reached through its
  * vendor CLI or protocol or, for an API key on a model API, directly. */
-import { quiet } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import type Conf from 'conf';
 import { readState } from '../session/state/read.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
-import { isClikCodeAgent } from '../session/route.js';
+import { AGENT_COMPACT_UNAVAILABLE, isClikCodeAgent } from '../session/route.js';
+import { COMPACTED, NOTHING_TO_COMPACT, compactFailedLine, isCompactRequest } from './compaction.js';
+import { compactByRewrite, hasThreadToCompact, recordCompaction, sessionCompactionMechanism } from './compaction-run.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { releaseHeldLocalModel } from '../commands/ai/local-model.js';
@@ -41,6 +43,9 @@ export interface TurnRunOptions {
   /** ClikCode sends this prompt itself, and why: saved with it and drawn as
    * ClikCode's notice instead of the user's message (TranscriptMessage.automatic). */
   automatic?: string;
+  /** Set by runSessionTurn for a COMPACT_REQUEST: the turn is the harness's own compaction
+   * (turn/compaction.ts), sent as its command or, for Codex, its compact operation. */
+  compaction?: boolean;
   /** A worker keeps ONE app-server / ACP child per open session and closes
    * it itself; a turn run anywhere else stays one-shot. */
   persistentTransports?: boolean;
@@ -135,6 +140,8 @@ export async function runSessionTurn(
     // there, the way a usage-limit failover does. A change that did not land
     // stops the handoff. Bound repeated changes, but never report a dropped
     // continuation as a completed turn.
+    // `/compact`: the harness's own compaction, as a turn of its own (turn/compaction.ts).
+    if (isCompactRequest(prompt) && !run.compaction) { await compactSession(state, session, signal, recorded); return; }
     let stateNow = state;
     let sessionNow = session;
     for (let hop = 0; hop < MAX_TURN_HANDOFFS; hop += 1) {
@@ -169,6 +176,24 @@ export async function runSessionTurn(
   }
 }
 
+/** Compact the conversation now, by whatever its harness has (compaction.ts compactionMechanism):
+ * its compact operation or command, run as this turn; else its thread is let go for the next
+ * turn to take up afresh. Refused plainly where there is nothing to compact. */
+async function compactSession(state: HarnessState, session: HarnessSession, signal: AbortSignal | undefined, run: TurnRunOptions): Promise<void> {
+  const harness = !isClikCodeAgent(session) && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  if (!harness) throw new Error(compactFailedLine(AGENT_COMPACT_UNAVAILABLE));
+  if (!hasThreadToCompact(session)) throw new Error(NOTHING_TO_COMPACT);
+  const mechanism = sessionCompactionMechanism(session, harness);
+  lifecycle('turn.compact', { harness: harness.command, how: mechanism.kind, context: session.lastUsage?.contextUsed });
+  if (mechanism.kind === 'rewrite') {
+    await compactByRewrite(session.id);
+    run.prompter?.activity(COMPACTED);
+    return;
+  }
+  const handed = await runAccountTurn(state, session, mechanism.prompt, signal, { ...run, compaction: true, automatic: COMPACTED });
+  if (handed !== 'switch') await recordCompaction(session.id);
+}
+
 /** Where this conversation runs, for telling a real move from a handoff that did not land. */
 function where(session: HarnessSession): string {
   return [session.route, session.nativeHarness ?? '', session.accountId ?? ''].join('|');
@@ -190,7 +215,8 @@ async function runAccountTurn(
   if (!text) throw new Error('prompt is required');
   // The account and its model are settled: what follows is the route's own work.
   markTurn('account');
-  const prepared = await prepareAttachments(session.attachments ?? []);
+  // A compaction is the harness's command alone: what waits for the next request stays for it.
+  const prepared = await prepareAttachments(run.compaction ? [] : session.attachments ?? []);
   let turnText = `${text}${prepared.textContext}`;
   // A resumed native-harness thread never replays ClikCode's own transcript
   // (see turn/thread-start.ts and the attachment envelope: the vendor process keeps
@@ -200,7 +226,7 @@ async function runAccountTurn(
   // shell printed. Fresh native threads and the direct/gateway routes replay
   // session.messages and already carry the note; gating on resumed-only keeps
   // it from being delivered twice to them.
-  if (session.nativeSessionId && !session.nativeSessionPreallocated) {
+  if (session.nativeSessionId && !session.nativeSessionPreallocated && !run.compaction) {
     turnText += shellContextBlock(session.shellNotes ?? []);
   }
   const startedAt = Date.now();

@@ -25,6 +25,7 @@ import { fullRecordNote } from '../session/full-record.js';
 import type { NativeSessionEnvironment, NativeThreadWriter, NativeThreadWritten } from '../session/discovery/stores.js';
 import { modelProvider } from '../runtime/lazy-bridge.js';
 import { BYTES_PER_TOKEN, transferBudget, transferPrompt } from './transfer.js';
+import { COMPACTED } from './compaction.js';
 
 /** The model runs behind a provider that keeps no history between one-shot
  * turns (catalog `turn.statelessProviders`: Goose's `claude-code`). Its
@@ -78,6 +79,8 @@ export interface ThreadStartInput {
   model: string | null;
   /** The receiving model's context window in tokens, where known. */
   contextWindow?: number;
+  /** The most it may carry, in tokens (nativeThreadBudget). */
+  capTokens?: number;
   /** Bytes a prompt may take when it travels in argv; absent when the turn's
    * transport passes it another way (stdin, ACP, app-server). */
   argvLimit?: number;
@@ -106,8 +109,11 @@ const NATIVE_WINDOW_SHARE = 0.5;
 /** The budget when nothing has reported the model's window. */
 const NATIVE_DEFAULT_BYTES = 400 * 1024;
 
-export function nativeThreadBudget(contextWindow?: number): number {
-  return contextWindow && contextWindow > 0 ? Math.floor(contextWindow * NATIVE_WINDOW_SHARE * BYTES_PER_TOKEN) : NATIVE_DEFAULT_BYTES;
+/** `capTokens`: the most a handoff may carry (turn/compaction.ts handoffTokens: the compaction
+ * threshold), so a conversation never arrives past the size it would be compacted at. */
+export function nativeThreadBudget(contextWindow?: number, capTokens?: number): number {
+  const byWindow = contextWindow && contextWindow > 0 ? Math.floor(contextWindow * NATIVE_WINDOW_SHARE * BYTES_PER_TOKEN) : NATIVE_DEFAULT_BYTES;
+  return capTokens && capTokens > 0 ? Math.min(byWindow, capTokens * BYTES_PER_TOKEN) : byWindow;
 }
 
 /** What a writer serializes of a turn: the request and the ordered parts.
@@ -282,7 +288,7 @@ async function written(input: ThreadStartInput): Promise<{ written: NativeThread
     }
     // No note of which provider ran which turns is written into the vendor's
     // thread: it is the vendor's own. Only what was left out is said.
-    const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow), input.recordPath ? { recordPath: input.recordPath } : {});
+    const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow, input.capTokens), input.recordPath ? { recordPath: input.recordPath } : {});
     const result = await writer.write(fitted.record, context);
     if (!result?.nativeId) input.onFallback?.(`${input.harness.command} thread writer declined`);
     return result?.nativeId ? { written: result, omitted: fitted.omitted, summarised: fitted.summarised } : undefined;
@@ -299,6 +305,7 @@ export async function startConversationThread(input: ThreadStartInput): Promise<
   const budget = transferBudget({
     ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
     ...(input.argvLimit ? { argvLimit: input.argvLimit } : {}),
+    ...(input.capTokens ? { capTokens: input.capTokens } : {}),
   });
   return {
     kind: 'transfer', budget,
@@ -309,17 +316,9 @@ export async function startConversationThread(input: ThreadStartInput): Promise<
   };
 }
 
-/** What a person is told when a conversation is taken up by a provider and anything of it did not
- * go in whole: how many turns arrived, and how. Undefined when all of it went in as it was. */
-export function carriedLine(turns: number, start: ThreadStart, provider: string, recordPath?: string): string | undefined {
+/** What a person is told when a conversation is taken up by a provider and it did not all go in
+ * as it was (retold, or fitted to the window): that it was compacted. Undefined when it went in whole. */
+export function carriedLine(turns: number, start: ThreadStart): string | undefined {
   if (!turns) return undefined;
-  const where = recordPath ? ` The whole conversation is saved at ${recordPath}.` : '';
-  if (start.kind === 'transfer') {
-    return `Carried ${turns} of ${turns} turns to ${provider}, ${turns} summarised: ${provider} could not be given the conversation as its own thread, so it was retold.${where}`;
-  }
-  if (!start.omitted && !start.summarised) return undefined;
-  const parts = [`Carried ${turns - start.omitted} of ${turns} turns to ${provider}`];
-  if (start.summarised) parts.push(`${start.summarised} summarised`);
-  const left = start.omitted ? `; the ${start.omitted} earliest ${start.omitted === 1 ? 'is' : 'are'} left out to fit its window` : '';
-  return `${parts.join(', ')}${left}.${where}`;
+  return start.kind === 'transfer' || start.omitted || start.summarised ? COMPACTED : undefined;
 }

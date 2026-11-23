@@ -35,7 +35,7 @@ export function isGatewayService(session: Routed): boolean {
 export const GATEWAY_LABEL = 'ClikDeploy Gateway';
 
 /** The built-in agent has no native compaction operation to relay. */
-export const AGENT_COMPACT_UNAVAILABLE = '/compact is only available for vendor harnesses that support it.';
+export const AGENT_COMPACT_UNAVAILABLE = "ClikCode's agent fits the conversation to its model by itself.";
 
 const AI_HARNESS_ROUTES: readonly AiHarnessRoute[] = ['local', 'gateway', 'clikcode-local'];
 

@@ -161,6 +161,12 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
     expect(nativeThreadBudget()).toBe(400 * 1024);
   });
 
+  it('never carries more than the compaction threshold: min(threshold, half the window)', () => {
+    expect(nativeThreadBudget(1_000_000, 150_000)).toBe(600_000);
+    expect(nativeThreadBudget(200_000, 150_000)).toBe(400_000);
+    expect(nativeThreadBudget(undefined, 50_000)).toBe(200_000);
+  });
+
   it('keeps the newest turns that fit, and names the file that holds the rest and what was asked in it', () => {
     const fitted = fitRecord(long, 3_000, { recordPath: '/state/records/s2.md' });
     expect(fitted.omitted).toBeGreaterThan(0);
@@ -273,14 +279,12 @@ describe('what a person is told was carried', () => {
     expect(tight.omitted + tight.record.turns.length).toBe(20);
   });
 
-  it('says "carried N of M turns, K summarised" when anything was left out or shortened, and nothing when all arrived whole', () => {
+  it('says "Compacted" when anything was left out, shortened or retold, and nothing when all arrived whole', () => {
     const native = (omitted: number, summarised: number) => ({ kind: 'native' as const, written: { nativeId: 'n' }, prompt: 'p', omitted, summarised });
-    expect(carriedLine(757, native(145, 30), 'Claude Code', '/state/records/c.md'))
-      .toBe('Carried 612 of 757 turns to Claude Code, 30 summarised; the 145 earliest are left out to fit its window. The whole conversation is saved at /state/records/c.md.');
-    expect(carriedLine(20, native(0, 4), 'Codex')).toBe('Carried 20 of 20 turns to Codex, 4 summarised.');
-    expect(carriedLine(20, native(0, 0), 'Codex')).toBeUndefined();
-    expect(carriedLine(0, native(0, 0), 'Codex')).toBeUndefined();
-    // A retelling is never the whole conversation as the provider's own thread.
-    expect(carriedLine(9, { kind: 'transfer', prompt: 'p', budget: 1 }, 'Grok')).toMatch(/^Carried 9 of 9 turns to Grok, 9 summarised/);
+    expect(carriedLine(757, native(145, 30))).toBe('Compacted');
+    expect(carriedLine(20, native(0, 4))).toBe('Compacted');
+    expect(carriedLine(20, native(0, 0))).toBeUndefined();
+    expect(carriedLine(0, native(0, 0))).toBeUndefined();
+    expect(carriedLine(9, { kind: 'transfer', prompt: 'p', budget: 1 })).toBe('Compacted');
   });
 });

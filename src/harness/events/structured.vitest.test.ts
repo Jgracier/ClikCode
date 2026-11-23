@@ -89,10 +89,10 @@ describe('a Claude-shaped stream compacting its context', () => {
     const state = createStreamState();
     // Shapes of claude-code's stream-json (SDKStatusMessage, SDKCompactBoundaryMessage).
     reportStructuredLine(harness, '{"type":"system","subtype":"status","status":"compacting","session_id":"s"}', observer, state);
-    expect(phases).toContain('compacting the conversation');
+    expect(phases).toContain('Compacting…');
     expect(notices).toEqual([]);
     reportStructuredLine(harness, '{"type":"system","subtype":"compact_boundary","session_id":"s","compact_metadata":{"trigger":"auto","pre_tokens":167000}}', observer, state);
-    expect(notices).toEqual(['Conversation compacted to fit the context window']);
+    expect(notices).toEqual(['Compacted']);
     // Another harness speaking Claude's stream (grok, qwen, gemini, amp) is read the same.
     const qwen = { command: 'qwen', parser: 'claude-stream-json' } as unknown as AiLocalHarnessDefinition;
     reportStructuredLine(qwen, '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual"}}', observer, createStreamState());

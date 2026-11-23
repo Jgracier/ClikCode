@@ -18,6 +18,11 @@ import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
+import { COMPACT_REQUEST, COMPACTING, NOTHING_TO_COMPACT, compactAt, compactFailedLine, isCompactRequest, noteContextAfterCompaction, shouldCompact } from '../turn/compaction.js';
+import { hasThreadToCompact } from '../turn/compaction-run.js';
+import { persistentWorkRunning } from '../turn/vendor-process.js';
+import { isClikCodeAgent } from '../session/route.js';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 
 type SubmitCommand = Extract<ClientCommand, { type: 'submit' }>;
 
@@ -124,7 +129,9 @@ export function createTurnRunner(ctx: WorkerContext) {
     // The cause, in full, in the turn, saved with it. Running out of usage is said by
     // whoever carries on from it (the window's own next step).
     const said = !isUsageExhaustedMessage(message);
-    if (said) observer.activity(chalk.red(`Error: ${failureText(message)}`));
+    // A compaction that failed is one plain line.
+    if (said && isCompactRequest(command.text)) observer.activity(message === NOTHING_TO_COMPACT ? message : compactFailedLine(failureText(message)));
+    else if (said) observer.activity(chalk.red(`Error: ${failureText(message)}`));
     observer.broadcast({ type: 'turn-error', message, ...(said ? { said: true as const } : {}) });
     // The one retry after the reset ran out too: it is not parked again.
     if (resumed && isUsageExhaustedMessage(message)) diagnostic('worker.resume-still-exhausted', message);
@@ -142,7 +149,23 @@ export function createTurnRunner(ctx: WorkerContext) {
 
   /** After the turn, success or not: the turn's own state cleared, the windows
    * told it ended, and whatever is owed or queued next started. */
-  const finalizeTurn = async (turnId: string, turnStarted: number, turnOutcome: string, lastHarness: string | undefined, liveInput: LiveTurnInputBroker, submissions: Set<Promise<void>>): Promise<void> => {
+  /** After a completed turn: the conversation is compacted when its context passed the threshold
+   * (turn/compaction.ts shouldCompact), as a turn of its own. Not while anything of the
+   * conversation's still runs: notifications, the vendor's own turn or words, its background work. */
+  const compactIfDue = async (turnStarted: number): Promise<boolean> => {
+    const state = await readState({ transcripts: [sessionId] });
+    const session = state.sessions.find((item) => item.id === sessionId);
+    const harness = session && !isClikCodeAgent(session) && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (!session || !harness) return false;
+    if (noteContextAfterCompaction(session)) await writeState(state);
+    if (!hasThreadToCompact(session) || !shouldCompact(session, compactAt(state.globalSettings), turnStarted)) return false;
+    if (ctx.turnRunning || agentSession.notifications.length || ctx.vendorBackground.busy || ctx.outOfTurn.active
+      || session.queuedTurns?.some((entry) => entry.kind === 'notification') || await persistentWorkRunning(sessionId)) return false;
+    lifecycle('worker.compact', { context: session.lastUsage?.contextUsed, threshold: compactAt(state.globalSettings) });
+    return ctx.queue.startTurn({ type: 'submit', text: COMPACT_REQUEST, echo: false });
+  };
+
+  const finalizeTurn = async (command: SubmitCommand, turnId: string, turnStarted: number, turnOutcome: string, lastHarness: string | undefined, liveInput: LiveTurnInputBroker, submissions: Set<Promise<void>>): Promise<void> => {
     liveInput.close();
     releaseTurnControls(ctx);
     // A message typed as the turn ended may still be on its way into the
@@ -174,9 +197,15 @@ export function createTurnRunner(ctx: WorkerContext) {
     if (observer.attachedCount === 0) void releaseMcp();
     // Shells that finished after the turn's last step, then whatever is
     // queued next; either may start the next turn at once.
+    // A conversation whose context passed the threshold is compacted first, at this boundary
+    // between turns; what is queued runs after it.
     if (agentSession.notifications.length) void ctx.queue.deliverNotifications();
     else {
-      void ctx.queue.drainQueue().catch(ctx.queue.reportDrainFailure).finally(() => {
+      const next = async (): Promise<void> => {
+        if (turnOutcome === 'completed' && !isCompactRequest(command.text) && await compactIfDue(turnStarted)) return;
+        await ctx.queue.drainQueue();
+      };
+      void next().catch(ctx.queue.reportDrainFailure).finally(() => {
         ctx.idle.scheduleIdleExit();
       });
     }
@@ -247,7 +276,9 @@ export function createTurnRunner(ctx: WorkerContext) {
     const outOfTurnSettleMs = Math.round(performance.now() - outOfTurnStarted);
     // A prompt ClikCode sent itself is not named to the windows: they would echo it as the
     // user's. Its journal, written next, carries it with the notice drawn in its place.
-    observer.startTurn(command.label ?? 'working', command.automatic ? undefined : command.text);
+    const compacting = isCompactRequest(command.text);
+    // A compaction (`/compact`, sent by a window or by compactIfDue) is not echoed as the user's words.
+    observer.startTurn(compacting ? COMPACTING : 'working', compacting ? undefined : command.text);
     try {
       // A background turn's record still being saved: this turn's checkpoint
       // would read the conversation without it and then write it back whole.
@@ -274,7 +305,6 @@ export function createTurnRunner(ctx: WorkerContext) {
         liveInput,
         liveSettings: ctx.liveSettings,
         ...(command.queuedTurnId ? { queuedTurnId: command.queuedTurnId } : {}),
-        ...(command.automatic ? { automatic: command.automatic } : {}),
       });
       running.catch(quiet('worker/worker-turn'));
       await Promise.race([running, forced]);
@@ -291,7 +321,7 @@ export function createTurnRunner(ctx: WorkerContext) {
         observer.broadcast({ type: 'turn-error', message: settleError instanceof Error ? settleError.message : String(settleError) });
       }
     } finally {
-      await finalizeTurn(turnId, turnStarted, turnOutcome, lastHarness, liveInput, submissions);
+      await finalizeTurn(command, turnId, turnStarted, turnOutcome, lastHarness, liveInput, submissions);
     }
   };
 }
