@@ -143,12 +143,13 @@ describe('a vendor\'s own threshold, in its own terms', () => {
   it('a share or percent of the window, only once the window is known, below the whole of it', () => {
     expect(plan('goose', 150_000, 200_000)).toEqual({ kind: 'env', env: { GOOSE_AUTO_COMPACT_THRESHOLD: '0.75' } });
     expect(plan('copilot', 150_000, 1_000_000)).toEqual({ kind: 'env', env: { COPILOT_BACKGROUND_COMPACTION_THRESHOLD: '0.15' } });
-    expect(plan('grok', 150_000, 256_000)).toEqual({ kind: 'env', env: { GROK_AUTO_COMPACT_THRESHOLD_PERCENT: '59' } });
     // A threshold past the window: as near it as the vendor still compacts (Goose turns off at 1).
     expect(plan('goose', 500_000, 200_000)).toEqual({ kind: 'env', env: { GOOSE_AUTO_COMPACT_THRESHOLD: '0.95' } });
-    expect(plan('grok', 500_000, 200_000)).toEqual({ kind: 'env', env: { GROK_AUTO_COMPACT_THRESHOLD_PERCENT: '95' } });
+    const percent = { env: 'X_PERCENT', unit: 'percent' as const };
+    expect(vendorThresholdPlan(percent, 150_000, 256_000)).toEqual({ kind: 'env', env: { X_PERCENT: '59' } });
+    expect(vendorThresholdPlan(percent, 500_000, 200_000)).toEqual({ kind: 'env', env: { X_PERCENT: '95' } });
     expect(plan('goose', 150_000)).toBeUndefined();
-    expect(plan('grok', 150_000, 0)).toBeUndefined();
+    expect(vendorThresholdPlan(percent, 150_000, 0)).toBeUndefined();
   });
 
   it('settings at a key: a file for Gemini, Qwen and Droid', () => {
@@ -160,7 +161,7 @@ describe('a vendor\'s own threshold, in its own terms', () => {
   });
 
   it('nothing for a harness with no threshold of its own', () => {
-    for (const command of ['opencode', 'kilo', 'pi', 'amp', 'cline', 'cursor', 'kiro', 'hermes', 'devin', 'auggie', 'junie']) expect(plan(command, 150_000, 200_000)).toBeUndefined();
+    for (const command of ['opencode', 'kilo', 'grok', 'pi', 'amp', 'cline', 'cursor', 'kiro', 'hermes', 'devin', 'auggie', 'junie']) expect(plan(command, 150_000, 200_000)).toBeUndefined();
   });
 });
 
