@@ -555,9 +555,9 @@ describe('background work by kind: workflows on the end line, terminals on the w
   });
 
   it('names the command by pid data when the worker read it, in place of the bare count', () => {
-    const commands = [{ pid: 3555608, label: 'node scripts/pre-push-related.mjs', startedAt: Date.now() - 32 * 3_600_000, cpuPercent: 100 }];
+    const commands = [{ pid: 3555608, label: 'node scripts/pre-push-related.mjs', startedAt: Date.now() - 32 * 3_600_000, cpuPercent: 100, lastOutputAt: Date.now(), lastLine: 'checking 12 files' }];
     const live = run([worker({ type: 'background', pending: 0, work: { terminals: 1, commands } as never })], begin()).live!;
-    expect(workingIndicator(live)).toBe('waiting on background command: node scripts/pre-push-related.mjs · running 32h · cpu 100% · no output');
+    expect(workingIndicator(live)).toBe('node scripts/pre-push-related.mjs · checking 12 files');
   });
 
   it('a window joining mid-turn takes every kind from the snapshot, and the later event replaces it', () => {

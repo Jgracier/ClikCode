@@ -102,7 +102,7 @@ export function workingIndicator(live: Pick<LiveTurn, 'background'> | undefined)
   const work = live?.background;
   const workflows = work?.workflows ?? 0;
   return [workflows ? turnSummary({ ms: 0, pendingWorkflows: workflows }) : undefined,
-    // Named by pid when the worker could read them (age, cpu, silence): what is waited on, not a bare count.
+    // Named by pid when the worker could read them (the newest line, a long silence): what is waited on, not a bare count.
     describeCommands(work?.commands ?? []) ?? backgroundTerminalsLabel(work?.terminals)].filter(Boolean).join(' · ') || undefined;
 }
 
