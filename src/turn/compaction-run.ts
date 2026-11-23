@@ -9,6 +9,8 @@ import { writeState } from '../session/state/write.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { stateDirectory } from '../session/store/paths.js';
+import { fullRecordNote, writeFullRecord } from '../session/full-record.js';
+import { wrapResourceNote } from './resource-note-text.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { compactAt, compactionMechanism, type CompactionMechanism } from './compaction.js';
 import { targetContextWindow } from './transfer.js';
@@ -38,7 +40,7 @@ async function updateSession(id: string, change: (session: HarnessSession) => vo
 /** A native compaction finished: what the conversation keeps of it (the guard's starting point). */
 export async function recordCompaction(id: string): Promise<void> {
   await updateSession(id, (session) => {
-    session.compaction = { at: new Date().toISOString(), through: session.messages?.length ?? 0 };
+    session.compaction = { at: new Date().toISOString(), through: session.messages?.length ?? 0, noteRecord: true };
   });
 }
 
@@ -80,4 +82,14 @@ export async function compactThresholdEnvironment(
     await writeFile(file, text);
   }
   return { [setting.env]: file };
+}
+
+/** The first request after a native compaction names the file that keeps the whole conversation
+ * (session/full-record.ts): the vendor now works from its own summary, and what the summary left
+ * out is still within reach. */
+export async function withCompactionNote(session: HarnessSession, turnText: string): Promise<string> {
+  if (!session.compaction?.noteRecord) return turnText;
+  delete session.compaction.noteRecord;
+  const path = await writeFullRecord({ ...session, pendingTurn: undefined }, stateDirectory());
+  return path ? `${wrapResourceNote(fullRecordNote(path))}\n\n${turnText}` : turnText;
 }

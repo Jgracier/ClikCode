@@ -123,6 +123,8 @@ export interface CompactionRecord {
   after?: number;
   /** A rewrite whose fresh thread the next turn has yet to write. */
   rewrite?: true;
+  /** A native compaction whose next turn has yet to name the full-record file to the model. */
+  noteRecord?: true;
 }
 
 interface CompactableSession {

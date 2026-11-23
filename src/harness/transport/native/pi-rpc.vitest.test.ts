@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { createPiRpcTurn, piRpcPrompt, piRpcSteer } from './pi-rpc.js';
+import { createPiRpcTurn, PI_RPC_COMPACT, piRpcPrompt, piRpcSteer } from './pi-rpc.js';
 
 describe('pi --mode rpc turn', () => {
   it('takes a steer when pi answers its id with success, and closes stdin only once settled', async () => {
@@ -16,6 +16,16 @@ describe('pi --mode rpc turn', () => {
     turn.note({ type: 'agent_settled' });
     expect(close).toHaveBeenCalledOnce();
     await expect(turn.await('s2')).rejects.toThrow('finishing');
+  });
+
+  it('compacts with pi\'s own rpc compact command, and the turn ends on its response', () => {
+    expect(JSON.parse(PI_RPC_COMPACT)).toEqual({ id: 'clikcode-compact', type: 'compact' });
+    const close = vi.fn();
+    const turn = createPiRpcTurn({ close });
+    turn.note({ type: 'compaction_start' });
+    expect(close).not.toHaveBeenCalled();
+    turn.note({ type: 'response', command: 'compact', id: 'clikcode-compact', success: true });
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('rejects a refused steer, and one still waiting when the turn settles or pi exits (the message is then queued)', async () => {

@@ -34,6 +34,10 @@ export function piRpcCommands(record: Record<string, unknown>): { name: string; 
   });
 }
 
+/** Pi's own compaction of the session (rpc-mode `compact`), sent in place of a prompt for
+ * ClikCode's /compact (turn/compaction.ts). Its `response` ends the turn. */
+export const PI_RPC_COMPACT = `${JSON.stringify({ id: 'clikcode-compact', type: 'compact' })}\n`;
+
 /** The `steer` command; `id` correlates the `response` that says whether it was taken. */
 export function piRpcSteer(id: string, text: string): string {
   return `${JSON.stringify({ id, type: 'steer', message: text })}\n`;
@@ -74,7 +78,7 @@ export function createPiRpcTurn(options: { close: () => void; fallbackMs?: numbe
         pending.delete(record.id);
         if (record.success === true) waiter?.resolve();
         else waiter?.reject(new Error(typeof record.error === 'string' ? record.error : 'pi refused the message'));
-      } else if (type === 'agent_settled') settle();
+      } else if (type === 'agent_settled' || (type === 'response' && record.command === 'compact')) settle();
       else if (type === 'agent_end') {
         if (timer) clearTimeout(timer);
         timer = setTimeout(settle, options.fallbackMs ?? PI_SETTLE_FALLBACK_MS);

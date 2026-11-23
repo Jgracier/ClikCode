@@ -78,6 +78,7 @@ describe('how each harness compacts', () => {
     expect(compactionMechanism(harness('kilo'))).toEqual({ kind: 'native-command', prompt: '/compact' });
     expect(compactionMechanism(harness('aider'), ['ask', 'tokens'])).toEqual({ kind: 'vendor-threshold' });
     expect(compactionMechanism(harness('auggie'))).toEqual({ kind: 'rewrite' });
+    expect(compactionMechanism(harness('pi'))).toEqual({ kind: 'native-api', prompt: '/compact' });
     expect(compactionMechanism(harness('amp'))).toEqual({ kind: 'rewrite' });
   });
 });
@@ -136,6 +137,30 @@ describe('a vendor that compacts at a threshold of its own', () => {
       // No window known: Gemini keeps its own default.
       expect(await compactThresholdEnvironment(harness('gemini'), state, 'unknown-model')).toEqual({});
       expect(await compactThresholdEnvironment(harness('claude'), state, null)).toEqual({});
+    } finally {
+      if (previous === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = previous;
+    }
+  });
+});
+
+describe('after a native compaction', () => {
+  it('the next request names the file that keeps the whole conversation, once', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const previous = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = mkdtempSync(join(tmpdir(), 'compact-note-'));
+    try {
+      const { withCompactionNote } = await import('./compaction-run.js');
+      const session = {
+        id: 'c1', route: 'local', accountId: null, provider: null, model: null, createdAt: at(0), updatedAt: at(0), status: 'active',
+        messages: turns(2), compaction: { at: at(1), through: 4, noteRecord: true as const },
+      } as never as import('../session/model.js').HarnessSession;
+      const sent = await withCompactionNote(session, 'next request');
+      expect(sent).toMatch(/The complete conversation, every request and answer, is saved at .*records\/c1\.md/);
+      expect(sent.endsWith('next request')).toBe(true);
+      expect(session.compaction?.noteRecord).toBeUndefined();
+      expect(await withCompactionNote(session, 'later')).toBe('later');
     } finally {
       if (previous === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = previous;
     }
