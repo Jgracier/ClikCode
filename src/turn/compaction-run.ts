@@ -8,6 +8,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { quiet } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { fullRecordNote, writeFullRecord } from '../session/full-record.js';
 import { wrapResourceNote } from './resource-note-text.js';
@@ -66,7 +67,7 @@ export async function compactThresholdEnvironment(
   if (!setting) return {};
   const tokens = compactAt(state.globalSettings);
   if (!setting.settingsKey) return { [setting.env]: String(tokens) };
-  const window = await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(() => undefined);
+  const window = await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(quiet('turn/compaction-run'));
   if (!window) return {};
   const share = Math.round(Math.min(0.95, tokens / window) * 1000) / 1000;
   const settings: Record<string, unknown> = {};
@@ -77,7 +78,7 @@ export async function compactThresholdEnvironment(
   const directory = join(stateDirectory(), 'cache');
   const file = join(directory, `${harness.command}-compact-defaults.json`);
   const text = `${JSON.stringify(settings)}\n`;
-  if (await readFile(file, 'utf8').catch(() => undefined) !== text) {
+  if (await readFile(file, 'utf8').catch(() => undefined /* fail-open-ok: a missing cache file is written below */) !== text) {
     await mkdir(directory, { recursive: true });
     await writeFile(file, text);
   }
