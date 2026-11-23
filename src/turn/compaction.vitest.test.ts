@@ -135,9 +135,9 @@ describe('a vendor\'s own threshold, in its own terms', () => {
     expect(plan('codex', 300_000)).toEqual({ kind: 'config', config: { model_auto_compact_token_limit: 300_000 } });
   });
 
-  it('tokens in a variable: Aider, Vibe', () => {
+  it('tokens in a variable: Aider', () => {
     expect(plan('aider', 150_000)).toEqual({ kind: 'env', env: { AIDER_MAX_CHAT_HISTORY_TOKENS: '150000' } });
-    expect(plan('vibe', 80_000)).toEqual({ kind: 'env', env: { VIBE_AUTO_COMPACT_THRESHOLD: '80000' } });
+    expect(plan('aider', 80_000)).toEqual({ kind: 'env', env: { AIDER_MAX_CHAT_HISTORY_TOKENS: '80000' } });
   });
 
   it('a share or percent of the window, only once the window is known, below the whole of it', () => {
@@ -161,7 +161,7 @@ describe('a vendor\'s own threshold, in its own terms', () => {
   });
 
   it('nothing for a harness with no threshold of its own', () => {
-    for (const command of ['opencode', 'kilo', 'grok', 'pi', 'amp', 'cline', 'cursor', 'kiro', 'hermes', 'devin', 'auggie', 'junie']) expect(plan(command, 150_000, 200_000)).toBeUndefined();
+    for (const command of ['opencode', 'kilo', 'grok', 'vibe', 'pi', 'amp', 'cline', 'cursor', 'kiro', 'hermes', 'devin', 'auggie', 'junie']) expect(plan(command, 150_000, 200_000)).toBeUndefined();
   });
 });
 
