@@ -13,6 +13,7 @@
  * uses); one recorded as needing a sign-in is left out, since a vendor handed
  * it would start a browser sign-in of its own on every session. */
 import { quiet } from '../../runtime/lifecycle-log.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { homedir } from 'node:os';
 import { loadMcpServers, type McpServerSpec } from '../../agent/mcp/config.js';
 import { vendorMcpServerNames } from '../../agent/mcp/import.js';
@@ -64,6 +65,15 @@ async function withSignIn(stateDir: string, spec: HttpSpec): Promise<HttpSpec | 
  * or `home`) does not already have: ClikCode's built-in one unless the user
  * recorded a server under its name, then the recorded ones, each remote one with
  * its sign-in. Never throws: MCP must never be the reason a turn did not run. */
+/** The servers of a turn the caller gave its own (the accounts service's
+ * `mcp`), in place of the global ones -- the recorded servers, ClikCode's
+ * built-in one and ClikDeploy's -- for every harness launch inside `work`. */
+const turnServers = new AsyncLocalStorage<readonly McpServerSpec[]>();
+
+export function withTurnMcpServers<T>(servers: readonly McpServerSpec[], work: () => Promise<T>): Promise<T> {
+  return turnServers.run(servers, work);
+}
+
 export async function globalMcpServers(
   command: string, profile?: { env: string; path: string }, home: string = homedir(),
   /** False for a harness that takes its servers only in a file or on its command line:
@@ -72,6 +82,8 @@ export async function globalMcpServers(
   signIns = true,
   workspace?: string,
 ): Promise<McpServerSpec[]> {
+  const given = turnServers.getStore();
+  if (given) return [...given];
   try {
     const stateDir = stateDirectory();
     const { servers: recorded } = await loadMcpServers(stateDir);

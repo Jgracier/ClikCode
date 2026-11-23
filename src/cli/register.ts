@@ -39,6 +39,10 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // ClikDeploy's tools over MCP (stdio), started for every harness session while signed in to ClikDeploy: also a spawn target.
   program.command('clikdeploy-mcp-serve', { hidden: true })
     .action(async () => { const { clikDeployMcpServe } = await import('../commands/clikdeploy-mcp-serve.js'); await serveThenExit(clikDeployMcpServe); });
+  // The accounts service (docs/SERVICE.md): ClikCode's sign-ins and turns over HTTP, for a platform's own agents
+  // in a container. Hidden: it is a server a deployment starts, configured by its environment.
+  program.command('service', { hidden: true })
+    .action(async () => { const { runService } = await import('../commands/service.js'); await serveThenExit((signal) => runService(config, signal)); });
   program.command('computer-host <stateDir>', { hidden: true }).action(async (stateDir: string) => (await import('../agent/computer/browser-host.js')).runComputerHost(stateDir));
   // An editor extension's client (ide/bridge.ts), over an IPC channel the
   // extension opens; and the terminal it runs a vendor sign-in in. Hidden for

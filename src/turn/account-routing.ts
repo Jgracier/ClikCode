@@ -299,8 +299,11 @@ export function turnAccounts(input: {
   /** Runs before the account changes (a vendor closes its live process). */
   beforeSwitch?: () => Promise<void>;
   model?: string;
+  /** No other account may take the turn (TurnRunOptions.pinnedAccount). */
+  pinned?: boolean;
 }) {
-  const { state, session, prompter, matchesBackend, persist } = input;
+  const { state, session, prompter, persist } = input;
+  const matchesBackend = input.pinned ? (): boolean => false : input.matchesBackend;
   const tally: FailoverTally = { attempted: new Map(), exhaustedAny: false };
   const recordAccount = turnAccountRecorder(session, persist);
   let switchedFrom: string | undefined;

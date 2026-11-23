@@ -249,13 +249,22 @@ export async function syncAccountIdentityAfterLogin(
 }
 
 export async function aiAccountLogin(harnessCommandName: string, label?: string): Promise<string> {
+  return (await aiAccountSignIn(harnessCommandName, label)).label;
+}
+
+/** The one sign-in behind `accounts login`, returning the account it signed
+ * in (its id too: a caller that tracks accounts by id, the accounts service,
+ * needs the one this login landed on -- a new account, or an existing one
+ * the vendor's identity matched). */
+export async function aiAccountSignIn(harnessCommandName: string, label?: string): Promise<{ id: string; label: string }> {
   // A sign-in creates its profile before the vendor runs. One that fails, is
   // cancelled, or resolves to an account that keeps its own profile would
   // otherwise leave that directory behind for good, as would the profile an
   // account gives up for a new one.
   const touched = new Set<string>();
   try {
-    return await signInAccount(harnessCommandName, label, touched);
+    const account = await signInAccount(harnessCommandName, label, touched);
+    return { id: account.id, label: account.label };
   } finally {
     if (touched.size) {
       const { accounts } = await readState({ transcripts: [] });
@@ -273,7 +282,7 @@ function forgetOldCredential(account: AiHarnessAccount): void {
   clearQuotaMark(account);
 }
 
-async function signInAccount(harnessCommandName: string, label: string | undefined, touched: Set<string>): Promise<string> {
+async function signInAccount(harnessCommandName: string, label: string | undefined, touched: Set<string>): Promise<AiHarnessAccount> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   const state = await readState({ transcripts: [] });
@@ -303,7 +312,7 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
     await loginNativeHarness(harness, {});
     const signedIn = await syncAccountIdentityAfterLogin(harness, singleSlotExisting, state);
     emitHarnessOutput({ status: 'connected', harness: harness.command, account: signedIn.label, credentialBoundary: 'local-only' });
-    return signedIn.label;
+    return signedIn;
   }
   const accountId = randomUUID();
   const profilePath = harness.profileEnv
@@ -377,7 +386,7 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
       forgetOldCredential(existingMatch);
       await writeState(state);
       emitHarnessOutput({ status: 'connected', harness: harness.command, account: existingMatch.label, credentialBoundary: 'local-only' });
-      return existingMatch.label;
+      return existingMatch;
     }
     accountLabel = nameAccount(state.accounts, harness, derived);
   } else {
@@ -398,7 +407,7 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
       forgetOldCredential(again);
       await writeState(state);
       emitHarnessOutput({ status: 'connected', harness: harness.command, account: again.label, credentialBoundary: 'local-only' });
-      return again.label;
+      return again;
     }
     accountLabel = nameAccount(state.accounts, harness, accountLabel);
   }
@@ -406,7 +415,7 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
   state.accounts.push(created);
   await writeState(state);
   emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
-  return accountLabel;
+  return created;
 }
 
 /** Runs `work` -- a vendor's sign-in -- on the prompter's own sign-in
@@ -466,6 +475,14 @@ function nativeAccountContext(state: HarnessState, labelOrId: string): { account
 }
 
 export async function aiAccountStatus(labelOrId: string): Promise<void> {
+  const { account, nativeStatus, usage } = await checkAccountStatus(labelOrId);
+  emitResult({ account: { ...accountView(account), usage }, nativeStatus, credentialBoundary: 'local-only' });
+}
+
+/** The explicit check of one account behind `accounts status`: what is on
+ * disk, then the vendor's own status command, the registry brought in step
+ * with the answer, and its usage asked now. */
+export async function checkAccountStatus(labelOrId: string): Promise<{ account: AiHarnessAccount; nativeStatus: string; usage: Awaited<ReturnType<typeof accountUsageLabel>> }> {
   const state = await readState({ transcripts: [] });
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
   if (!harness.statusArgv && !hasAuthEvidence(harness)) throw new Error(`${harness.displayName} does not publish a non-destructive account-status command`);
@@ -510,7 +527,7 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
   }
   // An explicit check of one account: ask the harness now.
   const usage = await accountUsageLabel(account, state, { network: true });
-  emitResult({ account: { ...accountView(account), usage }, nativeStatus, credentialBoundary: 'local-only' });
+  return { account, nativeStatus, usage };
 }
 
 /** Interpret only explicit authentication signals; arbitrary successful

@@ -62,6 +62,11 @@ export interface TurnRunOptions {
   onWorkFinished?: () => void;
   /** The vendor that actually finished this turn, after any mid-turn handoffs. */
   onCompletedHarness?: (harness: string | undefined) => void;
+  /** The turn runs on the conversation's account and no other: a refusal there
+   * (usage spent, a sign-in gone) ends the turn with that refusal instead of
+   * moving it to another account. The accounts service runs each turn on the
+   * account its caller chose and reports why it could not (service/turns.ts). */
+  pinnedAccount?: boolean;
   /** The turn's journal exists (startTurnCheckpoint): a worker closes it when it ends the turn by force. */
   onCheckpoint?: (checkpoint: DurableTurnCheckpoint) => void;
 }
