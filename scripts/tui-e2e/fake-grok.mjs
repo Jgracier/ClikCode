@@ -16,7 +16,7 @@ const out = (record) => process.stdout.write(`${JSON.stringify(record)}\n`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // FAKE_TURNS is a list, one entry per turn: the Nth invocation replays the
 // Nth, counted in FAKE_STATE so consecutive turns can say different things.
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 // The matrix rig (matrix/fake-vendor.mjs) reuses this ACP agent for every
 // harness that rides the shared ACP client. FAKE_EMIT_LOG: every update is
 // logged with Date.now() at the moment it is written to the pipe, and the
@@ -46,6 +46,16 @@ if (argv[0] === 'models' || argv.includes('--list-models')) { console.log('grok-
 // wait for the browser (here, two seconds), then success. Like the real one
 // it insists on a TTY.
 if (argv[0] === 'login') {
+  // A sign-in that worked leaves the vendor's credential where the real one keeps it
+  // (the catalog's authFiles, ~/.grok/auth.json): ClikCode adds no account for a login
+  // that left none (src/commands/account.ts), so a fake that only exited 0 was refused.
+  const signedIn = (code) => {
+    if (code === 0 && process.env.HOME) {
+      mkdirSync(`${process.env.HOME}/.grok`, { recursive: true });
+      writeFileSync(`${process.env.HOME}/.grok/auth.json`, `${JSON.stringify({ 'https://accounts.x.ai::fake': { email: 'fake@grok.test' } })}\n`);
+    }
+    process.exit(code);
+  };
   if (!process.stdin.isTTY || !process.stdout.isTTY) { console.log('not a tty'); process.exit(9); }
   // FAKE_LOGIN_KEY: a sign-in that asks for a key on its own prompt line, as
   // Hermes's does, and succeeds only with that key.
@@ -70,7 +80,7 @@ if (argv[0] === 'login') {
       process.stdout.write('\n');
       if (base) process.exit(5);
     }
-    process.exit(typed === process.env.FAKE_LOGIN_KEY ? 0 : 4);
+    signedIn(typed === process.env.FAKE_LOGIN_KEY ? 0 : 4);
   }
   console.log('To sign in, open this URL in your browser:\n  https://accounts.x.ai/oauth2/device?user_code=AB12-CD34\nConfirm this code in your browser:\n  AB12-CD34\nWaiting for authorization...');
   // FAKE_LOGIN_HOLD: while that file exists (up to 30s) the browser has not
@@ -81,7 +91,7 @@ if (argv[0] === 'login') {
   while (hold && existsSync(hold) && Date.now() - started < 30_000) await new Promise((resolve) => setTimeout(resolve, 100));
   // Awaited, never a timer: everything below is the agent, and a login that
   // fell through into it used up the scenario's first answer.
-  process.exit(0);
+  signedIn(0);
 } else if (['logout', 'auth', 'status'].includes(argv[0])) process.exit(0);
 // `grok mcp add <name> <command> [args...]`, as the real one records it, so
 // the next turn finds the server there and does not add it again. Never a
