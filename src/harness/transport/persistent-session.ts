@@ -156,6 +156,10 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   /** The child's process group when the current turn's prompt went out
    * (promptSent): what was already running -- the vendor, its MCP servers. */
   private atPrompt?: Promise<Set<number>>;
+  /** The end-of-turn look at what the turn left running (noteLeftRunning), while it is still being
+   * taken: a retire or a background-work question right after a turn waits for it, or it would see
+   * none of the commands the turn just started. */
+  private noting?: Promise<void>;
   /** Processes a turn started and left running after it. Only some are the
    * vendor's background work (a `run_in_background` shell, a dev server):
    * the rest are helpers it started lazily (MCP servers). toolCallWork
@@ -263,6 +267,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
    * where their output goes. */
   private async leftCommands(): Promise<Map<number, RunningWork>> {
     const commands = new Map<number, RunningWork>();
+    await this.noting;
     const root = this.live?.pid;
     if (this.isClosed || !this.live || this.live.peer.closed || !root || !this.leftRunning.size) return commands;
     const group = await processGroup(root);
@@ -422,7 +427,9 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (this.retirement) return this.retirement.work.count() > 0;
     if (this.isClosed || !this.live || this.live.peer.closed) return false;
     if (this.pendingCount() > 0) return true;
-    const root = this.live.pid;
+    await this.noting;
+    const root = this.live?.pid;
+    if (this.isClosed || !this.live || this.live.peer.closed) return false;
     if (!this.leftRunning.size || !root) return false;
     const group = await processGroup(root);
     for (const pid of this.leftRunning) if (!group.has(pid)) this.leftRunning.delete(pid);
@@ -521,7 +528,10 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       signal?.removeEventListener('abort', onAbort);
       if (this.turn === turn) this.turn = undefined;
       hooks.ended(succeeded);
-      void this.noteLeftRunning().catch(quiet('harness/transport/persistent-session'));
+      const noting: Promise<void> = this.noteLeftRunning().catch(quiet('harness/transport/persistent-session')).finally(() => {
+        if (this.noting === noting) this.noting = undefined;
+      });
+      this.noting = noting;
     }
   }
 
