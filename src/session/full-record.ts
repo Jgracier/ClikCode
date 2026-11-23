@@ -1,12 +1,18 @@
-/** The whole conversation as one readable file, for whatever provider takes it up.
+/** The whole conversation as one readable file, and where a provider is told
+ * to find what a handoff left out.
  *
  * A provider's window is finite, so a handoff can carry only what fits. What it
- * leaves out must stay reachable, and a provider's own tools are the only
- * thing every provider has: vendors are not given ClikCode's MCP servers, so
- * "ask the conversation tools" pointed at tools that were not there. A plain
- * file in ClikCode's state directory is read by any agent's file tools or
- * grep. Written fresh at each handoff from the stored conversation, in full
- * (every request and every answer), never trimmed to fit a window. */
+ * leaves out must stay reachable. Where the harness is given ClikCode's MCP
+ * server (harness/transport/acp-mcp-servers.ts: ACP, Codex's app-server, a
+ * per-run MCP flag) and in ClikCode's own agent, that is the `hindsight` tool,
+ * which searches this conversation by words and meaning and reads it by
+ * message number. Anywhere else a provider's own tools are all it has, so the
+ * note names this file, read by any agent's file tools or grep.
+ *
+ * The file is written either way, fresh at each handoff from the stored
+ * conversation, in full (every request and every answer), never trimmed to fit
+ * a window: it is also the copy session/audit.ts checks a log against, and
+ * what ClikCode's read_context reads. */
 import { quiet } from '../runtime/lifecycle-log.js';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -52,7 +58,21 @@ async function setAsideLongerRecord(path: string, id: string, turns: number): Pr
   await rename(path, join(older, `${id}.${new Date().toISOString().replace(/[:.]/g, '-')}.md`));
 }
 
+/** Where the receiving provider reaches the rest: its hindsight tool, or the file. */
+export type RecordReach = { tool: 'hindsight' } | { path: string };
+
+/** The tool when the receiving harness has it, else the file when it was written. */
+export function recordReachFor(hasHindsight: boolean, path: string | undefined): RecordReach | undefined {
+  return hasHindsight ? { tool: 'hindsight' } : path ? { path } : undefined;
+}
+
+/** A few words for where the rest is, for a line that has room for no more. */
+export function recordReachLabel(reach: RecordReach): string {
+  return 'path' in reach ? reach.path : 'the hindsight tool';
+}
+
 /** The line that tells the receiving provider where the rest is. */
-export function fullRecordNote(path: string): string {
-  return `The complete conversation, every request and answer, is saved at ${path}. Read or search that file when something is not above.`;
+export function fullRecordNote(reach: RecordReach): string {
+  if ('path' in reach) return `The complete conversation, every request and answer, is saved at ${reach.path}. Read or search that file when something is not above.`;
+  return 'The complete conversation, every request and answer, is in the hindsight tool: query finds a phrase or a subject in it, from and to read messages by number. Use it when something is not above.';
 }

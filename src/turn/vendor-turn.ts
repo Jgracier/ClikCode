@@ -19,7 +19,8 @@ import { targetContextWindow, transferBudget } from './transfer.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
 import { maxPromptArgvBytes } from '../runtime/lazy-bridge.js';
-import { writeFullRecord } from '../session/full-record.js';
+import { recordReachFor, writeFullRecord } from '../session/full-record.js';
+import { reachesBuiltInMcp } from '../harness/transport/acp-mcp-servers.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { createVendorTurnContext, type VendorTurnContext } from './vendor-turn-context.js';
 import { withMoveNote } from './resource-notes.js';
@@ -96,8 +97,8 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
     const budget = transferBudget({ ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}) });
     const missed = ctx.baseMessages.slice(returningThrough);
     if (missed.length) {
-      const recordPath = await writeFullRecord({ ...session, pendingTurn: undefined }, stateDirectory());
-      ctx.turnText = returnPrompt(session, ctx.baseMessages, returningThrough, ctx.turnText, budget, recordPath);
+      const reach = recordReachFor(reachesBuiltInMcp(harness, transport), await writeFullRecord({ ...session, pendingTurn: undefined }, stateDirectory()));
+      ctx.turnText = returnPrompt(session, ctx.baseMessages, returningThrough, ctx.turnText, budget, reach);
       ctx.prompter?.activity(`${harness.displayName} was away from this conversation for ${missed.length} message${missed.length === 1 ? '' : 's'}; they are sent with this request.`);
     }
   }
@@ -176,7 +177,7 @@ export async function sendVendorTurn(input: AccountTurnInput): Promise<'switch' 
     // the turn sends -- the taken-up conversation included (session/move.ts).
     ctx.turnText = withMoveNote(ctx.session, ctx.turnText);
     // The first request after a compaction names where the whole conversation is kept.
-    if (!ctx.run.compaction) ctx.turnText = await withCompactionNote(ctx.session, ctx.turnText);
+    if (!ctx.run.compaction) ctx.turnText = await withCompactionNote(ctx.session, ctx.turnText, reachesBuiltInMcp(ctx.harness, sessionTurnTransport(ctx.harness, ctx.session)));
     // Moved off a spent account before the first attempt: the agent is told which, and how much the new one has.
     noteAccountSwitch(ctx);
     const observer = createVendorObserver(ctx);

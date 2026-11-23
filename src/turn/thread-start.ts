@@ -21,7 +21,7 @@ import { ranNote } from '../agent/ran-note.js';
 import { quiet } from '../runtime/lifecycle-log.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import { type CanonicalRecord, type CanonicalTurn } from '../session/canonical.js';
-import { fullRecordNote } from '../session/full-record.js';
+import { fullRecordNote, recordReachLabel, type RecordReach } from '../session/full-record.js';
 import type { NativeSessionEnvironment, NativeThreadWriter, NativeThreadWritten } from '../session/discovery/stores.js';
 import { modelProvider } from '../runtime/lazy-bridge.js';
 import { BYTES_PER_TOKEN, transferBudget, transferPrompt } from './transfer.js';
@@ -88,11 +88,12 @@ export interface ThreadStartInput {
   session?: { statelessRoutes?: readonly string[] };
   /** The writer for this harness, if any (registry: nativeSessionStore). */
   writer?: NativeThreadWriter;
-  /** Where the whole conversation is saved as a file (session/full-record.ts):
-   * named in whatever a handoff leaves out, so nothing is out of reach. A
-   * summary a provider made is never put in place of turns: it is the
-   * provider's own, and a handoff carries the conversation itself. */
-  recordPath?: string;
+  /** Where the whole conversation is (session/full-record.ts): the hindsight
+   * tool or the record file, named in whatever a handoff leaves out, so
+   * nothing is out of reach. A summary a provider made is never put in place
+   * of turns: it is the provider's own, and a handoff carries the
+   * conversation itself. */
+  recordReach?: RecordReach;
   /** The installed vendor build (first line of `--version`). */
   version?: () => Promise<string | undefined>;
   displayName?: (harness: string) => string | undefined;
@@ -151,8 +152,8 @@ function clipMiddle(text: string, limit: number): string {
 /** A compact, attributable account of one old turn. Keeping its request,
  * outcome and work done means a long handoff loses detail gradually instead
  * of dropping whole chunks of history before the current request. */
-function compactTurn(turn: CanonicalTurn, maxBytes: number, recordPath?: string): CanonicalTurn {
-  const recordNote = turn.index === 0 && recordPath ? ` Full transcript: ${recordPath}.` : '';
+function compactTurn(turn: CanonicalTurn, maxBytes: number, recordReach?: RecordReach): CanonicalTurn {
+  const recordNote = turn.index === 0 && recordReach ? ` Full transcript: ${recordReachLabel(recordReach)}.` : '';
   const lead = `[ClikCode history, turn ${turn.index + 1}] Request:${recordNote} `;
   const room = Math.max(0, maxBytes - Buffer.byteLength(lead, 'utf8') - 44);
   const requestLimit = Math.floor(room * 0.46);
@@ -208,9 +209,9 @@ function requestsOutline(turns: readonly CanonicalTurn[], maxBytes: number): str
  * the newest always), then, with what room is left, the newest of those get
  * their tool output back. Turns are left out only when even their words do
  * not fit, and the first kept turn then says what was left out: a line for
- * each request, and the file that holds the whole conversation. ClikCode's
+ * each request, and where the whole conversation is. ClikCode's
  * record keeps every turn; nothing is deleted by being left out here. */
-export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { recordPath?: string } = {}): { record: CanonicalRecord; omitted: number; summarised: number } {
+export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { recordReach?: RecordReach } = {}): { record: CanonicalRecord; omitted: number; summarised: number } {
   const turns = record.turns;
   const brief = turns.map(briefTurn);
   let totalBytes = writtenRecordBytes(brief);
@@ -220,10 +221,10 @@ export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { 
   // A previous fitter simply omitted these turns; long-running conversations
   // consequently reached a new provider with only an outline of old requests.
   if (totalBytes > maxBytes && turns.length > 1) {
-    const perTurn = Math.floor((maxBytes - (options.recordPath ? Buffer.byteLength(options.recordPath, 'utf8') + 48 : 0)) / turns.length);
+    const perTurn = Math.floor((maxBytes - (options.recordReach ? Buffer.byteLength(recordReachLabel(options.recordReach), 'utf8') + 48 : 0)) / turns.length);
     if (perTurn >= 192) {
       for (let index = 0; index < turns.length - 1 && totalBytes > maxBytes; index += 1) {
-        const compact = compactTurn(turns[index]!, perTurn, options.recordPath);
+        const compact = compactTurn(turns[index]!, perTurn, options.recordReach);
         const before = writtenBytes(brief[index]!);
         const after = writtenBytes(compact);
         if (after < before) {
@@ -266,7 +267,7 @@ export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { 
   ({ first, kept } = select(Math.max(0, maxBytes - outlineRoom - NOTE_FIXED_BYTES)));
   const summarised = compacted + summarisedIn();
   const outline = requestsOutline(turns.slice(0, first), outlineRoom);
-  const note = `[ClikCode: the ${first} earlier turn${first === 1 ? ' is' : 's are'} left out to fit this model.${options.recordPath ? ` ${fullRecordNote(options.recordPath)}` : ''}${outline ? `\nWhat was asked in them, oldest first:\n${outline}` : ''}]\n\n`;
+  const note = `[ClikCode: the ${first} earlier turn${first === 1 ? ' is' : 's are'} left out to fit this model.${options.recordReach ? ` ${fullRecordNote(options.recordReach)}` : ''}${outline ? `\nWhat was asked in them, oldest first:\n${outline}` : ''}]\n\n`;
   return { record: { ...record, turns: [{ ...kept[0]!, user: `${note}${kept[0]!.user}` }, ...kept.slice(1)] }, omitted: first, summarised };
 }
 
@@ -288,7 +289,7 @@ async function written(input: ThreadStartInput): Promise<{ written: NativeThread
     }
     // No note of which provider ran which turns is written into the vendor's
     // thread: it is the vendor's own. Only what was left out is said.
-    const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow, input.capTokens), input.recordPath ? { recordPath: input.recordPath } : {});
+    const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow, input.capTokens), input.recordReach ? { recordReach: input.recordReach } : {});
     const result = await writer.write(fitted.record, context);
     if (!result?.nativeId) input.onFallback?.(`${input.harness.command} thread writer declined`);
     return result?.nativeId ? { written: result, omitted: fitted.omitted, summarised: fitted.summarised } : undefined;
@@ -311,7 +312,7 @@ export async function startConversationThread(input: ThreadStartInput): Promise<
     kind: 'transfer', budget,
     prompt: transferPrompt(input.record, input.request, {
       maxBytes: budget, interrupted: input.interrupted, ...(input.displayName ? { displayName: input.displayName } : {}),
-      ...(input.recordPath ? { recordPath: input.recordPath } : {}),
+      ...(input.recordReach ? { recordReach: input.recordReach } : {}),
     }),
   };
 }

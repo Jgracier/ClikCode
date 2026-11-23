@@ -1,6 +1,7 @@
 /** Taking a conversation up on a harness's fresh thread, and the edits a retry
  * makes to the answer written so far. */
-import { writeFullRecord } from '../session/full-record.js';
+import { recordReachFor, writeFullRecord } from '../session/full-record.js';
+import { reachesBuiltInMcp } from '../harness/transport/acp-mcp-servers.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { carriedLine, startConversationThread } from './thread-start.js';
 import { compactAt } from './compaction.js';
@@ -51,11 +52,12 @@ export async function takeUp(
   const argvBound = (transport === 'structured-cli' || transport === 'text-cli') && harness.turn?.promptInput !== 'stdin';
   const contextWindow = await targetContextWindow(state.sessions, harness.command, ctx.model, modelsDevFiles()).catch(quiet('turn/vendor-thread-takeup'));
   const writer = nativeSessionStore(harness)?.writer;
-  // The whole conversation is always kept in a file the receiving provider can
-  // read, so whatever its window cannot hold is still within reach. A summary
-  // any provider made of it is never put in place of turns: a handoff carries
-  // the conversation itself.
+  // The whole conversation is always kept in a file, and the receiving provider
+  // is told where to reach it (its hindsight tool, or that file), so whatever
+  // its window cannot hold is still within reach. A summary any provider made
+  // of it is never put in place of turns: a handoff carries the conversation itself.
   const recordPath = record.turns.length ? await writeFullRecord(view, stateDirectory()) : undefined;
+  const recordReach = record.turns.length ? recordReachFor(reachesBuiltInMcp(harness, transport), recordPath) : undefined;
   // Never more than the compaction threshold; a compaction ClikCode does itself (no native one,
   // compaction-run.ts compactByRewrite) fits it to half of that, so it is not due again at once.
   const threshold = compactAt(state.globalSettings);
@@ -64,7 +66,7 @@ export async function takeUp(
   const start = await startConversationThread({
     record, request, interrupted: options.interrupted, harness, model: ctx.model,
     session,
-    ...(recordPath ? { recordPath } : {}),
+    ...(recordReach ? { recordReach } : {}),
     workspace: session.workspace ?? process.cwd(), environment: turnEnvironment(harness, ctx.account),
     ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}), capTokens,
     ...(writer ? { writer } : {}),

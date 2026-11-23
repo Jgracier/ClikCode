@@ -143,12 +143,15 @@ describe('a handoff never leaves the rest of the conversation out of reach', () 
   ]).flat()));
 
   it('names the file that holds the whole conversation, and no tool a provider does not have', () => {
-    const prompt = transferPrompt(long(60), 'go on', { maxBytes: 20 * KB, recordPath: '/state/records/s1.md' });
+    const prompt = transferPrompt(long(60), 'go on', { maxBytes: 20 * KB, recordReach: { path: '/state/records/s1.md' } });
     expect(prompt).toContain('/state/records/s1.md');
     expect(prompt).not.toMatch(/search_conversations|read_conversation/);
     // Every request is listed, however many turns the budget could not retell.
     expect(prompt).toContain('1. request number 1');
     expect(prompt).toContain('60. request number 60');
+    const viaTool = transferPrompt(long(60), 'go on', { maxBytes: 20 * KB, recordReach: { tool: 'hindsight' } });
+    expect(viaTool).toContain('is in the hindsight tool');
+    expect(viaTool).not.toContain('/state/records/');
   });
 
   it('carries a long conversation in the half of the window a written thread gets, not a fifth', () => {
@@ -167,7 +170,7 @@ describe('a conversation far longer than its budget', () => {
       messages.push({ role: 'user', content: `request number ${index} asking for something fairly specific here`, at: now } as TranscriptMessage);
       messages.push({ role: 'assistant', content: `answer ${index}`, at: now } as TranscriptMessage);
     }
-    const prompt = transferPrompt(canonicalRecord(session(messages)), 'now what', { maxBytes: 92 * KB, recordPath: '/r/record.md' });
+    const prompt = transferPrompt(canonicalRecord(session(messages)), 'now what', { maxBytes: 92 * KB, recordReach: { path: '/r/record.md' } });
     expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(92 * KB);
     expect(prompt).toMatch(/earlier requests? not listed/);
     expect(prompt).toContain('request number 3999');

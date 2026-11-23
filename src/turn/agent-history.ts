@@ -16,7 +16,7 @@ import { ConversationStore } from '../agent/conversation.js';
 import type { ConversationItem } from '../agent/model-client.js';
 import { canonicalRecord, markProviderBoundaries, withProviderNote, type CanonicalTurn } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
-import { writeFullRecord } from '../session/full-record.js';
+import { recordReachFor, writeFullRecord } from '../session/full-record.js';
 import { ranNote } from '../agent/ran-note.js';
 import { fitRecord, nativeThreadBudget } from './thread-start.js';
 import { BYTES_PER_TOKEN } from './transfer.js';
@@ -98,10 +98,11 @@ export async function seedAgentConversation(input: {
   }
   const receiving = `${session.route}:${session.provider ?? ''}`;
   const missing = { ...record, turns: record.turns.slice(through) };
-  // What does not fit is named with the file that holds the whole conversation:
-  // no provider's summary stands in for turns (a handoff carries the conversation).
-  const recordPath = await writeFullRecord(session, input.stateDir);
-  const fitted = fitRecord(markProviderBoundaries(missing, receiving, input.displayName), agentSeedBudget(input.contextWindow, input.readableTokens), recordPath ? { recordPath } : {});
+  // What does not fit is named with the hindsight tool, which ClikCode's agent
+  // always has; the record file is still written (session/full-record.ts). No
+  // provider's summary stands in for turns (a handoff carries the conversation).
+  const recordReach = recordReachFor(true, await writeFullRecord(session, input.stateDir));
+  const fitted = fitRecord(markProviderBoundaries(missing, receiving, input.displayName), agentSeedBudget(input.contextWindow, input.readableTokens), recordReach ? { recordReach } : {});
   await store.append(...fitted.record.turns.flatMap(agentItemsFromTurn));
   return { total, seeded: missing.turns.length };
 }

@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HarnessSession } from './model.js';
-import { fullRecordNote, fullRecordPath, recordTurns, writeFullRecord } from './full-record.js';
+import { fullRecordNote, fullRecordPath, recordReachFor, recordTurns, writeFullRecord } from './full-record.js';
 
 const now = '2026-10-21T00:00:00.000Z';
 let dir: string | undefined;
@@ -62,8 +62,18 @@ describe('the file that holds a whole conversation', () => {
     expect(await writeFullRecord(chat(1), join(dir, 'a-file', 'state'))).toBeUndefined();
   });
 
-  it('is named in a line that points at the file, not at a tool', () => {
-    expect(fullRecordNote('/state/records/x.md')).toContain('/state/records/x.md');
-    expect(fullRecordNote('/state/records/x.md')).not.toMatch(/search_conversations|read_conversation/);
+  it('is named in a line that points at the file, not at a tool, for a harness without ClikCode\'s MCP server', () => {
+    const reach = recordReachFor(false, '/state/records/x.md')!;
+    expect(fullRecordNote(reach)).toContain('/state/records/x.md');
+    expect(fullRecordNote(reach)).not.toMatch(/search_conversations|read_conversation|hindsight/);
+    expect(recordReachFor(false, undefined)).toBeUndefined();
+  });
+
+  it('points at the hindsight tool instead where the harness has it, file written or not', () => {
+    for (const path of ['/state/records/x.md', undefined]) {
+      const note = fullRecordNote(recordReachFor(true, path)!);
+      expect(note).toContain('hindsight tool');
+      expect(note).not.toContain('records/');
+    }
   });
 });

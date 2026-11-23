@@ -45,6 +45,18 @@ function builtInMcpServer(): McpServerSpec | undefined {
   return { name: BUILT_IN_MCP_NAME, transport: 'stdio', command: process.execPath, args: [entry, 'mcp-serve'], env: { CLIKCODE_WORKER_PID: String(process.pid) } };
 }
 
+/** Whether a turn on `transport` reaches ClikCode's own server, so its
+ * conversation tools (hindsight) can be named to the model: ACP and Codex's
+ * app-server take it with the session or launch, a one-shot CLI only through
+ * a per-run MCP flag (`turn.mcpConfigArgv`), and a turn given its own servers
+ * (withTurnMcpServers) only when they include it. */
+export function reachesBuiltInMcp(harness: { turn?: { mcpConfigArgv?: readonly string[] } }, transport: 'acp' | 'codex-app-server' | 'structured-cli' | 'text-cli'): boolean {
+  const given = turnServers.getStore();
+  if (given) return given.some((server) => server.name === BUILT_IN_MCP_NAME);
+  if (!builtInMcpServer()) return false;
+  return transport === 'acp' || transport === 'codex-app-server' || Boolean(harness.turn?.mcpConfigArgv?.length);
+}
+
 /** `spec` with the bearer of ClikCode's stored sign-in, refreshed when it is
  * about to expire; undefined when it needs a sign-in ClikCode does not hold. An
  * Authorization header the user wrote on the entry is theirs and wins. */

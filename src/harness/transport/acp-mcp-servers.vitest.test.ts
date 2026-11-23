@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acpMcpServer, ampMcpConfig, codexMcpLaunch, globalMcpServers, globalMcpServersForAcp } from './acp-mcp-servers.js';
+import { acpMcpServer, ampMcpConfig, codexMcpLaunch, globalMcpServers, globalMcpServersForAcp, reachesBuiltInMcp, withTurnMcpServers } from './acp-mcp-servers.js';
 import { mcpOAuthFile } from '../../agent/mcp/oauth.js';
 
 describe('acpMcpServer', () => {
@@ -47,6 +47,20 @@ describe('the built-in ClikCode server', () => {
     const servers = await inHome(() => globalMcpServersForAcp('some-harness', {}, undefined, '/nonexistent-home'),
       async home => { const fs = await import('node:fs/promises'); await fs.writeFile(`${home}/mcp.json`, JSON.stringify({ mcpServers: { clikcode: { command: 'mine', args: [] } } })); });
     expect(servers).toEqual([{ name: 'clikcode', command: 'mine', args: [], env: [] }]);
+  });
+});
+
+describe('whether a turn reaches the built-in server (so the model can be told of hindsight)', () => {
+  it('does over ACP, the Codex app-server and a per-run MCP flag; not over a plain one-shot CLI', async () => {
+    expect(reachesBuiltInMcp({}, 'acp')).toBe(true);
+    expect(reachesBuiltInMcp({}, 'codex-app-server')).toBe(true);
+    expect(reachesBuiltInMcp({ turn: { mcpConfigArgv: ['--mcp-config'] } }, 'structured-cli')).toBe(true);
+    expect(reachesBuiltInMcp({ turn: {} }, 'structured-cli')).toBe(false);
+    expect(reachesBuiltInMcp({}, 'text-cli')).toBe(false);
+    // A turn given its own servers reaches it only if they include it.
+    expect(await withTurnMcpServers([], async () => reachesBuiltInMcp({}, 'acp'))).toBe(false);
+    const builtIn = { name: 'clikcode', transport: 'stdio', command: 'node', args: ['x', 'mcp-serve'], env: {} } as const;
+    expect(await withTurnMcpServers([builtIn], async () => reachesBuiltInMcp({}, 'acp'))).toBe(true);
   });
 });
 

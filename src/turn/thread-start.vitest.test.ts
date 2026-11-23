@@ -168,7 +168,7 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
   });
 
   it('keeps the newest turns that fit, and names the file that holds the rest and what was asked in it', () => {
-    const fitted = fitRecord(long, 3_000, { recordPath: '/state/records/s2.md' });
+    const fitted = fitRecord(long, 3_000, { recordReach: { path: '/state/records/s2.md' } });
     expect(fitted.omitted).toBeGreaterThan(0);
     expect(fitted.omitted + fitted.record.turns.length).toBe(20);
     expect(fitted.record.turns.at(-1)!.user).toContain('request 19');
@@ -179,12 +179,16 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
     expect(note).not.toMatch(/search_conversations|read_conversation/);
     expect(note).toContain('What was asked in them, oldest first:');
     expect(note).toContain('1. request 0');
+    // Where the harness has ClikCode's MCP server, the rest is in its hindsight tool instead.
+    const viaTool = fitRecord(long, 3_000, { recordReach: { tool: 'hindsight' } }).record.turns[0]!.user;
+    expect(viaTool).toContain('is in the hindsight tool');
+    expect(viaTool).not.toContain('/state/records/');
   });
 
   it('holds the note inside the budget, not on top of it', () => {
     const bytes = (turns: typeof long.turns) => turns.reduce((sum, turn) => sum + Buffer.byteLength(turn.user, 'utf8') + Buffer.byteLength(JSON.stringify(turn.parts), 'utf8'), 0);
     for (const budget of [3_000, 5_000, 9_000]) {
-      const fitted = fitRecord(long, budget, { recordPath: '/state/records/s2.md' });
+      const fitted = fitRecord(long, budget, { recordReach: { path: '/state/records/s2.md' } });
       // The newest turn is always kept, so a budget below it can be passed by that turn alone.
       expect(bytes(fitted.record.turns), `budget ${budget}`).toBeLessThanOrEqual(budget + 1_200);
     }
@@ -231,7 +235,7 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
         { role: 'assistant' as const, content: `Started work on item ${index + 1}. ${'Detailed intermediate context. '.repeat(30)}Completed item ${index + 1} successfully.` },
       ]).flat(),
     } as HarnessSession);
-    const fitted = fitRecord(many, 400 * 1024, { recordPath: '/state/records/long-history.md' });
+    const fitted = fitRecord(many, 400 * 1024, { recordReach: { path: '/state/records/long-history.md' } });
     const bytes = fitted.record.turns.reduce((sum, turn) => sum
       + Buffer.byteLength(turn.user, 'utf8') + Buffer.byteLength(JSON.stringify(turn.parts), 'utf8'), 0);
 

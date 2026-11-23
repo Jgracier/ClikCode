@@ -11,7 +11,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { quiet } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { fullRecordNote, writeFullRecord } from '../session/full-record.js';
+import { fullRecordNote, recordReachFor, writeFullRecord } from '../session/full-record.js';
 import { wrapResourceNote } from './resource-note-text.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { compactAt, compactionMechanism, vendorThresholdPlan, type CompactionMechanism } from './compaction.js';
@@ -95,12 +95,13 @@ export async function compactThresholdLaunch(
   return { environment: { [plan.env]: file }, config: {}, set: true };
 }
 
-/** The first request after a native compaction names the file that keeps the whole conversation
- * (session/full-record.ts): the vendor now works from its own summary, and what the summary left
- * out is still within reach. */
-export async function withCompactionNote(session: HarnessSession, turnText: string): Promise<string> {
+/** The first request after a native compaction names where the whole conversation is
+ * (session/full-record.ts): the hindsight tool when the harness has ClikCode's MCP server
+ * (`hasHindsight`), else the record file. The vendor now works from its own summary, and what the
+ * summary left out is still within reach. The file is written either way. */
+export async function withCompactionNote(session: HarnessSession, turnText: string, hasHindsight: boolean): Promise<string> {
   if (!session.compaction?.noteRecord) return turnText;
   delete session.compaction.noteRecord;
-  const path = await writeFullRecord({ ...session, pendingTurn: undefined }, stateDirectory());
-  return path ? `${wrapResourceNote(fullRecordNote(path))}\n\n${turnText}` : turnText;
+  const reach = recordReachFor(hasHindsight, await writeFullRecord({ ...session, pendingTurn: undefined }, stateDirectory()));
+  return reach ? `${wrapResourceNote(fullRecordNote(reach))}\n\n${turnText}` : turnText;
 }

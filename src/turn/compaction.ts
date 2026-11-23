@@ -15,7 +15,7 @@
  * runs itself (Claude's `/compact`, Gemini's `/compress`, ...). Only a harness with neither is
  * compacted by ClikCode: its thread is let go and the next turn takes the conversation up afresh
  * (turn/thread-start.ts), fitted to half the threshold. ClikCode's own record keeps every turn
- * either way, and the full-record file stays named to the model.
+ * either way, and the model is told where it is: the hindsight tool, or the full-record file.
  *
  * Chalk free and dependency free: the slash registry and the webview import it. */
 
@@ -188,7 +188,7 @@ export interface CompactionRecord {
   after?: number;
   /** A rewrite whose fresh thread the next turn has yet to write. */
   rewrite?: true;
-  /** A native compaction whose next turn has yet to name the full-record file to the model. */
+  /** A native compaction whose next turn has yet to tell the model where the whole conversation is. */
   noteRecord?: true;
 }
 

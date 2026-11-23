@@ -22,7 +22,7 @@
 import { readFile } from 'node:fs/promises';
 import type { CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
-import { fullRecordNote } from '../session/full-record.js';
+import { fullRecordNote, type RecordReach } from '../session/full-record.js';
 import { escapeFailoverContent, FAILOVER_PREAMBLE } from './failover-prompt.js';
 
 /** Smallest budget: what every handoff had before it was sized to a model. */
@@ -223,9 +223,10 @@ interface TransferOptions {
   interrupted?: boolean;
   /** Harness command -> display name, for the header. */
   displayName?: (harness: string) => string | undefined;
-  /** The file that holds the whole conversation (session/full-record.ts), named
-   * in the prompt so whatever the budget left out is still within reach. */
-  recordPath?: string;
+  /** Where the whole conversation is (session/full-record.ts): the hindsight
+   * tool or the record file, named in the prompt so whatever the budget left
+   * out is still within reach. */
+  recordReach?: RecordReach;
 }
 
 /** The transfer prompt: `record` retold within `maxBytes`, ending in the
@@ -258,7 +259,7 @@ export function transferPrompt(record: CanonicalRecord, request: string, options
     const total = turns.length;
     add(`This chat has ${total} earlier turn${total === 1 ? '' : 's'} (${runs.join('; ')}).`);
   }
-  if (options.recordPath && turns.length) add(escapeFailoverContent(fullRecordNote(options.recordPath)));
+  if (options.recordReach && turns.length) add(escapeFailoverContent(fullRecordNote(options.recordReach)));
 
   // 1. Every request, compact. All of them, however many: each is clipped
   // harder rather than any dropped.

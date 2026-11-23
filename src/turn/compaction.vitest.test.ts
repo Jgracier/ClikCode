@@ -209,7 +209,7 @@ describe('a launch', () => {
 
 describe('after a native compaction', () => {
   it('the next request names the file that keeps the whole conversation, once', async () => {
-    const { mkdtempSync } = await import('node:fs');
+    const { existsSync, mkdtempSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const previous = process.env.CLIKCODE_HOME;
@@ -220,11 +220,17 @@ describe('after a native compaction', () => {
         id: 'c1', route: 'local', accountId: null, provider: null, model: null, createdAt: at(0), updatedAt: at(0), status: 'active',
         messages: turns(2), compaction: { at: at(1), through: 4, noteRecord: true as const },
       } as never as import('../session/model.js').HarnessSession;
-      const sent = await withCompactionNote(session, 'next request');
+      const sent = await withCompactionNote(session, 'next request', false);
       expect(sent).toMatch(/The complete conversation, every request and answer, is saved at .*records\/c1\.md/);
       expect(sent.endsWith('next request')).toBe(true);
       expect(session.compaction?.noteRecord).toBeUndefined();
-      expect(await withCompactionNote(session, 'later')).toBe('later');
+      expect(await withCompactionNote(session, 'later', false)).toBe('later');
+      // A harness given ClikCode's MCP server is pointed at its hindsight tool; the file is still written.
+      session.compaction!.noteRecord = true;
+      const viaTool = await withCompactionNote(session, 'next request', true);
+      expect(viaTool).toContain('is in the hindsight tool');
+      expect(viaTool).not.toContain('records/c1.md');
+      expect(existsSync(join(process.env.CLIKCODE_HOME!, 'records', 'c1.md'))).toBe(true);
     } finally {
       if (previous === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = previous;
     }
