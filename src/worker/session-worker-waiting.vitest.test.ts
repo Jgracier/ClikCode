@@ -298,13 +298,14 @@ describe('a session worker waits for what it should', () => {
     } finally { process.env.CLIKCODE_LIFECYCLE_LOG = '0'; }
   }, 60_000);
 
+  // The worker may still be writing into its home as it is removed: rm retries ENOTEMPTY (maxRetries).
   it('idle-exits even when its home was deleted under it (a test run ending)', async () => {
     const session = await gatewaySession('bypass', 1_000);
     const client = await attach(session.id);
     const pid = workerPids[0]!;
     client.close();
     clients.splice(0);
-    await rm(process.env.CLIKCODE_HOME!, { recursive: true, force: true });
+    await rm(process.env.CLIKCODE_HOME!, { recursive: true, force: true, maxRetries: 10 });
     await processExit(pid, 10_000);
   }, 30_000);
 
@@ -319,7 +320,7 @@ describe('a session worker waits for what it should', () => {
     await asked;
     client.close();
     clients.splice(0);
-    await rm(process.env.CLIKCODE_HOME!, { recursive: true, force: true });
+    await rm(process.env.CLIKCODE_HOME!, { recursive: true, force: true, maxRetries: 10 });
     await processExit(pid, 10_000);
   }, 30_000);
 
@@ -334,7 +335,7 @@ describe('a session worker waits for what it should', () => {
     await asked;
     client.close();
     clients.splice(0);
-    await rm(process.env.CLIKCODE_HOME!, { recursive: true, force: true });
+    await rm(process.env.CLIKCODE_HOME!, { recursive: true, force: true, maxRetries: 10 });
     await mkdir(process.env.CLIKCODE_HOME!, { recursive: true });
     await processExit(pid, 10_000);
   }, 30_000);
