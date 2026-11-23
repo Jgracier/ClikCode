@@ -196,7 +196,7 @@ export async function runServiceTurn(config: Conf, request: TurnRequest, emit: (
 
 /** When the account is back, as the refusal just recorded on it says. */
 async function retryAfter(accountId: string): Promise<{ retryAfterSec?: number }> {
-  const account = (await readState({ transcripts: [] }).catch(() => undefined))?.accounts.find((item) => item.id === accountId);
+  const account = (await readState({ transcripts: [] }).catch(quiet('service/backend')))?.accounts.find((item) => item.id === accountId);
   const seconds = account ? retryAfterSeconds(accountBackAt(account)) : undefined;
   return seconds ? { retryAfterSec: seconds } : {};
 }

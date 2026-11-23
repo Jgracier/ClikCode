@@ -99,6 +99,8 @@ export function errorReason(error: unknown, kind: AccountFailureKind, options: {
   const message = error instanceof Error ? error.message : String(error ?? '');
   if (options.timedOut) return 'timeout';
   if (isUsageExhaustedMessage(message)) return 'limited';
+  // The plan does not cover it (an eligibility refusal) before the model's own absence.
+  if (kind === 'account-ineligible') return /\bmodel\b/i.test(message) ? 'not-entitled' : /verify|verification|past due|suspend|disabled|banned/i.test(message) ? 'revoked' : 'not-entitled';
   if (/is not available through local account|model[^.\n]{0,40}\b(?:not found|not available|unavailable|does not exist|not supported)\b|unknown model|invalid model|model_not_found/i.test(message)) return 'model-unavailable';
   switch (kind) {
     case 'authentication-required':
@@ -106,8 +108,6 @@ export function errorReason(error: unknown, kind: AccountFailureKind, options: {
     case 'quota-exhausted':
     case 'temporarily-throttled':
       return 'limited';
-    case 'account-ineligible':
-      return /\bmodel\b/i.test(message) ? 'not-entitled' : /verify|verification|past due|suspend|disabled|banned/i.test(message) ? 'revoked' : 'not-entitled';
     case 'request-invalid':
       return /\bmodel\b/i.test(message) ? 'model-unavailable' : 'crashed';
     default:
