@@ -40,8 +40,8 @@ export async function runService(config: Conf, signal: AbortSignal): Promise<voi
   }
   // Nobody sits at this machine's display: a sign-in's link goes to the caller,
   // and every vendor takes its device or pasted-code sign-in (gateway/login/url.ts).
-  delete process.env.DISPLAY;
-  delete process.env.WAYLAND_DISPLAY;
+  // A ClikDeploy remote terminal forwards a browser callback's port; nothing forwards one to this service.
+  for (const name of ['DISPLAY', 'WAYLAND_DISPLAY', 'CLIKDEPLOY_REMOTE_TERMINAL']) delete process.env[name];
   const [{ createServiceServer }, { machineBackend }] = await Promise.all([import('../service/server.js'), import('../service/backend.js')]);
   const backend = machineBackend(config);
   const server = createServiceServer(backend, { token: settings.token, log: (line) => process.stderr.write(`${new Date().toISOString()} ${line}\n`) });
