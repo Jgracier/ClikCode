@@ -27,7 +27,7 @@ export interface WorkingStatus {
 
 /** The working line, by turn-flow's rule: waiting on the user, else the open
  * call's verb, else the reasoning's heading, else "writing" while answer
- * text arrives, else "thinking". */
+ * text arrives, else "Working". */
 export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: number, reconnecting = false): WorkingStatus {
   // The bridge is coming back: not working, not waiting on the user.
   if (reconnecting) return { label: 'Reconnecting…', tone: 'thinking', toneClass: 'tone-stopped' };

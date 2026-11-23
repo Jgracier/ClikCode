@@ -34,7 +34,7 @@ describe('writing holds until a call starts (X1)', () => {
     expect(label(model, 61_000)).toBe('Writing…');
   });
 
-  it('goes back to thinking once a call started and finished after the text', () => {
+  it('goes back to working once a call started and finished after the text', () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     // All inside one millisecond: order is by event, not by the clock.
@@ -43,7 +43,7 @@ describe('writing holds until a call starts (X1)', () => {
       activity({ kind: 'tool-start', id: 't1', label: 'Read a.ts', category: 'read' }),
       activity({ kind: 'tool-done', id: 't1', label: 'Read a.ts', category: 'read' }),
     ], begin());
-    expect(label(model, 2_000)).toBe('Thinking…');
+    expect(label(model, 2_000)).toBe('Working…');
   });
 
   it('writes again when text arrives after the call', () => {

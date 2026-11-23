@@ -366,17 +366,17 @@ describe('the working line', () => {
     expect(status).toMatchObject({ label: 'Running tests…', tone: 'tool', toneClass: 'tone-accent' });
   });
 
-  it("shows the reasoning's own heading, else writing, else thinking", () => {
+  it("shows the reasoning's own heading, else writing, else working", () => {
     expect(workingStatus(live({ thought: { text: '**Inspecting the parser** first' }}), false, 2000).label).toBe('Inspecting the parser…');
     expect(workingStatus(live({ writingAt: 2_000 }), false, 2_500).label).toBe('Writing…');
     // Writing holds however long the pause (standard 9): it is not a timer.
     expect(workingStatus(live({ writingAt: 0 }), false, 3_000).label).toBe('Writing…');
     expect(workingStatus(live({ writingAt: 0 }), false, 300_000).label).toBe('Writing…');
-    // A call began after the text: back to thinking until text arrives again.
-    expect(workingStatus(live({ writingAt: 1, callAt: 2 }), false, 3_000).label).toBe('Thinking…');
+    // A call began after the text: back to working until text arrives again.
+    expect(workingStatus(live({ writingAt: 1, callAt: 2 }), false, 3_000).label).toBe('Working…');
     expect(workingStatus(live({ writingAt: 3, callAt: 2 }), false, 3_000).label).toBe('Writing…');
-    expect(workingStatus(live({ thinkingSince: 0 }), false, 25_000).label).toBe('Thinking…');
-    expect(workingStatus(live(), false, 3_000)).toMatchObject({ label: 'Thinking…', toneClass: 'tone-accent' });
+    expect(workingStatus(live({ thinkingSince: 0 }), false, 25_000).label).toBe('Working…');
+    expect(workingStatus(live(), false, 3_000)).toMatchObject({ label: 'Working…', toneClass: 'tone-accent' });
   });
 
   it('never turns toward red or says nothing arrived, however long it is quiet', () => {
