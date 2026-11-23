@@ -415,6 +415,16 @@ describe('who sits in a vote', () => {
     expect(seatOrder('tile', free, ['qwen3.8-27b', 'gpt-4.1-mini']).map(seat => seat.id)).toEqual(['qwen3.8-27b', 'deepseek-v4.1-flash', 'gemma-4-31b', 'nemotron-3.5-super-vl']);
   });
 
+  it('a voter that takes too long counts as failed: benched, and its seat handed to a spare', async () => {
+    const { askTileMatch, isBenched } = await import('./captcha-model.js');
+    const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);
+    const stuck: ModelClient = { step: (request: { signal: AbortSignal }) => new Promise((_, reject) => request.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })) } as unknown as ModelClient;
+    const question = { image: { mimeType: 'image/jpeg', data: 'eA==' }, instruction: 'Select all squares with buses', target: 'buses', size: 3 };
+    const voters = async () => [{ name: 'tile-stuck', client: stuck }, { name: 'tile-yes-1', client: fake('yes') }, { name: 'tile-no', client: fake('no') }, { name: 'tile-yes-2', client: fake('yes') }];
+    expect(await askTileMatch(question, { voters, voteMs: 50 })).toBe(true);
+    expect(isBenched('tile-stuck')).toBe(true);
+  });
+
   it('a strict tile vote can say yes once two voters are seated', async () => {
     const { askTileMatch } = await import('./captcha-model.js');
     const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);

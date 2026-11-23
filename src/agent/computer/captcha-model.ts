@@ -39,6 +39,10 @@ async function rosterSetting(roster: Roster): Promise<readonly string[]> {
   } catch (error) { quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error)); return ROSTERS[roster]; }
 }
 const VOTERS = 3;
+/** How long one voter may take over one answer. A vision answer comes in seconds; a free model that is queued or thinking at length
+ * held a whole vote for two minutes on the hCaptcha demo (2026-11-23), and a vote with no agreement waits for every voter. One past
+ * this is treated as one that failed: benched, and its seat handed to the next model. */
+export const VOTE_MS = 40_000;
 const VISION_TTL_MS = 60_000;
 
 /** The account's vision models, cached for a minute (the Gateway list itself is cached about as long). */
@@ -56,7 +60,7 @@ export const newMeter = (): AskMeter => ({ asks: 0, models: {}, votes: [], sampl
 
 /** `order`: the roster's models in the order measured on this machine (captcha-log.ts voterOrder), when known.
  * `meter`: where to count the asks. The rest are seams for tests: fake voters, a fixed clock, a signal. */
-export interface AskOptions { signal?: AbortSignal; modelClientsOf?: () => Promise<ModelClient[]>; /** Named voters, best first, in place of the roster (a seam for tests of who sits in and who stands in). */ voters?: () => Promise<Voter[]>; now?: () => number; meter?: AskMeter; order?: Partial<Record<Roster, readonly string[]>>;
+export interface AskOptions { signal?: AbortSignal; /** One voter's time limit per answer (VOTE_MS; a seam for tests). */ voteMs?: number; modelClientsOf?: () => Promise<ModelClient[]>; /** Named voters, best first, in place of the roster (a seam for tests of who sits in and who stands in). */ voters?: () => Promise<Voter[]>; now?: () => number; meter?: AskMeter; order?: Partial<Record<Roster, readonly string[]>>;
   /** Seams for tests of how the seats are filled: the Gateway listing, a roster, a Gateway client, the subscription voter. */
   seats?: { listing?: () => Promise<GatewayListing>; roster?: (roster: Roster) => Promise<readonly string[]>; client?: (id: string) => Promise<ModelClient>; subscription?: () => Promise<Voter | undefined> } }
 
@@ -219,7 +223,8 @@ async function poll<T>(question: Question<T>, options: AskOptions): Promise<Poll
         system: question.system,
         items: [{ type: 'text', role: 'user', text: question.text, images: question.images }],
         tools: [], toolChoice: 'none', maxOutputTokens: question.maxOutputTokens ?? 800,
-        signal,
+        // The vote's own signal (settled, or the run stopped), and this voter's own time limit: past it, it counts as having failed.
+        signal: AbortSignal.any([signal, AbortSignal.timeout(options.voteMs ?? VOTE_MS)]),
         onTextDelta: () => undefined,
       });
       if (await voteLogOn()) console.error(`vote ${question.roster} ${voter.name}: ${JSON.stringify(result.text.slice(0, 160))}`);
