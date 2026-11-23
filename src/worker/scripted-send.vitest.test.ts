@@ -170,12 +170,14 @@ describe('a scripted send', () => {
     const worker = await readWorkerRecord(session.id);
     expect(worker, 'a worker runs it').toBeDefined();
     expect(worker!.pid).not.toBe(process.pid);
+    // Ended and waited out in afterEach: a worker still exiting writes its compile cache into the
+    // test home while it is removed (ENOTEMPTY).
+    workerPids.push(worker!.pid);
     asked.answer('done here');
     await scripted;
     expect((await stored(session.id)).messages?.map((message) => message.content)).toEqual(['nobody else is here', 'done here']);
     // This Gateway serves no /mcp: the turn runs without its tools and says
     // nothing about it, on stderr or anywhere else (the lifecycle log has it).
     expect(warned.join('')).not.toMatch(/MCP server/);
-    try { process.kill(worker!.pid, 'SIGTERM'); } catch { /* already gone */ }
   }, 60_000);
 });
