@@ -18,7 +18,6 @@ import { homedir } from 'node:os';
 import { loadMcpServers, type McpServerSpec } from '../../agent/mcp/config.js';
 import { vendorMcpServerNames } from '../../agent/mcp/import.js';
 import { mcpOAuthProvider, mcpOAuthState } from '../../agent/mcp/oauth.js';
-import { computerEnabledSync } from '../../agent/computer/settings.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import { clikDeploySessionServer } from '../../agent/mcp/clikdeploy-session.js';
 
@@ -34,13 +33,15 @@ export function acpMcpServer(spec: McpServerSpec, capabilities: Json | undefined
   return { type: spec.transport, name: spec.name, url: spec.url, headers: pairs(spec.headers) };
 }
 
-/** ClikCode's own server, in every harness session: computer use and secret
- * capture work the same in any harness. Nothing is installed or recorded; it
- * is the clikcode that is running now, told which worker to call back. */
+/** ClikCode's own server, in every harness session: the conversation tools
+ * (hindsight among them), and computer use and secret capture while computer
+ * use is on, work the same in any harness. Nothing is installed or recorded; it
+ * is the clikcode that is running now, told which worker (so which chat) it
+ * answers for. */
 export const BUILT_IN_MCP_NAME = 'clikcode';
 function builtInMcpServer(): McpServerSpec | undefined {
   const entry = process.env.CLIKCODE_MCP_ENTRY || process.argv[1];
-  if (!entry || !computerEnabledSync(stateDirectory())) return undefined;
+  if (!entry) return undefined;
   return { name: BUILT_IN_MCP_NAME, transport: 'stdio', command: process.execPath, args: [entry, 'mcp-serve'], env: { CLIKCODE_WORKER_PID: String(process.pid) } };
 }
 

@@ -1,10 +1,17 @@
 /** ClikCode's own MCP server (`clikcode mcp-serve`), over stdio. It is handed to
  * every harness session automatically (harness/transport/acp-mcp-servers.ts),
- * so computer use and secret capture work in any harness, not only ClikCode's
- * agent. It holds no state: each call is forwarded to the chat's worker. */
+ * so the conversation tools (search/tools.ts: search_conversations,
+ * read_conversation, active_conversations, hindsight), and computer use and
+ * secret capture while computer use is on, work in any harness, not only
+ * ClikCode's agent. It holds no state: a computer call is forwarded to the
+ * chat's worker, and a conversation tool reads the stored conversations, as
+ * the chat whose worker started this process. */
 import { createInterface } from 'node:readline';
 import { installedBuildStamp, latestToolSet } from '../agent/computer/hot-tools.js';
+import { computerEnabled } from '../agent/computer/settings.js';
 import type { ToolDefinition } from '../agent/tool-contract.js';
+import { stateDirectory } from '../session/store/paths.js';
+import { CONVERSATION_TOOLS, CONVERSATION_TOOLS_NOTE } from '../search/tools.js';
 import type { callWorkerTool } from './computer-tool-client.js';
 import { currentToolName } from '../agent/computer/tool-names.js';
 import { untilInputEnds } from '../cli/stop-signal.js';
@@ -19,12 +26,22 @@ async function toolSet(): Promise<readonly ToolDefinition[]> {
   return await latestToolSet() ?? (await import('../worker/computer-tool.js')).SHARED_COMPUTER_TOOLS;
 }
 
+/** Computer tools only while computer use is on (`clikcode computer off`); the conversation tools always. */
+async function computerTools(): Promise<readonly ToolDefinition[]> {
+  return await computerEnabled(stateDirectory()) ? toolSet() : [];
+}
+
 async function tools(): Promise<unknown[]> {
-  return (await toolSet()).map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.parameters }));
+  return [
+    ...CONVERSATION_TOOLS.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })),
+    ...(await computerTools()).map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.parameters })),
+  ];
 }
 
 /** The worker connection, loaded with the first call: a session that never calls a tool does not pay for it. */
 const callInWorker: typeof callWorkerTool = async (input) => (await import('./computer-tool-client.js')).callWorkerTool(input);
+/** The chat this server answers for: the one whose worker started it. */
+const chatOfWorker = async (): Promise<string | undefined> => (await import('./computer-tool-client.js')).workerChat();
 
 /** The installed build as of the last tool list this process gave out. */
 let listedStamp: number | undefined;
@@ -38,21 +55,32 @@ export async function buildChangedSinceListed(): Promise<boolean> {
   return true;
 }
 
-export async function handleMcpRequest(message: Rpc, call = callInWorker): Promise<Record<string, unknown> | undefined> {
+export async function handleMcpRequest(message: Rpc, call = callInWorker, chat = chatOfWorker): Promise<Record<string, unknown> | undefined> {
   if (message.id === undefined) return undefined; // a notification wants no answer
   const reply = (result: unknown): Record<string, unknown> => ({ jsonrpc: '2.0', id: message.id, result });
   switch (message.method) {
     case 'initialize': {
       const asked = String(message.params?.protocolVersion ?? '');
-      return reply({ protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS[0], capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'clikcode', version: '1' } });
+      return reply({ protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS[0], capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'clikcode', version: '1' }, instructions: CONVERSATION_TOOLS_NOTE });
     }
     case 'ping': return reply({});
     case 'tools/list': { listedStamp = await installedBuildStamp(); return reply({ tools: await tools() }); }
     case 'tools/call': {
       const name = currentToolName(String(message.params?.name ?? ''));
-      if (!(await toolSet()).some(tool => tool.name === name)) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
+      const args = (message.params?.arguments ?? {}) as Record<string, unknown>;
+      const conversationTool = CONVERSATION_TOOLS.find(tool => tool.name === name);
+      if (conversationTool) {
+        try {
+          const currentSessionId = await chat().catch(() => undefined);
+          const result = await conversationTool.run(args, currentSessionId ? { currentSessionId } : {});
+          return reply({ content: [{ type: 'text', text: result.text }], isError: Boolean(result.isError) });
+        } catch (error) {
+          return reply({ content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }], isError: true });
+        }
+      }
+      if (!(await computerTools()).some(tool => tool.name === name)) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
       try {
-        const result = await call({ tool: name, args: (message.params?.arguments ?? {}) as Record<string, unknown> });
+        const result = await call({ tool: name, args });
         // A rejected call after a rebuild is most likely the caller's cached tool list: say so, and say what to do.
         const stale = !result.ok && /^Invalid arguments/.test(result.output) && await installedBuildStamp() !== listedStamp;
         const text = stale ? `${result.output}\nrestart needed: the installed ClikCode build is newer than the tool list this session was given; start a new chat (or reconnect the clikcode MCP server) to get the new arguments.` : result.output;

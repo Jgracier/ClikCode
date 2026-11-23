@@ -32,3 +32,46 @@ it('says restart needed when a call is rejected for its arguments after the buil
     expect(reply.result.content[0]!.text).toContain('restart needed');
   } finally { await rm(file, { force: true }); }
 });
+
+type CallResult = { result: { content: { text: string }[]; isError: boolean } };
+
+it('serves the conversation tools exactly as the Gateway agent has them, and computer tools only while computer use is on', async () => {
+  const { CONVERSATION_TOOLS, CONVERSATION_TOOLS_NOTE } = await import('../search/tools.js');
+  const init = await handleMcpRequest({ jsonrpc: '2.0', id: 0, method: 'initialize', params: {} }) as unknown as { result: { instructions: string } };
+  expect(init.result.instructions).toBe(CONVERSATION_TOOLS_NOTE);
+  const { stateDirectory } = await import('../session/store/paths.js');
+  const settings = `${stateDirectory()}/computer/settings.json`;
+  const { mkdir } = await import('node:fs/promises');
+  try {
+    await writeFile(file, copy(''));
+    const on = await handleMcpRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) as unknown as { result: { tools: { name: string; description: string; inputSchema: unknown }[] } };
+    for (const tool of CONVERSATION_TOOLS) expect(on.result.tools.find(listed => listed.name === tool.name)).toEqual({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema });
+    expect(on.result.tools.map(tool => tool.name)).toContain('browser_use');
+    await mkdir(`${stateDirectory()}/computer`, { recursive: true });
+    await writeFile(settings, '{"enabled":false}');
+    const off = await handleMcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) as unknown as ListResult;
+    expect(off.result.tools.map(tool => tool.name)).toEqual(CONVERSATION_TOOLS.map(tool => tool.name));
+    const refused = await handleMcpRequest({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'browser_use', arguments: {} } }) as unknown as { error?: unknown; result?: CallResult['result'] };
+    expect(refused.error ?? refused.result?.isError).toBeTruthy();
+  } finally { await rm(file, { force: true }); await rm(settings, { force: true }); }
+});
+
+it('binds a conversation tool to the chat whose worker started the server', async () => {
+  const { readState } = await import('../session/state/read.js');
+  const { writeState } = await import('../session/state/write.js');
+  const { resetCorpusCache } = await import('../search/corpus.js');
+  const { resetHarnessStateCaches } = await import('../session/state/index-file.js');
+  resetCorpusCache(); resetHarnessStateCaches();
+  const id = 'cccccccc-3333-4333-8333-333333333333';
+  const state = await readState();
+  state.sessions.push({ id, route: 'local', accountId: null, provider: 'anthropic', model: 'claude', effort: 'medium', permissionMode: 'ask', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), status: 'active', nativeHarness: 'claude', name: 'Bound chat',
+    messages: [{ role: 'user', content: 'the flux capacitor needs 1.21 gigawatts' }, { role: 'assistant', content: 'noted' }] } as never);
+  await writeState(state);
+  const call = (chat: () => Promise<string | undefined>) => handleMcpRequest({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'hindsight', arguments: { query: 'gigawatts' } } }, undefined, chat) as unknown as Promise<CallResult>;
+  const bound = await call(async () => id);
+  expect(bound.result.isError).toBe(false);
+  expect(bound.result.content[0]!.text).toContain('gigawatts');
+  const unbound = await call(async () => undefined);
+  expect(unbound.result.isError).toBe(true);
+  expect(unbound.result.content[0]!.text).toBe('hindsight is this conversation, and this call has none.');
+});

@@ -27,11 +27,16 @@ function chatOfWorker(workerPid: number): Promise<string | undefined> {
   return turnChat;
 }
 
+/** The chat whose worker started this process (CLIKCODE_WORKER_PID), when one did. */
+export async function workerChat(): Promise<string | undefined> {
+  const workerPid = Number(process.env.CLIKCODE_WORKER_PID);
+  return Number.isSafeInteger(workerPid) && workerPid > 0 ? chatOfWorker(workerPid) : undefined;
+}
+
 /** The chat a call belongs to: the one whose worker started this process, or
  * the one named. A running chat can use only its own. */
 async function callerSession(chat?: string): Promise<string> {
-  const workerPid = Number(process.env.CLIKCODE_WORKER_PID);
-  const fromTurn = Number.isSafeInteger(workerPid) && workerPid > 0 ? await chatOfWorker(workerPid) : undefined;
+  const fromTurn = await workerChat();
   const sessionId = chat ? await resolveChat(chat) : fromTurn;
   if (!sessionId) throw new Error('Run this from inside a ClikCode chat, or pass --chat <chat>.');
   if (fromTurn && sessionId !== fromTurn) throw new Error('A running chat can use these tools only in its own chat.');

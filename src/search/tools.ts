@@ -1,6 +1,6 @@
 /** The conversation tools, once, for every agent: ClikCode's own
  * (agent/tools/conversations.ts wraps them as native tools) and every vendor
- * harness (search/mcp.ts serves them over MCP). Read-only.
+ * harness (commands/mcp-serve.ts serves them over MCP). Read-only.
  *
  * Search, read, and active leave out the conversation the agent is asking
  * from unless it asks for that one: it already has it. Hindsight is that

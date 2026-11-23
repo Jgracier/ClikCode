@@ -37,10 +37,10 @@ describe('the built-in ClikCode server', () => {
     expect(servers).toEqual([{ name: 'clikcode', command: process.execPath, args: ['/opt/clikcode/index.js', 'mcp-serve'], env: [{ name: 'CLIKCODE_WORKER_PID', value: String(process.pid) }] }]);
   });
 
-  it('is withheld while computer use is off', async () => {
+  it('still goes while computer use is off: the conversation tools are always served', async () => {
     const servers = await inHome(() => globalMcpServersForAcp('some-harness', {}, undefined, '/nonexistent-home'),
       async home => { const fs = await import('node:fs/promises'); await fs.mkdir(`${home}/computer`, { recursive: true }); await fs.writeFile(`${home}/computer/settings.json`, '{"enabled":false}'); });
-    expect(servers).toEqual([]);
+    expect(servers.map((server) => server.name)).toEqual(['clikcode']);
   });
 
   it('steps aside for a server the user recorded under the same name', async () => {
