@@ -559,7 +559,7 @@ describe('the answer field', () => {
   const withDocument = async <T>(fields: Record<string, string>, run: () => Promise<T>): Promise<T> => {
     const g = globalThis as unknown as { document?: unknown };
     const before = g.document;
-    g.document = { querySelectorAll: (selector: string) => Object.entries(fields).filter(([name]) => selector.includes(`[name="${name}"]`)).map(([, value]) => ({ value })) };
+    g.document = { querySelectorAll: (selector: string) => selector === 'input, textarea' ? Object.entries(fields).map(([name, value]) => ({ name, value })) : Object.entries(fields).filter(([name]) => selector.includes(`[name="${name}"]`)).map(([, value]) => ({ value })) };
     try { return await run(); } finally { g.document = before; }
   };
   const pageWith = (frames: Array<{ url: string; fields: Record<string, string> }>) => ({
@@ -575,6 +575,24 @@ describe('the answer field', () => {
     expect(await humanCheckAnswered(pageWith([{ url: 'https://vendor.example/form', fields: { 'g-recaptcha-response': token } }]))).toBe(true);
     expect(await humanCheckAnswered(pageWith([{ url: 'about:srcdoc', fields: { 'h-captcha-response': token } }]))).toBe(true);
     expect(await humanCheckAnswered(pageWith([{ url: 'https://www.google.com/recaptcha/api2/anchor', fields: { 'g-recaptcha-response': token } }]))).toBe(false);
+  });
+
+  it("reads Turnstile's answer from a field the page named itself, or from the widget, and only once it is filled", async () => {
+    const { humanCheckAnswered } = await import('./human-check.js');
+    const token = '0.' + 'x'.repeat(750);
+    // Steady's sign-up (passed on load) and Contact Form 7 (esign.co.uk, filled after the press), seen live 2026-11-23.
+    expect(await humanCheckAnswered(pageWith([{ url: 'about:srcdoc', fields: { turnstile_response: token } }]))).toBe(true);
+    expect(await humanCheckAnswered(pageWith([{ url: 'about:srcdoc', fields: { _wpcf7_turnstile_response: token } }]))).toBe(true);
+    expect(await humanCheckAnswered(pageWith([{ url: 'about:srcdoc', fields: { _wpcf7_turnstile_response: '' } }]))).toBe(false);
+    const g = globalThis as unknown as { turnstile?: unknown };
+    try {
+      g.turnstile = { getResponse: () => token };
+      expect(await humanCheckAnswered(pageWith([{ url: 'about:srcdoc', fields: {} }]))).toBe(true);
+      g.turnstile = { getResponse: () => undefined };
+      expect(await humanCheckAnswered(pageWith([{ url: 'about:srcdoc', fields: {} }]))).toBe(false);
+      g.turnstile = { getResponse: () => { throw new Error('no widget'); } };
+      expect(await humanCheckAnswered(pageWith([{ url: 'about:srcdoc', fields: {} }]))).toBe(false);
+    } finally { delete g.turnstile; }
   });
 
   it("counts Arkose's completion token, not the session token it holds from the start", async () => {

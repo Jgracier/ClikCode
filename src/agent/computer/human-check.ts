@@ -126,6 +126,14 @@ function answeredHere(): boolean {
   // Arkose's `fc-token` holds the session token from the moment the widget loads, solved or not: it is no answer. What Arkose
   // fills once the game is won is `verification-token` (and GitHub's Octocaptcha copies it into `octocaptcha-token`).
   if (Array.from(doc.querySelectorAll('#g-recaptcha-response, [name="g-recaptcha-response"], [name="cf-turnstile-response"], [name="h-captcha-response"], [name="lot_number"], [name="geetest_validate"], [name="verification-token"], [name="octocaptcha-token"]')).some(field => (field.value ?? '').length > 8)) return true;
+  // Turnstile and hCaptcha let the page name its own answer field (`response-field-name`): Steady's sign-up fills `turnstile_response`,
+  // Contact Form 7 `_wpcf7_turnstile_response`. Those never read as answered, so a widget that had passed (Steady's is passed on load) was
+  // pressed, watched and reported "still-there". The widget's own record of its answer is read first; then any field named for it.
+  const widgets = globalThis as unknown as { turnstile?: { getResponse?(): unknown }; hcaptcha?: { getResponse?(): unknown } };
+  for (const api of [widgets.turnstile, widgets.hcaptcha]) {
+    try { const answer = api?.getResponse?.(); if (typeof answer === 'string' && answer.length > 8) return true; } catch { /* fail-open-ok: runs inside the page (nothing to log to); a widget API with nothing rendered throws, which counts as no answer */ }
+  }
+  if (Array.from(doc.querySelectorAll('input, textarea') as ArrayLike<{ name?: string; value?: string }>).some(field => /(?:turnstile|captcha)[-_]?response/i.test(field.name ?? '') && (field.value ?? '').length > 8)) return true;
   // Auth0's sign-in pages (Twilio and many more) copy the widget's token into their own hidden "captcha" field. A token is
   // hundreds of characters; a typed answer to Auth0's own text captcha (same name) is a few, so only a long value counts.
   if (Array.from(doc.querySelectorAll('input[type="hidden"][name="captcha"]')).some(field => (field.value ?? '').length > 100)) return true;
