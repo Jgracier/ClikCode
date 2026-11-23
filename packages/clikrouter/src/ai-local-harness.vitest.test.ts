@@ -490,7 +490,7 @@ describe('local harness catalog', () => {
   });
 
   it('derives Kilo from the shared OpenCode base, differing only where declared', () => {
-    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, permissionEnv: _pe, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, freePlan: _fp, quotaProbe: _oq, ...opencode } = localHarnessForCommand('opencode')!;
+    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, permissionEnv: _pe, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, freePlan: _fp, quotaProbe: _oq, authEnv: _ae, loginKeyPage: _kp2, modelCatalogFiles: _mc, ...opencode } = localHarnessForCommand('opencode')!;
     const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, permissionEnv: _kpe, authFiles: _kaf, loginAccountChoose: _kac, freePlan: _kfp, quotaProbe: _kq, ...kilo } = localHarnessForCommand('kilo')!;
     expect(kilo).toEqual(opencode);
     expect(localHarnessForCommand('kilo')!.permissionModes).toEqual(['ask', 'auto']);
@@ -498,6 +498,9 @@ describe('local harness catalog', () => {
     expect(localHarnessForCommand('kilo')!.signInOptional).toBeUndefined();
     expect(localHarnessForCommand('kilo')!.authFiles).toEqual([{ path: '${XDG_DATA_HOME:-~/.local/share}/kilo/auth.json', contains: '"type"' }]);
     expect(localHarnessForCommand('kilo')!.loginAccountChoose).toEqual(['Kilo Gateway']);
+    // OpenCode's own key (OPENCODE_API_KEY, its key page) and its config file are OpenCode's alone.
+    expect(localHarnessForCommand('kilo')!.authEnv).toBeUndefined();
+    expect(localHarnessForCommand('kilo')!.loginKeyPage).toBeUndefined();
   });
 
   it('sends Amp prompts on its native JSON input for fresh and resumed threads', () => {
@@ -768,7 +771,7 @@ describe('one permission declaration per harness', () => {
         (now[harness.command] as Record<string, unknown>)[mode] = { turn, acp, ...(harness.acp?.permissionModeIds?.[mode] ? { ids: harness.acp.permissionModeIds[mode] } : {}) };
       }
     }
-    expect(Object.keys(now)).toHaveLength(29);
+    expect(Object.keys(now)).toHaveLength(28);
     expect(sort(JSON.parse(JSON.stringify(now)))).toEqual(permissionLaunchBefore);
   });
 
