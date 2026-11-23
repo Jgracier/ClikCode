@@ -386,6 +386,17 @@ const budgetFor = (deps: SolveDeps): Budget => deps.budget ?? budgetOf(deps.wait
  * accepted) or `none` (nothing found to answer). Never throws. */
 /** Picture rounds reCAPTCHA gets before its spoken clip is tried. */
 export const RECAPTCHA_PICTURE_ROUNDS = 4;
+/** The time kept for the spoken clip: once less than this is left, the pictures stop and the clip is tried, whatever the round. */
+export const RECAPTCHA_AUDIO_RESERVE_MS = 90_000;
+
+/** Whether reCAPTCHA's next go is its spoken clip: already on it, or the pictures have had their rounds, or their time. Rounds alone were
+ * not enough: a "none left" grid answered by the free voters takes 15-20 s a pass and up to eight passes, so on the demo (2026-11-23) a
+ * whole four-minute run went by in three picture rounds and the clip -- which cleared every run that reached it -- was never asked for.
+ * Never after Google refused the clip on this connection. */
+export function recaptchaAudioTurn(audio: 'untried' | 'on' | 'refused', pictureRounds: number, leftMs: number): boolean {
+  if (audio === 'refused') return false;
+  return audio === 'on' || pictureRounds >= RECAPTCHA_PICTURE_ROUNDS || (pictureRounds > 0 && leftMs < RECAPTCHA_AUDIO_RESERVE_MS);
+}
 
 /** Whether Google's "Try again later" page (its automated-queries refusal) fills the reCAPTCHA challenge: the widget is finished for this
  * session, and nothing clicked or typed into it can help. Read by its markup, not its words, which come in the visitor's language. */
@@ -600,9 +611,9 @@ async function answerLoop(page: Page, deps: SolveDeps & { budget: Budget }, hand
       continue;
     }
     // reCAPTCHA offers the same check as a spoken clip, as a LAST resort: after RECAPTCHA_PICTURE_ROUNDS picture rounds that did not
-    // clear. Asking for audio is what Google most often answers with "Try again later" (automated queries), which ends the widget for
-    // the session; measured 2026-11-19/20 audio rescued 7 of 47 runs while the pictures alone cleared 35, so the pictures get more rounds.
-    if (found.widget === 'recaptcha' && audio !== 'refused' && (audio === 'on' || pictureRounds >= RECAPTCHA_PICTURE_ROUNDS)) {
+    // clear, or once the pictures have used all but RECAPTCHA_AUDIO_RESERVE_MS of the run (recaptchaAudioTurn). Asking for audio is what
+    // Google most often answers with "Try again later" (automated queries), which ends the widget for the session; measured 2026-11-19/20 audio rescued 7 of 47 runs while the pictures alone cleared 35, so the pictures get more rounds.
+    if (found.widget === 'recaptcha' && recaptchaAudioTurn(audio, pictureRounds, budget.left())) {
       const heard = await solveRecaptchaAudio(page, found.frame, found.box, hands.asks.transcribe, random, sleep, deps.trace);
       if (heard === 'refused') { audio = 'refused'; await sleep(1_000); continue; }
       audio = 'on';

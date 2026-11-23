@@ -127,6 +127,8 @@ export async function solveRecaptchaAudio(page: Page, frame: Frame, box: Box, tr
   const backToPictures = async (state: Read | undefined): Promise<'refused'> => { if (state?.toImage) await visitorClick(page.mouse, inPage(state.toImage), random, sleep); return 'refused'; };
   let state = await read();
   if (!state) return 'refused';
+  // The widget's word on the last clip typed ("Multiple correct solutions required - please solve more"), for the trace.
+  if (state.field && state.said.trim()) trace?.(`audio: the widget said "${state.said.trim().slice(0, 100)}"`);
   if (!state.field) {
     if (!state.toAudio) return 'refused';
     trace?.('audio: switching to the spoken challenge');
@@ -144,6 +146,8 @@ export async function solveRecaptchaAudio(page: Page, frame: Frame, box: Box, tr
   if (words.length < 3) { trace?.('audio: nothing could be made out'); return backToPictures(state); }
   trace?.(`audio: typing ${words.split(' ').length} words`);
   await visitorClick(page.mouse, inPage(state.field), random, sleep);
+  // A field still holding the last clip's words would get these appended to them.
+  await frame.evaluate(`(() => { const f = document.querySelector('#audio-response'); if (f && f.value) { f.select(); return true; } return false; })()`).then(async selected => { if (selected) await page.keyboard.press('Backspace'); }).catch(quiet('agent/computer/human-check-grid'));
   for (const char of words) { await page.keyboard.type(char); await sleep(40 + random() * 110); }
   await sleep(300 + random() * 400);
   const after = await read();

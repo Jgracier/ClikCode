@@ -719,3 +719,18 @@ describe("Turnstile's own word", () => {
     expect(await humanCheckAnswered(failed)).toBe(false);
   });
 });
+
+describe("reCAPTCHA's spoken clip", () => {
+  it('is tried after the picture rounds, or once the pictures have used all but the time kept for it, never after a refusal', async () => {
+    const { recaptchaAudioTurn, RECAPTCHA_PICTURE_ROUNDS, RECAPTCHA_AUDIO_RESERVE_MS } = await import('./human-check.js');
+    expect(recaptchaAudioTurn('untried', 0, 240_000)).toBe(false);
+    expect(recaptchaAudioTurn('untried', 1, 200_000)).toBe(false);
+    expect(recaptchaAudioTurn('untried', RECAPTCHA_PICTURE_ROUNDS, 200_000)).toBe(true);
+    // Three slow rounds that used most of the run: the clip gets the rest.
+    expect(recaptchaAudioTurn('untried', 3, RECAPTCHA_AUDIO_RESERVE_MS - 1)).toBe(true);
+    // Not before the pictures have had a go at all.
+    expect(recaptchaAudioTurn('untried', 0, 10_000)).toBe(false);
+    expect(recaptchaAudioTurn('on', 0, 240_000)).toBe(true);
+    expect(recaptchaAudioTurn('refused', 9, 10_000)).toBe(false);
+  });
+});
