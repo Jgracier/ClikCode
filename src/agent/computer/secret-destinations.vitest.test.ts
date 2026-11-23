@@ -556,3 +556,12 @@ it('clikdeploy-connection resends a custom-auth connector as its declared props 
   expect(result).toMatchObject({ ok: true, message: 'connected' });
   expect(JSON.parse(await readFile(join(dir, 'body2'), 'utf8'))).toEqual({ integrationId: 'cloudmersive-ocr', props: { app_secret: VALUE, app_id: 'cli_a1' } });
 });
+
+it('clikdeploy-connection says a held connect was held, in fixed words, even when an older connection is still active', async () => {
+  // ClikDeploy holds a person's scoped key's writes without a live authenticator unlock: the connect never ran, so nothing was learned
+  // about the key, and an earlier active connection must not be read as this key connecting.
+  await fakeConnect(pretty({ status: 'success', command: 'tools run', tool: 'connect_connector', data: { approvalRequired: true, message: 'This write needs your approval.' } }), shown({ id: 'c1', status: 'active' }));
+  const [held] = await sendKey();
+  expect(held!.ok).toBe(false);
+  expect(held!.message).toBe("NOT connected: held for a person's approval - ClikDeploy did not run the connect (This write needs your approval.). The key is still saved; send it again once the write is approved.");
+});

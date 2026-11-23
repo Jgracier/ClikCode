@@ -393,6 +393,9 @@ export async function connectionState(integration: string, signal?: AbortSignal)
   return { connected: false, reason: statuses.length ? `${integration} shows a connection with status "${statuses[0]}", not active` : `ClikDeploy shows no connection for ${integration}` };
 }
 
+/** What a connect ClikDeploy held for approval says, word for word (ClikDeploy's connector worker reads it: credential-reuse.ts reuseCause). */
+export const HELD_FOR_APPROVAL = "held for a person's approval - ClikDeploy did not run the connect";
+
 /** Wait before the one retry of an empty reply. */
 const SEND_RETRY_DELAY_MS = 1_500;
 
@@ -515,6 +518,13 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
         // The reply was empty or not JSON: what happened is asked of ClikDeploy, and the status and a short excerpt are shown.
         if (state.connected) { out.push({ label, ok: true, message: 'connected (the connect call\'s reply was empty or not JSON, but ClikDeploy lists an active connection)' }); continue; }
         out.push({ label, ok: false, message: `NOT connected: ${scrubSecrets(describeEmptyReply(result))}${state.reason ? `; ${state.reason}` : ''}. The key is still saved; send it again with send_secret.` });
+        continue;
+      }
+      // ClikDeploy did not run the connect: it holds a person's scoped key's writes for their approval (no live authenticator unlock).
+      // Said in fixed words, so a caller can tell it from anything the vendor said about the key: nothing was learned about the key.
+      const held = firstJsonObject<{ data?: { approvalRequired?: unknown; message?: unknown } }>(result.text)?.data;
+      if (held?.approvalRequired === true) {
+        out.push({ label, ok: false, message: `NOT connected: ${HELD_FOR_APPROVAL}${typeof held.message === 'string' && held.message ? ` (${scrubSecrets(held.message).replace(/\s+/g, ' ').slice(0, 160)})` : ''}. The key is still saved; send it again once the write is approved.` });
         continue;
       }
       const failed = result.code !== 0 || /"status"\s*:\s*"error"/.test(result.text) || /"success"\s*:\s*false/.test(result.text);
