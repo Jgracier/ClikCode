@@ -565,3 +565,10 @@ it('clikdeploy-connection says a held connect was held, in fixed words, even whe
   expect(held!.ok).toBe(false);
   expect(held!.message).toBe("NOT connected: held for a person's approval - ClikDeploy did not run the connect (This write needs your approval.). The key is still saved; send it again once the write is approved.");
 });
+
+it('a custom-auth connector is sent through clikdeploy-connection (its key becomes the declared props), not refused as a misfit', async () => {
+  const plan = [{ to: 'clikdeploy-connection', with: { integration: 'smsglobal' } }];
+  expect(await destinationProblem(dir, plan, undefined, async () => 'custom')).toBeUndefined();
+  expect(await destinationProblem(dir, plan, undefined, async () => 'jwt')).toBeUndefined();
+  expect(await destinationProblem(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'smsglobal', username: 'me' } }], undefined, async () => 'custom')).toContain('does not fit');
+});
