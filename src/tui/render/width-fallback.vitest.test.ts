@@ -40,7 +40,7 @@ describe('the width functions on an engine without Intl.Segmenter', () => {
       expect(cut.endsWith('…')).toBe(true);
       expect(terminalCellWidth('部署')).toBe(4);
     } finally {
-      Intl.Segmenter = saved;
+      (Intl as { Segmenter: typeof Intl.Segmenter }).Segmenter = saved;
       vi.resetModules();
     }
   });
