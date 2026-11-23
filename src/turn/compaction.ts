@@ -19,10 +19,11 @@
  *
  * Chalk free and dependency free: the slash registry and the webview import it. */
 
-/** MEASURED 2026-11-22 on a month of the user's own calls (283k model calls): compacting at 150k
- * tokens cut what was re-read by 58-66% and the cost by 45-54%; a typical session compacts about
- * every 50 calls. */
-export const DEFAULT_COMPACT_AT_TOKENS = 150_000;
+/** MEASURED 2026-11-23 (scripts/compaction-eval.mjs, two ~210k-token conversations, Haiku through
+ * Claude Code): what the last 100k tokens held is answered as well as with nothing compacted (84%
+ * against 88%), at 60-64% of the full context's cost; 80k fell to 76% and 40k to 44%. What is
+ * older is lost to any threshold alike, and recall brings part of it back. */
+export const DEFAULT_COMPACT_AT_TOKENS = 100_000;
 /** Below this a compaction costs more than it saves. */
 export const MIN_COMPACT_AT_TOKENS = 20_000;
 /** Turns after a compaction before another may run by itself. About one in ten sessions carries
