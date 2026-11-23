@@ -36,6 +36,8 @@ export async function runVendorSessionAttempt(input: {
   turnText: string;
   model: string | null;
   environment: Record<string, string>;
+  /** The thread config that sets the vendor's own compaction threshold (compaction-run.ts). */
+  compactConfig?: Record<string, unknown>;
   images: string[];
   signal?: AbortSignal;
   run: TurnRunOptions;
@@ -45,7 +47,7 @@ export async function runVendorSessionAttempt(input: {
   onSessionId: (id: string) => Promise<void>;
   runCli: () => Promise<NativeTurnResult>;
 }): Promise<NativeTurnResult> {
-  const { harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint, sharedObserver, effort, onSessionId, runCli } = input;
+  const { harness, account, session, transport, turnText, model, environment, compactConfig, images, signal, run, checkpoint, sharedObserver, effort, onSessionId, runCli } = input;
   const prompter = run.prompter;
   let result: NativeTurnResult;
   // ACP and the app-server own session identity: never hand them an id
@@ -63,7 +65,7 @@ export async function runVendorSessionAttempt(input: {
     : undefined;
   try {
     if (transport === 'codex-app-server') {
-      const launch = codexLaunchInput({ harness, account, session, model, effort, environment, live: run.liveSettings });
+      const launch = codexLaunchInput({ harness, account, session, model, effort, environment, compactConfig, live: run.liveSettings });
       // The user's own option going unapplied is theirs to know -- once per
       // chat and set of options, not as a note on every turn.
       const ignored = launch.unmapped.join(', ');
@@ -281,11 +283,14 @@ export async function pingPromptCache(input: {
  * for a failover's standby alike (see acpLaunchInput). `unmapped`: the
  * chat's own options the app-server has no place for. */
 function codexLaunchInput(input: {
-  harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string; environment: Record<string, string>; live?: LiveSettings;
+  harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string; environment: Record<string, string>;
+  compactConfig?: Record<string, unknown>; live?: LiveSettings;
 }): { input: Omit<CodexAppServerTurnInput, 'prompt'>; unmapped: readonly string[] } {
   const { harness, account, session, model, effort, environment, live } = input;
   const overrides = appServerThreadOverrides(localHarnessCapabilityManifest(harness).options, session.harnessOptions);
-  const configOverrides = { ...(overrides.configOverrides ? overrides.configOverrides : {}) };
+  // The compaction threshold is part of the thread's config: a changed one is a changed launch
+  // key, so the app-server restarts and resumes the thread with it (codex-app-server ensureLive).
+  const configOverrides = { ...(overrides.configOverrides ? overrides.configOverrides : {}), ...input.compactConfig };
   return {
     unmapped: overrides.unmapped,
     input: {
@@ -312,7 +317,7 @@ function codexLaunchInput(input: {
  * on a standby app-server, up to turn/start. */
 export function prepareCodexStandby(input: {
   harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string;
-  environment: Record<string, string>;
+  environment: Record<string, string>; compactConfig?: Record<string, unknown>;
 }): Promise<boolean> {
   const launch = codexLaunchInput(input).input;
   return standbyOf(input, 'codex-app-server', async (child) => { await (child as CodexSession).runTurn({ ...launch, prompt: '', initializeOnly: true }); });
@@ -325,7 +330,7 @@ export function prepareCodexStandby(input: {
  * opens its own, as it would have. */
 export async function prepareVendorAhead(input: {
   harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; transport: 'acp' | 'codex-app-server';
-  model: string | null; effort?: string; environment: Record<string, string>;
+  model: string | null; effort?: string; environment: Record<string, string>; compactConfig?: Record<string, unknown>;
 }): Promise<void> {
   const { harness, account, session, transport, environment } = input;
   const live = persistentTransportFor(session.id, transport, vendorChildKey(harness, account, environment, session.workspace));

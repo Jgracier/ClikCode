@@ -16,7 +16,7 @@ import { openFailoverStandby } from './vendor-standby.js';
 import type { VendorObserver, VendorTransport } from './vendor-observer.js';
 import { turnEffort, type VendorTurnContext } from './vendor-turn-context.js';
 import { turnPermissionMode } from './turn-permission.js';
-import { compactThresholdEnvironment } from './compaction-run.js';
+import { compactThresholdLaunch } from './compaction-run.js';
 
 /** What an attempt did, for the recovery or the completion that follows it. */
 export interface AttemptRecord {
@@ -37,12 +37,13 @@ export interface AttemptRecord {
  * servers, skills and hooks are the vendor's: nothing is written into them. */
 async function prepareAttempt(ctx: VendorTurnContext) {
   const { harness, session } = ctx;
+  // A vendor with an auto-compaction threshold of its own compacts at ClikCode's, mid-turn.
+  const threshold = await compactThresholdLaunch(harness, ctx.state, ctx.model ?? session.reported?.model ?? null);
   const environment = {
     ...turnEnvironment(harness, ctx.account, turnPermissionMode(harness, session.permissionMode)),
     // Goose on another agent's CLI runs it as one of the user's own accounts.
     ...gooseDrivenEnvironment(harness, ctx.model, ctx.state.accounts, localHarnessForCommand),
-    // A vendor that compacts at a threshold of its own does so at ClikCode's.
-    ...await compactThresholdEnvironment(harness, ctx.state, ctx.model ?? session.reported?.model ?? null),
+    ...threshold.environment,
   };
   // A provider with no signed-in account is signed in to when it is used
   // -- here, as its turn starts -- never when it is merely chosen (opening
@@ -53,7 +54,7 @@ async function prepareAttempt(ctx: VendorTurnContext) {
   // Goose resumes by its own id what was created under ClikCode's name.
   if (await adoptListedNativeId(harness, session, environment)) await ctx.checkpoint.persistNow();
   const transport = sessionTurnTransport(harness, session);
-  return { environment, transport };
+  return { environment, compactConfig: threshold.config, transport };
 }
 
 /** Runs one attempt; a stopped or oversized one throws, any other failure is
@@ -61,7 +62,7 @@ async function prepareAttempt(ctx: VendorTurnContext) {
 export async function runAttempt(ctx: VendorTurnContext, observer: VendorObserver): Promise<AttemptRecord> {
   const started = Date.now();
   const { harness, session, checkpoint } = ctx;
-  const { environment, transport } = await prepareAttempt(ctx);
+  const { environment, compactConfig, transport } = await prepareAttempt(ctx);
   observer.beginAttempt(transport);
   // A fresh native thread with prior ClikCode messages: see above. Also
   // covers an id ClikCode minted that the vendor never confirmed.
@@ -90,7 +91,7 @@ export async function runAttempt(ctx: VendorTurnContext, observer: VendorObserve
       result = await runStructuredCliTurn();
     } else {
       result = await runVendorSessionAttempt({
-        harness, account: ctx.account, session, transport, turnText: withWorkspaceNote(harness, ctx.turnText, session.workspace), model: ctx.model, environment,
+        harness, account: ctx.account, session, transport, turnText: withWorkspaceNote(harness, ctx.turnText, session.workspace), model: ctx.model, environment, compactConfig,
         images: ctx.images, signal: ctx.signal, run: ctx.run, checkpoint,
         sharedObserver: observer.sharedObserver, effort: turnEffort(ctx), onSessionId: observer.onSessionId,
         runCli: runStructuredCliTurn,

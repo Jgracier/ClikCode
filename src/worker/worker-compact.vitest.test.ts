@@ -1,5 +1,7 @@
-/** ClikCode compacts a conversation by itself at the boundary after a turn whose context passed
- * the threshold, as a turn of its own, before anything queued runs. In-process, with the turns faked. */
+/** Where no vendor threshold carries ClikCode's, ClikCode compacts a conversation by itself at the
+ * boundary after a turn whose context passed the threshold, as a turn of its own, before anything
+ * queued runs; a vendor whose own threshold carries it is not compacted a second time. In-process,
+ * with the turns faked. */
 import { describe, expect, it, vi } from 'vitest';
 import type { Socket } from 'node:net';
 import type { HarnessSession, HarnessState } from '../session/model.js';
@@ -32,8 +34,8 @@ const { createTurnRunner } = await import('./worker-turn.js');
 const { createCommandHandler } = await import('./worker-commands.js');
 
 const chat = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
-  id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: 'anthropic', model: null, effort: 'medium', permissionMode: 'ask',
-  nativeHarness: 'claude', nativeSessionId: 'n1', messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }],
+  id: 's1', conversationId: 's1', route: 'local', accountId: 'a1', provider: 'opencode', model: null, effort: 'medium', permissionMode: 'ask',
+  nativeHarness: 'opencode', nativeSessionId: 'n1', messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }],
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', status: 'active', ...overrides,
 });
 
@@ -63,8 +65,9 @@ function build() {
   return { ctx, send, events };
 }
 
+const account = (provider: string) => ({ id: 'a1', provider, label: provider, authKind: 'oauth', models: [], status: 'ready' });
 const stateWith = (session: HarnessSession, compactAt?: number): HarnessState => ({
-  sessions: [session], accounts: [], invocations: [], providerSettings: {},
+  sessions: [session], accounts: [account(session.nativeHarness!)], invocations: [], providerSettings: {},
   globalSettings: { effort: 'medium', permissionMode: 'ask', ...(compactAt ? { compactAt } : {}) },
 } as unknown as HarnessState);
 
@@ -87,6 +90,17 @@ describe('compacting by itself', () => {
     turns.texts = [];
     turns.usage = 200_000;
     await writeState(stateWith(chat(), 300_000));
+    const { send, events } = build();
+    await send({ type: 'submit', text: 'do the thing', echo: true });
+    await vi.waitFor(() => expect(events.filter((event) => event.type === 'waiting-stop')).toHaveLength(1), { timeout: 5_000 });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    expect(turns.texts).toEqual(['do the thing']);
+  });
+
+  it('leaves a vendor whose own threshold carries ClikCode\'s to compact itself (Claude Code), not a second time after the turn', async () => {
+    turns.texts = [];
+    turns.usage = 200_000;
+    await writeState(stateWith(chat({ nativeHarness: 'claude', provider: 'anthropic' })));
     const { send, events } = build();
     await send({ type: 'submit', text: 'do the thing', echo: true });
     await vi.waitFor(() => expect(events.filter((event) => event.type === 'waiting-stop')).toHaveLength(1), { timeout: 5_000 });

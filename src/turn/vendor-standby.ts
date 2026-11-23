@@ -6,6 +6,7 @@ import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { nextUsableFailoverAccount, turnBackendForAccount } from './account-routing.js';
 import { turnEnvironment } from './turn-environment.js';
 import { prepareAcpStandby, prepareCodexStandby } from './vendor-session-attempt.js';
+import { compactThresholdLaunch } from './compaction-run.js';
 import type { VendorTransport } from './vendor-observer.js';
 import { turnEffort, type VendorTurnContext } from './vendor-turn-context.js';
 import { turnPermissionMode } from './turn-permission.js';
@@ -52,9 +53,11 @@ export function openFailoverStandby(ctx: VendorTurnContext, transport: VendorTra
   const permission = turnPermissionMode(harness, session.permissionMode);
   void (async () => {
     lifecycle('worker.standby', { harness: harness.command, account: standbyFor.id.slice(0, 8), process: persistentStandby });
-    const standbyEnvironment = turnEnvironment(harness, standbyFor, permission);
+    // Launched as the turn it stands by for would be, threshold included (vendor-attempt.ts prepareAttempt).
+    const threshold = await compactThresholdLaunch(harness, state, model ?? session.reported?.model ?? null);
+    const standbyEnvironment = { ...turnEnvironment(harness, standbyFor, permission), ...threshold.environment };
     if (transport === 'codex-app-server') {
-      await prepareCodexStandby({ harness, account: standbyFor, session, model, effort: turnEffort(ctx), environment: standbyEnvironment });
+      await prepareCodexStandby({ harness, account: standbyFor, session, model, effort: turnEffort(ctx), environment: standbyEnvironment, compactConfig: threshold.config });
       return;
     }
     await prepareAcpStandby({

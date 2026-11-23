@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import {
   COMPACTED, COMPACTING, DEFAULT_COMPACT_AT_TOKENS, compactAt, compactDescription, compactFailedLine, compactionMechanism, contextTokens,
-  effectiveThreshold, handoffTokens, isCompactRequest, noteCompactAt, noteContextAfterCompaction, parseCompactAt, shouldCompact, turnsSinceCompaction,
+  claudeCompactWindow, effectiveThreshold, handoffTokens, isCompactRequest, noteCompactAt, noteContextAfterCompaction, parseCompactAt, shouldCompact,
+  turnsSinceCompaction, vendorThresholdPlan,
 } from './compaction.js';
 
 const harness = (command: string) => localHarnessForCommand(command)!;
@@ -70,13 +71,13 @@ describe('how each harness compacts', () => {
   it('uses the vendor\'s own compact operation or command, and ClikCode\'s rewrite only where it has neither', () => {
     expect(compactionMechanism(harness('codex'))).toEqual({ kind: 'native-api', prompt: '/compact' });
     expect(compactionMechanism(harness('claude'))).toEqual({ kind: 'native-command', prompt: '/compact' });
-    // A command it lists wins; Gemini's ACP lists none, so it compacts at its own threshold, set to ClikCode's.
+    // A command it lists wins; Gemini's ACP lists none, so `/compact` there is a rewrite (it compacts by itself at its own threshold).
     expect(compactionMechanism(harness('gemini'), ['compress', 'memory'])).toEqual({ kind: 'native-command', prompt: '/compress' });
-    expect(compactionMechanism(harness('gemini'), ['memory'])).toEqual({ kind: 'vendor-threshold' });
+    expect(compactionMechanism(harness('gemini'), ['memory'])).toEqual({ kind: 'rewrite' });
     expect(compactionMechanism(harness('copilot'), ['/compact'])).toEqual({ kind: 'native-command', prompt: '/compact' });
     expect(compactionMechanism(harness('opencode'))).toEqual({ kind: 'native-command', prompt: '/compact' });
     expect(compactionMechanism(harness('kilo'))).toEqual({ kind: 'native-command', prompt: '/compact' });
-    expect(compactionMechanism(harness('aider'), ['ask', 'tokens'])).toEqual({ kind: 'vendor-threshold' });
+    expect(compactionMechanism(harness('aider'), ['ask', 'tokens'])).toEqual({ kind: 'rewrite' });
     expect(compactionMechanism(harness('auggie'))).toEqual({ kind: 'rewrite' });
     expect(compactionMechanism(harness('pi'))).toEqual({ kind: 'native-api', prompt: '/compact' });
     expect(compactionMechanism(harness('amp'))).toEqual({ kind: 'rewrite' });
@@ -118,28 +119,99 @@ describe('when it compacts by itself', () => {
   });
 });
 
-describe('a vendor that compacts at a threshold of its own', () => {
-  it('is told ClikCode\'s: Aider in tokens, Gemini as a share of the window in its lowest-precedence settings', async () => {
+describe('a vendor\'s own threshold, in its own terms', () => {
+  const plan = (command: string, threshold: number, window?: number) => vendorThresholdPlan(harness(command).compactThreshold, threshold, window);
+
+  it('Claude Code: the auto-compact window its threshold is 33k under, with a percent below its 100k floor', () => {
+    expect(plan('claude', 150_000)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '183000' } });
+    expect(plan('claude', 500_000, 200_000)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '533000' } });
+    // 40k: the floor window (100k) leaves 80k after the output room; 50% of it is 40k.
+    expect(claudeCompactWindow(40_000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000', CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '50' });
+    expect(claudeCompactWindow(67_000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' });
+  });
+
+  it('Codex: tokens in the thread\'s config', () => {
+    expect(plan('codex', 150_000)).toEqual({ kind: 'config', config: { model_auto_compact_token_limit: 150_000 } });
+    expect(plan('codex', 300_000)).toEqual({ kind: 'config', config: { model_auto_compact_token_limit: 300_000 } });
+  });
+
+  it('tokens in a variable: Aider, Vibe', () => {
+    expect(plan('aider', 150_000)).toEqual({ kind: 'env', env: { AIDER_MAX_CHAT_HISTORY_TOKENS: '150000' } });
+    expect(plan('vibe', 80_000)).toEqual({ kind: 'env', env: { VIBE_AUTO_COMPACT_THRESHOLD: '80000' } });
+  });
+
+  it('a share or percent of the window, only once the window is known, below the whole of it', () => {
+    expect(plan('goose', 150_000, 200_000)).toEqual({ kind: 'env', env: { GOOSE_AUTO_COMPACT_THRESHOLD: '0.75' } });
+    expect(plan('copilot', 150_000, 1_000_000)).toEqual({ kind: 'env', env: { COPILOT_BACKGROUND_COMPACTION_THRESHOLD: '0.15' } });
+    expect(plan('grok', 150_000, 256_000)).toEqual({ kind: 'env', env: { GROK_AUTO_COMPACT_THRESHOLD_PERCENT: '59' } });
+    // A threshold past the window: as near it as the vendor still compacts (Goose turns off at 1).
+    expect(plan('goose', 500_000, 200_000)).toEqual({ kind: 'env', env: { GOOSE_AUTO_COMPACT_THRESHOLD: '0.95' } });
+    expect(plan('grok', 500_000, 200_000)).toEqual({ kind: 'env', env: { GROK_AUTO_COMPACT_THRESHOLD_PERCENT: '95' } });
+    expect(plan('goose', 150_000)).toBeUndefined();
+    expect(plan('grok', 150_000, 0)).toBeUndefined();
+  });
+
+  it('settings at a key: a file for Gemini, Qwen and Droid, inline for Kilo', () => {
+    expect(plan('gemini', 200_000, 1_000_000)).toEqual({ kind: 'settings', env: 'GEMINI_CLI_SYSTEM_DEFAULTS_PATH', via: 'file', settings: { model: { compressionThreshold: 0.2 } } });
+    expect(plan('qwen', 150_000, 1_000_000)).toEqual({ kind: 'settings', env: 'QWEN_CODE_SYSTEM_DEFAULTS_PATH', via: 'file', settings: { context: { autoCompactThreshold: 0.15 } } });
+    expect(plan('droid', 150_000)).toEqual({ kind: 'settings', env: 'FACTORY_RUNTIME_SETTINGS_PATH', via: 'file', settings: { compactionTokenLimit: 150_000 } });
+    expect(plan('kilo', 150_000, 400_000)).toEqual({ kind: 'settings', env: 'KILO_CONFIG_CONTENT', via: 'inline', settings: { compaction: { threshold_percent: 38 } } });
+    expect(plan('gemini', 200_000)).toBeUndefined();
+  });
+
+  it('nothing for a harness with no threshold of its own', () => {
+    for (const command of ['opencode', 'pi', 'amp', 'cline', 'cursor', 'kiro', 'hermes', 'devin', 'auggie', 'junie']) expect(plan(command, 150_000, 200_000)).toBeUndefined();
+  });
+});
+
+describe('a launch', () => {
+  const withHome = async <T>(run: (readFile: (path: string) => string) => Promise<T>): Promise<T> => {
     const { mkdtempSync, readFileSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
-    const home = mkdtempSync(join(tmpdir(), 'compact-env-'));
     const previous = process.env.CLIKCODE_HOME;
-    process.env.CLIKCODE_HOME = home;
-    try {
-      const { compactThresholdEnvironment } = await import('./compaction-run.js');
-      const state = { globalSettings: { compactAt: 200_000 }, sessions: [
-        { nativeHarness: 'gemini', model: 'gemini-3-pro', lastUsage: { contextWindow: 1_000_000, at: at(1) } },
-      ] } as never;
-      expect(await compactThresholdEnvironment(harness('aider'), state, null)).toEqual({ AIDER_MAX_CHAT_HISTORY_TOKENS: '200000' });
-      const gemini = await compactThresholdEnvironment(harness('gemini'), state, 'gemini-3-pro');
-      expect(JSON.parse(readFileSync(gemini.GEMINI_CLI_SYSTEM_DEFAULTS_PATH!, 'utf8'))).toEqual({ model: { compressionThreshold: 0.2 } });
-      // No window known: Gemini keeps its own default.
-      expect(await compactThresholdEnvironment(harness('gemini'), state, 'unknown-model')).toEqual({});
-      expect(await compactThresholdEnvironment(harness('claude'), state, null)).toEqual({});
-    } finally {
+    process.env.CLIKCODE_HOME = mkdtempSync(join(tmpdir(), 'compact-env-'));
+    try { return await run((path) => readFileSync(path, 'utf8')); } finally {
       if (previous === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = previous;
     }
+  };
+  const state = (compactAt: number) => ({ globalSettings: { compactAt }, sessions: [
+    { nativeHarness: 'gemini', model: 'gemini-3-pro', lastUsage: { contextWindow: 1_000_000, at: at(1) } },
+    { nativeHarness: 'goose', model: 'gpt-x', lastUsage: { contextWindow: 400_000, at: at(1) } },
+  ] }) as never;
+
+  it('carries the threshold the user set, and a changed one is a changed launch', async () => {
+    await withHome(async (read) => {
+      const { compactThresholdLaunch } = await import('./compaction-run.js');
+      expect(await compactThresholdLaunch(harness('aider'), state(200_000), null)).toEqual({ environment: { AIDER_MAX_CHAT_HISTORY_TOKENS: '200000' }, config: {}, set: true });
+      expect(await compactThresholdLaunch(harness('codex'), state(200_000), 'gpt-5')).toEqual({ environment: {}, config: { model_auto_compact_token_limit: 200_000 }, set: true });
+      expect((await compactThresholdLaunch(harness('claude'), state(100_000), null)).environment).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '133000' });
+      expect((await compactThresholdLaunch(harness('goose'), state(100_000), 'gpt-x')).environment).toEqual({ GOOSE_AUTO_COMPACT_THRESHOLD: '0.25' });
+      const before = (await compactThresholdLaunch(harness('gemini'), state(200_000), 'gemini-3-pro')).environment.GEMINI_CLI_SYSTEM_DEFAULTS_PATH!;
+      const after = (await compactThresholdLaunch(harness('gemini'), state(300_000), 'gemini-3-pro')).environment.GEMINI_CLI_SYSTEM_DEFAULTS_PATH!;
+      expect(JSON.parse(read(before))).toEqual({ model: { compressionThreshold: 0.2 } });
+      expect(JSON.parse(read(after))).toEqual({ model: { compressionThreshold: 0.3 } });
+      // The file is named by what it holds: a running Gemini (keyed by its environment) restarts for the new one.
+      expect(after).not.toBe(before);
+    });
+  });
+
+  it('is not set where the window is not known, nor for a harness with no threshold: ClikCode compacts after the turn there', async () => {
+    await withHome(async () => {
+      const { compactThresholdLaunch } = await import('./compaction-run.js');
+      expect(await compactThresholdLaunch(harness('gemini'), state(200_000), 'unknown-model')).toEqual({ environment: {}, config: {}, set: false });
+      expect(await compactThresholdLaunch(harness('opencode'), state(200_000), 'x')).toEqual({ environment: {}, config: {}, set: false });
+    });
+  });
+
+  it('merges Kilo\'s inline settings into the user\'s own', async () => {
+    await withHome(async () => {
+      const { compactThresholdLaunch } = await import('./compaction-run.js');
+      const kilo = { ...harness('kilo'), command: 'goose' } as never; // goose's known window (400k)
+      const user = JSON.stringify({ compaction: { auto: true }, theme: 'dark' });
+      const launch = await compactThresholdLaunch(kilo, state(100_000), 'gpt-x', { KILO_CONFIG_CONTENT: user });
+      expect(JSON.parse(launch.environment.KILO_CONFIG_CONTENT!)).toEqual({ compaction: { auto: true, threshold_percent: 25 }, theme: 'dark' });
+    });
   });
 });
 

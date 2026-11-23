@@ -98,4 +98,19 @@ describe('a Claude-shaped stream compacting its context', () => {
     reportStructuredLine(qwen, '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual"}}', observer, createStreamState());
     expect(notices).toHaveLength(2);
   });
+
+  it('reads Pi compacting at its own threshold the same way, and not an aborted one', () => {
+    const notices: string[] = [];
+    const phases: string[] = [];
+    const observer: HarnessTurnObserver = { onNotice: (message) => notices.push(message), onPhase: (phase) => phases.push(phase) };
+    const pi = { command: 'pi', parser: 'pi-json' } as unknown as AiLocalHarnessDefinition;
+    const state = createStreamState();
+    // Shapes of pi 0.87 json mode (docs/rpc.md).
+    reportStructuredLine(pi, '{"type":"compaction_start","reason":"threshold"}', observer, state);
+    expect(phases).toContain('Compacting…');
+    reportStructuredLine(pi, '{"type":"compaction_end","reason":"threshold","result":null,"aborted":true,"willRetry":false}', observer, state);
+    expect(notices).toEqual([]);
+    reportStructuredLine(pi, '{"type":"compaction_end","reason":"threshold","result":{"summary":"s","tokensBefore":170000},"aborted":false,"willRetry":false}', observer, state);
+    expect(notices).toEqual(['Compacted']);
+  });
 });

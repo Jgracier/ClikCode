@@ -5,17 +5,17 @@ import { createCodexSession } from './codex-app-server.js';
 
 const SERVER = `
   const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
-  let buf = ''; let n = 0;
+  let buf = ''; let n = 0; const opened = [];
   process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) {
     const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
     if (m.method === 'initialize') send({ id: m.id, result: {} });
-    else if (m.method === 'thread/start' || m.method === 'thread/resume') send({ id: m.id, result: { thread: { id: 'T' } } });
+    else if (m.method === 'thread/start' || m.method === 'thread/resume') { opened.push({ method: m.method, config: m.params.config }); send({ id: m.id, result: { thread: { id: 'T' } } }); }
     else if (m.method === 'model/list') send({ id: m.id, result: { data: [{ id: 'gpt-x', model: 'gpt-x', displayName: 'GPT X', supportedReasoningEfforts: [] }], nextCursor: null } });
     else if (m.method === 'thread/compact/start') { send({ id: m.id, result: {} }); send({ method: 'thread/compacted', params: { threadId: 'T', turnId: 'C' } }); }
     else if (m.method === 'turn/start') {
       const turn = 'U' + (++n);
       send({ id: m.id, result: { turn: { id: turn } } });
-      send({ method: 'item/completed', params: { threadId: 'T', turnId: turn, item: { type: 'agentMessage', id: 'm' + n, text: JSON.stringify(m.params) } } });
+      send({ method: 'item/completed', params: { threadId: 'T', turnId: turn, item: { type: 'agentMessage', id: 'm' + n, text: JSON.stringify({ ...m.params, opened }) } } });
       send({ method: 'turn/completed', params: { threadId: 'T', turn: { id: turn, status: 'completed' } } });
     }
   } });
@@ -40,6 +40,25 @@ describe('Codex per-turn parameters and native compaction', () => {
       expect(compacted).toEqual({ text: '', nativeSessionId: 'T' });
       const after = JSON.parse((await codex.runTurn({ ...base, permissionMode: 'ask' as const })).text);
       expect(after).toMatchObject({ threadId: 'T' });
+    } finally {
+      await codex.close();
+    }
+  });
+
+  it('opens the thread with the compaction threshold in its config, and a changed one restarts the server and resumes with it', async () => {
+    let spawns = 0;
+    const codex = createCodexSession({ spawn: (_b, _a, o) => { spawns += 1; return spawn(process.execPath, ['-e', SERVER], o); } });
+    const base = { binary: 'codex', prompt: 'go', cwd: process.cwd(), permissionMode: 'ask' as const };
+    try {
+      const first = JSON.parse((await codex.runTurn({ ...base, configOverrides: { model_auto_compact_token_limit: 150_000 } })).text);
+      expect(first.opened).toEqual([{ method: 'thread/start', config: { model_auto_compact_token_limit: 150_000 } }]);
+      const same = JSON.parse((await codex.runTurn({ ...base, configOverrides: { model_auto_compact_token_limit: 150_000 } })).text);
+      expect(spawns).toBe(1);
+      expect(same.opened).toHaveLength(1);
+      // `/compact 300k`: the next turn carries it -- a fresh server that resumes the thread with it.
+      const changed = JSON.parse((await codex.runTurn({ ...base, nativeSessionId: 'T', configOverrides: { model_auto_compact_token_limit: 300_000 } })).text);
+      expect(spawns).toBe(2);
+      expect(changed.opened).toEqual([{ method: 'thread/resume', config: { model_auto_compact_token_limit: 300_000 } }]);
     } finally {
       await codex.close();
     }

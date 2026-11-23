@@ -358,7 +358,7 @@ function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn:
   }
   // The call comes after the words that introduced it, so it marks the break for what follows.
   if (turn.hasText && activities.some((event) => event.kind === 'tool-start' && !event.parentId)) turn.needsSeparator = true;
-  const compaction = claudeShaped(harness) ? claudeCompaction(value) : undefined;
+  const compaction = claudeShaped(harness) ? claudeCompaction(value) : harness.parser === 'pi-json' ? piCompaction(value) : undefined;
   const phase = compaction?.phase ?? nativeActivityPhaseFromValue(harness, value);
   // The terminal record's own totals, else the running sum of per-message usage.
   const usage = nativeUsageFromValue(value) ?? turn.usage.note(value);
@@ -385,6 +385,14 @@ function claudeCompaction(value: Json): { phase?: string; notice?: string } | un
   if (value.type !== 'system' || typeof value.parent_tool_use_id === 'string') return undefined;
   if (value.subtype === 'compact_boundary') return { notice: COMPACTED };
   if (value.subtype === 'status' && value.status === 'compacting') return { phase: COMPACTING };
+  return undefined;
+}
+
+/** Pi's json mode says when it compacts at its own threshold: `compaction_start`, then
+ * `compaction_end` with the `result` (null when it was aborted or failed). */
+function piCompaction(value: Json): { phase?: string; notice?: string } | undefined {
+  if (value.type === 'compaction_start') return { phase: COMPACTING };
+  if (value.type === 'compaction_end' && value.result && !value.aborted) return { notice: COMPACTED };
   return undefined;
 }
 

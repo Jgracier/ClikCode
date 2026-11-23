@@ -94,8 +94,9 @@ describe('warming a chat that moved here', () => {
     // Still told to the agent with that first turn.
     expect(saved.moveNote).toBe('This conversation moved from a to b.');
     expect(saved.messages).toHaveLength(2);
-    // The child the turn will look up (vendor-attempt.ts prepareAttempt): same account, environment and folder.
-    const key = vendorChildKey(claude, mine, turnEnvironment(claude, mine, 'auto'), '/home/me');
+    // The child the turn will look up (vendor-attempt.ts prepareAttempt): same account, environment -- the
+    // compaction threshold among it -- and folder.
+    const key = vendorChildKey(claude, mine, { ...turnEnvironment(claude, mine, 'auto'), CLAUDE_CODE_AUTO_COMPACT_WINDOW: '183000' }, '/home/me');
     expect(seen.prepared).toEqual([{ transport: expect.stringMatching(/^(acp|codex-app-server)$/), key, nativeSessionId: 'written-thread', model: 'opus', effort: 'high' }]);
   });
 

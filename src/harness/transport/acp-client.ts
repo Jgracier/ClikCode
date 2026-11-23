@@ -35,7 +35,7 @@ import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
 import { classifyEvidence } from '../../turn/account-evidence.js';
 import { ACP_AUTH_REQUIRED_CODE } from '../../turn/failover.js';
-import { COMPACTED, COMPACTING } from '../../turn/compaction.js';
+import { COMPACTED, COMPACTING, compactFailedLine } from '../../turn/compaction.js';
 
 type Json = Record<string, any>;
 
@@ -227,6 +227,19 @@ export function acpParentToolId(update: Json): string | undefined {
     if (nested) return nested;
   }
   return undefined;
+}
+
+/** A vendor's own compaction, shown as a tool call: Claude Code's "Compact conversation"
+ * (`_meta.claudeCode.toolName` `compact`, claude-agent-acp for a client without ACP compaction
+ * updates), Vibe's checkpoint (`_meta.checkpoint_kind` `compaction`), Junie's
+ * (`_meta.jetbrains.contextCompaction`). What it is now, or undefined for any other update. */
+export function acpVendorCompaction(update: Json): 'running' | 'completed' | 'failed' | undefined {
+  if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return undefined;
+  const meta = (update._meta ?? {}) as Json;
+  const compaction = meta.claudeCode?.toolName === 'compact' || meta.checkpoint_kind === 'compaction' || Boolean(meta.jetbrains?.contextCompaction);
+  if (!compaction) return undefined;
+  if (update.status === 'completed' || update.status === 'failed') return update.status;
+  return update.sessionUpdate === 'tool_call' || update.status === 'in_progress' ? 'running' : undefined;
 }
 
 export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined {
@@ -1510,6 +1523,20 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       target.thought ??= { id: `thought-${++target.thoughts}`, text: '' };
       target.thought.text += thought;
       return input.onThought?.(target.thought.text, target.thought.id);
+    }
+    // The vendor compacting itself mid-turn (its own threshold, set to ClikCode's: turn/compaction.ts)
+    // reads as ClikCode's words. A `/compact` the person asked for keeps its row: its failure is read there.
+    const compaction = acpVendorCompaction(update);
+    const manualCompaction = this.turn?.input.acp?.compactCommand;
+    if (compaction && !(target === this.turn && manualCompaction && this.turn.input.prompt.startsWith(manualCompaction.prompt))) {
+      if (compaction === 'running') input.onPhase?.(COMPACTING);
+      else if (compaction === 'completed') input.onNotice?.(COMPACTED);
+      else {
+        const said = (Array.isArray(update.content) ? update.content as Json[] : [])
+          .flatMap((entry) => entry?.type === 'content' && typeof entry.content?.text === 'string' ? [entry.content.text as string] : []).join(' ').trim();
+        input.onNotice?.(compactFailedLine(said.replace(/^Compaction failed:\s*/i, '') || 'the vendor stopped it'));
+      }
+      return;
     }
     const parsedActivity = acpActivityEvent(update);
     let activity = parsedActivity ? this.heldAgents.filter(parsedActivity, update.status === 'completed' ? update.rawOutput : undefined) : undefined;

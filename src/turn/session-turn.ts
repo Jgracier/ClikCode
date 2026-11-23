@@ -185,7 +185,7 @@ async function compactSession(state: HarnessState, session: HarnessSession, sign
   if (!hasThreadToCompact(session)) throw new Error(NOTHING_TO_COMPACT);
   const mechanism = sessionCompactionMechanism(session, harness);
   lifecycle('turn.compact', { harness: harness.command, how: mechanism.kind, context: session.lastUsage?.contextUsed });
-  if (mechanism.kind === 'rewrite' || mechanism.kind === 'vendor-threshold') {
+  if (mechanism.kind === 'rewrite') {
     await compactByRewrite(session.id);
     run.prompter?.activity(COMPACTED);
     return;

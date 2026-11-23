@@ -6,6 +6,7 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { quiet } from '../runtime/lifecycle-log.js';
@@ -13,7 +14,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { fullRecordNote, writeFullRecord } from '../session/full-record.js';
 import { wrapResourceNote } from './resource-note-text.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
-import { compactAt, compactionMechanism, type CompactionMechanism } from './compaction.js';
+import { compactAt, compactionMechanism, vendorThresholdPlan, type CompactionMechanism } from './compaction.js';
 import { targetContextWindow } from './transfer.js';
 import { knownVendorCommands } from './vendor-commands.js';
 import { leavePersistentTransport, nativeAvailableCommands } from './vendor-process.js';
@@ -56,33 +57,66 @@ export async function compactByRewrite(id: string): Promise<void> {
   });
 }
 
-/** What tells a vendor that compacts at a threshold of its own (catalog `compactThreshold`) to do
- * so at ClikCode's: the threshold in tokens, or a settings file of the vendor's lowest precedence
- * holding it as a share of the model's window (Gemini's `model.compressionThreshold`). Nothing
- * where the window is not known: the vendor keeps its own default. */
-export async function compactThresholdEnvironment(
+/** What a launch carries so the vendor compacts at ClikCode's threshold itself (compaction.ts
+ * vendorThresholdPlan). `set` is false where nothing reaches the vendor (no threshold of its own,
+ * or a share of a window not known yet): ClikCode then compacts after the turn. */
+export interface CompactThresholdLaunch {
+  environment: Record<string, string>;
+  /** Keys of the thread's config (Codex app-server). */
+  config: Record<string, unknown>;
+  set: boolean;
+}
+
+const NOTHING: CompactThresholdLaunch = { environment: {}, config: {}, set: false };
+
+/** Deep merge of `extra` into `base` (a copy): the user's own inline settings keep everything ClikCode does not set. */
+function mergeSettings(base: Record<string, unknown>, extra: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(extra)) {
+    const before = merged[key];
+    merged[key] = value && typeof value === 'object' && before && typeof before === 'object' && !Array.isArray(before)
+      ? mergeSettings(before as Record<string, unknown>, value as Record<string, unknown>) : value;
+  }
+  return merged;
+}
+
+function parsedObject(text: string | undefined): Record<string, unknown> {
+  if (!text) return {};
+  try {
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  } catch { return {}; } // fail-open-ok: settings ClikCode cannot read are replaced by its own
+}
+
+/** This launch's threshold for `harness` on `model`. A settings file is named by what it holds, so
+ * a changed threshold is a changed launch: a long-lived vendor process is keyed by its
+ * environment (vendor-process.ts vendorChildKey, codex-app-server ensureLive) and restarts for it. */
+export async function compactThresholdLaunch(
   harness: Pick<AiLocalHarnessDefinition, 'command' | 'compactThreshold'>, state: Pick<HarnessState, 'globalSettings' | 'sessions'>, model: string | null,
-): Promise<Record<string, string>> {
+  inherited: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<CompactThresholdLaunch> {
   const setting = harness.compactThreshold;
-  if (!setting) return {};
-  const tokens = compactAt(state.globalSettings);
-  if (!setting.settingsKey) return { [setting.env]: String(tokens) };
-  const window = await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(quiet('turn/compaction-run'));
-  if (!window) return {};
-  const share = Math.round(Math.min(0.95, tokens / window) * 1000) / 1000;
-  const settings: Record<string, unknown> = {};
-  const keys = setting.settingsKey.split('.');
-  let node = settings;
-  for (const key of keys.slice(0, -1)) node = (node[key] = {}) as Record<string, unknown>;
-  node[keys.at(-1)!] = share;
+  if (!setting) return NOTHING;
+  const unit = setting.unit ?? 'tokens';
+  const window = unit === 'share' || unit === 'percent'
+    ? await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(quiet('turn/compaction-run'))
+    : undefined;
+  const plan = vendorThresholdPlan(setting, compactAt(state.globalSettings), window);
+  if (!plan) return NOTHING;
+  if (plan.kind === 'config') return { environment: {}, config: plan.config, set: true };
+  if (plan.kind === 'env') return { environment: plan.env, config: {}, set: true };
+  if (plan.via === 'inline') {
+    const text = JSON.stringify(mergeSettings(parsedObject(inherited[plan.env]), plan.settings));
+    return { environment: { [plan.env]: text }, config: {}, set: true };
+  }
+  const text = `${JSON.stringify(plan.settings)}\n`;
   const directory = join(stateDirectory(), 'cache');
-  const file = join(directory, `${harness.command}-compact-defaults.json`);
-  const text = `${JSON.stringify(settings)}\n`;
-  if (await readFile(file, 'utf8').catch(() => undefined /* fail-open-ok: a missing cache file is written below */) !== text) {
+  const file = join(directory, `${harness.command}-compact-${createHash('sha256').update(text).digest('hex').slice(0, 12)}.json`);
+  if (await readFile(file, 'utf8').catch(() => undefined /* fail-open-ok: a missing file is written below */) !== text) {
     await mkdir(directory, { recursive: true });
     await writeFile(file, text);
   }
-  return { [setting.env]: file };
+  return { environment: { [plan.env]: file }, config: {}, set: true };
 }
 
 /** The first request after a native compaction names the file that keeps the whole conversation

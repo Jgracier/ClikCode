@@ -78,6 +78,20 @@ describe('ACP status updates and extension notifications', () => {
     expect(phases).toEqual(['Compacting…', 'Compacting…', 'background task: dev server', 'sub-agent: reviewer']);
   });
 
+  it('reads a vendor compacting itself mid-turn, shown as a tool call, as "Compacting…" and "Compacted" (Claude Code, Vibe, Junie)', async () => {
+    const activity: Array<Record<string, unknown>> = [];
+    const { notices, phases } = await run({ steps: [
+      update({ sessionUpdate: 'tool_call', toolCallId: 'k1', title: 'Compact conversation', kind: 'think', status: 'in_progress', _meta: { claudeCode: { toolName: 'compact' } } }),
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'k1', status: 'completed', rawOutput: { trigger: 'automatic', preTokens: 150_100 }, _meta: { claudeCode: { toolName: 'compact' } } }),
+      update({ sessionUpdate: 'tool_call', toolCallId: 'v1', title: 'Compacting context', kind: 'think', status: 'in_progress', _meta: { checkpoint_kind: 'compaction' } }),
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'v1', status: 'completed', _meta: { checkpoint_kind: 'compaction' } }),
+      update({ sessionUpdate: 'tool_call', toolCallId: 'j1', title: 'Context compaction', kind: 'think', status: 'failed', content: [{ type: 'content', content: { type: 'text', text: 'Compaction failed: out of usage' } }], _meta: { jetbrains: { contextCompaction: { trigger: 'auto' } } } }),
+    ] }, { onActivity: (event: Record<string, unknown>) => activity.push(event) });
+    expect(phases).toEqual(['Compacting…', 'Compacting…']);
+    expect(notices).toEqual(['Compacted', 'Compacted', 'Could not compact: out of usage']);
+    expect(activity).toEqual([]);
+  });
+
   it("keeps a background Agent's row running past its launch call, until its own task_notification", async () => {
     const raw = (message: Record<string, unknown>) => ({ send: { method: '_claude/sdkMessage', params: { sessionId: 's1', message: { type: 'system', ...message } } } });
     const events: Array<Record<string, unknown>> = [];

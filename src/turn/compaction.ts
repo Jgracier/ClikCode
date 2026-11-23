@@ -1,16 +1,21 @@
 /** ClikCode's one compaction: when and how a conversation is compacted, for every harness.
  *
- * `/compact` compacts the current conversation now; `/compact <tokens>` sets the one threshold
- * (globalSettings.compactAt, default DEFAULT_COMPACT_AT_TOKENS) at which ClikCode compacts by
- * itself, after a turn has ended (worker/worker-turn.ts) and before the next one starts. The same
- * number caps what a handoff to another provider may carry (handoffTokens).
+ * One threshold (globalSettings.compactAt, default DEFAULT_COMPACT_AT_TOKENS; `/compact <tokens>`
+ * sets it). The same number caps what a handoff to another provider may carry (handoffTokens).
  *
- * How is the harness's own, wherever it has one (compactionMechanism): its compact API (Codex
- * app-server `thread/compact/start`), else the compaction command it runs itself (Claude's
- * `/compact`, Gemini's `/compress`, ...). The vendor's strong model writes the summary. Only a
- * harness with neither is compacted by ClikCode: its thread is let go and the next turn takes
- * the conversation up afresh (turn/thread-start.ts), fitted to half the threshold. ClikCode's
- * own record keeps every turn either way, and the full-record file stays named to the model.
+ * Automatic: the vendor's own agent loop is the one place that sees the context before every
+ * model call, so wherever a vendor has an auto-compaction threshold (catalog `compactThreshold`)
+ * every launch carries ClikCode's number in the vendor's own terms (vendorThresholdPlan) and the
+ * vendor compacts itself, mid-turn, with its own summary. A changed number changes the launch,
+ * so a long-lived vendor process is restarted for it. Only where no threshold reaches the vendor
+ * does ClikCode compact after a turn that ended over it (worker/worker-turn.ts shouldCompact).
+ *
+ * Manual (`/compact`, and that after-turn fallback): the harness's own compaction
+ * (compactionMechanism) -- its compact API (Codex `thread/compact/start`), else the command it
+ * runs itself (Claude's `/compact`, Gemini's `/compress`, ...). Only a harness with neither is
+ * compacted by ClikCode: its thread is let go and the next turn takes the conversation up afresh
+ * (turn/thread-start.ts), fitted to half the threshold. ClikCode's own record keeps every turn
+ * either way, and the full-record file stays named to the model.
  *
  * Chalk free and dependency free: the slash registry and the webview import it. */
 
@@ -79,14 +84,12 @@ export function handoffTokens(threshold: number, contextWindow?: number): number
   return contextWindow && contextWindow > 0 ? Math.min(threshold, Math.floor(contextWindow / 2)) : threshold;
 }
 
+/** How `/compact` compacts the conversation now. */
 export type CompactionMechanism =
   /** The vendor's compact operation on its server (Codex `thread/compact/start`), sent as a turn. */
   | { kind: 'native-api'; prompt: string }
   /** The vendor's own compaction command, sent as a turn's prompt. */
   | { kind: 'native-command'; prompt: string }
-  /** No command, but a threshold of its own, set to ClikCode's on every turn (catalog
-   * `compactThreshold`: Aider, Gemini): it compacts itself there, and `/compact` now is a rewrite. */
-  | { kind: 'vendor-threshold' }
   /** No native compaction: ClikCode lets the thread go and the next turn takes the conversation
    * up afresh, fitted (turn/thread-start.ts). */
   | { kind: 'rewrite' };
@@ -98,10 +101,9 @@ interface CompactingHarness {
   nativeOperations?: readonly string[];
   nativeSlashPassthrough?: boolean;
   acp?: { compactCommand?: { prompt: string } };
-  compactThreshold?: { env: string };
 }
 
-/** How this harness compacts, from what it declares and the commands it has said it runs
+/** How this harness compacts now, from what it declares and the commands it has said it runs
  * (its live `available_commands`, the cached list, ClikCode's declared list). */
 export function compactionMechanism(harness: CompactingHarness, commands: readonly string[] = []): CompactionMechanism {
   if (harness.nativeOperations?.includes('compact')) return { kind: 'native-api', prompt: COMPACT_REQUEST };
@@ -110,8 +112,68 @@ export function compactionMechanism(harness: CompactingHarness, commands: readon
   const named = COMPACT_COMMAND_NAMES.find((name) => names.includes(name));
   if (named) return { kind: 'native-command', prompt: `/${named}` };
   if (harness.nativeSlashPassthrough) return { kind: 'native-command', prompt: COMPACT_REQUEST };
-  if (harness.compactThreshold) return { kind: 'vendor-threshold' };
   return { kind: 'rewrite' };
+}
+
+/** A vendor's auto-compaction threshold, as the catalog declares it (clikrouter AiHarnessCompactThreshold). */
+export interface VendorThresholdSetting {
+  env?: string;
+  config?: string;
+  settingsKey?: string;
+  settingsVia?: 'file' | 'inline';
+  unit?: 'tokens' | 'share' | 'percent' | 'claude-window';
+}
+
+/** What one launch carries so the vendor compacts at ClikCode's threshold. */
+export type VendorThresholdPlan =
+  /** Variables to set. */
+  | { kind: 'env'; env: Record<string, string> }
+  /** Settings for the variable `env` to carry: a file ClikCode writes, or the JSON itself. */
+  | { kind: 'settings'; env: string; via: 'file' | 'inline'; settings: Record<string, unknown> }
+  /** Keys of the vendor thread's config. */
+  | { kind: 'config'; config: Record<string, unknown> };
+
+/** The largest share of the window a threshold is set to: at or past the whole window some
+ * vendors switch auto-compaction off (Goose) or never reach it. */
+export const MAX_THRESHOLD_SHARE = 0.95;
+
+/** Claude Code compacts at its auto-compact window less the summary's room: min(the model's
+ * output limit, 20k) plus a 13k buffer -- 33k for every current model. The window is at least
+ * 100k; below that CLAUDE_AUTOCOMPACT_PCT_OVERRIDE lowers the threshold to a percent of the
+ * window less the output room (2.1.330 bundle; code.claude.com/docs/en/env-vars). */
+const CLAUDE_OUTPUT_ROOM = 20_000;
+const CLAUDE_BUFFER = 13_000;
+const CLAUDE_MIN_WINDOW = 100_000;
+export function claudeCompactWindow(threshold: number): Record<string, string> {
+  const window = threshold + CLAUDE_OUTPUT_ROOM + CLAUDE_BUFFER;
+  if (window >= CLAUDE_MIN_WINDOW) return { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(window) };
+  const percent = Math.floor(threshold / (CLAUDE_MIN_WINDOW - CLAUDE_OUTPUT_ROOM) * 1000) / 10;
+  return { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(CLAUDE_MIN_WINDOW), CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(percent) };
+}
+
+/** ClikCode's threshold (tokens) in the vendor's own terms, for a model whose window is `window`
+ * (tokens) where known. Undefined when it cannot be said: a share of an unknown window -- the
+ * vendor keeps its own default then, and ClikCode compacts after the turn instead. */
+export function vendorThresholdPlan(setting: VendorThresholdSetting | undefined, threshold: number, window?: number): VendorThresholdPlan | undefined {
+  if (!setting) return undefined;
+  const unit = setting.unit ?? 'tokens';
+  if (unit === 'claude-window') return { kind: 'env', env: claudeCompactWindow(threshold) };
+  let value: number;
+  if (unit === 'tokens') value = threshold;
+  else {
+    if (!window || window <= 0) return undefined;
+    const share = Math.min(MAX_THRESHOLD_SHARE, threshold / window);
+    value = unit === 'percent' ? Math.max(1, Math.round(share * 100)) : Math.max(0.01, Math.round(share * 1000) / 1000);
+  }
+  if (setting.config) return { kind: 'config', config: { [setting.config]: value } };
+  if (!setting.env) return undefined;
+  if (!setting.settingsKey) return { kind: 'env', env: { [setting.env]: String(value) } };
+  const settings: Record<string, unknown> = {};
+  const keys = setting.settingsKey.split('.');
+  let node = settings;
+  for (const key of keys.slice(0, -1)) node = (node[key] = {}) as Record<string, unknown>;
+  node[keys.at(-1)!] = value;
+  return { kind: 'settings', env: setting.env, via: setting.settingsVia ?? 'file', settings };
 }
 
 /** What the conversation keeps about its latest compaction (HarnessSession.compaction). */
