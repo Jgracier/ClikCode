@@ -67,6 +67,13 @@ describe('an ask over the Gateway', () => {
     expect(parts[1]!.type).toBe('image_url');
   });
 
+  it('asks the voters to say a drag puzzle is one (no click spots), so the caller asks for its drags instead', async () => {
+    reply = { chunks: ['{"points": []}'] };
+    expect(await askClickPoints(image, 'Drag the letter to the place where it fits', { modelClientsOf: async () => [await clientOf(), await clientOf()] })).toEqual([]);
+    const sent = (received[0]!.body.messages as Array<{ content: Array<{ type: string; text?: string }> }>)[1]!.content[0]!.text ?? '';
+    expect(sent).toMatch(/answered by dragging .* answer \{"points": \[\]\}/);
+  });
+
   it('answers nothing, rather than guessing, when no voter can be reached or none makes sense', async () => {
     const broken = async (): Promise<ModelClient> => {
       const { OpenAIModelClient } = await import('../models/openai-client.js');
