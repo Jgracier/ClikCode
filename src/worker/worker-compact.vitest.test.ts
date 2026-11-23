@@ -99,7 +99,7 @@ describe('compacting by itself', () => {
 
   it('leaves a vendor whose own threshold carries ClikCode\'s to compact itself (Claude Code), not a second time after the turn', async () => {
     turns.texts = [];
-    turns.usage = 200_000;
+    turns.usage = 130_000; // past the threshold, short of its backstop multiple
     await writeState(stateWith(chat({ nativeHarness: 'claude', provider: 'anthropic' })));
     const { send, events } = build();
     await send({ type: 'submit', text: 'do the thing', echo: true });
