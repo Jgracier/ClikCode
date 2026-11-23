@@ -134,31 +134,30 @@ export const TEXT_CAPTCHA = `(() => {
     return { filled: String(found.input.value || '').length > 0 };
   })()`;
 
-/** How a text captcha's picture is watched before it is read: a look every `LOOK_MS`; once it has changed, `AFTER_CHANGE_MS` more; a picture
- * that never changes is taken once it has held still for `STILL_MS`; `MOST_MS` in all. */
-export const TEXT_PICTURE_WATCH = { LOOK_MS: 500, AFTER_CHANGE_MS: 1_000, STILL_MS: 4_000, MOST_MS: 9_000 };
+/** How a text captcha's picture is watched before it is read: a look every `LOOK_MS`; a picture that has changed is read once it has held
+ * still for `SETTLED_MS`, one that never changed once it has held still for `STILL_MS`; an animated one is read as it is after `MOST_MS`. */
+export const TEXT_PICTURE_WATCH = { LOOK_MS: 500, SETTLED_MS: 1_500, STILL_MS: 4_000, MOST_MS: 15_000 };
 
-/** The text captcha's picture once it shows its code. A picture drawn by the page's script can show a stand-in first: NeutrinoAPI's canvas
- * says "Generating..." for about three seconds (2026-11-23: the first look was read, both voters agreed on "Generating...", and the code
- * typed was refused three times), and others fade in or swap a loading image. So the picture is watched: one that changed has been drawn
- * (an animated one keeps changing, and any frame of it reads), and one that holds still long enough is what it is. */
+/** The text captcha's picture once it shows its code. A picture drawn by the page's script can show a stand-in first and draw its code
+ * slowly: NeutrinoAPI's canvas says "Generating..." for three seconds and then paints the code left to right over about seven more
+ * (2026-11-23: the first look was read, both voters agreed on "Generating...", and the code typed was refused three times). So the
+ * picture is watched until it holds still; one that keeps moving (an animated code) is read in whatever frame the watch ends on. */
 async function settledPicture(page: Page, sleep: (ms: number) => Promise<void>): Promise<Buffer | undefined> {
-  const { LOOK_MS, AFTER_CHANGE_MS, STILL_MS, MOST_MS } = TEXT_PICTURE_WATCH;
+  const { LOOK_MS, SETTLED_MS, STILL_MS, MOST_MS } = TEXT_PICTURE_WATCH;
   const take = async (): Promise<Buffer | undefined> => {
     try { return await page.locator('[data-clikcode-captcha-picture="1"]').first().screenshot({ type: 'png', timeout: 8_000 }); } catch { return undefined; }
   };
   let last = await take();
   if (!last) return undefined;
-  let still = 0, changedFor = -1;
+  let still = 0, changed = false;
   for (let waited = 0; waited < MOST_MS; waited += LOOK_MS) {
     await sleep(LOOK_MS);
     const now = await take();
     if (!now) return last;
-    if (changedFor >= 0) changedFor += LOOK_MS;
-    else if (!now.equals(last)) changedFor = 0;
-    else still += LOOK_MS;
+    if (now.equals(last)) still += LOOK_MS;
+    else { changed = true; still = 0; }
     last = now;
-    if (changedFor >= AFTER_CHANGE_MS || (changedFor < 0 && still >= STILL_MS)) return last;
+    if (still >= (changed ? SETTLED_MS : STILL_MS)) return last;
   }
   return last;
 }

@@ -502,16 +502,16 @@ describe('after typing a text captcha', () => {
     expect(await solveTextCaptcha(textPage(() => ''), async () => 'x7Kp2', () => 0.5, async () => undefined)).toBe('mismatch');
   });
 
-  it('reads the picture once it has been drawn, not the stand-in it shows first (NeutrinoAPI: "Generating..." for 3 s)', async () => {
+  it('reads the picture once it has been drawn, not the stand-in it shows first (NeutrinoAPI: "Generating..." for 3 s, then drawn over 7 s)', async () => {
     const { solveTextCaptcha } = await import('./human-check-inpage.js');
     let clock = 0, typed = '';
-    // A stand-in for the first 3 s, then an animated code (every look differs).
-    const picture = () => Buffer.from(clock < 3_000 ? 'generating' : `code-frame-${clock}`);
+    // A stand-in for the first 3 s, then the code painted in over 7 s, then still.
+    const picture = () => Buffer.from(clock < 3_000 ? 'generating' : clock < 10_000 ? `drawing-${clock}` : 'code');
     const field = { click: async () => undefined, fill: async () => { typed = ''; }, inputValue: async () => typed, screenshot: async () => picture() };
     const page = { evaluate: async () => ({ filled: false }), locator: () => ({ first: () => field }), keyboard: { type: async (char: string) => { typed += char; } } } as unknown as Page;
     const read: string[] = [];
     expect(await solveTextCaptcha(page, async image => { read.push(Buffer.from(image.data, 'base64').toString()); return 'x7Kp2'; }, () => 0.5, async ms => { clock += ms; })).toBe('typed');
-    expect(read[0]).toMatch(/^code-frame-/);
+    expect(read[0]).toBe('code');
     // A picture that never changes is read once it has held still, without waiting out the whole watch.
     clock = 0; read.length = 0;
     const still = { ...field, screenshot: async () => Buffer.from('static') };
