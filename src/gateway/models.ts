@@ -175,7 +175,8 @@ export function gatewayPriceLabel(price: GatewayModelPrice, unit = true): string
 
 const TTL_MS = 60_000;
 const MODELS_TIMEOUT_MS = 15_000;
-let cached: { baseUrl: string; auth: string; subscriptions: boolean; at: number; list: GatewayModelList } | undefined;
+/** One list per lane: the picker's (the user's switch) and the subscriptions lane internal work asks on (captcha votes). */
+const cachedByLane = new Map<boolean, { baseUrl: string; auth: string; at: number; list: GatewayModelList }>();
 
 /** The model list includes account-specific access and prices. Keep a digest,
  * never the credential itself, beside its cache entry. */
@@ -242,13 +243,16 @@ export function isAutomaticModelWord(value: string): boolean {
 }
 
 export async function gatewayModels(
-  options: { config?: Conf; fetchImpl?: typeof fetch; fresh?: boolean; timeoutMs?: number } = {},
+  options: { config?: Conf; fetchImpl?: typeof fetch; fresh?: boolean; timeoutMs?: number; /** The lane to list: the user's switch unless given. Internal work that runs on the subscriptions lane (captcha votes) lists that lane, or its seats are chosen from a list its calls never use. */ subscriptions?: boolean } = {},
 ): Promise<GatewayModelList> {
   const config = options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
   const { baseUrl, apiKey } = gatewayConnection(config);
   const auth = authDigest(apiKey);
-  const subscriptions = gatewaySubscriptionsOn(config);
-  if (!options.fresh && cached && cached.baseUrl === baseUrl && cached.auth === auth && cached.subscriptions === subscriptions && Date.now() - cached.at < TTL_MS) return cached.list;
+  const subscriptions = options.subscriptions ?? gatewaySubscriptionsOn(config);
+  // Only the picker's own lane is saved to disk and offered when the Gateway does not answer.
+  const pickerLane = subscriptions === gatewaySubscriptionsOn(config);
+  const cached = cachedByLane.get(subscriptions);
+  if (!options.fresh && cached && cached.baseUrl === baseUrl && cached.auth === auth && Date.now() - cached.at < TTL_MS) return cached.list;
   let response: Response;
   let body: { data?: unknown; error?: unknown; clikcode?: { subscriptions?: unknown } } | undefined;
   try {
@@ -261,7 +265,7 @@ export async function gatewayModels(
     body = await response.json().catch(quiet('gateway/models')) as typeof body;
   } catch (error) {
     // A Gateway that does not answer in time: the last list received is better than none.
-    const saved = await savedGatewayModels({ config });
+    const saved = pickerLane ? await savedGatewayModels({ config }) : undefined;
     if (saved) return saved;
     throw error;
   }
@@ -274,9 +278,9 @@ export async function gatewayModels(
   }
   const switchState = body.clikcode?.subscriptions;
   const list = { ...fromOpenAIModelList(body.data), ...(typeof switchState === 'boolean' ? { subscriptions: switchState } : {}) };
-  cached = { baseUrl, auth, subscriptions, at: Date.now(), list };
+  cachedByLane.set(subscriptions, { baseUrl, auth, at: Date.now(), list });
   // fail-open-ok: a list that cannot be saved still answers this request; only the next instant open is lost.
-  await saveGatewayModels(baseUrl, auth, subscriptions, list).catch(quiet('gateway/models'));
+  if (pickerLane) await saveGatewayModels(baseUrl, auth, subscriptions, list).catch(quiet('gateway/models'));
   return list;
 }
 
@@ -363,11 +367,11 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
  * model it serves (from the list in memory), never the id. */
 export function gatewaySessionModelLabel(modelId: string): string {
   if (!modelId.startsWith('private-deployment:')) return modelId;
-  const served = cached?.list.models.find((entry) => entry.id === modelId)?.own?.modelId;
+  const served = [...cachedByLane.values()].map(entry => entry.list.models.find(model => model.id === modelId)?.own?.modelId).find(Boolean);
   return served ? `${withoutFreeTag(served)} (Hosted AI)` : 'Hosted AI model';
 }
 
 /** Test seam. */
 export function resetGatewayModelCache(): void {
-  cached = undefined;
+  cachedByLane.clear();
 }

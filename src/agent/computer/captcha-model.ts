@@ -130,7 +130,9 @@ export function seatOrder(roster: Roster, vision: readonly string[], measured: r
  * models (those not sitting out first). The first three vote; the rest stand in for one that fails. */
 async function gatewayListing(): Promise<GatewayListing> {
   const { gatewayModels } = await import('../../gateway/models.js');
-  return gatewayModels();
+  // The lane the votes are asked on (gatewayClient: subscriptions: true): listed on the picker's switch instead, every roster model read
+  // as paid while the user had subscriptions off for chats, no roster voter was ever seated, and grids fell to one free voter.
+  return gatewayModels({ subscriptions: true });
 }
 
 /** The subscription and free vision models the Gateway lists, a minute's memory. A listing that fails keeps the

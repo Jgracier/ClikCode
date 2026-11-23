@@ -310,3 +310,31 @@ describe('a chosen source', () => {
     expect(gatewayStepOptions({ effort: '' })).not.toHaveProperty('provider');
   });
 });
+
+describe('the lane a list is asked on', () => {
+  it('lists the subscriptions lane when asked, whatever the picker switch says, and keeps each lane apart', async () => {
+    const { gatewayModels, resetGatewayModelCache } = await import('./models.js');
+    resetGatewayModelCache();
+    const Conf = (await import('conf')).default;
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const config = new Conf({ projectName: 'clikcode-lane-test', cwd: await mkdtemp(join(tmpdir(), 'lane-')) });
+    config.set('gatewaySubscriptions', false);
+    const asked: string[] = [];
+    const fetchImpl = (async (_url: string, init: { headers: Record<string, string> }) => {
+      const lane = init.headers['x-clikcode-subscriptions']!;
+      asked.push(lane);
+      return new Response(JSON.stringify({ data: [{ id: 'gpt-6-luna', access: lane === 'on' ? 'subscription' : 'paid', capabilities: { vision: true } }], clikcode: { subscriptions: lane === 'on' } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const internal = await gatewayModels({ config, fetchImpl, subscriptions: true });
+    const picker = await gatewayModels({ config, fetchImpl });
+    expect(asked).toEqual(['on', 'off']);
+    expect(internal.models.find(m => m.id === 'gpt-6-luna')?.access).toBe('subscription');
+    expect(picker.models.find(m => m.id === 'gpt-6-luna')?.access).toBe('paid');
+    // Each lane is cached on its own: asking again asks nothing.
+    await gatewayModels({ config, fetchImpl, subscriptions: true });
+    await gatewayModels({ config, fetchImpl });
+    expect(asked).toHaveLength(2);
+  });
+});
