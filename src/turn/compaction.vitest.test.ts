@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import {
-  COMPACTED, COMPACTING, DEFAULT_COMPACT_AT_TOKENS, compactAt, compactDescription, compactFailedLine, compactionMechanism, contextTokens,
+  CODEX_COMPACT_PROMPT, COMPACTED, COMPACTING, COMPACT_INSTRUCTIONS, DEFAULT_COMPACT_AT_TOKENS, claudeCompactSettings, compactAt, compactDescription, compactFailedLine, compactionMechanism, contextTokens,
   claudeCompactWindow, effectiveThreshold, handoffTokens, isCompactRequest, noteCompactAt, noteContextAfterCompaction, parseCompactAt, shouldCompact,
   turnsSinceCompaction, vendorThresholdPlan,
 } from './compaction.js';
@@ -130,9 +130,16 @@ describe('a vendor\'s own threshold, in its own terms', () => {
     expect(claudeCompactWindow(67_000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' });
   });
 
-  it('Codex: tokens in the thread\'s config', () => {
-    expect(plan('codex', 150_000)).toEqual({ kind: 'config', config: { model_auto_compact_token_limit: 150_000 } });
-    expect(plan('codex', 300_000)).toEqual({ kind: 'config', config: { model_auto_compact_token_limit: 300_000 } });
+  it('Codex: tokens in the thread\'s config, with the state-only summary prompt', () => {
+    expect(plan('codex', 150_000)).toEqual({ kind: 'config', config: { model_auto_compact_token_limit: 150_000, compact_prompt: CODEX_COMPACT_PROMPT } });
+    expect(plan('codex', 300_000)).toEqual({ kind: 'config', config: { model_auto_compact_token_limit: 300_000, compact_prompt: CODEX_COMPACT_PROMPT } });
+    expect(CODEX_COMPACT_PROMPT).toContain(COMPACT_INSTRUCTIONS);
+  });
+
+  it('Claude Code: a PreCompact hook that echoes the state-only instructions, safe as it is in sh and cmd', () => {
+    expect(COMPACT_INSTRUCTIONS).toMatch(/^[A-Za-z ,.:]+$/);
+    for (const word of ['goal', 'Decisions', 'rejected', 'Open threads', 'current step', 'identifier']) expect(COMPACT_INSTRUCTIONS).toContain(word);
+    expect(claudeCompactSettings()).toEqual({ hooks: { PreCompact: [{ hooks: [{ type: 'command', command: `echo ${COMPACT_INSTRUCTIONS}` }] }] } });
   });
 
   it('tokens in a variable: Aider', () => {
@@ -185,7 +192,7 @@ describe('a launch', () => {
     await withHome(async (read) => {
       const { compactThresholdLaunch } = await import('./compaction-run.js');
       expect(await compactThresholdLaunch(harness('aider'), state(200_000), null)).toEqual({ environment: { AIDER_MAX_CHAT_HISTORY_TOKENS: '200000' }, config: {}, set: true });
-      expect(await compactThresholdLaunch(harness('codex'), state(200_000), 'gpt-5')).toEqual({ environment: {}, config: { model_auto_compact_token_limit: 200_000 }, set: true });
+      expect(await compactThresholdLaunch(harness('codex'), state(200_000), 'gpt-5')).toEqual({ environment: {}, config: { model_auto_compact_token_limit: 200_000, compact_prompt: CODEX_COMPACT_PROMPT }, set: true });
       expect((await compactThresholdLaunch(harness('claude'), state(100_000), null)).environment).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '133000' });
       expect((await compactThresholdLaunch(harness('goose'), state(100_000), 'gpt-x')).environment).toEqual({ GOOSE_AUTO_COMPACT_THRESHOLD: '0.25' });
       const before = (await compactThresholdLaunch(harness('gemini'), state(200_000), 'gemini-3-pro')).environment.GEMINI_CLI_SYSTEM_DEFAULTS_PATH!;
@@ -230,6 +237,9 @@ describe('after a native compaction', () => {
       const viaTool = await withCompactionNote(session, 'next request', true);
       expect(viaTool).toContain('is in the hindsight tool');
       expect(viaTool).not.toContain('records/c1.md');
+      // And what there was, by message number, for the summary to be read against.
+      expect(viaTool).toContain("This conversation's topics, by message number (hindsight from/to reads any of them whole):\n#0–#1: ask 0\n#2–#3: ask 1");
+      expect(viaTool.endsWith('next request')).toBe(true);
       expect(existsSync(join(process.env.CLIKCODE_HOME!, 'records', 'c1.md'))).toBe(true);
     } finally {
       if (previous === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = previous;

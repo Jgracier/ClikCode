@@ -13,6 +13,7 @@ import { quiet } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { fullRecordNote, recordReachFor, writeFullRecord } from '../session/full-record.js';
 import { wrapResourceNote } from './resource-note-text.js';
+import { topicContents } from '../search/topic-contents.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { compactAt, compactionMechanism, vendorThresholdPlan, type CompactionMechanism } from './compaction.js';
 import { targetContextWindow } from './transfer.js';
@@ -97,11 +98,14 @@ export async function compactThresholdLaunch(
 
 /** The first request after a native compaction names where the whole conversation is
  * (session/full-record.ts): the hindsight tool when the harness has ClikCode's MCP server
- * (`hasHindsight`), else the record file. The vendor now works from its own summary, and what the
- * summary left out is still within reach. The file is written either way. */
+ * (`hasHindsight`), else the record file; and its topics by message number
+ * (search/topic-contents.ts). The vendor now works from its own summary, and what the summary
+ * left out is still within reach. The file is written either way. */
 export async function withCompactionNote(session: HarnessSession, turnText: string, hasHindsight: boolean): Promise<string> {
   if (!session.compaction?.noteRecord) return turnText;
   delete session.compaction.noteRecord;
   const reach = recordReachFor(hasHindsight, await writeFullRecord({ ...session, pendingTurn: undefined }, stateDirectory()));
-  return reach ? `${wrapResourceNote(fullRecordNote(reach))}\n\n${turnText}` : turnText;
+  const contents = await topicContents(session, hasHindsight);
+  const note = [reach ? fullRecordNote(reach) : '', contents ?? ''].filter(Boolean).join('\n\n');
+  return note ? `${wrapResourceNote(note)}\n\n${turnText}` : turnText;
 }

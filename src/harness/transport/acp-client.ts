@@ -35,7 +35,7 @@ import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
 import { classifyEvidence } from '../../turn/account-evidence.js';
 import { ACP_AUTH_REQUIRED_CODE } from '../../turn/failover.js';
-import { COMPACTED, COMPACTING, compactFailedLine } from '../../turn/compaction.js';
+import { COMPACTED, COMPACTING, claudeCompactSettings, compactFailedLine } from '../../turn/compaction.js';
 
 type Json = Record<string, any>;
 
@@ -73,7 +73,8 @@ export function shellFailure(status: string, summary: string): string | undefine
  * `_claude/sdkMessage` (`_meta.claudeCode.emitRawSDKMessages`, a type/subtype
  * filter, claude-agent-acp 0.84): only the background-task level, which says
  * how many background agents are still running when the turn ends, and the
- * lifecycle of a background Agent (`heldAgentFrame`). An agent
+ * lifecycle of a background Agent (`heldAgentFrame`). `options.settings`: flag settings for
+ * the session's Claude Code (claude-agent-acp's own options pass-through). An agent
  * that does not know the key ignores it. */
 const ACP_SESSION_META = {
   claudeCode: { emitRawSDKMessages: [
@@ -84,7 +85,9 @@ const ACP_SESSION_META = {
     { type: 'system', subtype: 'task_updated' },
     // The end of every vendor turn, one the user did not start included: what closes a background turn (vendorTurnEnded).
     { type: 'result' },
-  ] },
+  ],
+  // A PreCompact hook: Claude Code's summary keeps the state of the work, not its story (turn/compaction.ts COMPACT_INSTRUCTIONS).
+  options: { settings: claudeCompactSettings() } },
 } as const;
 
 /** What this client can show. `terminal_output`: a command's output and exit

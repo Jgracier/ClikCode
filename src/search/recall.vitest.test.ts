@@ -12,6 +12,7 @@ import { RECALL_MAX_CHARS, agentRecallBoundary, distinctiveWords, recall, withRe
 import { stripResourceNotes } from '../turn/resource-note-text.js';
 import { requestKey } from '../session/store-evidence.js';
 import { recallBoundary } from '../turn/compaction.js';
+import { TOPIC_CONTENTS_MAX_CHARS, topicContentsText } from './topic-contents.js';
 
 /** One dimension per concept; any other word lands faintly in a hashed one (as vectors.vitest.test.ts). */
 const CONCEPTS: string[][] = [
@@ -168,5 +169,28 @@ describe('recall boundaries', () => {
     expect(agentRecallBoundary(messages, 4_000, undefined, 4)).toBe(0);
     // 10 messages of 400 bytes each, a budget of 1,000 tokens (4,000 bytes) for a memory of 8,000: the newest five fit.
     expect(agentRecallBoundary(messages, 8_000, 1_000, 4)).toBe(5);
+  });
+});
+
+describe('topic contents after a compaction', () => {
+  const asked = (texts: string[]) => texts.flatMap((text, at) => [
+    { index: at * 2, role: 'user' as const, content: text }, { index: at * 2 + 1, role: 'assistant' as const, content: 'done' },
+  ]);
+
+  it('one line per topic with its message numbers; a continuation stays in its topic', () => {
+    const text = topicContentsText(asked(['Add the login page to src/app.tsx', 'continue', 'Now migrate the postgres table']), false)!;
+    expect(text.split('\n')).toEqual([
+      "This conversation's topics, by message number:",
+      '#0–#3: Add the login page to src/app.tsx',
+      '#4–#5: Now migrate the postgres table',
+    ]);
+    expect(topicContentsText([], true)).toBeUndefined();
+  });
+
+  it('keeps the newest topics within about 1k tokens', () => {
+    const text = topicContentsText(asked(Array.from({ length: 200 }, (_, at) => `Request number ${at} about ${'something else entirely '.repeat(6)}`)), true)!;
+    expect(text.length).toBeLessThanOrEqual(TOPIC_CONTENTS_MAX_CHARS);
+    expect(text).toMatch(/\(\d+ earlier topics not listed\)/);
+    expect(text).toContain('#398–#399: Request number 199');
   });
 });

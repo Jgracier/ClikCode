@@ -34,6 +34,29 @@ export const TURNS_BETWEEN_COMPACTIONS = 2;
  * live). Above 1 so a turn whose last call crossed the line is left to the vendor's next call. */
 export const VENDOR_THRESHOLD_BACKSTOP = 1.5;
 
+/** What a compaction's summary keeps, where the harness takes instructions for it: the state the
+ * work is in, not the story of how it got there. ClikCode's record keeps every turn, and recall
+ * (search/recall.ts) and the topic contents (search/topic-contents.ts) bring back what a summary
+ * left out, so the summary need not narrate. Only letters, spaces, commas, periods and colons: it
+ * is echoed by a hook command (claudeCompactSettings) that sh and cmd both run as it is.
+ * Claude: a PreCompact hook, for its auto-compaction and `/compact` alike. Codex: within
+ * CODEX_COMPACT_PROMPT. Gemini's /compress takes no instructions; a rewrite writes no summary. */
+export const COMPACT_INSTRUCTIONS = 'Summarize the current state only, not the history of how it was reached. Keep, as short sections: '
+  + 'the goal and the constraints the user set. Decisions made, each with its reason. Things tried or proposed and rejected, each with why. '
+  + 'Open threads and unanswered questions. The current step and the next action. '
+  + 'Every exact identifier in play, verbatim: file paths, function and variable names, commands, ids, hashes, numbers, URLs and error text. '
+  + 'Leave out narrative, pleasantries and tool output already acted on.';
+
+/** Codex's `compact_prompt` replaces its whole compaction prompt, so it says what the task is too. */
+export const CODEX_COMPACT_PROMPT = `You are performing a context checkpoint compaction. Write a handoff summary for the model that will resume this work. ${COMPACT_INSTRUCTIONS}`;
+
+/** Claude Code's settings (claude-agent-acp `_meta.claudeCode.options.settings`) with a PreCompact
+ * hook whose output Claude Code adds to its summary's instructions, for its own threshold and a
+ * `/compact` alike. */
+export function claudeCompactSettings(): Record<string, unknown> {
+  return { hooks: { PreCompact: [{ hooks: [{ type: 'command', command: `echo ${COMPACT_INSTRUCTIONS}` }] }] } };
+}
+
 /** The only words a person sees about it. */
 export const COMPACTING = 'Compacting…';
 export const COMPACTED = 'Compacted';
@@ -125,6 +148,8 @@ export interface VendorThresholdSetting {
   config?: string;
   settingsKey?: string;
   unit?: 'tokens' | 'share' | 'percent' | 'claude-window';
+  /** The config key of the vendor's compaction prompt, set to CODEX_COMPACT_PROMPT. */
+  promptConfig?: string;
 }
 
 /** What one launch carries so the vendor compacts at ClikCode's threshold. */
@@ -168,7 +193,7 @@ export function vendorThresholdPlan(setting: VendorThresholdSetting | undefined,
     const share = Math.min(MAX_THRESHOLD_SHARE, threshold / window);
     value = unit === 'percent' ? Math.max(1, Math.round(share * 100)) : Math.max(0.01, Math.round(share * 1000) / 1000);
   }
-  if (setting.config) return { kind: 'config', config: { [setting.config]: value } };
+  if (setting.config) return { kind: 'config', config: { [setting.config]: value, ...(setting.promptConfig ? { [setting.promptConfig]: CODEX_COMPACT_PROMPT } : {}) } };
   if (!setting.env) return undefined;
   if (!setting.settingsKey) return { kind: 'env', env: { [setting.env]: String(value) } };
   const settings: Record<string, unknown> = {};
