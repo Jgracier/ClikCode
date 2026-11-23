@@ -141,6 +141,31 @@ function answeredHere(): boolean {
   return Array.from(doc.querySelectorAll('[class*="geetest_lock_success"], [class*="geetest_success_radar"], [class*="geetest_btn_click"][class*="geetest_success"]')).some(el => (el.getBoundingClientRect?.().width ?? 0) > 0);
 }
 
+/** What a Turnstile widget shows, read from its own frame's accessibility tree: its markup sits in a closed shadow root with ids that
+ * change on every load, so neither the page's script nor a selector reaches it, but the browser's accessibility tree does. `success`:
+ * the widget says it passed the visitor; `asking`: its box is there to tick; `said`: its own short words, for the trace and the tally
+ * (what a failed run met was never written down, so a "still-there" could not be told apart from a refusal). Undefined when there is
+ * no Turnstile frame or it cannot be read. */
+export async function turnstileSays(page: Page): Promise<{ success: boolean; asking: boolean; said: string } | undefined> {
+  let frames: Frame[];
+  try { frames = page.frames().filter(frame => /challenges\.cloudflare\.com\//i.test(frame.url())); } catch { return undefined; }
+  for (const frame of frames) {
+    let session: { send(method: string): Promise<unknown>; detach(): Promise<void> } | undefined;
+    try {
+      session = await page.context().newCDPSession(frame) as unknown as typeof session;
+      const { nodes } = await session!.send('Accessibility.getFullAXTree') as { nodes: Array<{ ignored?: boolean; role?: { value?: string }; name?: { value?: string } }> };
+      const shown = nodes.filter(node => !node.ignored);
+      const asking = shown.some(node => node.role?.value === 'checkbox');
+      // The widget's own words: static text that is not one of its footer links (Privacy, Help, Cloudflare) or the page title.
+      const words = [...new Set(shown.filter(node => node.role?.value === 'StaticText').map(node => (node.name?.value ?? '').trim()).filter(text => text.length > 1 && !/^(?:privacy|help|terms|cloudflare|•)$/i.test(text)))];
+      const said = words.join(' / ').slice(0, 120);
+      return { success: !asking && words.some(text => /^success!?$/i.test(text)), asking, said };
+    } catch { continue; } // fail-open-ok: a frame that went away or cannot be inspected says nothing; the next one is read
+    finally { await session?.detach().catch(() => undefined); }
+  }
+  return undefined;
+}
+
 /** The frames whose fields belong to the page: same origin as the page (a sign-up form in its own frame), or a blank or srcdoc
  * frame it wrote itself. A widget's own frames (google.com, hcaptcha.com) are not the page's form. */
 function pageFrames(page: Page): Frame[] {
@@ -161,7 +186,9 @@ export async function humanCheckAnswered(page: Page): Promise<boolean> {
   for (const frame of pageFrames(page)) {
     if (await Promise.resolve().then(() => frame.evaluate(answeredHere)).catch(() => false)) return true;
   }
-  return false;
+  // A Turnstile that says it passed the visitor holds its answer even where no field of the page shows it: a form in a frame of another
+  // origin, or a widget the page rendered with no field at all and reads through its callback.
+  return (await turnstileSays(page))?.success === true;
 }
 
 /** The checks a page draws itself, each by its own finder, in one look (runs in the page). */
@@ -296,7 +323,8 @@ async function pressOnce(page: Page, deps: { sleep?: (ms: number) => Promise<voi
     // the check deciding: watched on.
     if (!await findCheckbox(page) && !await detectHumanCheck(page)) return { outcome: 'cleared', widget: found.widget };
   }
-  return { outcome: 'still-there', widget: found.widget };
+  const says = found.widget === 'turnstile' ? await turnstileSays(page) : undefined;
+  return { outcome: 'still-there', widget: found.widget, ...(says?.said ? { seen: `the widget says: ${says.said}` } : {}) };
 }
 
 // ── solving ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -389,7 +417,7 @@ export async function solveHumanCheck(page: Page, deps: SolveDeps = {}): Promise
   // A `none` with nothing asked and nothing done is "no check was on the page", not a run of a family: recording it
   // as one made the tally count pages the solver never saw a check on (23 of 29 "unknown" runs were these).
   if (result.outcome === 'none' && !steps.length) return result;
-  await log.recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family, outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps, ...(memo.kinds.length ? { kinds: memo.kinds } : {}), ...(meter.asks ? { asks: meter.asks, models: meter.models } : {}), ...(egress ? { egress } : {}) });
+  await log.recordCaptcha(deps.stateDir, { at: new Date().toISOString(), host, family, outcome: result.outcome, seconds: Math.round((Date.now() - began) / 1000), steps, ...(result.outcome === 'still-there' && result.seen ? { seen: result.seen.slice(0, 160) } : {}), ...(memo.kinds.length ? { kinds: memo.kinds } : {}), ...(meter.asks ? { asks: meter.asks, models: meter.models } : {}), ...(egress ? { egress } : {}) });
   // What the site accepted is the nearest thing to a marked answer sheet: the voters are scored on it.
   if (result.outcome === 'cleared') await log.recordVotes(deps.stateDir, meter.votes);
   await log.saveSamples(deps.stateDir, result.outcome, family, meter.samples);
@@ -418,7 +446,7 @@ export async function passHumanCheck(page: Page, deps: SolveDeps & { solve?: boo
   // The press met a check but the solver then found none to answer (the challenge closed or changed in between): that is a
   // check that was tried and not passed, never "a puzzle nobody tried".
   if (solved.outcome === 'none' && pressed.outcome !== 'none') return { outcome: 'still-there', ...(pressed.widget ? { widget: pressed.widget } : {}), ...(pressed.seen ? { seen: pressed.seen } : {}) };
-  return { ...solved, ...(solved.widget ?? pressed.widget ? { widget: solved.widget ?? pressed.widget } : {}) } as HumanCheckResult;
+  return { ...solved, ...(solved.widget ?? pressed.widget ? { widget: solved.widget ?? pressed.widget } : {}), ...(solved.outcome === 'still-there' && !solved.seen && pressed.seen ? { seen: pressed.seen } : {}) } as HumanCheckResult;
 }
 
 interface InPageMemo { tries: number; held: boolean; holds: number; textTyped: boolean; /** Something was done in the page whose verdict never showed. */ acted: boolean }
@@ -504,6 +532,8 @@ async function answerLoop(page: Page, deps: SolveDeps & { budget: Budget }, hand
   const { budget } = deps;
   const { sleep, random } = hands;
   let repressed = 0, arkoseStuck = 0, unread = 0, verifyWaited = false;
+  /** What the widget last said of itself after a press that did not clear (Turnstile's own words), for the result. */
+  let widgetSaid = '';
   let pictureRounds = 0, audio: 'untried' | 'on' | 'refused' = deps.audio ?? 'untried';
   while (!budget.over()) {
     const found = await findPuzzle(page);
@@ -515,6 +545,7 @@ async function answerLoop(page: Page, deps: SolveDeps & { budget: Budget }, hand
         repressed++;
         const pressed = await pressOnce(page, { waitMs: 8_000, sleep });
         saw(pressed.widget);
+        if (pressed.seen) { widgetSaid = pressed.seen; deps.trace?.(`pressed the box again, ${pressed.outcome}: ${pressed.seen}`); }
         // A press the check took (it let the visitor through, or the page moved on) is the answer: nothing is left to solve.
         if (pressed.outcome === 'cleared') return ended('cleared');
         await sleep(1_500);
@@ -542,7 +573,8 @@ async function answerLoop(page: Page, deps: SolveDeps & { budget: Budget }, hand
       // A page that never stopped verifying: what it says is written down, since this state could not be reproduced on demand.
       if (stuck) deps.trace?.(`still on a verifying page "${await page.title().catch(() => '')}": ${String(await page.evaluate(`(document.body && document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 160)`).catch(() => '')).slice(0, 160)}`);
       // Something was done in the page (a hold, a slide, proof of work) whose verdict never showed: tried, not passed.
-      return ended(inPage.held || inPage.acted || stuck || await detectHumanCheck(page) ? 'still-there' : 'none');
+      const outcome = inPage.held || inPage.acted || stuck || await detectHumanCheck(page) ? 'still-there' : 'none';
+      return outcome === 'still-there' && widgetSaid ? { ...ended(outcome), seen: widgetSaid } : ended(outcome);
     }
     saw(found.widget);
     if (await humanCheckAnswered(page)) return ended('cleared');

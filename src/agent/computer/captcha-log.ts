@@ -21,6 +21,9 @@ export interface CaptchaRecord {
    * the user's own Claude or Codex plan, the rest are Gateway credit). */
   asks?: number;
   models?: Record<string, number>;
+  /** A run that did not clear: what the check showed at the end, in the solver's words or the widget's own short status words
+   * (Turnstile's "Verification failed"), never the page's text. */
+  seen?: string;
   /** The way out the page's traffic left through (egress.ts); absent for home, this computer's own connection. */
   egress?: string;
 }

@@ -692,3 +692,30 @@ describe('an Arkose carousel', () => {
     expect(total(['7 of 3'])).toBe(0);
   });
 });
+
+describe("Turnstile's own word", () => {
+  const ax = (nodes: Array<[string, string]>) => ({ nodes: nodes.map(([role, name]) => ({ ignored: false, role: { value: role }, name: { value: name } })) });
+  const turnstilePage = (tree: ReturnType<typeof ax>) => ({
+    url: () => 'https://vendor.example/signup',
+    mainFrame: () => undefined,
+    frames: () => [{ url: () => 'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/f/av0/rch/x' }],
+    evaluate: async () => false,
+    context: () => ({ newCDPSession: async () => ({ send: async () => tree, detach: async () => undefined }) }),
+  }) as unknown as Page;
+
+  it('reads a passed widget as answered even when no field of the page holds its token', async () => {
+    const { humanCheckAnswered, turnstileSays } = await import('./human-check.js');
+    const passed = turnstilePage(ax([['RootWebArea', 'Checking your Browser…'], ['link', 'Privacy'], ['StaticText', 'Privacy'], ['StaticText', 'Success!']]));
+    expect(await turnstileSays(passed)).toEqual({ success: true, asking: false, said: 'Success!' });
+    expect(await humanCheckAnswered(passed)).toBe(true);
+  });
+
+  it('a box still to tick, or a failure, is not an answer, and its words are kept for the tally', async () => {
+    const { humanCheckAnswered, turnstileSays } = await import('./human-check.js');
+    const asking = turnstilePage(ax([['checkbox', 'Verify you are human'], ['StaticText', 'Verify you are human']]));
+    expect(await humanCheckAnswered(asking)).toBe(false);
+    const failed = turnstilePage(ax([['StaticText', 'Verification failed'], ['StaticText', 'Troubleshoot']]));
+    expect(await turnstileSays(failed)).toEqual({ success: false, asking: false, said: 'Verification failed / Troubleshoot' });
+    expect(await humanCheckAnswered(failed)).toBe(false);
+  });
+});
