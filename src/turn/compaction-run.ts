@@ -69,31 +69,11 @@ export interface CompactThresholdLaunch {
 
 const NOTHING: CompactThresholdLaunch = { environment: {}, config: {}, set: false };
 
-/** Deep merge of `extra` into `base` (a copy): the user's own inline settings keep everything ClikCode does not set. */
-function mergeSettings(base: Record<string, unknown>, extra: Record<string, unknown>): Record<string, unknown> {
-  const merged: Record<string, unknown> = { ...base };
-  for (const [key, value] of Object.entries(extra)) {
-    const before = merged[key];
-    merged[key] = value && typeof value === 'object' && before && typeof before === 'object' && !Array.isArray(before)
-      ? mergeSettings(before as Record<string, unknown>, value as Record<string, unknown>) : value;
-  }
-  return merged;
-}
-
-function parsedObject(text: string | undefined): Record<string, unknown> {
-  if (!text) return {};
-  try {
-    const value: unknown = JSON.parse(text);
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  } catch { return {}; } // fail-open-ok: settings ClikCode cannot read are replaced by its own
-}
-
 /** This launch's threshold for `harness` on `model`. A settings file is named by what it holds, so
  * a changed threshold is a changed launch: a long-lived vendor process is keyed by its
  * environment (vendor-process.ts vendorChildKey, codex-app-server ensureLive) and restarts for it. */
 export async function compactThresholdLaunch(
   harness: Pick<AiLocalHarnessDefinition, 'command' | 'compactThreshold'>, state: Pick<HarnessState, 'globalSettings' | 'sessions'>, model: string | null,
-  inherited: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<CompactThresholdLaunch> {
   const setting = harness.compactThreshold;
   if (!setting) return NOTHING;
@@ -105,10 +85,6 @@ export async function compactThresholdLaunch(
   if (!plan) return NOTHING;
   if (plan.kind === 'config') return { environment: {}, config: plan.config, set: true };
   if (plan.kind === 'env') return { environment: plan.env, config: {}, set: true };
-  if (plan.via === 'inline') {
-    const text = JSON.stringify(mergeSettings(parsedObject(inherited[plan.env]), plan.settings));
-    return { environment: { [plan.env]: text }, config: {}, set: true };
-  }
   const text = `${JSON.stringify(plan.settings)}\n`;
   const directory = join(stateDirectory(), 'cache');
   const file = join(directory, `${harness.command}-compact-${createHash('sha256').update(text).digest('hex').slice(0, 12)}.json`);

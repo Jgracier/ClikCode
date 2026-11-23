@@ -151,16 +151,16 @@ describe('a vendor\'s own threshold, in its own terms', () => {
     expect(plan('grok', 150_000, 0)).toBeUndefined();
   });
 
-  it('settings at a key: a file for Gemini, Qwen and Droid, inline for Kilo', () => {
-    expect(plan('gemini', 200_000, 1_000_000)).toEqual({ kind: 'settings', env: 'GEMINI_CLI_SYSTEM_DEFAULTS_PATH', via: 'file', settings: { model: { compressionThreshold: 0.2 } } });
-    expect(plan('qwen', 150_000, 1_000_000)).toEqual({ kind: 'settings', env: 'QWEN_CODE_SYSTEM_DEFAULTS_PATH', via: 'file', settings: { context: { autoCompactThreshold: 0.15 } } });
-    expect(plan('droid', 150_000)).toEqual({ kind: 'settings', env: 'FACTORY_RUNTIME_SETTINGS_PATH', via: 'file', settings: { compactionTokenLimit: 150_000 } });
-    expect(plan('kilo', 150_000, 400_000)).toEqual({ kind: 'settings', env: 'KILO_CONFIG_CONTENT', via: 'inline', settings: { compaction: { threshold_percent: 38 } } });
+  it('settings at a key: a file for Gemini, Qwen and Droid', () => {
+    expect(plan('gemini', 200_000, 1_000_000)).toEqual({ kind: 'settings', env: 'GEMINI_CLI_SYSTEM_DEFAULTS_PATH', settings: { model: { compressionThreshold: 0.2 } } });
+    expect(plan('qwen', 150_000, 1_000_000)).toEqual({ kind: 'settings', env: 'QWEN_CODE_SYSTEM_DEFAULTS_PATH', settings: { context: { autoCompactThreshold: 0.15 } } });
+    expect(plan('droid', 150_000)).toEqual({ kind: 'settings', env: 'FACTORY_RUNTIME_SETTINGS_PATH', settings: { compactionTokenLimit: 150_000 } });
+    expect(vendorThresholdPlan({ env: 'X_CONFIG', settingsKey: 'a.b', unit: 'percent' }, 150_000, 400_000)).toEqual({ kind: 'settings', env: 'X_CONFIG', settings: { a: { b: 38 } } });
     expect(plan('gemini', 200_000)).toBeUndefined();
   });
 
   it('nothing for a harness with no threshold of its own', () => {
-    for (const command of ['opencode', 'pi', 'amp', 'cline', 'cursor', 'kiro', 'hermes', 'devin', 'auggie', 'junie']) expect(plan(command, 150_000, 200_000)).toBeUndefined();
+    for (const command of ['opencode', 'kilo', 'pi', 'amp', 'cline', 'cursor', 'kiro', 'hermes', 'devin', 'auggie', 'junie']) expect(plan(command, 150_000, 200_000)).toBeUndefined();
   });
 });
 
@@ -204,15 +204,6 @@ describe('a launch', () => {
     });
   });
 
-  it('merges Kilo\'s inline settings into the user\'s own', async () => {
-    await withHome(async () => {
-      const { compactThresholdLaunch } = await import('./compaction-run.js');
-      const kilo = { ...harness('kilo'), command: 'goose' } as never; // goose's known window (400k)
-      const user = JSON.stringify({ compaction: { auto: true }, theme: 'dark' });
-      const launch = await compactThresholdLaunch(kilo, state(100_000), 'gpt-x', { KILO_CONFIG_CONTENT: user });
-      expect(JSON.parse(launch.environment.KILO_CONFIG_CONTENT!)).toEqual({ compaction: { auto: true, threshold_percent: 25 }, theme: 'dark' });
-    });
-  });
 });
 
 describe('after a native compaction', () => {

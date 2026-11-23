@@ -120,7 +120,6 @@ export interface VendorThresholdSetting {
   env?: string;
   config?: string;
   settingsKey?: string;
-  settingsVia?: 'file' | 'inline';
   unit?: 'tokens' | 'share' | 'percent' | 'claude-window';
 }
 
@@ -128,8 +127,8 @@ export interface VendorThresholdSetting {
 export type VendorThresholdPlan =
   /** Variables to set. */
   | { kind: 'env'; env: Record<string, string> }
-  /** Settings for the variable `env` to carry: a file ClikCode writes, or the JSON itself. */
-  | { kind: 'settings'; env: string; via: 'file' | 'inline'; settings: Record<string, unknown> }
+  /** Settings in a file ClikCode writes, named by the variable `env`. */
+  | { kind: 'settings'; env: string; settings: Record<string, unknown> }
   /** Keys of the vendor thread's config. */
   | { kind: 'config'; config: Record<string, unknown> };
 
@@ -173,7 +172,7 @@ export function vendorThresholdPlan(setting: VendorThresholdSetting | undefined,
   let node = settings;
   for (const key of keys.slice(0, -1)) node = (node[key] = {}) as Record<string, unknown>;
   node[keys.at(-1)!] = value;
-  return { kind: 'settings', env: setting.env, via: setting.settingsVia ?? 'file', settings };
+  return { kind: 'settings', env: setting.env, settings };
 }
 
 /** What the conversation keeps about its latest compaction (HarnessSession.compaction). */
