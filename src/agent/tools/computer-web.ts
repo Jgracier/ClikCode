@@ -360,7 +360,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     secret: { type: 'string', description: 'send_secret: name a key was saved under (send it again, or somewhere else, without seeing it). With to and with, or send_to.' },
     to: { type: 'string', description: 'send_secret: destination name, e.g. clikdeploy-secret.' },
     with: { type: ['object', 'string'], description: 'send_secret: values for the destination slots, e.g. {key:"SALAD_API_KEY"}.' },
-    values: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'send_secret with to clikdeploy-connection: the plain connection values, e.g. {org_api_key:"..."} or {app_id:"secret:<saved name>"}.' },
+    values: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'send_secret with to clikdeploy-connection: the plain connection values, e.g. {org_api_key:"..."} or {app_id:"secret:<saved name>"}. oauth_connect: the per-account parts of the vendor sign-in address, by name, e.g. {shop:"bobs-bikes"} for {shop}.myshopify.com (the connect error names any it needs).' },
     ask: { type: 'boolean', description: 'profile: ask the user now for name, email, phone and address and save them as a profile (also happens when none exists).' },
     from: { type: 'string', description: 'open_email_link, read_email_code, read_sms_code: the sender (or "any"); default: the site.' },
     subject: { type: 'string', description: 'open_email_link, read_email_code: words from the subject.' },
@@ -1661,7 +1661,8 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
     }
     case 'oauth_connect': {
       const email = (await profileEmail(ctx.stateDir));
-      const done = await oauthConnect(args.target?.trim() ?? '', page, { email, stateDir: ctx.stateDir, signal: ctx.signal, progress: line => line && ctx.emitOutput?.(line) });
+      const values = oauthValues(args.values);
+      const done = await oauthConnect(args.target?.trim() ?? '', page, { email, stateDir: ctx.stateDir, signal: ctx.signal, ...(values ? { values } : {}), progress: line => line && ctx.emitOutput?.(line) });
       return { output: `Connected ${done.connector}: ClikDeploy shows an active connection. ${done.steps.filter(Boolean).join(' ')}` };
     }
     case 'read_sms_code': {
@@ -1913,4 +1914,13 @@ async function clickOrHint(target: Locator, at?: 'start' | 'end'): Promise<void>
     if (!(error instanceof Error) || !/timeout/i.test(error.message)) throw error;
     throw new Error(`${error.message.split('\n')[0]} If a popup window or browser dialog is in front of the page, use computer_use to see and answer it.`);
   }
+}
+
+/** oauth_connect values: an object of strings, or the same as JSON text; anything else is refused with what was wrong. */
+function oauthValues(raw: Record<string, string> | string | undefined): Record<string, string> | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  let value: unknown = raw;
+  if (typeof raw === 'string') { try { value = JSON.parse(raw); } catch { throw new Error('oauth_connect values must be an object such as {"shop":"bobs-bikes"}.'); } }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.values(value).some(v => typeof v !== 'string')) throw new Error('oauth_connect values must be an object of strings such as {"shop":"bobs-bikes"}.');
+  return Object.keys(value).length ? value as Record<string, string> : undefined;
 }

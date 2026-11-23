@@ -338,3 +338,12 @@ describe('links that open another program', () => {
     for (const href of ['', '#', '/signin/oauth', 'signin?x=1', 'https://accounts.google.com/x', 'http://127.0.0.1:1/y', 'javascript:void(0)', 'about:blank']) expect(OPENS_ANOTHER_APP.test(href), href).toBe(false);
   });
 });
+
+describe('oauth_connect per-account values', () => {
+  it('reach the platform start by name (Shopify: {shop}.myshopify.com)', async () => {
+    let got: Record<string, string> | undefined;
+    const message = await oauthConnect('shopify', {} as never, { values: { shop: 'bobs-bikes' }, start: async (_id, _signal, values) => { got = values; throw new Error('started'); }, status: async () => ({ connected: false }) }).then(() => '', (e: Error) => e.message);
+    expect(message).toBe('started');
+    expect(got).toEqual({ shop: 'bobs-bikes' });
+  });
+});

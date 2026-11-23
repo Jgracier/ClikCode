@@ -293,7 +293,8 @@ export interface ConsentPlatform {
   appNames: readonly string[];
   /** Whether a redirect_uri or a landing page is the platform's own callback. */
   ownsCallback: (url: URL) => boolean;
-  start: (connector: string, signal?: AbortSignal) => Promise<ConnectStart>;
+  /** values: per-account parts of the vendor's sign-in address ({shop} in {shop}.myshopify.com), by name. */
+  start: (connector: string, signal?: AbortSignal, values?: Record<string, string>) => Promise<ConnectStart>;
   status: (connector: string, signal?: AbortSignal) => Promise<{ connected: boolean; reason?: string }>;
 }
 
@@ -305,12 +306,17 @@ interface OAuthConsentOptions {
   /** Shorthand for platform.start / platform.status. */
   start?: ConsentPlatform['start'];
   status?: ConsentPlatform['status'];
+  /** Per-account values the connector's sign-in address takes (Shopify: { shop: 'bobs-bikes' }); passed to start by name. */
+  values?: Record<string, string>;
 }
 
 /** Runs the clikdeploy CLI (the saved admin key is its own sign-in) and waits for it to print the authorization URL. */
-function startViaCli(connector: string, signal?: AbortSignal): Promise<ConnectStart> {
+function startViaCli(connector: string, signal?: AbortSignal, values: Record<string, string> = {}): Promise<ConnectStart> {
+  const bad = Object.entries(values).find(([name, value]) => !/^[A-Za-z_][\w-]{0,63}$/.test(name) || !value || /[\r\n]/.test(value));
+  if (bad) return Promise.reject(new Error(`oauth_connect values: "${bad[0]}" is not a usable name=value (a plain name and a one-line value).`));
+  const valueArgs = Object.entries(values).flatMap(([name, value]) => ['--value', `${name}=${value}`]);
   return new Promise((resolve, reject) => {
-    const child = spawn('clikdeploy', ['integrations', 'connect', connector, '--no-browser'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn('clikdeploy', ['integrations', 'connect', connector, '--no-browser', ...valueArgs], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let text = '';
     let settled = false;
     const stop = (): void => { child.kill(); };
@@ -547,7 +553,7 @@ const MAX_ACCOUNT_PRESSES = 2;
 async function driveConsent(connector: string, firstPage: Page, options: OAuthConsentOptions): Promise<{ connector: string; steps: string[] }> {
   if (!CONNECTOR_ID.test(connector)) throw new Error('oauth_connect needs target: a connector id such as slack or github.');
   const platform: ConsentPlatform = { ...CLIKDEPLOY_PLATFORM, ...options.platform, ...(options.start ? { start: options.start } : {}), ...(options.status ? { status: options.status } : {}) };
-  const started = await platform.start(connector, options.signal);
+  const started = await platform.start(connector, options.signal, options.values);
   const status = platform.status;
   const appNames = platform.appNames.filter(Boolean);
   const steps: string[] = [];
