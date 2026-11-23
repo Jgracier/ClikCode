@@ -3,7 +3,7 @@
  * free model) and back, driven through the page the way a user drives it. */
 import * as assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
@@ -505,10 +505,13 @@ export function chatSuite(): void {
       };
       await until(api, (state) => state.connection === 'ready' && !state.running, 'an idle chat', 60_000);
       const before = bridges();
-      // A reinstall: the entry the bridge runs changes on disk.
+      // A reinstall of another build: the entry the bridge runs changes on disk. Its content, not
+      // its mtime -- a build is named by what the entry holds (src/worker/registry.ts), so a
+      // touch or a rewrite of the same program is no new build since 0be4f56b.
       const entry = clikcodeEntry();
-      const now = new Date();
-      utimesSync(entry, now, now);
+      const original = readFileSync(entry, 'utf8');
+      writeFileSync(entry, `${original}// a newer build (VS Code integration test)\n`);
+      try {
       const deadline = Date.now() + 30_000;
       while (Date.now() < deadline && bridges().every((pid) => before.includes(pid))) await sleep(250);
       assert.ok(bridges().some((pid) => !before.includes(pid)), 'the bridge moved onto the new build by itself');
@@ -525,6 +528,7 @@ export function chatSuite(): void {
       await until(api, (state) => !state.running && state.messages.some((message) => message.role === 'assistant' && /PING/.test(message.content)), 'the answer', 240_000);
       // Finished in view: nothing popped up about it.
       await waitFor(api, '.banner', 'no banner', 5_000, (found) => found.count === 0);
+      } finally { writeFileSync(entry, original); }
     });
 
     it('offers an update when ClikCode is too old for the extension, or the extension for ClikCode', async () => {
