@@ -381,7 +381,7 @@ describe('filling the seats', () => {
     resetCaptchaVoters();
     let listed = 0;
     const counted = async () => { listed++; return listing(); };
-    expect((await votersFor('tile', { seats: seats({ listing: counted, roster: async () => ['gpt-6.1-terra'] }) })).map(voter => voter.name)).toEqual(['gpt-6.1-terra']);
+    expect((await votersFor('tile', { seats: seats({ listing: counted, roster: async () => ['gpt-6.1-terra'] }) })).map(voter => voter.name)).toEqual(['gpt-6.1-terra', 'gpt-6-sol']);
     await votersFor('tile', { seats: seats({ listing: counted }) });
     expect(listed).toBe(1);
     resetCaptchaVoters();
@@ -394,9 +394,25 @@ describe('who sits in a vote', () => {
     expect(STAND_INS).toEqual([]);
     // What a subscription serves on the Gateway (the caller passes only subscription and free vision models).
     const vision = ['gpt-5.6-luna', 'gpt-6-sol', 'gpt-6.1-terra', 'gpt-5.6-terra', 'qwen4-max'];
-    expect(seatOrder('tile', vision).map(seat => seat.id)).toEqual(['gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-5.6-terra']);
+    // The roster's own models first, in its order; the other listed vision models only after them.
+    expect(seatOrder('tile', vision).map(seat => seat.id)).toEqual(['gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-5.6-terra', 'qwen4-max']);
     expect(seatOrder('click', vision).map(seat => seat.id).slice(0, 2)).toEqual(['gpt-6-sol', 'gpt-6.1-terra']);
     // A paid model in the list is never seated (it is not in any roster and there are no stand-ins).
-    expect(seatOrder('tile', [...vision, 'gpt-4.1-mini']).map(seat => seat.id)).not.toContain('gpt-4.1-mini');
+    expect(seatOrder('tile', vision, ['gpt-4.1-mini']).map(seat => seat.id)).not.toContain('gpt-4.1-mini');
+  });
+
+  it('fills a vote the roster cannot seat with the other listed vision models, measured ones first: never one voter alone', async () => {
+    const { seatOrder } = await import('./captcha-model.js');
+    // 2026-11-22/23: no roster model was listed and a single fallback voter could never agree with itself.
+    const free = ['deepseek-v4.1-flash', 'gemma-4-31b', 'qwen3.8-27b', 'nemotron-3.5-super-vl'];
+    expect(seatOrder('tile', free, ['qwen3.8-27b', 'gpt-4.1-mini']).map(seat => seat.id)).toEqual(['qwen3.8-27b', 'deepseek-v4.1-flash', 'gemma-4-31b', 'nemotron-3.5-super-vl']);
+  });
+
+  it('a strict tile vote can say yes once two voters are seated', async () => {
+    const { askTileMatch } = await import('./captcha-model.js');
+    const fake = (text: string): ModelClient => ({ step: async () => ({ text }) } as unknown as ModelClient);
+    const question = { image: { mimeType: 'image/jpeg', data: 'eA==' }, instruction: 'Select all squares with buses', target: 'buses', size: 3 };
+    expect(await askTileMatch(question, { voters: async () => [{ name: 'a', client: fake('yes') }] })).toBeUndefined();
+    expect(await askTileMatch(question, { voters: async () => [{ name: 'a', client: fake('yes') }, { name: 'b', client: fake('yes') }] })).toBe(true);
   });
 });

@@ -102,11 +102,17 @@ export const isBenched = (name: string, now = Date.now()): boolean => (benched.g
 export const STAND_INS = [] as readonly string[];
 
 /** Who may sit in a roster's vote, best first, as the Gateway lists them now: models measured on this machine first (in their measured
- * order), then the roster's own order, then the stand-ins. A roster name stands for whatever the Gateway lists under it now
- * (src/gateway/model-names.ts): its list renames families, and a name matched exactly silently dropped every Claude voter from the
- * rosters on 2026-11-17. The voter keeps the wanted name (for scores and benching); the client asks for the listed one. */
+ * order), then the roster's own order, then the stand-ins, then every other subscription or free vision model the Gateway lists (those
+ * measured on this machine first). A roster name stands for whatever the Gateway lists under it now (src/gateway/model-names.ts): its
+ * list renames families, and a name matched exactly silently dropped every Claude voter from the rosters on 2026-11-17. The voter keeps
+ * the wanted name (for scores and benching); the client asks for the listed one.
+ *
+ * The other listed models fill the seats the roster cannot. A vote needs two voters agreeing, so a roster the Gateway serves none (or one)
+ * of must not leave a single voter: on 2026-11-22/23 no roster model was listed, the one fallback voter (qwen4-max) could never agree with
+ * itself, every grid square read "no", and 32 of 43 picture runs ended still-there after up to 528 asks. */
 export function seatOrder(roster: Roster, vision: readonly string[], measured: readonly string[] = [], listed: readonly string[] = ROSTERS[roster]): Array<{ name: string; id: string }> {
-  const wanted = [...measured.filter(name => listed.includes(name)), ...listed.filter(name => !measured.includes(name)), ...STAND_INS.filter(name => !listed.includes(name))];
+  const named = [...measured.filter(name => listed.includes(name)), ...listed.filter(name => !measured.includes(name)), ...STAND_INS.filter(name => !listed.includes(name))];
+  const wanted = [...named, ...measured.filter(name => !named.includes(name)), ...vision.filter(id => !named.includes(id) && !measured.includes(id))];
   const seen = new Set<string>();
   const out: Array<{ name: string; id: string }> = [];
   for (const name of wanted) {
@@ -116,8 +122,8 @@ export function seatOrder(roster: Roster, vision: readonly string[], measured: r
   return out;
 }
 
-/** The voters for a kind of question, best first: the roster's models the account has (those not sitting out
- * first), else its first vision model alone. The first three vote; the rest stand in for one that fails. */
+/** The voters for a kind of question, best first: the roster's models the account has, then its other subscription and free vision
+ * models (those not sitting out first). The first three vote; the rest stand in for one that fails. */
 async function gatewayListing(): Promise<GatewayListing> {
   const { gatewayModels } = await import('../../gateway/models.js');
   return gatewayModels();
@@ -149,7 +155,7 @@ export async function votersFor(roster: Roster, options: AskOptions): Promise<Vo
   const listed = await (options.seats?.roster ?? rosterSetting)(roster);
   const preferred = seatOrder(roster, vision, options.order?.[roster] ?? [], listed);
   const fit = preferred.filter(model => !isBenched(model.name, now()));
-  const ordered = preferred.length ? [...fit, ...preferred.filter(model => !fit.includes(model))] : vision.slice(0, 1).map(id => ({ name: id, id }));
+  const ordered = [...fit, ...preferred.filter(model => !fit.includes(model))];
   const clientOf = options.seats?.client ?? ((id: string) => gatewayClient(id, now()));
   const gateway = (await Promise.all(ordered.map(async model => {
     try { return { name: model.name, client: await clientOf(model.id) }; }
