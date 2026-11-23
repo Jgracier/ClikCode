@@ -107,4 +107,15 @@ describe('compacting by itself', () => {
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
     expect(turns.texts).toEqual(['do the thing']);
   });
+
+  it('compacts a vendor launched with the threshold after all when it plainly ignored it', async () => {
+    turns.texts = [];
+    turns.usage = 400_000;
+    await writeState(stateWith(chat({ nativeHarness: 'claude', provider: 'anthropic' })));
+    const { send, events } = build();
+    await send({ type: 'submit', text: 'do the thing', echo: true });
+    await vi.waitFor(() => expect(events.filter((event) => event.type === 'waiting-stop')).toHaveLength(2), { timeout: 5_000 });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    expect(turns.texts).toEqual(['do the thing', '/compact']);
+  });
 });

@@ -29,6 +29,10 @@ export const MIN_COMPACT_AT_TOKENS = 20_000;
  * one huge tool result that keeps the context near the threshold, and would otherwise compact
  * again every few calls. */
 export const TURNS_BETWEEN_COMPACTIONS = 2;
+/** A vendor launched with ClikCode's threshold compacts itself; after a turn ClikCode compacts it
+ * only past this multiple of the threshold -- the vendor ignored its setting (Grok and Vibe did,
+ * live). Above 1 so a turn whose last call crossed the line is left to the vendor's next call. */
+export const VENDOR_THRESHOLD_BACKSTOP = 1.5;
 
 /** The only words a person sees about it. */
 export const COMPACTING = 'Compacting…';
