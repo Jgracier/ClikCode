@@ -83,10 +83,12 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     // (folded like the rest; its model ids still carry an effort of their own).
     // 87 -> 88, 215 -> 217: Kimi gains a `plan` option (folded) and an ACP effort selector; Continue's
     // `--readonly` is its plan switch (vendor-specific id, stays).
+    // 89 -> 88, 217 -> 205: Continue (cn) left the catalog (40ac74aa) with its one folded selector
+    // and its twelve vendor rows.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(89);
-    expect(kept.length).toBe(217);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(88);
+    expect(kept.length).toBe(205);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
     // These ACP-only agents expose no vendor-specific option yet. Their
     // model and effort controls still work through the common picker.
