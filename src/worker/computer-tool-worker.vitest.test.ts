@@ -77,8 +77,9 @@ it('offers the tools over MCP with typed schemas', async () => {
   const init = await server.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   expect(init.result.serverInfo.name).toBe('clikcode');
   const listed = await server.call('tools/list');
-  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['browser_use', 'account_use', 'computer_use', 'clikdeploy_step_up']);
-  expect(listed.result.tools[0].inputSchema.additionalProperties).toBe(true);
+  // The conversation tools first (always), then the computer tools (while computer use is on).
+  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['search_conversations', 'read_conversation', 'active_conversations', 'hindsight', 'browser_use', 'account_use', 'computer_use', 'clikdeploy_step_up']);
+  expect(listed.result.tools.find((tool: { name: string }) => tool.name === 'browser_use').inputSchema.additionalProperties).toBe(true);
   expect((await server.call('tools/call', { name: 'nope', arguments: {} })).error.code).toBe(-32602);
 }, 60_000);
 

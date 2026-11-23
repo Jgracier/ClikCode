@@ -15,6 +15,7 @@ import { CONVERSATION_TOOLS, CONVERSATION_TOOLS_NOTE } from '../search/tools.js'
 import type { callWorkerTool } from './computer-tool-client.js';
 import { currentToolName } from '../agent/computer/tool-names.js';
 import { untilInputEnds } from '../cli/stop-signal.js';
+import { quiet } from '../runtime/lifecycle-log.js';
 
 type Rpc = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: Record<string, any> };
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -71,14 +72,15 @@ export async function handleMcpRequest(message: Rpc, call = callInWorker, chat =
       const conversationTool = CONVERSATION_TOOLS.find(tool => tool.name === name);
       if (conversationTool) {
         try {
-          const currentSessionId = await chat().catch(() => undefined);
+          const currentSessionId = await chat().catch(quiet('commands/mcp-serve'));
           const result = await conversationTool.run(args, currentSessionId ? { currentSessionId } : {});
           return reply({ content: [{ type: 'text', text: result.text }], isError: Boolean(result.isError) });
         } catch (error) {
           return reply({ content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }], isError: true });
         }
       }
-      if (!(await computerTools()).some(tool => tool.name === name)) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
+      // A computer tool is known whether computer use is on or not: off, the worker refuses it in plain words.
+      if (!(await toolSet()).some(tool => tool.name === name)) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
       try {
         const result = await call({ tool: name, args });
         // A rejected call after a rebuild is most likely the caller's cached tool list: say so, and say what to do.

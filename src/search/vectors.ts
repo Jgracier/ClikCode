@@ -24,6 +24,7 @@ import { tryLease } from '../session/store/locks.js';
 import type { ConversationGroup } from './conversations.js';
 import { conversationView, type ConversationView, type MessageDoc } from './corpus.js';
 import type { Embedder } from './embedder.js';
+import { quiet } from '../runtime/lifecycle-log.js';
 
 export const CHUNK_CHARS = 1000;
 export const CHUNK_OVERLAP = 150;
@@ -156,7 +157,7 @@ const MAX_LOADED = 256;
 const recordKey = (fingerprint: string, offset: number): string => `${fingerprint}@${offset}`;
 
 async function load(file: string): Promise<Loaded> {
-  const info = await stat(file).catch(() => undefined);
+  const info = await stat(file).catch(quiet('search/vectors'));
   const key = info ? `${info.size}:${info.mtimeMs}` : 'none';
   const cached = loaded.get(file);
   if (cached?.key === key) return cached;

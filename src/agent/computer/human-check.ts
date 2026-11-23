@@ -161,7 +161,7 @@ export async function turnstileSays(page: Page): Promise<{ success: boolean; ask
       const said = words.join(' / ').slice(0, 120);
       return { success: !asking && words.some(text => /^success!?$/i.test(text)), asking, said };
     } catch { continue; } // fail-open-ok: a frame that went away or cannot be inspected says nothing; the next one is read
-    finally { await session?.detach().catch(() => undefined); }
+    finally { await session?.detach().catch(() => undefined); } // fail-open-ok: a frame that went away has nothing left to detach
   }
   return undefined;
 }

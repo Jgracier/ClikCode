@@ -12,6 +12,7 @@
 import { conversationGroups, findConversation, type ConversationGroup } from './conversations.js';
 import { embedderWithin, type Embedder } from './embedder.js';
 import { indexConversation } from './vectors.js';
+import { quiet } from '../runtime/lifecycle-log.js';
 
 /** How long a tool call waits for the embedder before going lexical. */
 const READY_WAIT_MS = 1500;
@@ -33,7 +34,7 @@ export async function queryVector(text: string, waitMs = READY_WAIT_MS): Promise
 /** Embed what `group` lacks, for at most `ms`. */
 export async function catchUp(group: ConversationGroup, ms = CATCH_UP_MS): Promise<void> {
   const embedder = await embedderWithin(0);
-  if (embedder) await indexConversation(group, embedder, { deadline: Date.now() + ms }).catch(() => undefined);
+  if (embedder) await indexConversation(group, embedder, { deadline: Date.now() + ms }).catch(quiet('search/hybrid'));
 }
 
 let backfilling: Promise<void> | undefined;
@@ -47,10 +48,10 @@ export function backfill(budgetMs = BACKFILL_MS): Promise<void> {
     const groups = (await conversationGroups()).sort((left, right) => right.updatedAtMs - left.updatedAtMs);
     for (const group of groups) {
       if (Date.now() > deadline) break;
-      const result = await indexConversation(group, embedder, { deadline }).catch(() => undefined);
+      const result = await indexConversation(group, embedder, { deadline }).catch(quiet('search/hybrid'));
       if (result?.skipped === 'failed') break;
     }
-  })().catch(() => undefined).finally(() => { backfilling = undefined; });
+  })().catch(quiet('search/hybrid')).finally(() => { backfilling = undefined; });
   return backfilling;
 }
 
@@ -63,5 +64,5 @@ export function indexAfterTurn(sessionId: string, embedder?: Embedder): Promise<
     if (!ready) return;
     const found = findConversation(await conversationGroups(), sessionId);
     if (found) await indexConversation(found.group, ready, { deadline: Date.now() + 60_000 });
-  })().catch(() => undefined);
+  })().catch(quiet('search/hybrid'));
 }

@@ -23,6 +23,7 @@ import { readServerRecord, serverDir, startSupervisor, sweepOrphan, withDownload
 import { modelsDir } from '../local-models/paths.js';
 import { ensureRuntime, selectRuntimeBuild } from '../local-models/runtime.js';
 import { pidIsAlive } from '../session/store/locks.js';
+import { quiet } from '../runtime/lifecycle-log.js';
 
 export interface Embedder {
   /** Names the model and its settings: vectors from different ids never mix. */
@@ -151,7 +152,7 @@ async function prepare(): Promise<Embedder | undefined> {
     await rm(failedFile(), { force: true });
     return new ServerEmbedder(port);
   } catch (error) {
-    await writeFile(failedFile(), JSON.stringify({ at: Date.now(), reason: error instanceof Error ? error.message : String(error) })).catch(() => undefined);
+    await writeFile(failedFile(), JSON.stringify({ at: Date.now(), reason: error instanceof Error ? error.message : String(error) })).catch(quiet('search/embedder'));
     return undefined;
   }
 }
