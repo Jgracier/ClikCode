@@ -82,6 +82,9 @@ export function visibleNativeUserText(text: string): string {
   const envelope = /^<(recommended_plugins|environment_context|user_instructions|developer_instructions|system-reminder|local-command-caveat|local-command-stdout|ide_opened_file|ide_selection|task-notification)\b[^>]*>[\s\S]*?<\/\1>\s*/i;
   while (envelope.test(trimmed)) trimmed = trimmed.replace(envelope, '');
   if (!trimmed) return '';
+  // A slash command the user typed is recorded as tags; show it as typed.
+  const command = /^<command-name>\s*([^<]*?)\s*<\/command-name>[\s\S]*?(?:<command-args>([\s\S]*?)<\/command-args>)?\s*$/i.exec(trimmed);
+  if (command) return `${command[1]!.startsWith('/') ? '' : '/'}${command[1]} ${command[2] ?? ''}`.trim();
   if (trimmed.startsWith('# Context from my IDE setup:')) {
     const marker = '\n## My request:\n';
     const requestStart = trimmed.indexOf(marker);

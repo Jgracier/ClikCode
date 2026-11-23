@@ -27,6 +27,8 @@ describe('reconciling a native transcript with the cached copy', () => {
     expect(visibleNativeUserText('<environment_context>metadata</environment_context>\nFix this page')).toBe('Fix this page');
     expect(visibleNativeUserText('<task-notification><status>stopped</status></task-notification>')).toBe('');
     expect(visibleNativeUserText('<task-notification><status>stopped</status></task-notification>\nWhat happened?')).toBe('What happened?');
+    expect(visibleNativeUserText('<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>')).toBe('/compact');
+    expect(visibleNativeUserText('<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>')).toBe('/model opus');
   });
   it('removes native task notices and empty tool completion rows already imported into the cache', () => {
     const cached = [
