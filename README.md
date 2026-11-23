@@ -347,10 +347,16 @@ command: `/provider` to pick from a list, or its name directly — `/claude`,
 The conversation keeps its name, its history and its place in your list. No
 vendor can read another vendor's memory, so ClikCode writes the conversation
 into the new tool's own thread where it knows that tool's format, and sends it
-as context where it does not. When a tool has already summarized the opening
-turns (a compaction), the summary goes in their place; `/history` and
-`/export` show it, and the conversation's row says "first N turns summarized".
-On a long thread that costs tokens and a few seconds. Nothing else changes.
+as context where it does not. A conversation larger than the `/compact`
+threshold (or half the new model's window) arrives fitted to it, and the chat
+says "Compacted"; the whole conversation stays in a file the tool is told
+about. On a long thread that costs tokens and a few seconds. Nothing else changes.
+
+ClikCode compacts a conversation by itself once its context passes the
+`/compact` threshold, between turns, using each tool's own compaction (Claude
+Code's `/compact`, Codex's compact operation, Gemini's and Aider's own
+thresholds, ...). A tool with none gets the conversation retold in a fresh
+thread, fitted to half the threshold.
 
 ## MCP servers for ClikCode's own agent
 
@@ -449,7 +455,7 @@ reference reads better that way. All of them, grouped as `/help` groups them:
 | Command | What it does |
 | --- | --- |
 | `/new [first message]` (also `/clear`, `/reset`) | start a fresh conversation (the current one stays resumable) |
-| `/compact [focus]` | ask the selected vendor harness to compact this conversation, where it supports the command |
+| `/compact [tokens]` | compact this conversation now, with the tool's own compaction; `/compact 150k` sets the size at which ClikCode compacts every conversation by itself (default 150k tokens) |
 | `/history` | show this conversation; a summary carried for its opening turns comes first |
 | `/hindsight` | this conversation cut into topics, newest first, with the files each one changed, numbered by your prompts — the numbers `/fork @N` and `/redo @N` take |
 | `/copy` | copy the last answer |
