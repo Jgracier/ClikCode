@@ -1442,7 +1442,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       const compact = active?.input.acp?.compactCommand;
       if (active && target === active && compact
         && (active.input.prompt === compact.prompt || active.input.prompt.startsWith(`${compact.prompt} `))
-        && activity.kind === 'tool-error' && activity.label.toLowerCase() === compact.toolLabel.toLowerCase()) {
+        && activity.kind === 'tool-error' && activity.label.toLowerCase() === compact.toolLabel?.toLowerCase()) {
         const reason = activity.output?.join('\n') ?? '';
         if (classifyEvidence({ vendorError: true, text: reason }) === 'quota-exhausted') {
           active.compactionFailure = new Error(reason);

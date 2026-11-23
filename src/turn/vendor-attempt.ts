@@ -16,6 +16,7 @@ import { openFailoverStandby } from './vendor-standby.js';
 import type { VendorObserver, VendorTransport } from './vendor-observer.js';
 import { turnEffort, type VendorTurnContext } from './vendor-turn-context.js';
 import { turnPermissionMode } from './turn-permission.js';
+import { compactThresholdEnvironment } from './compaction-run.js';
 
 /** What an attempt did, for the recovery or the completion that follows it. */
 export interface AttemptRecord {
@@ -40,6 +41,8 @@ async function prepareAttempt(ctx: VendorTurnContext) {
     ...turnEnvironment(harness, ctx.account, turnPermissionMode(harness, session.permissionMode)),
     // Goose on another agent's CLI runs it as one of the user's own accounts.
     ...gooseDrivenEnvironment(harness, ctx.model, ctx.state.accounts, localHarnessForCommand),
+    // A vendor that compacts at a threshold of its own does so at ClikCode's.
+    ...await compactThresholdEnvironment(harness, ctx.state, ctx.model ?? session.reported?.model ?? null),
   };
   // A provider with no signed-in account is signed in to when it is used
   // -- here, as its turn starts -- never when it is merely chosen (opening

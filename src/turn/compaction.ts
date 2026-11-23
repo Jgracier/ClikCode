@@ -58,8 +58,9 @@ export function tokenLabel(tokens: number): string {
  * what is drawn synchronously: the /compact entry's description. */
 let knownCompactAt: number | undefined;
 export function noteCompactAt(settings: { compactAt?: unknown } | undefined): void { knownCompactAt = compactAt(settings); }
+export const currentCompactAt = (): number => knownCompactAt ?? DEFAULT_COMPACT_AT_TOKENS;
 export function compactDescription(): string {
-  return `compact this conversation now; /compact <tokens> sets when it compacts by itself (now ${tokenLabel(knownCompactAt ?? DEFAULT_COMPACT_AT_TOKENS)})`;
+  return `compact this conversation now; /compact <tokens> sets when it compacts by itself (now ${tokenLabel(currentCompactAt())})`;
 }
 
 /** How much context the conversation holds now, in tokens: what the latest model call read
@@ -83,6 +84,9 @@ export type CompactionMechanism =
   | { kind: 'native-api'; prompt: string }
   /** The vendor's own compaction command, sent as a turn's prompt. */
   | { kind: 'native-command'; prompt: string }
+  /** No command, but a threshold of its own, set to ClikCode's on every turn (catalog
+   * `compactThreshold`: Aider, Gemini): it compacts itself there, and `/compact` now is a rewrite. */
+  | { kind: 'vendor-threshold' }
   /** No native compaction: ClikCode lets the thread go and the next turn takes the conversation
    * up afresh, fitted (turn/thread-start.ts). */
   | { kind: 'rewrite' };
@@ -94,6 +98,7 @@ interface CompactingHarness {
   nativeOperations?: readonly string[];
   nativeSlashPassthrough?: boolean;
   acp?: { compactCommand?: { prompt: string } };
+  compactThreshold?: { env: string };
 }
 
 /** How this harness compacts, from what it declares and the commands it has said it runs
@@ -105,6 +110,7 @@ export function compactionMechanism(harness: CompactingHarness, commands: readon
   const named = COMPACT_COMMAND_NAMES.find((name) => names.includes(name));
   if (named) return { kind: 'native-command', prompt: `/${named}` };
   if (harness.nativeSlashPassthrough) return { kind: 'native-command', prompt: COMPACT_REQUEST };
+  if (harness.compactThreshold) return { kind: 'vendor-threshold' };
   return { kind: 'rewrite' };
 }
 

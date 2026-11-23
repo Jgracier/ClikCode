@@ -39,6 +39,11 @@ describe('where a vendor thread stands in the conversation', () => {
     expect(threadCoverage({ text: asked(15) }, store, undefined)).toEqual({ kind: 'behind', missed: 5 });
   });
 
+  it('is current after a compaction ClikCode ran: its request is the vendor\'s command, not one the thread keeps', () => {
+    const compacted: TranscriptMessage[] = [...store, { role: 'user', content: '/compact', automatic: 'Compacted' }, { role: 'assistant', content: '' }];
+    expect(threadCoverage({ text: asked(20) }, compacted, undefined)).toEqual({ kind: 'current' });
+  });
+
   it('is ahead only when it was asked something the record lacks, later than the record was written', () => {
     const newest = { text: 'a request the stored conversation never saw: deploy the thing', at: '2026-10-12T18:29:00.000Z' };
     expect(threadCoverage(newest, store, '2026-10-10T07:20:00.000Z')).toMatchObject({ kind: 'ahead' });

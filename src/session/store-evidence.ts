@@ -69,7 +69,8 @@ export function threadCoverage(
   const asked = requestKey(request.text);
   if (asked.length < MIN_ALIGNED) return { kind: 'unknown' };
   const users: string[] = [];
-  for (const message of messages) if (message.role === 'user') users.push(requestKey(message.content));
+  // A request ClikCode sent itself (a compaction, turn/compaction.ts) is the vendor's command, not one its thread keeps as asked.
+  for (const message of messages) if (message.role === 'user' && !message.automatic) users.push(requestKey(message.content));
   for (let index = users.length - 1; index >= 0; index -= 1) {
     const mine = users[index]!;
     if (mine.length < MIN_ALIGNED) continue;

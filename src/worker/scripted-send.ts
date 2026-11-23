@@ -29,6 +29,7 @@ import { emitHarnessOutput } from '../harness/output.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import { turnCancelledError } from '../agent/cancellation.js';
 import { sleep } from '../runtime/sleep.js';
+import { COMPACTED, COMPACTING, isCompactRequest } from '../turn/compaction.js';
 
 export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: string, signal?: AbortSignal): Promise<void> {
   const text = prompt.trim();
@@ -67,6 +68,7 @@ export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: 
  * started, and the message was taken back out of its queue to be sent again. */
 function turnThroughWorker(client: WorkerClient, sessionId: string, text: string, signal?: AbortSignal): Promise<boolean> {
   const startedAt = new Date().toISOString();
+  const compacting = isCompactRequest(text);
   const initial = client.initialEvent;
   /** Whether any turn is running, and whether it is this one. */
   let running = initial?.type === 'snapshot' && Boolean(initial.live);
@@ -111,7 +113,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
       const answer = session ? textTranscript(sessionTranscriptMessages(session)).at(-1) : undefined;
       const invocation = state.invocations.filter((item) => item.sessionId === sessionId && item.at >= startedAt).at(-1);
       emitHarnessOutput({
-        session, text: answer?.role === 'assistant' ? answer.content : '',
+        session, text: compacting ? COMPACTED : answer?.role === 'assistant' ? answer.content : '',
         ...(invocation ? { invocation } : {}), ...(session?.lastUsage ? { usage: session.lastUsage } : {}),
       });
       finish(() => resolveTurn(true));
@@ -123,7 +125,8 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
           return;
         case 'waiting-start':
           running = true;
-          if (event.prompt?.trim() === text) ours = true;
+          // A compaction is not named to the windows (worker-turn.ts): its line is.
+          if (event.prompt?.trim() === text || (compacting && event.message === COMPACTING)) ours = true;
           return;
         case 'snapshot':
           if (event.live) running = true;

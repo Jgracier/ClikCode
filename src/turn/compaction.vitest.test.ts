@@ -70,9 +70,14 @@ describe('how each harness compacts', () => {
   it('uses the vendor\'s own compact operation or command, and ClikCode\'s rewrite only where it has neither', () => {
     expect(compactionMechanism(harness('codex'))).toEqual({ kind: 'native-api', prompt: '/compact' });
     expect(compactionMechanism(harness('claude'))).toEqual({ kind: 'native-command', prompt: '/compact' });
+    // A command it lists wins; Gemini's ACP lists none, so it compacts at its own threshold, set to ClikCode's.
     expect(compactionMechanism(harness('gemini'), ['compress', 'memory'])).toEqual({ kind: 'native-command', prompt: '/compress' });
+    expect(compactionMechanism(harness('gemini'), ['memory'])).toEqual({ kind: 'vendor-threshold' });
     expect(compactionMechanism(harness('copilot'), ['/compact'])).toEqual({ kind: 'native-command', prompt: '/compact' });
-    expect(compactionMechanism(harness('aider'), ['ask', 'tokens'])).toEqual({ kind: 'rewrite' });
+    expect(compactionMechanism(harness('opencode'))).toEqual({ kind: 'native-command', prompt: '/compact' });
+    expect(compactionMechanism(harness('kilo'))).toEqual({ kind: 'native-command', prompt: '/compact' });
+    expect(compactionMechanism(harness('aider'), ['ask', 'tokens'])).toEqual({ kind: 'vendor-threshold' });
+    expect(compactionMechanism(harness('auggie'))).toEqual({ kind: 'rewrite' });
     expect(compactionMechanism(harness('amp'))).toEqual({ kind: 'rewrite' });
   });
 });
@@ -109,5 +114,30 @@ describe('when it compacts by itself', () => {
     expect(noteContextAfterCompaction(session)).toBe(false);
     expect(shouldCompact({ ...session, messages: turns(4), lastUsage: { contextUsed: 180_000, at: at(11) } }, threshold, ended)).toBe(false);
     expect(shouldCompact({ ...session, messages: turns(4), lastUsage: { contextUsed: 210_000, at: at(11) } }, threshold, ended)).toBe(true);
+  });
+});
+
+describe('a vendor that compacts at a threshold of its own', () => {
+  it('is told ClikCode\'s: Aider in tokens, Gemini as a share of the window in its lowest-precedence settings', async () => {
+    const { mkdtempSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const home = mkdtempSync(join(tmpdir(), 'compact-env-'));
+    const previous = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
+    try {
+      const { compactThresholdEnvironment } = await import('./compaction-run.js');
+      const state = { globalSettings: { compactAt: 200_000 }, sessions: [
+        { nativeHarness: 'gemini', model: 'gemini-3-pro', lastUsage: { contextWindow: 1_000_000, at: at(1) } },
+      ] } as never;
+      expect(await compactThresholdEnvironment(harness('aider'), state, null)).toEqual({ AIDER_MAX_CHAT_HISTORY_TOKENS: '200000' });
+      const gemini = await compactThresholdEnvironment(harness('gemini'), state, 'gemini-3-pro');
+      expect(JSON.parse(readFileSync(gemini.GEMINI_CLI_SYSTEM_DEFAULTS_PATH!, 'utf8'))).toEqual({ model: { compressionThreshold: 0.2 } });
+      // No window known: Gemini keeps its own default.
+      expect(await compactThresholdEnvironment(harness('gemini'), state, 'unknown-model')).toEqual({});
+      expect(await compactThresholdEnvironment(harness('claude'), state, null)).toEqual({});
+    } finally {
+      if (previous === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = previous;
+    }
   });
 });

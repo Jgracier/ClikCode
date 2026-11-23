@@ -46,10 +46,13 @@ export function createVendorObserver(ctx: VendorTurnContext) {
    * screen alike, so what is shown and what is saved cannot differ. */
   const sink = turnSink(checkpoint, prompter);
   const toolLog = createToolLog();
+  // A compaction says "Compacting…" and "Compacted" (turn/compaction.ts), not the vendor's rows for it.
+  const compacting = Boolean(ctx.run.compaction);
   const onActivity = (event: HarnessActivityEvent): void => {
     pendingWork.note(event);
     toolLog.note(event);
     if (event.kind === 'tool-done' || event.kind === 'tool-error') lifecycle('turn.tool', { ...toolLog.finished(event) });
+    if (compacting) return;
     sink.activity(withWorkspacePaths(event, session.workspace));
   };
   /** A transport's thought is the whole of it so far: one row per id,
@@ -102,10 +105,10 @@ export function createVendorObserver(ctx: VendorTurnContext) {
       prompter?.setBackgroundWork?.(backgroundNow);
     },
     onResponseDelta: sink.response,
-    onPhase: (phase: string) => prompter?.phase(phase),
+    onPhase: (phase: string) => { if (!compacting) prompter?.phase(phase); },
     onNotice: (message: string) => {
       diagnostic('vendor.notice', message);
-      prompter?.activity(message);
+      if (!compacting) prompter?.activity(message);
     },
     onPlan: (entries: readonly HarnessPlanEntry[]) => {
       // Kept on the session too: a provider taking the conversation over is

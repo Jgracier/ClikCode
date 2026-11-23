@@ -19,7 +19,7 @@ import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
 import { COMPACT_REQUEST, COMPACTING, NOTHING_TO_COMPACT, compactAt, compactFailedLine, isCompactRequest, noteContextAfterCompaction, shouldCompact } from '../turn/compaction.js';
-import { hasThreadToCompact } from '../turn/compaction-run.js';
+import { hasThreadToCompact, sessionCompactionMechanism } from '../turn/compaction-run.js';
 import { persistentWorkRunning } from '../turn/vendor-process.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
@@ -158,6 +158,8 @@ export function createTurnRunner(ctx: WorkerContext) {
     const harness = session && !isClikCodeAgent(session) && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!session || !harness) return false;
     if (noteContextAfterCompaction(session)) await writeState(state);
+    // A vendor that compacts at its own threshold (set to ClikCode's) does it itself.
+    if (sessionCompactionMechanism(session, harness).kind === 'vendor-threshold') return false;
     if (!hasThreadToCompact(session) || !shouldCompact(session, compactAt(state.globalSettings), turnStarted)) return false;
     if (ctx.turnRunning || agentSession.notifications.length || ctx.vendorBackground.busy || ctx.outOfTurn.active
       || session.queuedTurns?.some((entry) => entry.kind === 'notification') || await persistentWorkRunning(sessionId)) return false;
