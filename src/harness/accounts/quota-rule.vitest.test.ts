@@ -30,7 +30,7 @@ describe('can an account take a turn now', () => {
   });
 
   it('lets back an account marked exhausted whose spent window reset hours ago', () => {
-    // The user's justin@webpro.ai: refused, read once, never again.
+    // The user's user@example.com: refused, read once, never again.
     const webpro = account({
       quotaState: 'exhausted', quotaExhaustedAt: minutes(-780),
       usage: reading(minutes(-752), [{ name: '5h', usedPct: 100, resetsAt: minutes(-624) }, { name: 'weekly', usedPct: 56, resetsAt: minutes(3865) }]),

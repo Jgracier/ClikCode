@@ -304,7 +304,9 @@ async function nearNames(stateDir: string, name: string): Promise<string[]> {
 }
 
 /** What a secret is for and who owns it, kept beside the value so a long list of credentials can be audited and rotated. */
-type SecretMeta = { vendor?: string; owner?: string; env?: string; url?: string; /** The page a captured key was taken from (no query): where such a key is made. */ page?: string; createdAt: string; rotatedAt?: string };
+type SecretMeta = { vendor?: string; owner?: string; env?: string; url?: string; /** The page a captured key was taken from (no query): where such a key is made. */ page?: string; createdAt: string; rotatedAt?: string;
+  /** When its vendor refused this value (401, invalid or revoked): a capture that finds the same value again is told to make a new key. */
+  refusedAt?: string };
 /** A website's base URL (https, or http for a local test page); nothing else, and never with a login in it. */
 function webOrigin(value: string | undefined): string | undefined {
   try { const url = new URL(value ?? ''); return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password ? url.origin : undefined; } catch { return undefined; }
@@ -321,7 +323,7 @@ async function baseUrlFor(stateDir: string, name: string, given: string | undefi
   const sites = new Set((await readItems(stateDir).catch(() => [])).map(({ item }) => item.origin).filter(origin => new URL(origin).hostname.toLowerCase().replace(/[^a-z0-9]/g, '').includes(vendor)));
   return sites.size === 1 ? [...sites][0] : undefined;
 }
-type SecretInput = { vendor?: string; owner?: string; env?: string; url?: string; page?: string };
+type SecretInput = { vendor?: string; owner?: string; env?: string; url?: string; page?: string; refusedAt?: string };
 export async function saveNamedSecret(stateDir: string, name: string, value: string, meta: SecretInput = {}, options: { legacy?: boolean } = {}): Promise<void> {
   if (!value) throw new CredentialError('The secret is empty.');
   await withVaultLock(stateDir, () => saveNamedSecretHeld(stateDir, name, value, meta, options));
@@ -340,11 +342,24 @@ async function saveNamedSecretHeld(stateDir: string, name: string, value: string
   const kept = (field: 'vendor' | 'owner' | 'env' | 'page'): Partial<SecretMeta> => { const v = meta[field]?.trim() || before.meta?.[field]; return v ? { [field]: v } : {}; };
   const url = INTERNAL_SECRET.test(name) ? undefined : await baseUrlFor(stateDir, name, meta.url, before.meta?.url);
   if (!url && !INTERNAL_SECRET.test(name) && !options.legacy) throw new CredentialError(`A saved key must say which site it is for: give its base URL (https://example.com) when saving "${name}".`);
-  const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), ...kept('page'), ...(url ? { url } : {}), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) };
+  const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), ...kept('page'), ...(url ? { url } : {}), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) ,
+    // A refusal belongs to the value: a rotation clears it, a save that keeps the value keeps it.
+    ...(meta.refusedAt ? { refusedAt: meta.refusedAt } : before.value === value && before.meta?.refusedAt ? { refusedAt: before.meta.refusedAt } : {}) };
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   // The origin pin of a generated token survives a save that keeps its value (a filled-in owner); a new value is a new token, unpinned.
   const pin = options.pin ?? (before.pin && before.value === value ? before.pin : undefined);
   await writeSealed(file, seal(key, aad, JSON.stringify({ name, value, meta: saved, ...(pin ? { pin } : {}) })));
+}
+/** Records that the secret's vendor refused its value. Returns false when there is no such secret. */
+export async function markSecretRefused(stateDir: string, name: string): Promise<boolean> {
+  return withVaultLock(stateDir, async () => {
+    const saved = await savedNameFor(stateDir, name);
+    if (!saved) return false;
+    const value = await readNamedSecret(stateDir, saved).catch(() => '');
+    if (!value) return false;
+    await saveNamedSecretHeld(stateDir, saved, value, { refusedAt: new Date().toISOString() }, { legacy: true });
+    return true;
+  });
 }
 /** The one site a token `secrets generate` made may be sent to, fixed when it was made. Not the record's `url` (which a later
  * setSecretUrl, merge or backfill may change) and not its vendor tag (anything that saves a secret can write that): an HMAC under

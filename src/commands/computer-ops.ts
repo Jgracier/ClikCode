@@ -229,8 +229,14 @@ export async function computerSecretRename(from: string, to: string): Promise<vo
   const info = (await vault.namedSecretInfo(dir)).find(item => item.name === from);
   const value = info ? await vault.readNamedSecret(dir, from).catch(() => '') : '';
   if (!value) return print({ renamed: false, from, to });
-  await vault.saveNamedSecret(dir, to, value, { ...(info?.meta?.vendor ? { vendor: info.meta.vendor } : {}), ...(info?.meta?.owner ? { owner: info.meta.owner } : {}), ...(info?.meta?.url ? { url: info.meta.url } : {}), ...(info?.meta?.page ? { page: info.meta.page } : {}) }, { legacy: true });
+  await vault.saveNamedSecret(dir, to, value, { ...(info?.meta?.vendor ? { vendor: info.meta.vendor } : {}), ...(info?.meta?.owner ? { owner: info.meta.owner } : {}), ...(info?.meta?.url ? { url: info.meta.url } : {}), ...(info?.meta?.page ? { page: info.meta.page } : {}), ...(info?.meta?.refusedAt ? { refusedAt: info.meta.refusedAt } : {}) }, { legacy: true });
   print({ renamed: await vault.deleteNamedSecret(dir, from), from, to });
+}
+
+export async function computerSecretRefused(name: string): Promise<void> {
+  if (!NAME.test(name)) throw new Error('Secret names are letters, digits, dots, dashes and slashes.');
+  const vault = await import('../agent/computer/credential-vault.js');
+  print({ marked: await vault.markSecretRefused(stateDirectory(), name), name });
 }
 
 /** The vendor recorded on a token `secrets generate` made: only such a token can be used by `secrets call`. */

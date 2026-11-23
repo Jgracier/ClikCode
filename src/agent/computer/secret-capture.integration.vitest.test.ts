@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, afterEach, beforeAll, describe as describe_, expect, it } from 'vitest';
 import type { Destination } from './secret-destinations.js';
-import { lockCredentialVault, readNamedSecret } from './credential-vault.js';
+import { lockCredentialVault, markSecretRefused, readNamedSecret } from './credential-vault.js';
 import { captureSecret as capture } from './secret-capture.js';
 import { forgetSecrets, scrubSecrets, showsSecret } from './secret-scrubber.js';
 import { observeComputerPage } from '../tools/computer-web.js';
@@ -211,6 +211,7 @@ it.skipIf(!enabled)('refuses a capture that is the key already set aside as refu
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const first = await open('/pair');
   await captureSecret({ stateDir, page: first, name: 'pair/key-rejected', trigger: () => tap(first, '#go'), ask: neverAsked });
+  expect(await markSecretRefused(stateDir, 'pair/key-rejected')).toBe(true);
   const again = await open('/pair');
   await expect(captureSecret({ stateDir, page: again, name: 'pair/key', trigger: () => tap(again, '#go'), ask: neverAsked })).rejects.toThrow(/already refused \(set aside as "pair\/key-rejected"\)/);
   await expect(readNamedSecret(stateDir, 'pair/key')).rejects.toThrow();

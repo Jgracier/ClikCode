@@ -135,7 +135,7 @@ it('connects a vendor key through ClikDeploy without putting it in process argum
 
 it('sends on stdin when the destination says so, so the key is in no command line', async () => {
   await fake('gh', `printf '%s\\n' "$@" > "${dir}/gh-argv"; cat > "${dir}/gh-stdin"`);
-  const [result] = await sendToDestinations(dir, [{ to: 'github-secret', with: { repo: 'Jgracier/app', key: 'SALAD_API_KEY' } }], VALUE);
+  const [result] = await sendToDestinations(dir, [{ to: 'github-secret', with: { repo: 'owner/app', key: 'SALAD_API_KEY' } }], VALUE);
   expect(result!.ok).toBe(true);
   expect(await readFile(join(dir, 'gh-stdin'), 'utf8')).toBe(VALUE);
   expect(await readFile(join(dir, 'gh-argv'), 'utf8')).not.toContain(VALUE);

@@ -237,10 +237,8 @@ export function vendorMfaAccountFor(siteUrl: string, accounts: readonly string[]
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-/** The connection destinations that fit each auth kind a connector declares. */
-// Custom and JWT auth go through clikdeploy-connection too: ClikDeploy answers "Provide { props }" and the delivery reshapes the key into
-// the declared props (declaredCustomProps / customAuthBody). An empty list here refused every custom-auth connector before sending
-// (smsglobal), while describeShapes told the agent to use exactly that destination.
+/** The connection destinations that fit each auth kind a connector declares. Every kind but basic sends one value; the delivery
+ * shapes it into what the connector's own spec declares (declaredCustomProps / customAuthBody), so no kind is refused before sending. */
 const ACCEPTS: Record<string, string[]> = { 'api-key': ['clikdeploy-connection'], basic: ['clikdeploy-connection-basic', 'clikdeploy-connection-basic-key'], custom: ['clikdeploy-connection'], jwt: ['clikdeploy-connection'], 'aws-sigv4': ['clikdeploy-connection'], oauth: ['clikdeploy-connection'] };
 
 /** One message listing the shapes a connector's declared auth accepts. */

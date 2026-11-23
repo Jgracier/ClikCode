@@ -37,10 +37,10 @@ describe('provider table', () => {
   });
 
   it('Google: the account chip on the signing-back-in and consent pages is never pressed as an account', () => {
-    const chip = [...press('gracierdigital@gmail.com selected. Switch account', 'Cancel', 'Continue'), { name: 'gracierdigital@gmail.com', leaf: true }];
-    expect(pick('accounts.google.com', chip, '', { email: 'gracierdigital@gmail.com' })).toBe('Continue');
-    const consentChip = press('gracierdigital@gmail.com', 'Cancel', 'Continue');
-    expect(pick('accounts.google.com', consentChip, '', { email: 'gracierdigital@gmail.com', account: false })).toBe('Continue');
+    const chip = [...press('other@example.com selected. Switch account', 'Cancel', 'Continue'), { name: 'other@example.com', leaf: true }];
+    expect(pick('accounts.google.com', chip, '', { email: 'other@example.com' })).toBe('Continue');
+    const consentChip = press('other@example.com', 'Cancel', 'Continue');
+    expect(pick('accounts.google.com', consentChip, '', { email: 'other@example.com', account: false })).toBe('Continue');
     expect(nextPress('accounts.google.com', [{ name: 'Advanced', leaf: true }], '')?.phase).toBe('notice');
     expect(nextPress('accounts.google.com', press('Cancel', 'Continue'), '')?.phase).toBe('grant');
   });

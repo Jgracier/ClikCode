@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { allSavedLogins, auditVault, readNamedSecret, saveNamedSecret, UNKNOWN_ACCOUNT, forgetSavedLogins, loginLabel, lockCredentialVault, removeSavedLogin, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected, siteKey } from './credential-vault.js';
+import { allSavedLogins, auditVault, markSecretRefused, namedSecretInfo, readNamedSecret, saveNamedSecret, UNKNOWN_ACCOUNT, forgetSavedLogins, loginLabel, lockCredentialVault, removeSavedLogin, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected, siteKey } from './credential-vault.js';
 
 let dir = '';
 afterEach(async () => { if (dir) { lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); dir = ''; } });
@@ -78,6 +78,19 @@ it('remembers a refused password, and a new save clears it', async () => {
   await saveLoginFields(dir, url, { password: 'new' }, id);
   expect((await savedLoginsForSite(dir, url))[0]!.rejected).toBe(false);
   expect((await savedLoginFields(dir, url, id)).password).toBe('new');
+});
+
+it('marks a key its vendor refused, keeps the mark while the value stays, and clears it on rotation', async () => {
+  dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-key-refused-'));
+  const refused = async (): Promise<string | undefined> => (await namedSecretInfo(dir)).find(item => item.name === 'acme/key')?.meta?.refusedAt;
+  expect(await markSecretRefused(dir, 'acme/key')).toBe(false);
+  await saveNamedSecret(dir, 'acme/key', 'value-one', { url: 'https://acme.example' });
+  expect(await markSecretRefused(dir, 'acme/key')).toBe(true);
+  expect(await refused()).toBeTruthy();
+  await saveNamedSecret(dir, 'acme/key', 'value-one', { owner: 'ops' });
+  expect(await refused()).toBeTruthy();
+  await saveNamedSecret(dir, 'acme/key', 'value-two');
+  expect(await refused()).toBeUndefined();
 });
 
 it('keeps one entry for an account saved again, with its newest password', async () => {

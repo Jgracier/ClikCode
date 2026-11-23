@@ -7,7 +7,7 @@
  * prompt. Every failure says "Not saved" and why; nothing is ever saved half-way. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page } from 'playwright-core';
-import { namedSecretNames, readNamedSecret, saveNamedSecret } from './credential-vault.js';
+import { namedSecretInfo, readNamedSecret, saveNamedSecret } from './credential-vault.js';
 import { copyWithSiteButton, listenForCopies, copiedSince, plausibleCopy, readClipboard } from './clipboard-watch.js';
 import { secretParts, watchDownload } from './download-capture.js';
 import { LoginError } from './login-error.js';
@@ -17,9 +17,6 @@ import { sendToDestinations, type Delivery, type Destination } from './secret-de
 import { registerSecret } from './secret-scrubber.js';
 
 const LOOK_POLLS = 20;
-
-/** The suffix of a key set aside because its vendor refused it (the connector worker keeps a refused <id>/key as <id>/key-rejected). */
-export const REJECTED_SUFFIX = '-rejected';
 
 export async function captureSecret(input: {
   stateDir: string; page: Page; name: string; signal?: AbortSignal;
@@ -107,12 +104,15 @@ export async function captureSecret(input: {
     for (const part of secretParts(value)) registerSecret(part);
     // The same value already in the vault under another name is saved, not new: it is not stored twice, and it carries on to the send step.
     let alreadySavedAs: string | undefined;
-    for (const other of await namedSecretNames(input.stateDir)) {
-      if (other.toLowerCase() !== input.name.toLowerCase() && await readNamedSecret(input.stateDir, other).catch(quiet('agent/computer/secret-capture')) === value) { alreadySavedAs = other; break; }
+    let refused = false;
+    for (const other of await namedSecretInfo(input.stateDir)) {
+      if (await readNamedSecret(input.stateDir, other.name).catch(quiet('agent/computer/secret-capture')) !== value) continue;
+      // The same value its vendor already refused, under any name (this one included), is that dead key again, not a new one: sending it
+      // on could only be refused once more (Chipbot's page kept showing its refused key, and the capture told the agent to carry on with it).
+      if (other.meta?.refusedAt) { alreadySavedAs = other.name; refused = true; break; }
+      if (other.name.toLowerCase() !== input.name.toLowerCase()) alreadySavedAs ??= other.name;
     }
-    // The same value as a key set aside because its vendor refused it (<name>-rejected) is that dead key again, not a new one: sending it
-    // on could only be refused once more (Chipbot's page kept showing its refused key, and the capture told the agent to carry on with it).
-    if (alreadySavedAs && alreadySavedAs.toLowerCase().endsWith(REJECTED_SUFFIX)) throw new LoginError(`Not saved: this is the key the vendor already refused (set aside as "${alreadySavedAs}"). Make a new key: create another one, or rotate/regenerate this one, and capture that.`);
+    if (refused) throw new LoginError(`Not saved: this is the key the vendor already refused (set aside as "${alreadySavedAs}"). Make a new key: create another one, or rotate/regenerate this one, and capture that.`);
     const check = await (input.check ?? ((url, key, options) => checkKey(url, key, fetch, options)))(input.page.url(), value, { fresh: clicked });
     // A value its own service refuses, from a page that already showed it, is not the key (an id, a page
     // blob): saving it would only hide the problem. A key just made by the click is different: the site

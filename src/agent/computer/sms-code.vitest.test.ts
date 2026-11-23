@@ -32,8 +32,8 @@ describe('reading a texted code', () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-sms-'));
     expect(await waitForTextedCode(dir, { since: Date.now() })).toMatchObject({ error: expect.stringMatching(/clikcode computer sms/) });
     await expect(setSmsSource(dir, 'a@mac; rm -rf /')).rejects.toThrow(/user@host/);
-    await setSmsSource(dir, 'justin@imac');
-    expect(await smsSource(dir)).toBe('justin@imac');
+    await setSmsSource(dir, 'user@imac');
+    expect(await smsSource(dir)).toBe('user@imac');
     let asks = 0;
     const found = await waitForTextedCode(dir, { since: 1_000_000, sleep: async () => undefined, ask: async (_t, since) => { asks++; expect(since).toBe(995); return { rows: asks < 3 ? '' : row(1001, '22395', 'Code: 7731') }; } });
     expect(found).toEqual({ code: '7731', from: '22395', at: 1001 });
@@ -89,7 +89,7 @@ describe('a Twilio number as the sign-up phone', () => {
   });
   it('waits on the Twilio number and the Mac together: a code on either is found, a Mac that cannot be read does not stop it', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-sms-'));
-    await setSmsSource(dir, 'justin@imac');
+    await setSmsSource(dir, 'user@imac');
     await setTwilioSms(dir, { number: '+17192497747', account: AC });
     const at = Math.floor(Date.now() / 1000);
     const viaTwilio = await waitForTextedCode(dir, { since: Date.now(), seconds: 5, sleep: async () => undefined, ask: async () => ({ error: 'The Mac is asleep' }), askTwilio: async () => ({ rows: `${at}\u001f22395\u001fYour code is 482913` }) });

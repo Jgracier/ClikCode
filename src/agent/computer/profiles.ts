@@ -34,7 +34,7 @@ export function defaultProfile<P extends SavedProfile>(profiles: readonly P[]): 
 }
 
 /** The sign-in email every sign-up uses: the default profile's (Personal), else any other profile's. Never "the first by label",
- * which put an admin profile such as "ClikDeploy" (justin@clikdeploy.com) ahead of the user's own. */
+ * which put an admin profile ahead of the user's own. */
 export async function profileEmail(stateDir: string): Promise<string | undefined> {
   const listed = await listProfiles(stateDir);
   const first = defaultProfile(listed);

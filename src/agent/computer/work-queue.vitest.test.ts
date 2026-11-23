@@ -17,10 +17,10 @@ describe('work queue', () => {
     let [task] = await listTasks(stateDir);
     expect(task).toMatchObject({ vendor: 'xero', status: 'needs-human', reason: 'captcha' });
     expect(task).not.toHaveProperty('connectors');
-    await saveTask(stateDir, { vendor: 'xero', status: 'done', owner: 'gracierdigital@gmail.com' });
+    await saveTask(stateDir, { vendor: 'xero', status: 'done', owner: 'other@example.com' });
     [task] = await listTasks(stateDir);
     expect(task!.reason).toBeUndefined();
-    expect(task).toMatchObject({ status: 'done', owner: 'gracierdigital@gmail.com', note: 'trial needs reCAPTCHA' });
+    expect(task).toMatchObject({ status: 'done', owner: 'other@example.com', note: 'trial needs reCAPTCHA' });
     expect(await listTasks(stateDir, { status: 'queued' })).toEqual([]);
   });
 

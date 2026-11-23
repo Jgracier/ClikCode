@@ -63,7 +63,7 @@ const state = (sessions: HarnessSession[], accounts: AiHarnessAccount[] = []): H
 const exported = (fields: Partial<ChatExport['settings']> = {}): ChatExport => ({
   version: 1, sessionId: 's1', conversationId: 'c1', name: 'Fix the parser', createdAt: now,
   messages: [{ role: 'user', content: 'read the parser' }, { role: 'assistant', content: 'It reads tokens.' }],
-  settings: { route: 'local', provider: 'anthropic', nativeHarness: 'claude', model: 'opus', effort: 'high', permissionMode: 'bypass', account: 'justin@webpro.ai', ...fields },
+  settings: { route: 'local', provider: 'anthropic', nativeHarness: 'claude', model: 'opus', effort: 'high', permissionMode: 'bypass', account: 'user@example.com', ...fields },
   source: { folder: '/home/me/project' },
 });
 
@@ -87,7 +87,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const key of Ob
 
 describe('what the machine it goes to keeps', () => {
   it('keeps everything it can, and says nothing when nothing changes', async () => {
-    const mine = account({ label: 'justin@webpro.ai' });
+    const mine = account({ label: 'user@example.com' });
     const plan = await planImport(state([], [mine]), exported(), facts());
     expect(plan.changes).toEqual([]);
     expect(plan.session).toMatchObject({ route: 'local', nativeHarness: 'claude', accountId: mine.id, model: 'opus', effort: 'high', permissionMode: 'bypass', conversationId: 'c1' });
@@ -95,45 +95,45 @@ describe('what the machine it goes to keeps', () => {
   });
 
   it('finds the same account by the email in its label', async () => {
-    const mine = account({ label: 'Justin (JUSTIN@webpro.ai)' });
+    const mine = account({ label: 'Work (USER@example.com)' });
     const plan = await planImport(state([], [account({ label: 'other@x.io' }), mine]), exported(), facts());
     expect(plan.session.accountId).toBe(mine.id);
     expect(plan.changes).toEqual([]);
   });
 
   it('uses that machine’s signed-in account when the same one is not signed in there, and says so', async () => {
-    const theirs = account({ label: 'gracierdigital@gmail.com' });
-    const signedOut = account({ label: 'justin@webpro.ai', status: 'needs_login' });
+    const theirs = account({ label: 'other@example.com' });
+    const signedOut = account({ label: 'user@example.com', status: 'needs_login' });
     const plan = await planImport(state([], [signedOut, theirs]), exported(), facts());
     expect(plan.session.accountId).toBe(theirs.id);
-    expect(plan.changes).toEqual(['account justin@webpro.ai is not signed in there; using gracierdigital@gmail.com.']);
+    expect(plan.changes).toEqual(['account user@example.com is not signed in there; using other@example.com.']);
   });
 
   it('with no account there at all, moves with none: the first message signs in', async () => {
     const plan = await planImport(state([]), exported(), facts());
     expect(plan.session.accountId).toBeNull();
-    expect(plan.changes).toEqual(['account justin@webpro.ai is not signed in there; the first message there signs in.']);
+    expect(plan.changes).toEqual(['account user@example.com is not signed in there; the first message there signs in.']);
   });
 
   it('takes the vendor’s own sign-in there for the account ClikCode has not made yet', async () => {
-    const same = await planImport(state([]), exported(), facts({ vendorSignIn: async () => 'justin@webpro.ai' }));
+    const same = await planImport(state([]), exported(), facts({ vendorSignIn: async () => 'user@example.com' }));
     expect(same.changes).toEqual([]);
     const other = await planImport(state([]), exported(), facts({ vendorSignIn: async () => 'root@prod' }));
-    expect(other.changes).toEqual(['account justin@webpro.ai is not signed in there; using root@prod.']);
+    expect(other.changes).toEqual(['account user@example.com is not signed in there; using root@prod.']);
   });
 
   it('keeps permissions only within what that machine allows: Bypass as root is Auto', async () => {
     vi.spyOn(process, 'getuid').mockReturnValue(0);
     vi.stubEnv('IS_SANDBOX', '');
-    const theirs = account({ label: 'gracierdigital@gmail.com' });
+    const theirs = account({ label: 'other@example.com' });
     const plan = await planImport(state([], [theirs]), exported(), facts());
     expect(plan.session.permissionMode).toBe('auto');
     // Not asked about: what changed is in the log, and the info line shows the result.
-    expect(plan.changes).toEqual(['account justin@webpro.ai is not signed in there; using gracierdigital@gmail.com.', 'Bypass → Auto (root).']);
+    expect(plan.changes).toEqual(['account user@example.com is not signed in there; using other@example.com.', 'Bypass → Auto (root).']);
   });
 
   it('keeps the model only when the account there lists it, and effort only when offered', async () => {
-    const theirs = account({ label: 'justin@webpro.ai', models: ['sonnet', 'haiku'] });
+    const theirs = account({ label: 'user@example.com', models: ['sonnet', 'haiku'] });
     const plan = await planImport(state([], [theirs]), exported(), facts({ efforts: async () => ['low', 'medium'] }));
     expect(plan.session.model).toBe('sonnet');
     expect(plan.session.effort).toBe('medium');
@@ -178,11 +178,11 @@ describe('a move between two machines', () => {
 
   it('carries the conversation, leaves one live copy, and tells the agent once, unseen', async () => {
     on('a');
-    const mine = account({ id: 'mine', label: 'justin@webpro.ai' });
+    const mine = account({ id: 'mine', label: 'user@example.com' });
     await writeState(state([chat()], [mine]));
     on('b');
     mkdirSync(join(machines.b!), { recursive: true });
-    await writeState(state([], [account({ label: 'justin@webpro.ai' })]));
+    await writeState(state([], [account({ label: 'user@example.com' })]));
     vi.stubEnv('HOME', home);
     const outcome = await moveChat(end('a', 'linux'), end('b', 'clikdeploy-prod'), 's1');
     expect(outcome).toMatchObject({ moved: true, sessionId: 's1', changes: [] });
@@ -211,12 +211,12 @@ describe('a move between two machines', () => {
 
   it('asks nothing when something changes: it moves, keeping what that machine allows', async () => {
     on('c');
-    await writeState(state([chat({ id: 's2', conversationId: 'c2' })], [account({ id: 'mine', label: 'justin@webpro.ai' })]));
+    await writeState(state([chat({ id: 's2', conversationId: 'c2' })], [account({ id: 'mine', label: 'user@example.com' })]));
     on('d');
-    const theirs = account({ label: 'gracierdigital@gmail.com' });
+    const theirs = account({ label: 'other@example.com' });
     await writeState(state([], [theirs]));
     const outcome = await moveChat(end('c', 'linux'), end('d', 'imac'), 's2');
-    expect(outcome).toMatchObject({ moved: true, sessionId: 's2', changes: ['account justin@webpro.ai is not signed in there; using gracierdigital@gmail.com.'] });
+    expect(outcome).toMatchObject({ moved: true, sessionId: 's2', changes: ['account user@example.com is not signed in there; using other@example.com.'] });
     expect(sent.filter((line) => line.includes('import-chat'))).toEqual(['imac import-chat']);
     on('d');
     expect((await readState({ transcripts: [] })).sessions[0]).toMatchObject({ id: 's2', accountId: theirs.id });
@@ -226,9 +226,9 @@ describe('a move between two machines', () => {
 
   it('an older client’s dry run is answered with what would change, and imports nothing', async () => {
     on('c2');
-    await writeState(state([], [account({ label: 'gracierdigital@gmail.com' })]));
+    await writeState(state([], [account({ label: 'other@example.com' })]));
     const plan = await answerMoveRequest(undefined, { type: 'import-chat', chat: exported(), names, dryRun: true } as MoveRequest);
-    expect(plan).toEqual({ changes: ['account justin@webpro.ai is not signed in there; using gracierdigital@gmail.com.'], folder: expect.any(String) });
+    expect(plan).toEqual({ changes: ['account user@example.com is not signed in there; using other@example.com.'], folder: expect.any(String) });
     expect((await readState({ transcripts: [] })).sessions).toEqual([]);
     expect(workers.warmed).toEqual([]);
   });

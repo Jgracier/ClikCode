@@ -513,7 +513,7 @@ What the browser tool does so a run does not depend on luck or on the user:
 - **Several mailboxes.** Any number of Google accounts can be connected, one secret per address
   (`email/gmail/<address>`; the old single `email/gmail` record moves to this shape by itself). A consent
   for another account adds a mailbox and never replaces one. Add one with
-  `clikcode computer email connect --address justin@clikdeploy.com` (or `email_connect` with `address`);
+  `clikcode computer email connect --address admin@example.com` (or `email_connect` with `address`);
   that Google account must be signed in in the ClikCode browser, because Google only consents the account
   it shows. `clikcode computer email status` lists them (the profile email is the default) and
   `clikcode computer email disconnect --address <email>` forgets one. `read_email_code` and

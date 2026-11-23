@@ -209,9 +209,9 @@ describe('profile secrets', () => {
 
 
 describe('bestProfileFor: several profiles never mean asking', () => {
-  const personal: SavedProfile = { id: 'p', label: 'Personal', fields: { given_name: 'J', email: 'gracierdigital@gmail.com', phone: '1', address_line1: 'x' }, custom: {} };
+  const personal: SavedProfile = { id: 'p', label: 'Personal', fields: { given_name: 'J', email: 'other@example.com', phone: '1', address_line1: 'x' }, custom: {} };
   const admin: SavedProfile = { id: 'a', label: 'ClikDeploy admin', fields: { given_name: 'J', email: 'admin@x.test' }, custom: {} };
-  const railway: SavedProfile = { id: 'r', label: 'Railway', fields: { given_name: 'J', organization: 'R' }, custom: { railway_email: { label: 'Railway email', value: 'justin@webpro.ai', match: ['email'] } } };
+  const railway: SavedProfile = { id: 'r', label: 'Railway', fields: { given_name: 'J', organization: 'R' }, custom: { railway_email: { label: 'Railway email', value: 'user@example.com', match: ['email'] } } };
   const hint = (text: string) => ({ text, type: 'text', autocomplete: '' });
 
   it('uses the default profile (Personal) whatever the form asks for', () => {
@@ -223,7 +223,7 @@ describe('bestProfileFor: several profiles never mean asking', () => {
   it('two profiles with different emails: an Email field gets the default profile\'s, even when the other profile holds a custom "email" detail', () => {
     const picked = bestProfileFor([railway, personal], [hint('Email')], undefined, 'example-signup.test');
     expect(picked?.label).toBe('Personal');
-    expect(picked?.fields.email).toBe('gracierdigital@gmail.com');
+    expect(picked?.fields.email).toBe('other@example.com');
     expect(customFieldFor(picked, hint('Email'))).toBeUndefined();
   });
 
@@ -277,9 +277,9 @@ describe('profileEmail: one mailbox, never the first profile by label', () => {
   it('is the default profile\'s sign-in email even when another profile sorts first, and falls back to any profile that has one', async () => {
     stateDir = await mkdtemp(join(tmpdir(), 'clikcode-profile-'));
     expect(await profileEmail(stateDir)).toBeUndefined();
-    await saveProfile(stateDir, { label: 'ClikDeploy admin', fields: { sso_email: 'justin@clikdeploy.com' } });
-    expect(await profileEmail(stateDir)).toBe('justin@clikdeploy.com');
-    await saveProfile(stateDir, { label: 'Personal', fields: { sso_email: 'gracierdigital@gmail.com', given_name: 'Justin', family_name: 'G' } });
-    expect(await profileEmail(stateDir)).toBe('gracierdigital@gmail.com');
+    await saveProfile(stateDir, { label: 'ClikDeploy admin', fields: { sso_email: 'admin@example.com' } });
+    expect(await profileEmail(stateDir)).toBe('admin@example.com');
+    await saveProfile(stateDir, { label: 'Personal', fields: { sso_email: 'other@example.com', given_name: 'Justin', family_name: 'G' } });
+    expect(await profileEmail(stateDir)).toBe('other@example.com');
   });
 });

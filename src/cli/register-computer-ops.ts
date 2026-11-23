@@ -1,5 +1,5 @@
 /** Commands that hand ClikCode's computer abilities to scripts and other programs as JSON: `clikcode agent run` and, under `computer`,
- * mcp, keygrab, keygrab-resume, keygrab-backoff, page, tab, desk-finished, settings, token and secret-rename. (commands/computer-ops.ts) */
+ * mcp, keygrab, keygrab-resume, keygrab-backoff, page, tab, desk-finished, settings, token, secret-rename and secret-refused. (commands/computer-ops.ts) */
 import type { Command } from 'commander';
 import { serveThenExit } from './stop-signal.js';
 
@@ -84,4 +84,6 @@ export function registerComputerAbilities(program: Command, computer: Command): 
     .action(async (name: string, flags: { path: string; method?: string; header?: string[]; dataFile?: string; timeout?: string }) => (await import('../commands/computer-ops.js')).computerSecretCall(name, flags));
   computer.command('secret-rename <from> <to>').description('Keep a saved secret under another name (it is never shown)')
     .action(async (from: string, to: string) => (await import('../commands/computer-ops.js')).computerSecretRename(from, to));
+  computer.command('secret-refused <name>').description("Record that a saved secret's vendor refused it: capturing the same value again asks for a new key")
+    .action(async (name: string) => (await import('../commands/computer-ops.js')).computerSecretRefused(name));
 }

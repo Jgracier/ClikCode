@@ -46,7 +46,7 @@ vi.mock('../harness/transport/native/inspect.js', async (original) => ({
 const now = '2026-10-21T00:00:00.000Z';
 const claude = localHarnessForCommand('claude')!;
 const account = (fields: Partial<AiHarnessAccount> = {}): AiHarnessAccount => ({
-  id: 'acc-1', provider: 'anthropic', label: 'justin@webpro.ai', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:claude:default', ...fields,
+  id: 'acc-1', provider: 'anthropic', label: 'user@example.com', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:claude:default', ...fields,
 });
 const chat = (fields: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', conversationId: 'c1', route: 'local', accountId: 'acc-1', provider: 'anthropic', nativeHarness: 'claude', model: 'opus',
