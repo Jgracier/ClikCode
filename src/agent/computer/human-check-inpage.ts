@@ -134,6 +134,35 @@ export const TEXT_CAPTCHA = `(() => {
     return { filled: String(found.input.value || '').length > 0 };
   })()`;
 
+/** How a text captcha's picture is watched before it is read: a look every `LOOK_MS`; once it has changed, `AFTER_CHANGE_MS` more; a picture
+ * that never changes is taken once it has held still for `STILL_MS`; `MOST_MS` in all. */
+export const TEXT_PICTURE_WATCH = { LOOK_MS: 500, AFTER_CHANGE_MS: 1_000, STILL_MS: 4_000, MOST_MS: 9_000 };
+
+/** The text captcha's picture once it shows its code. A picture drawn by the page's script can show a stand-in first: NeutrinoAPI's canvas
+ * says "Generating..." for about three seconds (2026-11-23: the first look was read, both voters agreed on "Generating...", and the code
+ * typed was refused three times), and others fade in or swap a loading image. So the picture is watched: one that changed has been drawn
+ * (an animated one keeps changing, and any frame of it reads), and one that holds still long enough is what it is. */
+async function settledPicture(page: Page, sleep: (ms: number) => Promise<void>): Promise<Buffer | undefined> {
+  const { LOOK_MS, AFTER_CHANGE_MS, STILL_MS, MOST_MS } = TEXT_PICTURE_WATCH;
+  const take = async (): Promise<Buffer | undefined> => {
+    try { return await page.locator('[data-clikcode-captcha-picture="1"]').first().screenshot({ type: 'png', timeout: 8_000 }); } catch { return undefined; }
+  };
+  let last = await take();
+  if (!last) return undefined;
+  let still = 0, changedFor = -1;
+  for (let waited = 0; waited < MOST_MS; waited += LOOK_MS) {
+    await sleep(LOOK_MS);
+    const now = await take();
+    if (!now) return last;
+    if (changedFor >= 0) changedFor += LOOK_MS;
+    else if (!now.equals(last)) changedFor = 0;
+    else still += LOOK_MS;
+    last = now;
+    if (changedFor >= AFTER_CHANGE_MS || (changedFor < 0 && still >= STILL_MS)) return last;
+  }
+  return last;
+}
+
 /** A classic "type the characters you see" captcha: a small picture beside a field asking for its code. The picture
  * is read by the vision models and typed in at a visitor's pace. `typed`: the field reads back what was typed.
  * `mismatch`: something was typed but the field does not hold it (another field had focus, or the page rewrote it).
@@ -141,8 +170,8 @@ export const TEXT_CAPTCHA = `(() => {
 export async function solveTextCaptcha(page: Page, askText: (image: { mimeType: string; data: string }) => Promise<string | undefined>, random: () => number, sleep: (ms: number) => Promise<void>, trace?: (line: string) => void): Promise<'typed' | 'mismatch' | false> {
   const marked = await page.evaluate(TEXT_CAPTCHA).catch(() => null);
   if (!marked) return false;
-  let shot: Buffer;
-  try { shot = await page.locator('[data-clikcode-captcha-picture="1"]').first().screenshot({ type: 'png', timeout: 8_000 }); } catch { return false; }
+  const shot = await settledPicture(page, sleep);
+  if (!shot) return false;
   const text = await askText({ mimeType: 'image/png', data: shot.toString('base64') });
   if (!text) { trace?.('text captcha: the picture could not be read'); return false; }
   trace?.(`text captcha: typing ${text.length} characters`);
