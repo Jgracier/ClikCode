@@ -2517,6 +2517,16 @@ SCENARIOS = {
                   ('type', '/send'), ('wait_for', 'Messages typed mid-turn', 10), ('settle', 1), ('snap', 'send'), ('keys', '\x1b'), ('settle', 1)],
         'watch': [], 'snap_contains': {'permissions': ['· current', 'esc close'], 'send': ['· current', 'esc close']},
     },
+    # The context gauge on the composer rule: used context against where this
+    # chat compacts (auto, untuned: 100k), live mid-turn and after it.
+    'context-gauge': {
+        'turns': [{'emits': [{'op': 'usage', 'used': 41000, 'size': 1000000},
+                             {'op': 'text', 'text': 'Gauge reading taken.\n\n', 'ms': 5},
+                             {'op': 'sleep', 'ms': 4000}, {'op': 'text', 'text': 'Gauge turn done.', 'ms': 5}]}],
+        'steps': [('type', 'hi'), ('wait_for', 'Gauge reading taken.', 30), ('settle', 1.5), ('snap', 'mid'),
+                  ('wait_for', 'Gauge turn done.', 30), ('settle', 2), ('snap', 'after')],
+        'watch': [], 'snap_contains': {'mid': ['41k/100k'], 'after': ['41k/100k']},
+    },
     # /usage with a vendor that reports no token counts: no bare zeros
     # ("0", "0 in · 0 out", "This chat · 1 turn · 0").
     'usage-no-bare-zeros': {
