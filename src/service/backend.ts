@@ -84,14 +84,25 @@ function refreshUsage(state: HarnessState, now = Date.now()): void {
   }
 }
 
+/** Whether each vendor CLI is on disk: asking every harness costs ~160 ms, and it only changes when a sign-in installs one. */
+const INSTALLED_MS = 60_000;
+
 export function machineBackend(config: Conf): ServiceBackend {
+  let installedRead: { at: number; read: Promise<Map<string, boolean>> } | undefined;
+  const installedNow = (harnesses: ReturnType<typeof builtInHarnesses>) => {
+    if (!installedRead || Date.now() - installedRead.at > INSTALLED_MS) {
+      const read = Promise.all(harnesses.map(async (harness) => [harness.command, (await inspectNativeHarnessForPicker(harness).catch(() => ({ installed: false }))).installed] as const)).then((pairs) => new Map(pairs));
+      installedRead = { at: Date.now(), read };
+    }
+    return installedRead.read;
+  };
   return {
     version: CLIKCODE_VERSION,
     ...(CLIKCODE_COMMIT ? { commit: CLIKCODE_COMMIT } : {}),
     logins: new LoginRegistry(loginDriver),
     providers: async () => {
       const harnesses = builtInHarnesses();
-      const installed = new Map(await Promise.all(harnesses.map(async (harness) => [harness.command, (await inspectNativeHarnessForPicker(harness).catch(() => ({ installed: false }))).installed] as const)));
+      const installed = await installedNow(harnesses);
       return serviceProviders(harnesses, harnessCanRunTurns, (harness) => installed.get(harness.command) === true);
     },
     accounts: async () => {

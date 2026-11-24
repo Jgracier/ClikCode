@@ -26,7 +26,8 @@ export interface ServiceAccount {
   detail?: string;
   checkedAt?: string;
   models?: string[];
-  usage?: { window?: string; remainingPct?: number; resetsAt?: string };
+  /** The binding window (nearest its limit) at the top level, for older readers; every non-advisory window in `windows`, for bars. */
+  usage?: { window?: string; remainingPct?: number; resetsAt?: string; windows?: Array<{ name: string; remainingPct: number; resetsAt?: string }> };
 }
 
 /** How a harness's own login can be finished with no terminal and no
@@ -83,12 +84,15 @@ export function serviceAccountView(account: AiHarnessAccount, facts: AccountFact
   return { ...base, status: 'connected', ...(facts.usageLabel ? { detail: facts.usageLabel } : {}), ...withUsage };
 }
 
-/** The window nearest its limit (the one that stops the account first). */
+/** The window nearest its limit (the one that stops the account first), and every window it reports. */
 export function usageSummary(windows: readonly UsageWindow[] | undefined, backAt?: string): ServiceAccount['usage'] | undefined {
-  const binding = [...(windows ?? [])].filter((window) => !window.advisory).sort((left, right) => right.usedPct - left.usedPct)[0];
+  const shown = (windows ?? []).filter((window) => !window.advisory);
+  const binding = [...shown].sort((left, right) => right.usedPct - left.usedPct)[0];
   if (!binding && !backAt) return undefined;
+  const left = (window: UsageWindow) => Math.max(0, Math.min(100, Math.round(100 - window.usedPct)));
   return {
-    ...(binding ? { window: binding.name, remainingPct: Math.max(0, Math.min(100, Math.round(100 - binding.usedPct))) } : {}),
+    ...(binding ? { window: binding.name, remainingPct: left(binding) } : {}),
     ...(backAt ?? binding?.resetsAt ? { resetsAt: backAt ?? binding!.resetsAt } : {}),
+    ...(shown.length ? { windows: shown.map((window) => ({ name: window.name, remainingPct: left(window), ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}) })) } : {}),
   };
 }

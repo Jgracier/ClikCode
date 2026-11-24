@@ -112,6 +112,9 @@ describe('accounts and providers', () => {
     expect(serviceAccountView({ ...account, verification: { at: 'x' } }, facts).status).toBe('revoked');
     const limited = serviceAccountView(account, { ...facts, canTakeTurn: false, backAt: '2026-11-24T00:00:00.000Z', windows: [{ name: '5h', usedPct: 100 }, { name: 'weekly', usedPct: 40 }] });
     expect(limited).toMatchObject({ status: 'limited', usage: { window: '5h', remainingPct: 0, resetsAt: '2026-11-24T00:00:00.000Z' } });
+    // Every window it reports, for the panel's bars; an advisory window is not one that stops the account.
+    expect(limited.usage?.windows).toEqual([{ name: '5h', remainingPct: 0 }, { name: 'weekly', remainingPct: 60 }]);
+    expect(usageSummary([{ name: '5h', usedPct: 26, resetsAt: 'r' }, { name: 'note', usedPct: 90, advisory: true }])?.windows).toEqual([{ name: '5h', remainingPct: 74, resetsAt: 'r' }]);
     expect(serviceAccountView(account, { ...facts, harness: undefined }).status).toBe('unknown');
     expect(usageSummary(undefined)).toBeUndefined();
   });
