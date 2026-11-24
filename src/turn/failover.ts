@@ -103,7 +103,7 @@ const THROTTLE_TEXT = /(?:rate[ _-]?limit|\bRATE_LIMITED\b|too many requests|tem
  *  the user was told "account failed" -- true but useless, since it names
  *  neither the problem nor the fix. Signing in again cannot help, which is
  *  why this is distinct from authentication-required. */
-const INELIGIBLE_TEXT = /(?:not eligible|can't use your (?:\w+ ){0,2}subscription|payment is past due|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|(?:no|not have a) valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available|not authorized to use this copilot feature|model is not supported when using [\w ]+ with a (?:chatgpt|\w+) account)/i;
+const INELIGIBLE_TEXT = /(?:not eligible|can't use your (?:\w+ ){0,2}subscription|payment is past due|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|(?:no|not have a) valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available|not authorized to use this copilot feature|model is not supported when using [\w ]+ with a (?:chatgpt|\w+) account|execution failed: model "[^"\n]+" is not available)/i;
 /** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
  * agy 1.2.7 on a real authenticated Antigravity account, which is where this
  * came from: ClikCode sent `--effort` alongside `--model`, and Antigravity

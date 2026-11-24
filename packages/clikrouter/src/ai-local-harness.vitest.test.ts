@@ -614,6 +614,8 @@ describe('replies that are really a failed call', () => {
   it('reads Copilot\'s request-id error as a failure, and not an answer that mentions one', () => {
     // Verbatim from Copilot 1.0.88 over ACP, stop reason end_turn.
     expect(harnessReplyError(harness('copilot'), 'Error: You have exceeded your monthly quota (Request ID: 4755:2BCAD5:424FACB:4F41C2D:6AB87680)')).toEqual({ notice: 'Error: You have exceeded your monthly quota (Request ID: 4755:2BCAD5:424FACB:4F41C2D:6AB87680)' });
+    expect(harnessReplyError(harness('copilot'), 'Error: Execution failed: Model "gpt-5.6-sol" is not available.')).toEqual({ notice: 'Error: Execution failed: Model "gpt-5.6-sol" is not available.' });
+    expect(harnessReplyError(harness('copilot'), 'Error: Execution failed: x\nmore prose')).toBeUndefined();
     expect(harnessReplyError(harness('copilot'), 'PONG')).toBeUndefined();
     expect(harnessReplyError(harness('copilot'), 'Error: handling is done in parse(); see the Request ID header.')).toBeUndefined();
   });

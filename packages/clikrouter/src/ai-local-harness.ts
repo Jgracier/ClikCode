@@ -815,6 +815,9 @@ const HERMES_REPLY_ERRORS: readonly AiHarnessReplyErrorPattern[] = [
  * no answer of the model's would carry. */
 const COPILOT_REPLY_ERRORS: readonly AiHarnessReplyErrorPattern[] = [
   { pattern: '^Error: .+ \\(Request ID: [0-9A-Fa-f:]+\\)$' },
+  // Copilot 1.0.x, a model the account lists but may not use, every turn alike: no request id,
+  // and the turn still ends end_turn. One line, the vendor's own prefix.
+  { pattern: '^Error: Execution failed: [^\\n]+$' },
 ];
 
 /** Goose writes a provider failure into the chat as its own message, framed

@@ -14,6 +14,11 @@ describe('ClikCode account failover', () => {
     expect(classifyAccountFailure(refusal)).toBe('account-ineligible');
   });
 
+  it("treats Copilot's 'Execution failed: Model is not available' reply as this account's refusal", () => {
+    // Copilot 1.0.x over ACP, a model the account's list offers but its plan does not serve.
+    expect(classifyAccountFailure(new Error('Error: Execution failed: Model "gpt-5.6-sol" is not available.'))).toBe('account-ineligible');
+  });
+
   it('does not confuse temporary throttling with exhausted quota', () => {
     expect(classifyAccountFailure(Object.assign(new Error('too many requests'), { statusCode: 429 }))).toBe('temporarily-throttled');
     expect(classifyAccountFailure(new Error('weekly usage limit reached'))).toBe('quota-exhausted');
