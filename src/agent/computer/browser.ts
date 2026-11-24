@@ -402,16 +402,18 @@ async function egressContext(stateDir: string, connected: Connected, name: strin
   return (await opening).context;
 }
 
-/** Opens a page in a context the browser host owns: Chrome makes the target in that context, and this connection's Playwright files
- * the page under its default context, where it is picked up by its target id. */
-export async function pageInHostedContext(connected: Connected, browserContextId: string, ms = 15_000): Promise<Page> {
+/** Opens a page in a window of its own, in a context the browser host owns (the default one when none is given): Chrome makes the
+ * target, and this connection's Playwright files the page under its default context, where it is picked up by its target id.
+ * A window of its own keeps every chat's tab the one in front of its window: a tab behind another in a shared window has no
+ * window around it (outerHeight equals innerHeight), which bot checks read as a virtual machine. */
+export async function pageInHostedContext(connected: Connected, browserContextId?: string, ms = 15_000): Promise<Page> {
   const session = await connected.browser.newBrowserCDPSession();
   const fresh: Page[] = [];
   const onPage = (page: Page): void => { fresh.push(page); };
   connected.context.on('page', onPage);
   try {
     const before = new Set(connected.context.pages());
-    const { targetId } = await session.send('Target.createTarget', { url: 'about:blank', browserContextId }) as { targetId: string };
+    const { targetId } = await session.send('Target.createTarget', { url: 'about:blank', newWindow: true, ...(browserContextId ? { browserContextId } : {}) }) as { targetId: string };
     const ids = new Map<Page, Promise<string | undefined>>();
     for (const until = Date.now() + ms; Date.now() < until; await sleep(50)) {
       for (const page of new Set([...fresh, ...connected.context.pages().filter(page => !before.has(page))])) {
@@ -420,7 +422,7 @@ export async function pageInHostedContext(connected: Connected, browserContextId
       }
     }
     await session.send('Target.closeTarget', { targetId }).catch(quiet('agent/computer/browser'));
-    throw new Error('The egress tab did not open in time.');
+    throw new Error('The new tab did not open in time.');
   } finally {
     connected.context.off('page', onPage);
     await session.detach().catch(quiet('agent/computer/browser'));
@@ -429,8 +431,9 @@ export async function pageInHostedContext(connected: Connected, browserContextId
 
 /** A new page for a tab: in the cloud browser, in its egress's context (the host's; this worker's own only when no host serves
  * egress), or in the shared profile. */
-async function newTabPage(stateDir: string, connected: Connected, egress: string | undefined): Promise<Page> {
-  if (!egress) return connected.context.newPage();
+async function newTabPage(stateDir: string, connected: Connected, egress: string | undefined, cloud = false): Promise<Page> {
+  if (cloud) return connected.context.newPage();
+  if (!egress) return pageInHostedContext(connected);
   try {
     const hosted = await requestHostedContext(stateDir, egress);
     const page = await pageInHostedContext(connected, hosted.id);
@@ -599,7 +602,7 @@ export async function closeOwnedPage(stateDir: string, page: Page, tab?: string)
 export async function openNewComputerPage(stateDir: string, tab?: string): Promise<Page> {
   const cloud = await onCloud(stateDir, tab);
   const connected = await browserFor(stateDir, true, cloud);
-  const page = await newTabPage(stateDir, connected, cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab)));
+  const page = await newTabPage(stateDir, connected, cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab)), cloud);
   if (cloud) cloudPages.add(page);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);
@@ -629,7 +632,7 @@ export async function openComputerPage(stateDir: string, tab?: string): Promise<
   const egress = cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab));
   const existing = mine(stateDir, tab) ?? (cloud ? undefined : await claimRestored(stateDir, connected.context, tab, egress));
   if (existing) { touchTab(stateDir, existing); return existing; }
-  const page = await newTabPage(stateDir, connected, egress);
+  const page = await newTabPage(stateDir, connected, egress, cloud);
   if (cloud) cloudPages.add(page);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);

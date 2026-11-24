@@ -87,7 +87,7 @@ describe('a tab bound to an egress, with the browser host serving egress', () =>
     const agent = await openNewComputerPage(dir, 'agent-a') as unknown as FakePage;
     expect(a.inContext).toBe('host-ctx-prod');
     expect(agent.inContext).toBe('host-ctx-prod');
-    expect(created).toEqual([{ url: 'about:blank', browserContextId: 'host-ctx-prod' }, { url: 'about:blank', browserContextId: 'host-ctx-prod' }]);
+    expect(created).toEqual([{ url: 'about:blank', newWindow: true, browserContextId: 'host-ctx-prod' }, { url: 'about:blank', newWindow: true, browserContextId: 'host-ctx-prod' }]);
     expect(made).toHaveLength(0);
     expect(egressOfPage(a as never)).toBe('prod');
     expect(await openComputerPage(dir, 'loop-a')).toBe(a);
