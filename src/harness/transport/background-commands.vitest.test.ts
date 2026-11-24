@@ -10,22 +10,26 @@ import { commandLastLine, type BackgroundWork } from '../protocol/background-age
 import { createAcpSession, shellFailure } from './acp-client.js';
 import { processAlive } from './process-group.js';
 
-const POLICY: CommandPolicy = { maxLifetimeMs: 2 * 3_600_000, hotMs: 30 * 60_000, hotCpuPercent: 90 };
+const POLICY: CommandPolicy = { hotMs: 30 * 60_000, hotCpuPercent: 90 };
 const HOUR = 3_600_000;
+/** Every command with visible output is stale at once: the integration tests' way to reach the reap. */
+const STALE_NOW: CommandPolicy = { hotMs: 1, hotCpuPercent: -1 };
 
 describe('staleVerdict', () => {
   const now = 1_000_000_000_000;
-  it('calls a command over the lifetime limit stale, whatever it is doing', () => {
-    expect(staleVerdict({ pid: 5, label: 'x', startedAt: now - 3 * HOUR, cpuPercent: 0, lastOutputAt: now - 1000 }, now, POLICY)).toMatch(/over the 2h limit/);
-  });
+  const out = 'job.output';
   it('calls a busy command with no output for 30 minutes stale', () => {
-    expect(staleVerdict({ pid: 5, label: 'x', startedAt: now - 40 * 60_000, cpuPercent: 100 }, now, POLICY)).toMatch(/cpu 100% with no output for 40m/);
+    expect(staleVerdict({ pid: 5, label: 'x', outputFile: out, startedAt: now - 40 * 60_000, cpuPercent: 100 }, now, POLICY)).toMatch(/cpu 100% with no output for 40m/);
   });
-  it('leaves a busy command that is writing, an idle one, a young one and a kept one alone', () => {
-    expect(staleVerdict({ pid: 5, label: 'x', startedAt: now - 40 * 60_000, cpuPercent: 100, lastOutputAt: now - 60_000 }, now, POLICY)).toBeUndefined();
-    expect(staleVerdict({ pid: 5, label: 'x', startedAt: now - 40 * 60_000, cpuPercent: 3 }, now, POLICY)).toBeUndefined();
-    expect(staleVerdict({ pid: 5, label: 'x', startedAt: now - 10 * 60_000, cpuPercent: 100 }, now, POLICY)).toBeUndefined();
-    expect(staleVerdict({ pid: 5, label: 'x', startedAt: now - 9 * HOUR, keep: true }, now, POLICY)).toBeUndefined();
+  it('never ends a command for its age: a quiet dev server is healthy at any age', () => {
+    expect(staleVerdict({ pid: 5, label: 'x', outputFile: out, startedAt: now - 72 * HOUR, cpuPercent: 0, lastOutputAt: now - 30 * HOUR }, now, POLICY)).toBeUndefined();
+  });
+  it('leaves a busy command that is writing, an idle one, a young one, a kept one and one whose output it cannot see alone', () => {
+    expect(staleVerdict({ pid: 5, label: 'x', outputFile: out, startedAt: now - 40 * 60_000, cpuPercent: 100, lastOutputAt: now - 60_000 }, now, POLICY)).toBeUndefined();
+    expect(staleVerdict({ pid: 5, label: 'x', outputFile: out, startedAt: now - 40 * 60_000, cpuPercent: 3 }, now, POLICY)).toBeUndefined();
+    expect(staleVerdict({ pid: 5, label: 'x', outputFile: out, startedAt: now - 10 * 60_000, cpuPercent: 100 }, now, POLICY)).toBeUndefined();
+    expect(staleVerdict({ pid: 5, label: 'x', outputFile: out, startedAt: now - 9 * HOUR, cpuPercent: 100, keep: true }, now, POLICY)).toBeUndefined();
+    expect(staleVerdict({ pid: 5, label: 'x', startedAt: now - 9 * HOUR, cpuPercent: 100 }, now, POLICY)).toBeUndefined();
   });
 });
 
@@ -146,7 +150,8 @@ async function leaving(command: string, commandPolicy: CommandPolicy, onBackgrou
 
 describe.skipIf(process.platform !== 'linux')('a command a turn left running', () => {
   it('is listed by pid with its label and age, and ended by the stale policy (logged), leaving others alone', async () => {
-    const { session } = await leaving('sleep 61; true', { maxLifetimeMs: 1, hotMs: 1e12, hotCpuPercent: 90 });
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-cmd-stale-'));
+    const { session } = await leaving(`exec >${join(dir, 'job.output')}; sleep 61; true`, STALE_NOW);
     try {
       // Read the pid before the watch ends it.
       const listed = await session.backgroundCommands();
@@ -154,11 +159,11 @@ describe.skipIf(process.platform !== 'linux')('a command a turn left running', (
       expect(listed).toHaveLength(1);
       expect(listed[0]!.label).toContain('sleep 61');
       expect(listed[0]!.startedAt).toBeGreaterThan(0);
-      expect(listed[0]!.stale).toMatch(/over the/);
+      expect(listed[0]!.stale).toMatch(/no output/);
       expect(reaped).toHaveLength(1);
       await vi.waitFor(() => expect(processAlive(listed[0]!.pid)).toBe(false), { timeout: 5_000 });
       await vi.waitFor(async () => expect(await session.backgroundWorkRunning()).toBe(false), { timeout: 5_000 });
-    } finally { await session.close(); }
+    } finally { await session.close(); await rm(dir, { recursive: true, force: true }); }
   });
 
   it('is told with the newest line it printed, and once it ends, that it ended and how long it ran', async () => {
@@ -174,14 +179,15 @@ describe.skipIf(process.platform !== 'linux')('a command a turn left running', (
   }, 20_000);
 
   it('is ended by the watch on its own once it is stale', async () => {
-    const { session } = await leaving('sleep 62; true', { maxLifetimeMs: 1, hotMs: 1e12, hotCpuPercent: 90 });
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-cmd-stale-'));
+    const { session } = await leaving(`exec >${join(dir, 'job.output')}; sleep 62; true`, STALE_NOW);
     try {
       await vi.waitFor(async () => expect(await session.backgroundWorkRunning()).toBe(false), { timeout: 8_000 });
-    } finally { await session.close(); }
+    } finally { await session.close(); await rm(dir, { recursive: true, force: true }); }
   });
 
   it(`is never ended by the policy when it carries ${KEEP_MARK}`, async () => {
-    const { session } = await leaving(`sleep 63; true # ${KEEP_MARK}`, { maxLifetimeMs: 1, hotMs: 1, hotCpuPercent: 0 });
+    const { session } = await leaving(`sleep 63; true # ${KEEP_MARK}`, STALE_NOW);
     try {
       const [command] = await session.backgroundCommands();
       expect(command?.keep).toBe(true);

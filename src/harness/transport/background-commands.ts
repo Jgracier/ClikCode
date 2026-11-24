@@ -4,8 +4,9 @@
  * their pids (persistent-session.ts leftCommands). This reads each one from /proc -- age, cpu, the
  * last time its output file changed and the newest line in it -- so a status line can say what is
  * being waited on (the line, not the cpu, which only the stale policy reads), and so a
- * command that has run for hours at full cpu without a word (2026-10-30: a vitest worker spinning
- * for 32 h under a stopped sub-agent held a chat 'thinking' all that time) is marked stale and ended.
+ * command spinning at full cpu without a word for half an hour is marked stale and ended. (2026-10-30: a
+ * vitest worker spinning for 32 h under a stopped sub-agent held a chat 'thinking'; its owner ending
+ * ends such a command now, acp-client.ts ownerEnded.)
  *
  * Everything that ends a process here ends it BY PID, from a tracked command: its own process group
  * when it leads one that is not the vendor's, else the process and the processes below it. Never by
@@ -28,8 +29,6 @@ export interface CommandStats extends BackgroundCommand {
 export const KEEP_MARK = 'clikcode:keep';
 
 export interface CommandPolicy {
-  /** Longest a background command may run before it is stale. */
-  maxLifetimeMs: number;
   /** Stale when it has run this long above hotCpuPercent with no output. */
   hotMs: number;
   hotCpuPercent: number;
@@ -40,18 +39,18 @@ const envMs = (name: string, fallback: number): number => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
-/** The policy in force: 2 h at most, or 30 min above 90 % cpu with no output. CLIKCODE_BACKGROUND_MAX_MS and
- * CLIKCODE_BACKGROUND_HOT_MS change the two times (0 or unset keeps the default). */
+/** The policy in force: 30 min above 90 % cpu with no output. CLIKCODE_BACKGROUND_HOT_MS changes the time
+ * (0 or unset keeps the default). Age alone is never a reason: a dev server, a watcher or a long suite may run
+ * for days, and a command nobody can want any more is ended for that (its owner ended), not for its age. */
 export function commandPolicy(): CommandPolicy {
-  return { maxLifetimeMs: envMs('CLIKCODE_BACKGROUND_MAX_MS', 2 * 3_600_000), hotMs: envMs('CLIKCODE_BACKGROUND_HOT_MS', 30 * 60_000), hotCpuPercent: 90 };
+  return { hotMs: envMs('CLIKCODE_BACKGROUND_HOT_MS', 30 * 60_000), hotCpuPercent: 90 };
 }
 
-/** Why `stats` is stale at `now`, or undefined. Pure. */
+/** Why `stats` is stale at `now`, or undefined. Pure. Silence is evidence only where the output can be seen:
+ * a command writing to a pipe (no output file) is never called silent. */
 export function staleVerdict(stats: CommandStats, now: number, policy: CommandPolicy = commandPolicy()): string | undefined {
-  if (stats.keep || stats.startedAt === undefined) return undefined;
-  const age = now - stats.startedAt;
+  if (stats.keep || stats.startedAt === undefined || !stats.outputFile) return undefined;
   const silentSince = Math.max(stats.startedAt, stats.lastOutputAt ?? 0);
-  if (age >= policy.maxLifetimeMs) return `ran ${formatAge(age)}, over the ${formatAge(policy.maxLifetimeMs)} limit`;
   if ((stats.cpuPercent ?? 0) > policy.hotCpuPercent && now - silentSince >= policy.hotMs) {
     return `cpu ${Math.round(stats.cpuPercent!)}% with no output for ${formatAge(now - silentSince)}`;
   }
