@@ -4,6 +4,19 @@ import { createSignalTracker, isCorrection, shellReads } from './context-signals
 const read = (id: string, path: string) => ({ kind: 'tool-start', id, category: 'read', call: { name: 'Read', input: { file_path: path } } });
 
 describe('context signals', () => {
+  it('counts a call from the frame that carries its arguments, not the name-only one before it', () => {
+    const files: string[] = [];
+    const tracker = createSignalTracker(files);
+    tracker.note({ kind: 'tool-start', id: 'r1', category: 'read' });
+    tracker.note({ kind: 'tool-start', id: 'r1', category: 'read', call: { name: 'Read', input: {} } });
+    tracker.note(read('r1', '/a'));
+    tracker.note(read('r1', '/a'));
+    expect(files).toEqual(['/a']);
+    tracker.note({ kind: 'tool-start', id: 'r2', category: 'read', call: { name: 'Read', input: {} } });
+    tracker.note(read('r2', '/a'));
+    expect(tracker.counts('x').reReads).toBe(1);
+  });
+
   it('counts a file read again, not one changed in between', () => {
     const files: string[] = ['/a'];
     const tracker = createSignalTracker(files);

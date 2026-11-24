@@ -143,11 +143,12 @@ export function createSignalTracker(files: string[], cwd?: string): { note(event
       if (event.parentId) return;
       const name = event.call?.name;
       if (event.kind === 'tool-start') {
-        if (event.id) {
-          if (started.has(event.id)) return;
-          started.add(event.id);
-        }
+        // A call arrives in frames: Claude's first names the tool alone, before its arguments have
+        // streamed. Each call counts once, from the first frame that says what it does.
+        if (event.id && started.has(event.id)) return;
+        const seen = (): void => { if (event.id) started.add(event.id); };
         if (isHindsight(name)) {
+          seen();
           turn.hindsight += 1;
           if (event.id) hindsightIds.add(event.id);
           return;
@@ -155,6 +156,7 @@ export function createSignalTracker(files: string[], cwd?: string): { note(event
         const input = event.call?.input;
         const line = event.category === 'run' || event.category === undefined ? commandOf(input) : undefined;
         if (line !== undefined) {
+          seen();
           const reads = shellReads(line);
           if (reads) for (const { path, range } of reads) noteRead(path, range);
           // Anything else the line does may change a file it names.
@@ -163,6 +165,7 @@ export function createSignalTracker(files: string[], cwd?: string): { note(event
         }
         const path = pathOf(input);
         if (!path) return;
+        seen();
         if (event.category === 'read') noteRead(path, rangeOf(input));
         else if (event.category === 'edit') forget(path);
         return;
