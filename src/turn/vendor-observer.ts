@@ -2,7 +2,8 @@
  * screen: the shared observer, usage and pending work. */
 import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { COMPACTED, contextTokens, nextCompactionRecord, noteContextStep, noteVendorFloor } from './compaction.js';
-import { rememberVendorMeasure } from './vendor-floors.js';
+import { knownVendorMeasures, rememberVendorMeasure } from './vendor-floors.js';
+import { addToTally, emptyTally, noteShadowReading, vendorDefaultTrigger, type ContextTally } from './context-shadow.js';
 import { catalogContextWindow } from '../harness/accounts/model-catalog.js';
 import { markTurn } from '../runtime/turn-latency.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
@@ -47,7 +48,16 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   const remember = (measure: { floor?: number; step?: number; window?: number }): void => {
     void rememberVendorMeasure(harness.command, ctx.model, session.id, measure);
   };
+  // The same readings as the vendor's default compaction would have left them (context-shadow.ts).
+  let tally: ContextTally = emptyTally();
+  const claudeWindow = harness.compactThreshold?.unit === 'claude-window';
+  const noteShadow = (used: number): void => {
+    const window = turnUsage?.contextWindow || catalogWindow || knownVendorMeasures(harness.command, ctx.model).window;
+    const shadow = session.contextShadow ??= { removed: 0 };
+    addToTally(tally, used, noteShadowReading(shadow, used, session.compaction?.at, vendorDefaultTrigger(window, claudeWindow)));
+  };
   const noteContext = (used: number): void => {
+    noteShadow(used);
     const record = session.compaction;
     if (floorPending && noteVendorFloor(record, lastContext, used)) {
       floorPending = false;
@@ -81,8 +91,10 @@ export function createVendorObserver(ctx: VendorTurnContext) {
    * Taken once: the attempt's usage is cleared as it is recorded. */
   const recordUnfinishedAttempt = unfinishedUsageRecorder(ctx.state, checkpoint, () => {
     const usage = turnUsage;
+    const context = tally;
     turnUsage = undefined;
-    return { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage };
+    tally = emptyTally();
+    return { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage, context };
   });
   const pendingWork = createPendingWorkTracker(harness.command);
   /** The response-delta rule, in one place: to the checkpoint and to the
@@ -187,12 +199,15 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     sharedObserver, onActivity, onSessionId, keepTransport, recordUnfinishedAttempt, pendingWork,
     /** The attempt's usage so far. */
     usage: (): TurnUsage | undefined => turnUsage,
+    /** The attempt's context readings, beside the vendor-default shadow of them. */
+    contextTally: (): ContextTally => tally,
     /** The per-attempt resets, and the transport this attempt runs on. */
     beginAttempt(transport: VendorTransport): void {
       activeTransport = transport;
     },
     resetAttempt(): void {
       turnUsage = undefined;
+      tally = emptyTally();
       pendingWork.reset();
     },
   };

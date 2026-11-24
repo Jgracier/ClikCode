@@ -237,7 +237,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   program.command('usage').description('Your AI use, per day, provider and model (--gateway: your use and credit as ClikDeploy Gateway records it)')
     .option('--gateway', 'ClikDeploy Gateway\'s record instead')
     .option('--days <days>', 'With --gateway: window in days, 1-90 (default 30)')
-    .action((options: { gateway?: boolean; days?: string }) => options.gateway ? later(statusCommands, 'aiGatewayUsage')(config, options) : later(statusCommands, 'aiUsage')());
+    .option('--by <period>', 'Tokens per account by hour, day, week, month or year, beside the same without context auto-tune')
+    .option('--last <count>', 'With --by: how many periods (default 14)')
+    .action((options: { gateway?: boolean; days?: string; by?: string; last?: string }) => options.gateway ? later(statusCommands, 'aiGatewayUsage')(config, options) : later(statusCommands, 'aiUsage')(Date.now(), options));
   // One command for "ask something from a script": a new chat (or --chat to
   // continue one), bound to an account, and the message sent. It took four
   // before -- sessions create, accounts add, sessions set, sessions send.

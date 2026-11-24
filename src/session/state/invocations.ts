@@ -18,6 +18,7 @@ import { sameData } from '../store/data.js';
 import { cachedFile } from '../store/cached-file.js';
 import { atomicWriteFile, ensurePrivateDirectory } from '../store/files.js';
 import { stateDirectory } from '../store/paths.js';
+import { tokensWithoutTune } from '../../turn/context-shadow.js';
 
 const DAY_MS = 24 * 60 * 60_000;
 /** Individual records are kept this long. */
@@ -45,6 +46,9 @@ export interface InvocationRollup {
   day: string; accountId: string; provider: string; model?: string;
   calls: number; inputTokens: number; outputTokens: number; latencyMs: number;
   maintenanceCalls?: number; cacheReadTokens?: number; cacheWriteTokens?: number; totalTokens?: number;
+  /** Over the calls that carried context readings (turn/context-shadow.ts): their tokens, and the
+   * same under the vendor's default compaction -- the comparison survives the fold. */
+  shadowCalls?: number; shadowTokens?: number; withoutTuneTokens?: number;
 }
 
 function rollupKey(invocation: Invocation): string {
@@ -83,6 +87,11 @@ export function capInvocations(index: StateIndex, now: number = Date.now()): voi
       cacheWriteTokens: (previous.cacheWriteTokens ?? 0) + (invocation.cacheWriteTokens ?? 0),
       totalTokens: (previous.totalTokens ?? 0) + invocationTokenCount(invocation),
       latencyMs: previous.latencyMs + (invocation.latencyMs ?? 0),
+      ...(invocation.contextCalls || previous.shadowCalls ? {
+        shadowCalls: (previous.shadowCalls ?? 0) + (invocation.contextCalls ? 1 : 0),
+        shadowTokens: (previous.shadowTokens ?? 0) + (invocation.contextCalls ? invocationTokenCount(invocation) : 0),
+        withoutTuneTokens: (previous.withoutTuneTokens ?? 0) + (invocation.contextCalls ? tokensWithoutTune(invocationTokenCount(invocation), invocation) : 0),
+      } : {}),
     };
     if (!index.rolledThrough || String(invocation.at) > index.rolledThrough) index.rolledThrough = String(invocation.at);
   }

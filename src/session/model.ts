@@ -212,6 +212,8 @@ export interface HarnessSession {
   lastUsage?: TurnUsage & { at: string };
   /** The conversation's latest compaction (turn/compaction.ts). */
   compaction?: import('../turn/compaction.js').CompactionRecord;
+  /** What the context would read under the vendor's default compaction (turn/context-shadow.ts). */
+  contextShadow?: import('../turn/context-shadow.js').ContextShadow;
   /** The vendor thread was started from a record that did not carry the conversation whole: the
    * messages before this one reached it fitted or not at all (turn/compaction.ts recallBoundary). */
   recallFrom?: number;
@@ -340,7 +342,7 @@ export interface HarnessState {
    *  'provider-default', 'platform' -- and those fake ids then flowed into
    *  usage rollups as if a model by that name had served the request. An
    *  absent model is a fact; a fabricated one corrupts the accounting. */
-  invocations: Array<{ id: string; accountId: string; provider: string; model?: string; at: string; kind?: 'maintenance'; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; totalTokens?: number; costUsd?: number; costBreakdown?: { meteredUsd?: number; gpuUsd?: number }; credits?: number; sessionId?: string; latencyMs: number; contextProfile?: string; stopReason?: 'stopped' | 'error' }>;
+  invocations: Array<{ id: string; accountId: string; provider: string; model?: string; at: string; kind?: 'maintenance'; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; totalTokens?: number; costUsd?: number; costBreakdown?: { meteredUsd?: number; gpuUsd?: number }; credits?: number; sessionId?: string; latencyMs: number; contextProfile?: string; stopReason?: 'stopped' | 'error'; contextCalls?: number; contextSum?: number; shadowSum?: number }>;
   /** Applies to every provider unless a providerSettings entry overrides it. */
   globalSettings: HarnessDefaultSettings;
   /** Keyed by AiLocalHarnessDefinition.provider; only the fields a user has set. */

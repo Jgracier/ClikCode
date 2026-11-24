@@ -154,7 +154,7 @@ describe('/usage all', () => {
   });
 
   it('adds a table of the last seven days with use, newest first', () => {
-    const week = all.text.slice(all.text.indexOf('Last 7 days')).split('\n').slice(1);
+    const week = all.text.slice(all.text.indexOf('Last 7 days')).split('\n\n')[0]!.split('\n').slice(1);
     expect(week).toHaveLength(2);
     expect(week[0]).toMatch(/^ {2}Mon Sep 21 +1.8k · 2 turns · \$0\.25\+$/);
     expect(week[1]).toMatch(/Sat Sep 19 +300 · 1 turn$/);

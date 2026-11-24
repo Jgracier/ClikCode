@@ -87,7 +87,7 @@ export async function completeVendorTurn(ctx: VendorTurnContext, observer: Vendo
     diagnostic('vendor.exited-with-tools-running', `${count} tool${count === 1 ? '' : 's'}`);
   }
   const usage = observer.usage() as TurnUsage | undefined;
-  const invocation = recordInvocation(state, { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage });
+  const invocation = recordInvocation(state, { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage, context: observer.contextTally() });
   // Claude answers a background agent's end with its refusal when the account has just run out, and
   // the prompt still ends as answered. That is the account spent, not served: recorded as a refusal, so
   // the next turn moves on -- recorded as a success it cleared the mark and set the 100% reading aside.

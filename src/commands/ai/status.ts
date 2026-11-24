@@ -29,14 +29,25 @@ export async function aiModelsList(): Promise<void> {
  * the last seven days -- not every recorded call. JSON: the per-provider totals (raw records and the
  * per-day rollups they are folded into) and the days. A latency average over every call is not shown:
  * a call's latency includes the time a turn waited on the user. */
-export async function aiUsage(now: number = Date.now()): Promise<void> {
+export async function aiUsage(now: number = Date.now(), options: { by?: string; last?: string } = {}): Promise<void> {
   const state = await readState({ transcripts: [] });
-  const [{ usageDays, usageReportAll }, { invocationRollups, invocationTokenCount }, { localHarnessForProvider }] = await Promise.all([
-    import('../../tui/slash/usage-report.js'), import('../../session/state/invocations.js'), import('../../runtime/lazy-bridge.js'),
+  const [{ usageDays, usageReportAll, usagePeriodText }, { invocationRollups, invocationTokenCount }, { localHarnessForProvider }, { USAGE_PERIODS, usageByPeriod, tuneSaving }] = await Promise.all([
+    import('../../tui/slash/usage-report.js'), import('../../session/state/invocations.js'), import('../../runtime/lazy-bridge.js'), import('../../session/usage-periods.js'),
   ]);
   const name = (provider: string): string => localHarnessForProvider(provider)?.displayName ?? provider;
+  const by = options.by?.toLowerCase().replace(/ly$/, '').replace(/^dai$/, 'day') as (typeof USAGE_PERIODS)[number] | undefined;
+  if (by !== undefined && !USAGE_PERIODS.includes(by)) throw new Error(`--by takes ${USAGE_PERIODS.join(', ')}`);
+  const last = options.last !== undefined ? Number(options.last) : undefined;
+  if (last !== undefined && !(Number.isInteger(last) && last > 0)) throw new Error('--last takes a whole number above 0');
   if (!isJsonDefaultMode()) {
-    process.stdout.write(`${usageReportAll(state, { accountId: null }, { now, providerName: name }).text}\n`);
+    process.stdout.write(`${by ? usagePeriodText(state, by, { ...(last ? { last } : {}), providerName: name }) : usageReportAll(state, { accountId: null }, { now, providerName: name }).text}\n`);
+    return;
+  }
+  if (by) {
+    const rows = usageByPeriod(state, by);
+    const keys = new Set([...new Set(rows.map((row) => row.period))].slice(0, last ?? 14));
+    const kept = rows.filter((row) => keys.has(row.period));
+    emitResult({ by, rows: kept, autoTune: tuneSaving(kept) });
     return;
   }
   type Totals = { provider: string; name: string; turns: number; maintenance: number; inputTokens: number; outputTokens: number; totalTokens: number; costUsd: number; unknownCostCalls: number };
@@ -59,7 +70,8 @@ export async function aiUsage(now: number = Date.now()): Promise<void> {
     totals.totalTokens += rollup.totalTokens ?? rollup.inputTokens + rollup.outputTokens;
     totals.unknownCostCalls += rollup.calls; // folded records keep no cost
   }
-  emitResult({ providers: [...providers.values()].sort((left, right) => left.name.localeCompare(right.name)), days: usageDays(state, now) });
+  const all = usageByPeriod(state, 'year');
+  emitResult({ providers: [...providers.values()].sort((left, right) => left.name.localeCompare(right.name)), days: usageDays(state, now), autoTune: tuneSaving(all) });
 }
 
 /** Reports the separate ClikDeploy OAuth/API-key gateway identity, never a BYO provider login. */

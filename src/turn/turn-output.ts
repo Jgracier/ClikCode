@@ -24,6 +24,8 @@ export function recordInvocation(state: HarnessState, turn: {
   sessionId: string; accountId: string; provider: string; model?: string | null;
   startedAt: number; usage?: TurnUsage; contextProfile?: string;
   kind?: 'maintenance';
+  /** The turn's model calls' context readings, and the same without ClikCode's threshold (turn/context-shadow.ts). */
+  context?: { calls: number; contextSum: number; shadowSum: number };
   /** Set only for a turn that did not complete: what it spent is still spent. */
   stopReason?: 'stopped' | 'error';
 }): Invocation {
@@ -43,6 +45,7 @@ export function recordInvocation(state: HarnessState, turn: {
     ...(usage?.credits !== undefined ? { credits: usage.credits } : {}),
     ...(turn.contextProfile ? { contextProfile: turn.contextProfile } : {}),
     ...(turn.stopReason ? { stopReason: turn.stopReason } : {}),
+    ...(turn.context?.calls ? { contextCalls: turn.context.calls, contextSum: turn.context.contextSum, shadowSum: turn.context.shadowSum } : {}),
   };
   state.invocations.push(invocation);
   return invocation;

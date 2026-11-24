@@ -9,6 +9,7 @@ import { invocationRollups, invocationTokenCount } from '../../session/state/inv
 import { accountBackAt, accountQuotaSpent, accountUsageText, outOfUsageText, usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { costSplitParts } from '../render/usage-words.js';
 import { accountUsage } from '../../session/picker-rows.js';
+import { periodKey, tuneSaving, usageByPeriod, type UsagePeriod, type UsagePeriodRow } from '../../session/usage-periods.js';
 
 type Invocation = HarnessState['invocations'][number];
 
@@ -234,5 +235,63 @@ export function usageReportAll(
     const figures = [...(width ? [tokensText(row.tokens, row.turns + row.maintenance).padStart(width)] : []), `${row.turns} ${row.turns === 1 ? 'turn' : 'turns'}`, ...(row.maintenance ? [`${row.maintenance} cache refresh${row.maintenance === 1 ? '' : 'es'}`] : []), ...(cost ? [cost] : [])];
     return `  ${label.padEnd(11)}  ${figures.join(' · ')}`;
   });
-  return { text: [...(sections.length ? sections : ['No providers yet']), ['Last 7 days', ...(week.length ? week : ['  Nothing recorded'])].join('\n')].join('\n\n') };
+  const totals = usageTotalsText(state, { now, providerName: name });
+  return { text: [...(sections.length ? sections : ['No providers yet']), ['Last 7 days', ...(week.length ? week : ['  Nothing recorded'])].join('\n'), ...(totals ? [totals] : [])].join('\n\n') };
+}
+
+/** `−32%`: the share auto-tune saved, or nothing where no turn was measured. */
+function savingText(rows: readonly UsagePeriodRow[]): string {
+  const saving = tuneSaving(rows);
+  if (!saving.measuredTokens) return '';
+  const percent = Math.round(saving.savedShare * 100);
+  return `without auto-tune ${compactCount(saving.withoutTuneTokens + (rows.reduce((sum, row) => sum + row.tokens, 0) - saving.measuredTokens))} (${percent > 0 ? `−${percent}` : percent === 0 ? '±0' : `+${-percent}`}%)`;
+}
+
+function accountName(state: Pick<HarnessState, 'accounts'>, accountId: string, provider: (id: string) => string, row?: UsagePeriodRow): string {
+  const account = state.accounts.find((item) => item.id === accountId);
+  return account ? `${provider(account.provider)} · ${account.label}` : `${provider(row?.provider ?? '')} · ${accountId.slice(0, 8)}`;
+}
+
+/** Per account: this hour, today, this week, this month, this year and everything recorded, then
+ * what auto-tune saved over the turns it was measured on. */
+export function usageTotalsText(state: HarnessState, options: { now?: number; providerName?: (provider: string) => string } = {}): string {
+  const now = new Date(options.now ?? Date.now());
+  const name = options.providerName ?? ((provider: string) => provider);
+  const periods: Array<[UsagePeriod | 'all', string]> = [['hour', 'hour'], ['day', 'today'], ['week', 'week'], ['month', 'month'], ['year', 'year'], ['all', 'all']];
+  const byPeriod = new Map(periods.map(([period]) => [period, period === 'all' ? usageByPeriod(state, 'year') : usageByPeriod(state, period)]));
+  const accounts = [...new Set(byPeriod.get('all')!.map((row) => row.accountId))];
+  if (!accounts.length) return '';
+  const lines = accounts.map((accountId) => {
+    const figures = periods.map(([period, label]) => {
+      const rows = byPeriod.get(period)!.filter((row) => row.accountId === accountId && (period === 'all' || row.period === periodKey(now, period)));
+      return `${label} ${compactCount(rows.reduce((sum, row) => sum + row.tokens, 0))}`;
+    });
+    const all = byPeriod.get('all')!.filter((row) => row.accountId === accountId);
+    const saving = savingText(all);
+    return [`  ${accountName(state, accountId, name, all[0])}`, `    ${figures.join(' · ')}`, ...(saving ? [`    ${saving}`] : [])].join('\n');
+  });
+  const everything = byPeriod.get('all')!;
+  const saving = tuneSaving(everything);
+  const summary = saving.measuredTokens
+    ? `  Auto-tune saved ${compactCount(saving.savedTokens)} tokens (${Math.round(saving.savedShare * 100)}%) on the ${Math.round(saving.coverage * 100)}% of use measured -- an estimate against the vendor's default compaction`
+    : '  Auto-tune: no turn measured yet (turns record their context readings from now on)';
+  return ['Tokens by account', ...lines, '', summary].join('\n');
+}
+
+/** `clikcode usage --by <period>`: every account's use per period, newest first. */
+export function usagePeriodText(state: HarnessState, period: UsagePeriod, options: { last?: number; providerName?: (provider: string) => string } = {}): string {
+  const name = options.providerName ?? ((provider: string) => provider);
+  const rows = usageByPeriod(state, period);
+  const keys = [...new Set(rows.map((row) => row.period))].slice(0, options.last ?? 14);
+  if (!keys.length) return 'Nothing recorded';
+  const width = Math.max(...rows.map((row) => compactCount(row.tokens).length));
+  return keys.map((key) => {
+    const inPeriod = rows.filter((row) => row.period === key);
+    const total = inPeriod.reduce((sum, row) => sum + row.tokens, 0);
+    const head = [key, `${compactCount(total)} tokens`, savingText(inPeriod)].filter(Boolean).join(' · ');
+    return [head, ...inPeriod.map((row) => {
+      const cost = row.costTurns ? (row.costTurns < row.turns ? `${dollars(row.costUsd)}+` : dollars(row.costUsd)) : '';
+      return `  ${compactCount(row.tokens).padStart(width)}  ${[accountName(state, row.accountId, name, row), `${row.turns} ${row.turns === 1 ? 'turn' : 'turns'}`, cost, savingText([row])].filter(Boolean).join(' · ')}`;
+    })].join('\n');
+  }).join('\n\n');
 }

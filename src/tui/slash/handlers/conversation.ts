@@ -28,7 +28,8 @@ import { capabilitiesText } from '../capabilities-text.js';
 import { compactConversation } from '../compact.js';
 import { sessionHarness, slashExtrasFor } from '../context.js';
 import { contextUsageText } from '../cost.js';
-import { usageReport, usageReportAll } from '../usage-report.js';
+import { usagePeriodText, usageReport, usageReportAll } from '../usage-report.js';
+import { USAGE_PERIODS, type UsagePeriod } from '../../../session/usage-periods.js';
 import { forkPoint, messagesThrough } from '../fork-at.js';
 import { exportTranscript } from '../export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from '../memory.js';
@@ -201,6 +202,14 @@ export const conversationHandlers = {
     });
   },
   usage: async ({ state, session, words }) => {
+    const period = words[0]?.toLowerCase().replace(/ly$/, '').replace(/^dai$/, 'day');
+    if (period && (USAGE_PERIODS as readonly string[]).includes(period)) {
+      const last = Number(words[1]);
+      return emitHarnessOutput({ panel: 'usage', text: usagePeriodText(state, period as UsagePeriod, {
+        ...(Number.isInteger(last) && last > 0 ? { last } : {}),
+        providerName: (provider) => localHarnessForProvider(provider)?.displayName ?? provider,
+      }) });
+    }
     if (words[0]?.toLowerCase() === 'all') {
       const report = usageReportAll(state, session, { providerName: (provider) => localHarnessForProvider(provider)?.displayName ?? provider });
       return emitHarnessOutput({ panel: 'usage', text: report.text });
