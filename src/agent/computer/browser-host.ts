@@ -60,15 +60,31 @@ export function separateProfileDir(stateDir: string, name: string): string { ret
  * leaves from. */
 export interface ProfileNet { egress: string; server: string; timeZone?: string }
 
-/** Chrome's own arguments and environment for a profile on an egress. Everything is set on the process, not patched into pages (a
- * patched page is itself a tell): the proxy for every request, WebRTC kept to the proxy (else its STUN request goes straight out and
- * reports the home address, measured 2026-11-24: "srflx:98.97.3.234" from a tab on prod), and TZ so the clock matches the exit address. */
+/** Chrome's own arguments and environment for a profile on an egress. Everything is set on the process (and WebRTC in the profile's
+ * preferences, writeWebRtcPolicy), not patched into pages, since a patched page is itself a tell: the proxy for every request, and TZ
+ * so the clock matches the exit address. */
 export function profileNetLaunch(net: ProfileNet | undefined): { args: string[]; env?: Record<string, string> } {
   if (!net) return { args: [] };
   return {
-    args: [`--proxy-server=${net.server}`, '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
+    args: [`--proxy-server=${net.server}`],
     ...(net.timeZone ? { env: { TZ: net.timeZone } } : {}),
   };
+}
+
+/** WebRTC's own setting in the profile, written before its Chrome starts: on an egress it may send only what goes through the proxy,
+ * so its STUN request cannot go straight out and report the home address. Chrome 149 ignores the --force-webrtc-ip-handling-policy
+ * switch (measured 2026-11-24: the switch on the command line, "srflx:98.97.3.234" still reported); the preference is what Chrome's
+ * privacy API and enterprise policy set. Home puts it back to Chrome's default. */
+export async function writeWebRtcPolicy(dir: string, onEgress: boolean): Promise<void> {
+  const file = path.join(dir, 'Default', 'Preferences');
+  let prefs: { webrtc?: Record<string, unknown> } & Record<string, unknown> = {};
+  try { prefs = JSON.parse(await fs.readFile(file, 'utf8')) as typeof prefs; } catch { prefs = {}; }
+  const webrtc = { ...(prefs.webrtc ?? {}) };
+  if (onEgress) webrtc.ip_handling_policy = 'disable_non_proxied_udp';
+  else if (webrtc.ip_handling_policy === undefined) return;
+  else delete webrtc.ip_handling_policy;
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await fs.writeFile(file, JSON.stringify({ ...prefs, webrtc }), { mode: 0o600 });
 }
 
 /** The egress a separate profile keeps (in its own folder): a profile is one identity, and one identity keeps one address. */
@@ -111,6 +127,7 @@ export function separateProfiles(stateDir: string, launch: (dir: string, net?: P
         const net = server && wanted ? { egress: wanted, server, timeZone: await network!.timeZone(wanted, server).catch(() => undefined) } : undefined;
         // A port file left by a Chrome that is gone would name a dead port.
         await fs.unlink(path.join(dir, 'DevToolsActivePort')).catch(quiet('agent/computer/browser-host'));
+        await writeWebRtcPolicy(dir, Boolean(net));
         const context = await launch(dir, net);
         const entry: Held = { context, port: 0, ...(server ? { server, egress: wanted } : {}), closed: false };
         (context as unknown as { once(event: 'close', callback: () => void): void }).once('close', () => { entry.closed = true; });

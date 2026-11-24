@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { BrowserContext } from 'playwright-core';
-import { launchFirst, profileNetLaunch, separateProfileDir, separateProfiles, type ProfileNet } from './browser-host.js';
+import { launchFirst, profileNetLaunch, writeWebRtcPolicy, separateProfileDir, separateProfiles, type ProfileNet } from './browser-host.js';
 
 it('uses the first browser that is installed', async () => {
   const tried: string[] = [];
@@ -197,7 +197,22 @@ describe('separate profiles', () => {
   it('sets the proxy, WebRTC and clock on the Chrome process, and nothing for home', () => {
     expect(profileNetLaunch(undefined)).toEqual({ args: [] });
     expect(profileNetLaunch({ egress: 'prod', server: 'socks5://127.0.0.1:41000', timeZone: 'America/Chicago' })).toEqual({
-      args: ['--proxy-server=socks5://127.0.0.1:41000', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'], env: { TZ: 'America/Chicago' } });
-    expect(profileNetLaunch({ egress: 'prod', server: 'socks5://127.0.0.1:41000' })).toEqual({ args: ['--proxy-server=socks5://127.0.0.1:41000', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] });
+      args: ['--proxy-server=socks5://127.0.0.1:41000'], env: { TZ: 'America/Chicago' } });
+    expect(profileNetLaunch({ egress: 'prod', server: 'socks5://127.0.0.1:41000' })).toEqual({ args: ['--proxy-server=socks5://127.0.0.1:41000'] });
+  });
+
+  it('keeps WebRTC to the proxy in the profile\'s own preferences on an egress, and puts it back for home', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-sep-'));
+    const prefs = path.join(dir, 'Default', 'Preferences');
+    try {
+      await writeWebRtcPolicy(dir, false);
+      await expect(fs.stat(prefs)).rejects.toThrow();
+      await fs.mkdir(path.dirname(prefs), { recursive: true });
+      await fs.writeFile(prefs, JSON.stringify({ profile: { name: 'x' }, webrtc: { multiple_routes_enabled: true } }));
+      await writeWebRtcPolicy(dir, true);
+      expect(JSON.parse(await fs.readFile(prefs, 'utf8'))).toEqual({ profile: { name: 'x' }, webrtc: { multiple_routes_enabled: true, ip_handling_policy: 'disable_non_proxied_udp' } });
+      await writeWebRtcPolicy(dir, false);
+      expect(JSON.parse(await fs.readFile(prefs, 'utf8'))).toEqual({ profile: { name: 'x' }, webrtc: { multiple_routes_enabled: true } });
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 });
