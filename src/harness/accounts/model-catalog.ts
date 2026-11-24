@@ -473,7 +473,7 @@ export async function recordLiveModelCatalog(
   const fingerprint = await catalogFingerprint(harness, account);
   const previous = (await memo.load()).entries[cacheKey(harness, account)];
   const configured = fresh ? listed.current : previous?.fingerprint === fingerprint ? previous.result.configured : undefined;
-  const result = await nativeModelCatalogUncached(harness, account, { ...listed, current: configured });
+  const result = await nativeModelCatalogUncached(harness, account, { ...listed, current: configured }, { windows: previous?.result.windows });
   rememberVendorModelNames(harness, result);
   if (previous?.fingerprint === fingerprint && JSON.stringify(previous.result) === JSON.stringify(result)) return;
   await rememberCatalog(harness, account, fingerprint, result);
@@ -528,6 +528,7 @@ interface DiscoveryState {
   connect?: ModelCatalogConnect[];
   free?: string[];
   effortValues?: string[];
+  windows?: Record<string, number>;
 }
 interface DiscoveryContext {
   harness: AiLocalHarnessDefinition;
@@ -733,7 +734,7 @@ async function nativeModelCatalogUncached(
   /** What a live session already offered: then no agent is started for it. */
   liveListed?: { models: string[]; labels: Record<string, string>; current?: string; efforts?: string[] },
   /** `offline`: start no vendor process (a hold after a failure). */
-  run: { offline?: boolean; outcome?: DiscoveryOutcome } = {},
+  run: { offline?: boolean; outcome?: DiscoveryOutcome; windows?: Readonly<Record<string, number>> } = {},
 ): Promise<ModelCatalogResult> {
   const d: DiscoveryState = { models: new Set(account?.models ?? []) };
   const { models } = d;
@@ -779,6 +780,16 @@ async function nativeModelCatalogUncached(
       else addDiscoveredModels(printed);
     } catch (error) { /* Keep configured/account models and the custom-ID option available. */ swallowed('harness/accounts/model-catalog', error); }
   }
+  // Windows already read are kept: a live session's list reports none, and
+  // re-reading them at every session start would start the vendor each time.
+  if (run.windows && Object.keys(run.windows).length) d.windows = { ...run.windows };
+  else if (harness.modelWindowArgv && mayRun) {
+    try {
+      const printed = await vendorCommandText({ gate: harness, argv: harness.modelWindowArgv, environment: nativeProfileEnvironment(account?.nativeProfile), deadlineMs: PROBE_DEADLINE_MS });
+      const windows = modelWindowsFrom(printed);
+      if (Object.keys(windows).length) d.windows = windows;
+    } catch (error) { /* No windows: a share of the window stays unread, as before. */ swallowed('harness/accounts/model-catalog', error); }
+  }
   if (d.configured) models.add(d.configured);
   return {
     ...(d.configured ? { configured: d.configured } : {}),
@@ -787,7 +798,34 @@ async function nativeModelCatalogUncached(
     ...(d.free?.length ? { free: d.free } : {}),
     ...(d.connect?.length ? { connect: d.connect } : {}),
     ...(d.effortValues?.length ? { effortValues: d.effortValues } : {}),
+    ...(d.windows ? { windows: d.windows } : {}),
   };
+}
+
+/** The context window `model` (the vendor's default where none is chosen) has, as the vendor's
+ * catalog states it (`modelWindowArgv`). Undefined where it states none. */
+export async function catalogContextWindow(
+  harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, model: string | null | undefined,
+): Promise<number | undefined> {
+  if (!harness.modelWindowArgv) return undefined;
+  const catalog = await nativeModelCatalog(harness, account);
+  const id = model || catalog.configured;
+  return id ? catalog.windows?.[id] : undefined;
+}
+
+/** `modelWindowArgv`'s answer, `{models: [{model_id, context_window_tokens}]}` (kiro-cli 2.23
+ * `chat --list-models --format json`), as model id to window. */
+export function modelWindowsFrom(printed: string): Record<string, number> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(printed.slice(Math.max(0, printed.indexOf('{')))); } catch { return {}; } // fail-open-ok: a list that is not JSON states no window
+  const listed = (parsed as { models?: unknown })?.models;
+  const windows: Record<string, number> = {};
+  for (const entry of Array.isArray(listed) ? listed as Record<string, unknown>[] : []) {
+    const id = entry?.model_id ?? entry?.model_name;
+    const tokens = entry?.context_window_tokens;
+    if (typeof id === 'string' && id && typeof tokens === 'number' && Number.isFinite(tokens) && tokens > 0) windows[id] = tokens;
+  }
+  return windows;
 }
 
 /** A harness whose effort levels depend on the model and which states them only over ACP (Droid,

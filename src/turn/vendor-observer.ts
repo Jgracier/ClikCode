@@ -1,8 +1,9 @@
 /** What one vendor turn's transports report, folded into the checkpoint and the
  * screen: the shared observer, usage and pending work. */
-import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { COMPACTED, contextTokens, nextCompactionRecord, noteContextStep, noteVendorFloor } from './compaction.js';
 import { rememberVendorMeasure } from './vendor-floors.js';
+import { catalogContextWindow } from '../harness/accounts/model-catalog.js';
 import { markTurn } from '../runtime/turn-latency.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -39,6 +40,10 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   let floorPending = false;
   let lastContext: number | undefined;
   let largestStep = 0;
+  // A vendor that says only how full its window is (Kiro's percentage) is read against the
+  // window its own model list states: without one there were no tokens, and no compaction.
+  let catalogWindow: number | undefined;
+  void catalogContextWindow(harness, ctx.account, ctx.model).then((window) => { catalogWindow = window; }, quiet('turn/vendor-observer'));
   const remember = (measure: { floor?: number; step?: number; window?: number }): void => {
     void rememberVendorMeasure(harness.command, ctx.model, session.id, measure);
   };
@@ -62,6 +67,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   };
   const noteUsage = (usage: TurnUsage): void => {
     turnUsage = { ...turnUsage, ...usage };
+    if (turnUsage.contextPercent !== undefined && !turnUsage.contextWindow && catalogWindow) turnUsage.contextWindow = catalogWindow;
     const shown = turnUsage!;
     const used = contextTokens(shown);
     // A compaction's own readings are of the summarizing call, not of the conversation.

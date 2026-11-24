@@ -146,6 +146,9 @@ export type ModelCatalogResult = {
   /** The reasoning levels the agent's own ACP session offers for its
    * `acp.effortConfigId` option (Goose), where it has no effort flag. */
   effortValues?: string[];
+  /** Each model's context window, where the vendor states it beside the list
+   * (`modelWindowArgv`): what a share of the window in use is out of. */
+  windows?: Readonly<Record<string, number>>;
 };
 
 export type NativeUsageProbe = (environment: Readonly<Record<string, string>>) => Promise<string | undefined>;

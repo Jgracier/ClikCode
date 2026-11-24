@@ -9,7 +9,7 @@ vi.mock('../../runtime/lazy-bridge.js', async (importOriginal) => ({
   modelIdFromDisplay: catalog.modelIdFromDisplay,
 }));
 
-const { copilotModelList, harnessModelLabel, modelIdFromLabel, nativeModelLabel } = await import('./model-catalog.js');
+const { copilotModelList, harnessModelLabel, modelIdFromLabel, modelWindowsFrom, nativeModelLabel } = await import('./model-catalog.js');
 const { modelRow } = await import('../../tui/pickers/model.js');
 const localHarnessForCommand = catalog.localHarnessForCommand;
 
@@ -85,5 +85,21 @@ describe('Copilot model list', () => {
   it('keeps the account\'s own list as the whole truth', () => {
     const own = { models: ['gpt-5-mini'], labels: { 'gpt-5-mini': 'GPT-5 mini' } };
     expect(copilotModelList(own, { models: ['gpt-5.6-sol'], labels: {} })).toBe(own);
+  });
+});
+
+describe('a vendor list that states each model window (Kiro)', () => {
+  it('reads model id to window from kiro-cli chat --list-models --format json', () => {
+    const printed = JSON.stringify({ models: [
+      { model_name: 'auto', model_id: 'auto', context_window_tokens: 1_000_000 },
+      { model_name: 'claude-sonnet-4.5', model_id: 'claude-sonnet-4.5', context_window_tokens: 200_000 },
+      { model_name: 'no-window', model_id: 'no-window' },
+    ], default_model: 'auto' });
+    expect(modelWindowsFrom(`Loading...\n${printed}`)).toEqual({ auto: 1_000_000, 'claude-sonnet-4.5': 200_000 });
+    expect(modelWindowsFrom('not json')).toEqual({});
+  });
+
+  it('is declared for Kiro, whose ACP reports only a percentage', () => {
+    expect(catalog.localHarnessForCommand('kiro')?.modelWindowArgv).toEqual(['chat', '--list-models', '--format', 'json']);
   });
 });
