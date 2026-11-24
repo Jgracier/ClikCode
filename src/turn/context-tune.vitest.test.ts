@@ -20,6 +20,16 @@ describe('context auto-tune', () => {
     expect(decideStep(tune, bounds)).toBeUndefined();
   });
 
+  it('never steps "down" to a higher level when the floor sits above it', () => {
+    const tall = { floor: 140_000, window: 133_000 };
+    const tune = { ...startTune(bounds), level: 30_000, full: counts(20), cut: counts(20) };
+    const step = decideStep(tune, tall)!;
+    expect(step.to).toBe(30_000);
+    expect(step.why).toMatch(/^holds: .*leaves no room below/);
+    expect(applyStep(tune, step, 't1')).toBeUndefined();
+    expect(tune.level).toBe(30_000);
+  });
+
   it('steps down while cut turns read like whole ones, and up when they lose more', () => {
     const tune = { ...startTune(bounds), full: counts(40, { reReads: 4, hindsight: 10 }), cut: counts(20, { reReads: 2, hindsight: 5 }) };
     const down = decideStep(tune, bounds)!;

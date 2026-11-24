@@ -111,6 +111,8 @@ export function decideStep(tune: ModelTune, bounds: TuneBounds): { to: number; w
     return { to, why: `up: ${rates}` };
   }
   const down = clamp(tune.level - TUNE_STEP, bounds);
+  // The floor (what a compaction leaves, plus room) can sit at or above the level: then there is no lower level to try.
+  if (down >= tune.level) return { to: tune.level, why: `holds: ${rates}; the floor ${Math.round(levelBounds(bounds).floor / 1000)}k leaves no room below` };
   if (down < EVAL_BELOW && !(tune.evalLevel !== undefined && tune.evalLevel <= down)) {
     return { to: tune.level, why: `holds: ${rates}; ${Math.round(down / 1000)}k needs the graded eval first`, evalWanted: down };
   }
