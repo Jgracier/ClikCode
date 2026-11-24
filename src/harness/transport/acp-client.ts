@@ -607,6 +607,9 @@ interface Stream {
   base: TurnUsage;
 }
 
+/** The same refused request retried this many times in a row, nothing said between: the provider's answer. */
+const REFUSED_RETRIES = 4;
+
 /** The longest a compaction the agent runs after its answer is waited for. */
 const COMPACTION_SETTLE_MS = 10 * 60_000;
 
@@ -627,6 +630,8 @@ interface ActiveTurn extends Stream {
   /** Cancelled mid-setup: the setup finishes in the background (interrupt). */
   setupContinues?: boolean;
   fail: (error: Error) => void;
+  /** `_session/retrying` notices in a row that named an HTTP status, with nothing else from the agent between. */
+  refusedRetries?: number;
   /** How this turn takes a message in (see steer); the broker sets `onWindow`. */
   steerPort?: SteerPort;
   /** Approvals the user is being asked for now. */
@@ -1351,6 +1356,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     let update: Json = params.update ?? {};
     const turn = this.turn && !this.turn.done ? this.turn : undefined;
     const expected = turn?.sessionId ?? this.sessionId;
+    // Anything the agent says for the turn: its retries are no longer in a row.
+    if (turn) turn.refusedRetries = 0;
     if (update.sessionUpdate === 'subagent_spawned' && typeof update.subagentSessionId === 'string') {
       const spawner = update._meta?.cursor?.toolCallId;
       if (typeof spawner === 'string' && spawner) {
@@ -1638,15 +1645,30 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   /** The agent's own notice that it is retrying a failed model call
    * (`_session/retrying`, Vibe: `{category:"rate_limited", detail:"HTTP 429"}`).
-   * Shown as a phase, nothing more: the agent retries by its own backoff and
-   * may well succeed. Its own failure or stop reason ends the turn. */
+   * Shown as a phase: the agent retries by its own backoff and may well
+   * succeed. But the same refusal `REFUSED_RETRIES` times in a row with not a
+   * word between is the provider's answer, and it is the account's: Vibe
+   * retries a 429 for five minutes a request, then the next request, while the
+   * turn shows nothing. That ends the turn as the status, so failover moves to
+   * another account. It counts the agent's refusals; ClikCode keeps no clock. */
   private retrying(params: Json): void {
     const target = this.liveTarget(params);
     if (!target) return;
     const command = this.turn?.input.command ?? 'the agent';
     const detail = typeof params.detail === 'string' ? params.detail : '';
     const category = typeof params.category === 'string' ? params.category : '';
-    target.observer.onPhase?.(`${command} is retrying${category || detail ? ` (${[category.replace(/_/g, ' '), detail].filter(Boolean).join(': ')})` : ''}`);
+    const said = [category.replace(/_/g, ' '), detail].filter(Boolean).join(': ');
+    target.observer.onPhase?.(`${command} is retrying${said ? ` (${said})` : ''}`);
+    const turn = this.turn;
+    const status = Number(/\bHTTP (\d{3})\b/.exec(detail)?.[1]);
+    if (target !== turn || turn.done) return;
+    if (!status) { turn.refusedRetries = 0; return; }
+    turn.refusedRetries = (turn.refusedRetries ?? 0) + 1;
+    if (turn.refusedRetries < REFUSED_RETRIES) return;
+    turn.fail(Object.assign(
+      new Error(`${command}: the provider kept refusing the request (${said}); ${command} retried ${turn.refusedRetries} times without answering`),
+      { statusCode: status, vendorRetryStall: true },
+    ));
   }
 
   /** Where a session-scoped extension notification goes: the user's turn, or

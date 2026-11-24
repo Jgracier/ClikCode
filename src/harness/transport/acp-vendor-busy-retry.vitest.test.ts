@@ -40,13 +40,13 @@ describe('vendor busy notices', () => {
 });
 
 describe('a retry the agent repeats', () => {
-  it('keeps waiting through repeated retries and lets the agent finish', async () => {
+  it('keeps waiting through retries short of a refusal and lets the agent finish', async () => {
     const phases: string[] = [];
     const session = createAcpSession();
     try {
       const retry = `send({ method: '_session/retrying', params: { sessionId: 's1', category: 'rate_limited', detail: 'HTTP 429' } });`;
-      const result = await session.runTurn(input(`${retry.repeat(6)} note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } }); send({ id, result: { stopReason: 'end_turn' } });`, { onPhase: (p: string) => phases.push(p) }));
-      expect(phases.filter((p) => /is retrying/.test(p))).toHaveLength(6);
+      const result = await session.runTurn(input(`${retry.repeat(3)} note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } }); send({ id, result: { stopReason: 'end_turn' } });`, { onPhase: (p: string) => phases.push(p) }));
+      expect(phases.filter((p) => /is retrying/.test(p))).toHaveLength(3);
       expect(phases[0]).toBe('fake is retrying (rate limited: HTTP 429)');
       expect(result.text).toBe('done');
     } finally { await session.close(); }

@@ -367,6 +367,45 @@ describe('an agent that is retrying a rate-limited call', () => {
     expect(result.text).toBe('PONG');
     expect(phases).toEqual(['vibe is retrying (rate limited: HTTP 429)']);
   });
+
+  /** Vibe on a key the provider keeps refusing: a retry notice per backoff,
+   * never an answer. `between` is said after each notice but the last. */
+  const refusing = (between: string) => `
+    const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+    let buf = '';
+    process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+      if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+      else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1' } });
+      else if (m.method === 'session/prompt') {
+        send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'PONG?' } } } });
+        let left = 4;
+        const retry = () => {
+          send({ method: '_session/retrying', params: { sessionId: 's1', category: 'rate_limited', detail: 'HTTP 429' } });
+          if (--left === 0) { ${between ? `send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'PONG' } } } }); send({ id: m.id, result: { stopReason: 'end_turn' } }); return;` : ''} }
+          ${between}
+          setTimeout(retry, 20);
+        };
+        retry();
+      } } });
+  `;
+
+  it('ends the turn as the provider\'s status when the agent retries the same refusal four times without a word', async () => {
+    const failure = await runAcpTurn({
+      binary: process.execPath, command: 'vibe', argv: ['-e', refusing('')], cwd: process.cwd(), prompt: 'PONG?',
+      environment: {}, permissionMode: 'ask' as const,
+    }).then(() => undefined, (error: unknown) => error as Error & { statusCode?: number });
+    expect(failure?.message).toBe('vibe: the provider kept refusing the request (rate limited: HTTP 429); vibe retried 4 times without answering');
+    expect(failure?.statusCode).toBe(429);
+  });
+
+  it('keeps waiting while the agent says something between its retries', async () => {
+    const said = `send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'waiting' } } } });`;
+    const result = await runAcpTurn({
+      binary: process.execPath, command: 'vibe', argv: ['-e', refusing(said)], cwd: process.cwd(), prompt: 'PONG?',
+      environment: {}, permissionMode: 'ask' as const,
+    });
+    expect(result.text).toBe('PONG');
+  });
 });
 
 describe('the models a session offers', () => {
