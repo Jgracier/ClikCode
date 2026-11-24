@@ -19,7 +19,7 @@ import { loginValueFor } from '../computer/login-fill.js';
 import { FILL_DEADLINE_MS, FillTimeout, withFillDeadline, type FillClock } from '../computer/fill-deadline.js';
 import { describeRecipe, destructiveStep, fillPlaceholders, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
-import { assertCustomKey, bestProfileFor, isUnfillable, customFieldFor, defaultProfile, describeProfile, listProfiles, profileEmail, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
+import { assertCustomKey, bestProfileFor, isUnfillable, customFieldFor, defaultProfile, describeProfile, listProfiles, profileEmail, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, profileValue, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type FillKey, type ProfileKey } from '../computer/profiles.js';
 import { holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup, sitePasswordFor } from '../computer/signup-login.js';
 import { generatePassword } from '../computer/password-policy.js';
 import { generatedFor, readPasswordPolicy, rememberGenerated, retryRejectedPassword } from '../computer/password-retry.js';
@@ -1075,7 +1075,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   }
   if (profile && profiles.length > 1) report.push(`Autofill used the profile "${profile.label}".`);
   const values = new Map<Step, string>();
-  const ask: { step: Step; key: ProfileKey | undefined; field: LoginField }[] = [];
+  const ask: { step: Step; key: FillKey | undefined; field: LoginField }[] = [];
   // A saved login for this site fills its sign-in fields. Not on a form that creates a password (two password
   // boxes): that is a signup, and the saved login belongs to the account that already exists.
   let login: Record<string, string> | undefined;
@@ -1211,7 +1211,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
       if (code) { registerSecret(code); values.set(field.step, code); continue; }
     }
     const key = field.password ? undefined : profileKeyFor(field.hint);
-    const known = key ? profile?.fields[key] : undefined;
+    const known = key ? profileValue(profile?.fields, key) : undefined;
     if (confirmSignIn && !signingUp && (field.password || fromLogin || key === 'email')) {
       const current = field.password ? fromLogin : (fromLogin ?? known);
       ask.push({ step: field.step, key: undefined, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true, ...(current ? { current } : {}) } });
@@ -1243,7 +1243,8 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
       values.set(item.step, answer);
       // A password typed into a form shows in the page's own text afterwards: hold it back from every view.
       if (item.field.kind === 'password' && answer) { registerSecret(answer); await holdSignup(ctx.stateDir, page, answer, email).catch(quiet('agent/tools/computer-web')); }
-      else if (item.key && answer) learned[item.key] = answer;
+      // A whole name typed in one box is not split into given and family guesses: only a box that is one detail teaches it.
+      else if (item.key && item.key !== 'name' && answer) learned[item.key] = answer;
     }
     // The email the person just typed is the account's: attach it to the login kept above (it was kept without one).
     const typedEmail = ask.map(item => values.get(item.step)).find(value => value && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value));

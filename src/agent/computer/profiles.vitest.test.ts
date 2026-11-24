@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { lockCredentialVault } from './credential-vault.js';
-import { isUnfillable, bestProfileFor, defaultProfile, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileEmail, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
+import { isUnfillable, bestProfileFor, defaultProfile, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileEmail, profileKeyFor, profileValue, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
 import { namedSecretNames } from './credential-vault.js';
 
 type SavedProfile = Awaited<ReturnType<typeof listProfiles>>[number];
@@ -24,6 +24,31 @@ describe('profileKeyFor', () => {
     expect(profileKeyFor({ autocomplete: 'cc-number', type: 'text', text: 'Card number' })).toBeUndefined();
     expect(profileKeyFor({ autocomplete: 'new-password', type: 'password', text: 'Password' })).toBeUndefined();
     expect(profileKeyFor({ autocomplete: '', type: 'text', text: 'Favourite colour' })).toBeUndefined();
+  });
+});
+
+describe('profileKeyFor: a placeholder example is read by its shape, not its words', () => {
+  const box = (label: string, name = '') => ({ autocomplete: '', type: 'text', label, text: `${label} ${name}` });
+  it('fills an email box whose example address has "company" in its domain with the email, never the company', () => {
+    expect(profileKeyFor(box('e.g. john.doe@company.com', 'contactEmail'))).toBe('email');
+    expect(profileKeyFor(box('Company name, e.g. Acme Inc'))).toBe('organization');
+  });
+  it('fills a box asking for the whole name with the whole name', () => {
+    expect(profileKeyFor(box('e.g. John Doe', 'contactName'))).toBe('name');
+    expect(profileKeyFor(box('Name'))).toBe('name');
+    expect(profileKeyFor(box('Full name'))).toBe('name');
+    expect(profileKeyFor(box('Developer contact name'))).toBe('name');
+    expect(profileKeyFor({ autocomplete: 'name', type: 'text', text: 'anything' })).toBe('name');
+    expect(profileKeyFor(box('First name'))).toBe('given_name');
+  });
+  it('never takes an app, project or workspace name for a person', () => {
+    expect(profileKeyFor(box('App name', 'e.g. My App'))).toBeUndefined();
+    expect(profileKeyFor(box('Project name'))).toBeUndefined();
+    expect(profileKeyFor({ autocomplete: '', type: 'text', text: 'name' })).toBeUndefined();
+  });
+  it('joins the given and family name for a whole-name box', () => {
+    expect(profileValue({ given_name: 'Ada', family_name: 'Lovelace' }, 'name')).toBe('Ada Lovelace');
+    expect(profileValue({}, 'name')).toBeUndefined();
   });
 });
 

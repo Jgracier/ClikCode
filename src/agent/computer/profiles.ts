@@ -207,15 +207,54 @@ export function secretFieldFor(profile: { secrets?: Record<string, SecretField> 
   return best?.key;
 }
 
+/** What a form box can be filled with from a profile: a stored detail, or `name`, the whole name (given then family) a box asks
+ * for in one piece ("Full name", "Contact name", a box whose example is "John Doe"). */
+export type FillKey = ProfileKey | 'name';
+
+/** A box that asks for the whole name in one piece. A bare "Name" is a person's only when nothing else names it (an app, project or
+ * workspace name is not), so it is matched on the label alone, never on a name or id. */
+const WHOLE_NAME = /full.?name|your.?name|(?:contact|developer|account.?holder|card.?holder|legal)\s?name|nombre.?completo|nome.?completo|nom.?complet|vollstandiger.?name/;
+const BARE_NAME = /^\s*(?:name|nombre|nome|nom)\s*\*?\s*$/;
+
+/** The example a placeholder gives ("e.g. john.doe@company.com", "Ex: John Doe", "z. B. Max Mustermann"), split from the words
+ * before it. The example is a sample value, not a description: its words ("company" in an address's domain) say nothing of what
+ * the box asks; its shape does. */
+const EXAMPLE = /(?:^|\s)(?:e\.\s?g\.?|eg\.|ex(?:ample)?\s?[.:]|for example|such as|z\.\s?b\.?|p\.\s?ej\.?|por ejemplo|par ex(?:emple)?\.?|ad es\.?)\s*:?\s*(.+)$/i;
+export function splitExample(text: string): { words: string; example?: string } {
+  const m = EXAMPLE.exec(text);
+  return m ? { words: text.slice(0, m.index).trim(), example: m[1]!.trim() } : { words: text };
+}
+/** What a sample value is, by its shape alone. */
+function exampleKey(example: string): FillKey | undefined {
+  const first = example.split(/\s+/)[0] ?? '';
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(first)) return 'email';
+  if (/^(?:https?:\/\/|www\.)\S+$/i.test(first)) return 'website';
+  if (/^\+?[\d\s().-]{7,}$/.test(example) && (example.match(/\d/g) ?? []).length >= 7) return 'phone';
+  if (/^\p{Lu}[\p{L}'-]+(?:\s\p{Lu}[\p{L}'-]+){1,2}$/u.test(example)) return 'name';
+  return undefined;
+}
+
+/** The profile value a fill key stands for. */
+export function profileValue(fields: Partial<Record<ProfileKey, string>> | undefined, key: FillKey): string | undefined {
+  if (key !== 'name') return fields?.[key];
+  return [fields?.given_name, fields?.family_name].filter(Boolean).join(' ') || undefined;
+}
+
 /** The profile field a form field wants, if any. A password, code or card field is never one. */
-export function profileKeyFor(hint: FieldHint): ProfileKey | undefined {
+export function profileKeyFor(hint: FieldHint): FillKey | undefined {
   if (isSecretField(hint) || isUnfillable(hint)) return undefined;
   for (const token of hint.autocomplete.toLowerCase().split(/\s+/)) if (TOKENS[token]) return TOKENS[token];
+  if (hint.autocomplete.toLowerCase().split(/\s+/).includes('name')) return 'name';
   // The field's own label decides before its name and id do (a "Postal code" box named address[zip] is a postal code, not an address).
-  for (const text of [hint.label, hint.text]) {
+  for (const [index, text] of [hint.label, hint.text].entries()) {
     if (!text?.trim()) continue;
-    const flat = plain(text).replace(/[_\-[\].]+/g, ' ');
+    const { words: described, example } = splitExample(text);
+    const flat = plain(described).replace(/[_\-[\].]+/g, ' ');
     for (const [pattern, key] of WORDS) if (pattern.test(flat)) return key;
+    if (WHOLE_NAME.test(flat) || (index === 0 && BARE_NAME.test(flat))) return 'name';
+    // A name-shaped example decides only a box with no words of its own: "App name, e.g. My App" asks for no person.
+    const shaped = example ? exampleKey(example) : undefined;
+    if (shaped && (shaped !== 'name' || !flat.trim())) return shaped;
   }
   return hint.type === 'email' ? 'email' : hint.type === 'tel' ? 'phone' : undefined;
 }
