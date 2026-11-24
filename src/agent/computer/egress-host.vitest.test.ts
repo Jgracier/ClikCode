@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { EgressContexts, EgressNotServed, egressSocketPath, requestHostedContext, serveEgress, type BrowserCdp } from './egress-host.js';
+import { EgressContexts, EgressNotServed, egressSocketPath, requestHostedContext, requestSeparateProfile, serveEgress, type BrowserCdp } from './egress-host.js';
 
 function fakeCdp() {
   const calls: Array<[string, Record<string, unknown> | undefined]> = [];
@@ -99,6 +99,23 @@ describe('asking the host over its socket', () => {
       expect(reply.trim().split('\n')).toEqual([JSON.stringify({ id: 'ctx-prod', server: 'socks5://127.0.0.1:41000' })]);
       expect(asked).toEqual(['prod']);
     } finally { await served.stop(); }
+  });
+
+  it('opens a separate profile on request and answers its port; a host without profiles says so', async () => {
+    const socket = egressSocketPath(dir, 4444);
+    const opened: string[] = [];
+    const ensure = async () => { throw new Error('not an egress request'); };
+    const served = await serveEgress(socket, { ensure }, async name => { opened.push(name); if (name === 'broken') throw new Error('Chrome did not start.'); return { port: 9333 }; });
+    const hostFile = async () => JSON.stringify({ pid: 4444, egressSocket: socket });
+    try {
+      expect(await requestSeparateProfile(dir, 'signup', hostFile)).toBe(9333);
+      await expect(requestSeparateProfile(dir, 'broken', hostFile)).rejects.toThrow('Chrome did not start.');
+      await expect(requestSeparateProfile(dir, '../chrome', hostFile)).rejects.toThrow('A profile name is lower-case letters');
+      expect(opened).toEqual(['signup', 'broken']);
+    } finally { await served.stop(); }
+    const plain = await serveEgress(socket, { ensure });
+    try { await expect(requestSeparateProfile(dir, 'signup', hostFile)).rejects.toThrow('does not open separate profiles'); }
+    finally { await plain.stop(); }
   });
 
   it('a host that serves no egress (an older one, or none) is told apart from a failure', async () => {

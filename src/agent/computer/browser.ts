@@ -18,7 +18,7 @@ import { sleep } from '../../runtime/sleep.js';
 import { browserDisplay, browserProvider, type BrowserDisplay } from './settings.js';
 import { browserUseConnection, stopBrowserUse } from './browser-use-cloud.js';
 import { contextEgress, egressOfPage, egressServer, pageEgress } from './egress.js';
-import { EgressNotServed, requestHostedContext } from './egress-host.js';
+import { EgressNotServed, requestHostedContext, requestSeparateProfile } from './egress-host.js';
 import { addDeskItem, deskHeldTargets, deskItemAddress, readDeskInfo, type DeskItem, type DeskKind } from './handoff-desk-store.js';
 
 type Connected = { browser: Browser; context: BrowserContext };
@@ -185,11 +185,36 @@ async function startHost(stateDir: string): Promise<Connected> {
 /** The managed cloud browser is a second, separate browser: its own connection, its own tabs, never the local profile. */
 const cloudRunKey = (stateDir: string): string => `${stateDir}\u0000\u0000cloud`;
 
-async function browserFor(stateDir: string, start: boolean, cloud = false): Promise<Connected> {
-  const runKey = cloud ? cloudRunKey(stateDir) : stateDir;
+/** A separate persistent profile is another Chrome the host runs beside the shared one: its own connection and tabs too. */
+const profileRunKey = (stateDir: string, name: string): string => `${stateDir}\u0000\u0000profile:${name}`;
+
+/** Connect to the host's separate profile `name`, asking the host to start it (and starting the host) when needed. */
+async function connectSeparateProfile(stateDir: string, name: string, start: boolean): Promise<Connected> {
+  const host = await connect(stateDir);
+  if (!host) {
+    if (!start) throw new Error('ClikCode browser is closed. Open a URL with browser_use first.');
+    await startHost(stateDir);
+  } else await host.browser.close().catch(quiet('agent/computer/browser'));
+  let port: number;
+  try { port = await requestSeparateProfile(stateDir, name); }
+  catch (error) {
+    if (error instanceof EgressNotServed) throw new Error('The running ClikCode browser is older than separate profiles. They work once it restarts (it does so on its own after a while; `clikcode computer restart` does it now).');
+    throw error;
+  }
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 8_000 });
+  const context = browser.contexts()[0];
+  if (!context) { await browser.close(); throw new Error(`The separate profile "${name}" opened no window.`); }
+  await serveDownloads(browser, stateDir).catch(quiet('agent/computer/browser'));
+  return { browser, context };
+}
+
+async function browserFor(stateDir: string, start: boolean, cloud = false, profile?: string): Promise<Connected> {
+  const runKey = cloud ? cloudRunKey(stateDir) : profile ? profileRunKey(stateDir, profile) : stateDir;
   let opening = running.get(runKey);
   if (!opening) {
     opening = (async () => {
+      if (profile && !cloud) return connectSeparateProfile(stateDir, profile, start);
       if (cloud) {
         const remote = await browserUseConnection(stateDir, start);
         if (remote) return remote;
@@ -224,6 +249,13 @@ const cloudOwners = sharedState('browser-cloud-owners', () => new Set<string>())
 const cloudPages = sharedState('browser-cloud-pages', () => new WeakSet<Page>());
 const cloudUsedAt = sharedState('browser-cloud-used', () => new Map<string, number>());
 const cloudTimers = sharedState('browser-cloud-timers', () => new Map<string, ReturnType<typeof setInterval>>());
+
+// ── which of this process's tabs live in a separate persistent profile (and which one) ──
+const profileOwners = sharedState('browser-profile-owners', () => new Map<string, string>());
+const profilePages = sharedState('browser-profile-pages', () => new WeakMap<Page, string>());
+
+/** The separate profile this chat's tab lives in, if any. */
+export function tabProfile(stateDir: string, tab?: string): string | undefined { return profileOwners.get(ownerKey(stateDir, tab)); }
 
 /** How long the cloud browser may sit unused before its billed session is stopped. */
 export function cloudIdleMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -338,6 +370,49 @@ export async function moveTabToLocal(stateDir: string, tab?: string): Promise<{ 
   if (address) await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(quiet('agent/computer/browser'));
   lifecycle('browser.cloud.tab', { moved: 'to-local', stopped });
   return { page, moved: true, stopped };
+}
+
+/** Move this chat's tab into the separate persistent profile `name` at the same address: a Chrome profile of its own (cookies,
+ * history, sign-ins), kept on disk across sessions, which never sees the shared profile's sign-ins. The old tab closes once the new
+ * one is open. */
+export async function moveTabToProfile(stateDir: string, name: string, tab?: string): Promise<{ page: Page; moved: boolean }> {
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(name)) throw new Error('A profile name is lower-case letters, digits and dashes (up to 32).');
+  const key = ownerKey(stateDir, tab);
+  if (cloudOwners.has(key) || await browserProvider(stateDir) === 'browser-use') throw new Error('This tab is in the managed cloud browser. Bring it back with cloud clear: true first.');
+  const current = mine(stateDir, tab);
+  if (current && profilePages.get(current) === name) return { page: current, moved: false };
+  const address = current && /^https?:/i.test(current.url()) ? current.url() : undefined;
+  const connected = await browserFor(stateDir, true, false, name);
+  const page = await pageInHostedContext(connected);
+  profilePages.set(page, name);
+  const before = owned.get(key) ?? [];
+  owned.set(key, []);
+  chosen.delete(key);
+  profileOwners.set(key, name);
+  adoptPage(stateDir, page, tab);
+  for (const old of before) await old.close().catch(quiet('agent/computer/browser'));
+  if (address) await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(quiet('agent/computer/browser'));
+  lifecycle('browser.profile.tab', { moved: 'to-profile' });
+  return { page, moved: true };
+}
+
+/** Bring this chat's tab back from its separate profile to the shared one at the same address. The profile stays on disk. */
+export async function moveTabFromProfile(stateDir: string, tab?: string): Promise<{ page: Page | undefined; moved: boolean; from?: string }> {
+  const key = ownerKey(stateDir, tab);
+  const from = profileOwners.get(key);
+  const pages = owned.get(key) ?? [];
+  const inProfile = pages.filter(page => profilePages.has(page));
+  if (!from && !inProfile.length) return { page: mine(stateDir, tab), moved: false };
+  const front = mine(stateDir, tab);
+  const address = front && /^https?:/i.test(front.url()) ? front.url() : undefined;
+  owned.set(key, pages.filter(page => !profilePages.has(page)));
+  chosen.delete(key);
+  profileOwners.delete(key);
+  for (const page of inProfile) await page.close().catch(quiet('agent/computer/browser'));
+  const page = await openComputerPage(stateDir, tab);
+  if (address) await page.goto(address, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(quiet('agent/computer/browser'));
+  lifecycle('browser.profile.tab', { moved: 'to-shared' });
+  return { page, moved: true, ...(from ? { from } : {}) };
 }
 
 /** Stop the cloud session now, whatever is open in it (the user turned the cloud browser off). */
@@ -494,10 +569,15 @@ export function adoptPage(stateDir: string, page: Page, tab?: string): void {
   holders.set(page, { stateDir, ...(tab ? { tab } : {}) });
   // A popup opened by a cloud tab lives in the cloud browser too.
   if (!cloudPages.has(page) && (owned.get(ownerKey(stateDir, tab)) ?? []).some(other => cloudPages.has(other) && other.context() === page.context())) cloudPages.add(page);
+  // And one opened by a separate-profile tab lives in that profile.
+  if (!profilePages.has(page)) {
+    const opener = (owned.get(ownerKey(stateDir, tab)) ?? []).find(other => profilePages.has(other) && other.context() === page.context());
+    if (opener) profilePages.set(page, profilePages.get(opener)!);
+  }
   // A page an egress-bound tab adopts (its popup, its restored or parked tab) is in that egress's context: Chrome opens a popup where its
   // opener is, and only same-egress restored tabs are claimed.
   const bound = egressOwners.get(ownerKey(stateDir, tab));
-  if (bound && !cloudPages.has(page) && !egressOfPage(page)) pageEgress.set(page, bound);
+  if (bound && !cloudPages.has(page) && !profilePages.has(page) && !egressOfPage(page)) pageEgress.set(page, bound);
   watchDownloads(page, stateDir);
   watchDialogs(page);
   const key = ownerKey(stateDir, tab);
@@ -505,7 +585,8 @@ export function adoptPage(stateDir: string, page: Page, tab?: string): void {
   chosen.delete(key);
   watchConsole(page);
   // The tab registry lists the local Chrome's tabs; a cloud tab is tracked by its session instead.
-  if (cloudPages.has(page)) cloudUsedAt.set(stateDir, Date.now()); else holdTab(stateDir, page, tab);
+  // A separate profile's tabs are in another Chrome, which that registry does not list.
+  if (cloudPages.has(page)) cloudUsedAt.set(stateDir, Date.now()); else if (!profilePages.has(page)) holdTab(stateDir, page, tab);
 }
 
 // ── who holds each tab: written down so any chat can list it and the sweep can close what no one holds (tab-registry.ts) ──
@@ -553,6 +634,7 @@ function holdTab(stateDir: string, page: Page, tab?: string): void {
 /** This chat used `page` just now. Also closes tabs no one holds, at most once a minute. */
 function touchTab(stateDir: string, page: Page): void {
   if (cloudPages.has(page)) { cloudUsedAt.set(stateDir, Date.now()); return; }
+  if (profilePages.has(page)) return;
   const entry = held.get(page);
   if (entry) { entry.lastUsedAt = Date.now(); void flushHeld(stateDir, page, entry, false).catch(quiet('agent/computer/browser')); }
   const now = Date.now();
@@ -601,9 +683,11 @@ export async function closeOwnedPage(stateDir: string, page: Page, tab?: string)
 /** A second tab for this chat (a page to keep while another is read); it becomes the one in front. */
 export async function openNewComputerPage(stateDir: string, tab?: string): Promise<Page> {
   const cloud = await onCloud(stateDir, tab);
-  const connected = await browserFor(stateDir, true, cloud);
-  const page = await newTabPage(stateDir, connected, cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab)), cloud);
+  const profile = cloud ? undefined : profileOwners.get(ownerKey(stateDir, tab));
+  const connected = await browserFor(stateDir, true, cloud, profile);
+  const page = profile ? await pageInHostedContext(connected) : await newTabPage(stateDir, connected, cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab)), cloud);
   if (cloud) cloudPages.add(page);
+  if (profile) profilePages.set(page, profile);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);
   return page;
@@ -628,12 +712,14 @@ export async function recoverComputerPage(stateDir: string, page: Page, tab?: st
 /** This chat's tab, opened in the shared Chrome the first time it is needed. */
 export async function openComputerPage(stateDir: string, tab?: string): Promise<Page> {
   const cloud = await onCloud(stateDir, tab);
-  const connected = await browserFor(stateDir, true, cloud);
-  const egress = cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab));
-  const existing = mine(stateDir, tab) ?? (cloud ? undefined : await claimRestored(stateDir, connected.context, tab, egress));
+  const profile = cloud ? undefined : profileOwners.get(ownerKey(stateDir, tab));
+  const connected = await browserFor(stateDir, true, cloud, profile);
+  const egress = cloud || profile ? undefined : egressOwners.get(ownerKey(stateDir, tab));
+  const existing = mine(stateDir, tab) ?? (cloud || profile ? undefined : await claimRestored(stateDir, connected.context, tab, egress));
   if (existing) { touchTab(stateDir, existing); return existing; }
-  const page = await newTabPage(stateDir, connected, egress, cloud);
+  const page = profile ? await pageInHostedContext(connected) : await newTabPage(stateDir, connected, egress, cloud);
   if (cloud) cloudPages.add(page);
+  if (profile) profilePages.set(page, profile);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);
   return page;
@@ -641,8 +727,9 @@ export async function openComputerPage(stateDir: string, tab?: string): Promise<
 
 export async function computerPage(stateDir: string, tab?: string): Promise<Page> {
   const cloud = await onCloud(stateDir, tab);
-  const { context } = await browserFor(stateDir, false, cloud);
-  const page = mine(stateDir, tab) ?? (cloud ? undefined : await claimRestored(stateDir, context, tab, egressOwners.get(ownerKey(stateDir, tab))));
+  const profile = cloud ? undefined : profileOwners.get(ownerKey(stateDir, tab));
+  const { context } = await browserFor(stateDir, false, cloud, profile);
+  const page = mine(stateDir, tab) ?? (cloud || profile ? undefined : await claimRestored(stateDir, context, tab, egressOwners.get(ownerKey(stateDir, tab))));
   if (page) touchTab(stateDir, page);
   if (!page) throw new Error('This chat has no open tab. Open a URL with browser_use first.');
   return page;

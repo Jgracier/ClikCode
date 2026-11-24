@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { launchFirst } from './browser-host.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import type { BrowserContext } from 'playwright-core';
+import { launchFirst, separateProfileDir, separateProfiles } from './browser-host.js';
 
 it('uses the first browser that is installed', async () => {
   const tried: string[] = [];
@@ -107,5 +111,46 @@ describe('plainUserAgent', () => {
     expect(plainUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.0.0 Safari/537.36'))
       .toBe('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36');
     expect(plainUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')).toBeUndefined();
+  });
+});
+
+describe('separate profiles', () => {
+  function fakeContext() {
+    let onClose: (() => void) | undefined;
+    const context = { closed: 0, once: (_: 'close', callback: () => void) => { onClose = callback; }, close: async () => { context.closed++; onClose?.(); } };
+    return context;
+  }
+
+  it('starts one Chrome per name in its own directory, reuses it, and starts it again after its window closed', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-sep-'));
+    try {
+      const launched: Array<{ dir: string; context: ReturnType<typeof fakeContext> }> = [];
+      const profiles = separateProfiles(dir, async at => { const context = fakeContext(); launched.push({ dir: at, context }); return context as unknown as BrowserContext; }, async () => 9000 + launched.length);
+      const [a, b] = await Promise.all([profiles.open('signup'), profiles.open('signup')]);
+      expect(a).toEqual({ port: 9001 });
+      expect(b).toEqual({ port: 9001 });
+      expect(launched.map(item => item.dir)).toEqual([separateProfileDir(dir, 'signup')]);
+      expect(separateProfileDir(dir, 'signup')).toBe(path.join(dir, 'computer', 'profiles', 'signup'));
+      expect((await fs.stat(separateProfileDir(dir, 'signup'))).mode & 0o777).toBe(0o700);
+      expect(await profiles.open('other')).toEqual({ port: 9002 });
+      await launched[0]!.context.close();
+      expect(await profiles.open('signup')).toEqual({ port: 9003 });
+      await profiles.closeAll();
+      expect(launched.map(item => item.context.closed)).toEqual([1, 1, 1]);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('a Chrome that never opens its port is closed and the next ask tries again', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-sep-'));
+    try {
+      const contexts: Array<ReturnType<typeof fakeContext>> = [];
+      let fail = true;
+      const profiles = separateProfiles(dir, async () => { const context = fakeContext(); contexts.push(context); return context as unknown as BrowserContext; },
+        async () => { if (fail) throw new Error('no port'); return 9100; });
+      await expect(profiles.open('signup')).rejects.toThrow('no port');
+      expect(contexts[0]!.closed).toBe(1);
+      fail = false;
+      expect(await profiles.open('signup')).toEqual({ port: 9100 });
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 });

@@ -97,8 +97,12 @@ export function egressSocketPath(stateDir: string, pid = process.pid): string {
   return process.platform === 'win32' ? `\\\\.\\pipe\\clikcode-egress-${pid}` : path.join(stateDir, 'computer', `egress-${pid}.sock`);
 }
 
-/** Serves `{"egress":"<name>"}` lines with `{"id":"<browserContextId>","server":"..."}` or `{"error":"..."}`. */
-export async function serveEgress(socketPath: string, contexts: Pick<EgressContexts, 'ensure'>): Promise<{ stop(): Promise<void> }> {
+/** Opens (or finds) the separate persistent profile `name` and answers with its Chrome's local debugging port. */
+export type SeparateProfileOpener = (name: string) => Promise<{ port: number }>;
+
+/** Serves `{"egress":"<name>"}` lines with `{"id":"<browserContextId>","server":"..."}`, and `{"profile":"<name>"}` lines with
+ * `{"port":<n>}`; either may be `{"error":"..."}`. */
+export async function serveEgress(socketPath: string, contexts: Pick<EgressContexts, 'ensure'>, openProfile?: SeparateProfileOpener): Promise<{ stop(): Promise<void> }> {
   if (process.platform !== 'win32') await fs.unlink(socketPath).catch(quiet('agent/computer/egress-host'));
   const server: Server = createServer(client => {
     let buffer = '';
@@ -109,11 +113,14 @@ export async function serveEgress(socketPath: string, contexts: Pick<EgressConte
       const end = buffer.indexOf('\n');
       if (end < 0) { if (buffer.length > 4_096) client.destroy(); return; }
       client.off('data', onData);
-      let name = '';
-      try { name = String((JSON.parse(buffer.slice(0, end)) as { egress?: unknown }).egress ?? ''); } catch { name = ''; }
+      let asked: { egress?: unknown; profile?: unknown } = {};
+      try { asked = JSON.parse(buffer.slice(0, end)) as typeof asked; } catch { asked = {}; }
       buffer = '';
-      if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(name)) { client.end(`${JSON.stringify({ error: 'An egress name is lower-case letters, digits and dashes.' })}\n`); return; }
-      void contexts.ensure(name).then(
+      const forProfile = asked !== null && typeof asked === 'object' && asked.profile !== undefined;
+      const name = String((forProfile ? asked.profile : asked?.egress) ?? '');
+      if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(name)) { client.end(`${JSON.stringify({ error: `${forProfile ? 'A profile' : 'An egress'} name is lower-case letters, digits and dashes.` })}\n`); return; }
+      if (forProfile && !openProfile) { client.end(`${JSON.stringify({ error: 'This browser host does not open separate profiles.' })}\n`); return; }
+      void (forProfile ? openProfile!(name) : contexts.ensure(name)).then(
         held => client.end(`${JSON.stringify(held)}\n`),
         (error: unknown) => client.end(`${JSON.stringify({ error: (error instanceof Error ? error.message : String(error)).slice(0, 300) })}\n`),
       );
@@ -132,37 +139,52 @@ export async function serveEgress(socketPath: string, contexts: Pick<EgressConte
 }
 
 /** The host's egress service: tunnels, contexts and the socket. */
-export async function startEgressService(stateDir: string, profile: string, tunnels: TunnelManager = tunnelManager(stateDir)): Promise<{ socket: string; contexts: EgressContexts; stop(): Promise<void> }> {
+export async function startEgressService(stateDir: string, profile: string, tunnels: TunnelManager = tunnelManager(stateDir), openProfile?: SeparateProfileOpener): Promise<{ socket: string; contexts: EgressContexts; stop(): Promise<void> }> {
   const contexts = new EgressContexts(rawBrowserCdp(profile), name => egressServer(stateDir, name, tunnels));
   const socket = egressSocketPath(stateDir);
-  const served = await serveEgress(socket, contexts);
+  const served = await serveEgress(socket, contexts, openProfile);
   return { socket, contexts, stop: async () => { await served.stop(); tunnels.closeAll(); } };
 }
 
 /** Thrown when no host of this build serves egress contexts (an older host, or none): the caller may make its own context instead. */
 export class EgressNotServed extends Error {}
 
-/** Asks the browser host for the context of `name`. */
-export async function requestHostedContext(stateDir: string, name: string, readHostFile: () => Promise<string> = () => fs.readFile(path.join(stateDir, 'computer', 'host.json'), 'utf8'), ms = 30_000): Promise<HostedContext> {
+type HostFileReader = () => Promise<string>;
+const readHostJson = (stateDir: string): HostFileReader => () => fs.readFile(path.join(stateDir, 'computer', 'host.json'), 'utf8');
+
+/** One request line to the host's socket and its one JSON answer. */
+async function askHost(readHostFile: HostFileReader, request: Record<string, string>, ms: number, late: string): Promise<Record<string, unknown>> {
   let socketPath: string | undefined;
   try { socketPath = (JSON.parse(await readHostFile()) as { egressSocket?: unknown }).egressSocket as string | undefined; } catch { socketPath = undefined; }
   if (typeof socketPath !== 'string' || !socketPath) throw new EgressNotServed('The browser host does not serve egress contexts.');
-  return new Promise<HostedContext>((resolve, reject) => {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
     const client = netConnect(socketPath!);
     let reply = '';
     let connected = false;
-    const timer = setTimeout(() => { client.destroy(); reject(new Error(`The browser host did not open the egress "${name}" in time.`)); }, ms);
-    client.once('connect', () => { connected = true; client.write(`${JSON.stringify({ egress: name })}\n`); });
+    const timer = setTimeout(() => { client.destroy(); reject(new Error(late)); }, ms);
+    client.once('connect', () => { connected = true; client.write(`${JSON.stringify(request)}\n`); });
     client.on('data', chunk => { reply += String(chunk); });
     client.once('end', () => {
       clearTimeout(timer);
-      try {
-        const answer = JSON.parse(reply.trim()) as { id?: string; server?: string; error?: string };
-        if (answer.error) reject(new Error(answer.error));
-        else if (answer.id && answer.server) resolve({ id: answer.id, server: answer.server });
-        else reject(new Error('The browser host gave no egress context.'));
-      } catch { reject(new Error('The browser host gave no egress context.')); }
+      let answer: Record<string, unknown>;
+      try { answer = JSON.parse(reply.trim()) as Record<string, unknown>; } catch { reject(new Error('The browser host gave no answer.')); return; }
+      if (typeof answer.error === 'string' && answer.error) reject(new Error(answer.error));
+      else resolve(answer);
     });
     client.once('error', error => { clearTimeout(timer); reject(connected ? error : new EgressNotServed(`The browser host does not serve egress contexts (${(error as NodeJS.ErrnoException).code ?? error.message}).`)); });
   });
+}
+
+/** Asks the browser host for the context of `name`. */
+export async function requestHostedContext(stateDir: string, name: string, readHostFile: HostFileReader = readHostJson(stateDir), ms = 30_000): Promise<HostedContext> {
+  const answer = await askHost(readHostFile, { egress: name }, ms, `The browser host did not open the egress "${name}" in time.`);
+  if (typeof answer.id === 'string' && answer.id && typeof answer.server === 'string' && answer.server) return { id: answer.id, server: answer.server };
+  throw new Error('The browser host gave no egress context.');
+}
+
+/** Asks the browser host to open (or find) the separate persistent profile `name`; answers its Chrome's local debugging port. */
+export async function requestSeparateProfile(stateDir: string, name: string, readHostFile: HostFileReader = readHostJson(stateDir), ms = 60_000): Promise<number> {
+  const answer = await askHost(readHostFile, { profile: name }, ms, `The browser host did not open the profile "${name}" in time.`);
+  if (typeof answer.port === 'number' && Number.isInteger(answer.port) && answer.port > 0) return answer.port;
+  throw new Error('The browser host gave no profile port.');
 }

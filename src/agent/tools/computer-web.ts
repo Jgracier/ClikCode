@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
 import { passHumanCheck } from '../computer/human-check.js';
-import { adoptPage, allTabs, arrivedPages, closeComputerPage, ownedPages, computerPage, moveTabToCloud, moveTabToLocal, tabIsInCloud, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
+import { adoptPage, allTabs, arrivedPages, closeComputerPage, ownedPages, computerPage, moveTabToCloud, moveTabToLocal, moveTabFromProfile, moveTabToProfile, tabIsInCloud, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
 import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, listTabs, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
 import { COMPUTER_OFF, captchaSolvingAllowed, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
@@ -68,7 +68,7 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'u
 type WebArgs = {
   /** help: an action name, or "guide". */
   topic?: string;
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'show' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'card' | 'open_email_link' | 'read_email_code' | 'read_sms_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'forget_login' | 'add_login' | 'cloud' | 'human_check' | 'auth_code' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'show' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'card' | 'open_email_link' | 'read_email_code' | 'read_sms_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'forget_login' | 'add_login' | 'cloud' | 'isolate' | 'human_check' | 'auth_code' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; mfa_account?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; address?: string; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
@@ -384,7 +384,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },
     address: { type: 'string', description: 'read_email_code, open_email_link: which connected mailbox to read (an email address). Default: the mailbox the page or the site\'s saved login used, else the profile email; after 20 s the others are tried. email_connect: the Google account to connect (default: the profile email); another account adds a mailbox, replacing none.' },
     fields: { type: 'object', additionalProperties: { type: 'string' }, description: `profile: fields to save or correct in the user's autofill profile (${PROFILE_KEYS.join(', ')}). Leave out to list the profiles. Use it when a site wants a different format (phone as +1…, state as an abbreviation).` },
-    label: { type: 'string', description: 'read_value: the label the page shows beside the value ("Application ID", "Subdomain", "Workspace ID"). forget_login: only the saved login with this username or email (default: every saved login for the site). profile: which profile (default: the one called Personal, else the one with the most standard fields, else a new one called Personal).' },
+    label: { type: 'string', description: 'read_value: the label the page shows beside the value ("Application ID", "Subdomain", "Workspace ID"). forget_login: only the saved login with this username or email (default: every saved login for the site). profile: which profile (default: the one called Personal, else the one with the most standard fields, else a new one called Personal). isolate: the separate Chrome profile\'s name (default "signup").' },
     ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' }, format: { type: 'string', description: 'Types itself as the user enters it: date (##/##/####), phone ((###) ###-####), zip, time, or a pattern where # is a digit, A a letter, * either and anything else a literal the box inserts and jumps over.' }, options: { type: 'array', items: { type: 'string' }, description: 'A fixed set of answers shown as a selector (arrow keys in the terminal, radios in VS Code) instead of a text box.' }, secret: { type: 'boolean', description: 'The answer is a secret (a password to use for sign-ups, key "password"; a recovery code): typed hidden, kept in Secrets Manager with the profile, and never shown to you. A later fill of a password box with no text uses it.' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only; a password or code goes in with secret: true.' },
     custom: { type: 'object', additionalProperties: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, value: { type: 'string' }, match: { type: 'array', items: { type: 'string' } } }, required: ['value'] }, description: 'profile: save custom details you already know (a redirect address, the app name you chose) into a profile, same shape as ask_fields answers: {key: {label, value, match}}.' },
     vendor: { type: 'string', description: 'capture_secret: the vendor the key is for, recorded with it.' },
@@ -445,6 +445,7 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'human_check': return 'Press the human check';
       case 'auth_code': return 'Type authenticator code';
       case 'cloud': return args.clear ? 'Back to the local browser' : 'Move tab to cloud browser';
+      case 'isolate': return args.clear ? 'Back to the main profile' : `Isolate tab in profile ${args.label?.trim() || 'signup'}`;
       case 'capture_secret': return `Capture key${args.secret_name ? ` as ${args.secret_name}` : ''}`;
       case 'close': return 'Close browser';
       default: return filesEnvLabel(args) ?? `Web ${args.action}`;
@@ -609,6 +610,17 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
         return { output: moved
           ? `This tab is now in the managed cloud browser at ${displayUrl(cloudPage.url())}. It is signed out there (local sign-ins are not copied) and does not answer captchas. Observe the page; if it still blocks you, use handoff. When done, close the tab or call cloud with clear: true, which stops the billed session.`
           : 'This tab is already in the managed cloud browser.' };
+      }
+      if (args.action === 'isolate') {
+        if (args.clear === true) {
+          const back = await moveTabFromProfile(ctx.stateDir, args.tab);
+          return { output: back.moved ? `This tab is back in the main profile${back.from ? ` (the profile "${back.from}" is kept for next time)` : ''}. Observe it to carry on.` : 'This tab was already in the main profile.' };
+        }
+        const name = (args.label?.trim() || 'signup').toLowerCase();
+        const { page: profilePage, moved } = await moveTabToProfile(ctx.stateDir, name, args.tab);
+        return { output: moved
+          ? `This tab is now in the separate profile "${name}" at ${displayUrl(profilePage.url())}, a Chrome of its own: none of the main profile's sign-ins are there, and what you sign into here stays here across sessions. If the site refuses softly ("we ran into a problem", "unusual activity"), stop and tell the user; do not retry. Call isolate with clear: true to go back to the main profile.`
+          : `This tab is already in the separate profile "${name}".` };
       }
       if (args.action === 'add_login') {
         // One private form: the website, the email, the password. The way in (Google, GitHub or a site's own form) follows from the site.

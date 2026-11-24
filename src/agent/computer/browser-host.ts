@@ -2,6 +2,7 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { BrowserContext } from 'playwright-core';
 import { leaveDialogsToWorkers } from './page-dialogs.js';
 import { hostStatusFile, launchComputerBrowser, shouldRunHeadless, VIRTUAL_DISPLAY_ENV, writeHostStatus } from './browser-launch.js';
 import { headlessSetting } from './settings.js';
@@ -51,6 +52,50 @@ export function plainUserAgent(userAgent: string): string | undefined {
   return /HeadlessChrome\//.test(userAgent) ? userAgent.replace(/HeadlessChrome\//g, 'Chrome/') : undefined;
 }
 
+/** Where the separate persistent profile `name` keeps its cookies and history: beside the shared one, never inside it. */
+export function separateProfileDir(stateDir: string, name: string): string { return path.join(stateDir, 'computer', 'profiles', name); }
+
+/** The host's separate profiles: one more persistent Chrome per name, started on the first ask and kept until the host stops (or its
+ * window is closed). Workers reach each over its own local debugging port; nothing in it is shared with the main profile. */
+export function separateProfiles(stateDir: string, launch: (dir: string) => Promise<BrowserContext>, readPort: (dir: string) => Promise<number> = devToolsPort): { open(name: string): Promise<{ port: number }>; closeAll(): Promise<void> } {
+  const open = new Map<string, Promise<{ context: BrowserContext; port: number }>>();
+  return {
+    async open(name) {
+      let held = open.get(name);
+      if (!held) {
+        held = (async () => {
+          const dir = separateProfileDir(stateDir, name);
+          await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+          // A port file left by a Chrome that is gone would name a dead port.
+          await fs.unlink(path.join(dir, 'DevToolsActivePort')).catch(quiet('agent/computer/browser-host'));
+          const context = await launch(dir);
+          (context as unknown as { once(event: 'close', callback: () => void): void }).once('close', () => { if (open.get(name) === held) open.delete(name); });
+          try { return { context, port: await readPort(dir) }; } catch (error) { await context.close().catch(quiet('agent/computer/browser-host')); throw error; }
+        })();
+        open.set(name, held);
+        held.catch(() => { if (open.get(name) === held) open.delete(name); });
+      }
+      return { port: (await held).port };
+    },
+    async closeAll() {
+      const all = [...open.values()];
+      open.clear();
+      await Promise.all(all.map(held => held.then(({ context }) => context.close(), () => undefined).catch(quiet('agent/computer/browser-host'))));
+    },
+  };
+}
+
+/** The local debugging port Chrome wrote into the profile once it listened (it takes a moment after launch). */
+async function devToolsPort(dir: string): Promise<number> {
+  const until = Date.now() + 15_000;
+  for (;;) {
+    const port = Number((await fs.readFile(path.join(dir, 'DevToolsActivePort'), 'utf8').catch(() => '')).split('\n')[0]);
+    if (Number.isInteger(port) && port > 0) return port;
+    if (Date.now() > until) throw new Error('The separate profile\'s Chrome did not open its debugging port.');
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
 export async function runComputerHost(stateDir: string): Promise<void> {
   const profile = computerProfile(stateDir);
   await fs.mkdir(profile, { recursive: true, mode: 0o700 });
@@ -63,11 +108,13 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   const inbox = downloadsInbox(stateDir);
   await fs.mkdir(inbox, { recursive: true, mode: 0o700 });
   let context;
-  const launch = (extra: string[] = []) => launchComputerBrowser(chromium, profile, {
+  let userAgentArgs: string[] = [];
+  const launchAt = (dir: string, extra: string[] = []) => launchComputerBrowser(chromium, dir, {
     headless, viewport: null, acceptDownloads: true, downloadsPath: inbox,
     ignoreDefaultArgs: ['--enable-automation'],
     args: [...hostChromeArgs({ headless, virtualDisplay }), ...extra],
   }, stateDir);
+  const launch = (extra: string[] = []) => launchAt(profile, extra);
   try {
     context = await launch();
     // Headless Chrome names itself in every request. Its version is only known once it runs, so it is asked once and started again
@@ -77,7 +124,8 @@ export async function runComputerHost(stateDir: string): Promise<void> {
       const plain = plainUserAgent(await page.evaluate(() => navigator.userAgent).catch(() => ''));
       if (plain) {
         await context.close();
-        context = await launch([`--user-agent=${plain}`]);
+        userAgentArgs = [`--user-agent=${plain}`];
+        context = await launch(userAgentArgs);
       }
     }
   } catch (error) {
@@ -88,13 +136,16 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   leaveDialogsToWorkers(context);
   const hostFile = computerHostFile(stateDir);
   // The egress contexts and their tunnels live here, for this Chrome's whole life (egress-host.ts); workers find the socket in host.json.
-  const egress = await startEgressService(stateDir, profile).catch(quiet('agent/computer/browser-host'));
+  // Separate profiles are started here too: this process has the display and outlives the worker that asks.
+  const profiles = separateProfiles(stateDir, dir => launchAt(dir, userAgentArgs));
+  const egress = await startEgressService(stateDir, profile, undefined, name => profiles.open(name)).catch(quiet('agent/computer/browser-host'));
   await writeHostStatus(stateDir, { pid: process.pid, state: 'running' });
   const record = JSON.stringify({ pid: process.pid, display: hostDisplay({ headless, virtualDisplay }), ...(egress ? { egressSocket: egress.socket } : {}) });
   try {
     await fs.writeFile(hostFile, record, { mode: 0o600 });
     // Closing a Chrome that is already gone never fires 'close', so a stop is bounded: the process ends either way.
     const stop = (): void => {
+      void profiles.closeAll();
       void context.close().catch(quiet('agent/computer/browser-host'));
       setTimeout(() => process.exit(0), 10_000).unref();
     };
@@ -137,11 +188,13 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     stopJanitor();
     await desk?.stop().catch(quiet('agent/computer/browser-host'));
     await egress?.stop().catch(quiet('agent/computer/browser-host'));
+    await profiles.closeAll();
     process.off('SIGTERM', stop);
     process.off('SIGINT', stop);
   } finally {
     try { if (await fs.readFile(hostFile, 'utf8') === record) await fs.unlink(hostFile); } catch { /* fail-open-ok: already gone */ }
     await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser-host'));
+    await profiles.closeAll();
     await context.close().catch(quiet('agent/computer/browser-host'));
   }
 }
