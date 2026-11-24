@@ -369,8 +369,9 @@ describe('an agent that is retrying a rate-limited call', () => {
   });
 
   /** Vibe on a key the provider keeps refusing: a retry notice per backoff,
-   * never an answer. `between` is said after each notice but the last. */
-  const refusing = (between: string) => `
+   * never an answer. `between` is said after each notice but the last; with
+   * `answer` it answers after the fourth notice. */
+  const refusing = (between: string, detail = 'HTTP 429', answer = Boolean(between)) => `
     const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
     let buf = '';
     process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
@@ -380,8 +381,8 @@ describe('an agent that is retrying a rate-limited call', () => {
         send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'PONG?' } } } });
         let left = 4;
         const retry = () => {
-          send({ method: '_session/retrying', params: { sessionId: 's1', category: 'rate_limited', detail: 'HTTP 429' } });
-          if (--left === 0) { ${between ? `send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'PONG' } } } }); send({ id: m.id, result: { stopReason: 'end_turn' } }); return;` : ''} }
+          send({ method: '_session/retrying', params: { sessionId: 's1', category: 'rate_limited', detail: '${detail}' } });
+          if (--left === 0) { ${answer ? `send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'PONG' } } } }); send({ id: m.id, result: { stopReason: 'end_turn' } }); return;` : ''} }
           ${between}
           setTimeout(retry, 20);
         };
@@ -402,6 +403,14 @@ describe('an agent that is retrying a rate-limited call', () => {
     const said = `send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'waiting' } } } });`;
     const result = await runAcpTurn({
       binary: process.execPath, command: 'vibe', argv: ['-e', refusing(said)], cwd: process.cwd(), prompt: 'PONG?',
+      environment: {}, permissionMode: 'ask' as const,
+    });
+    expect(result.text).toBe('PONG');
+  });
+
+  it('lets the agent ride out a provider fault (503) however often it retries: that is no answer about the account', async () => {
+    const result = await runAcpTurn({
+      binary: process.execPath, command: 'vibe', argv: ['-e', refusing('', 'HTTP 503', true)], cwd: process.cwd(), prompt: 'PONG?',
       environment: {}, permissionMode: 'ask' as const,
     });
     expect(result.text).toBe('PONG');

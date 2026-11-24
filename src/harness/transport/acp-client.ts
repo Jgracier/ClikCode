@@ -609,6 +609,8 @@ interface Stream {
 
 /** The same refused request retried this many times in a row, nothing said between: the provider's answer. */
 const REFUSED_RETRIES = 4;
+/** The statuses that are the provider refusing this account, not failing itself. */
+const REFUSAL_STATUSES = new Set([401, 402, 403, 429]);
 
 /** The longest a compaction the agent runs after its answer is waited for. */
 const COMPACTION_SETTLE_MS = 10 * 60_000;
@@ -1646,11 +1648,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   /** The agent's own notice that it is retrying a failed model call
    * (`_session/retrying`, Vibe: `{category:"rate_limited", detail:"HTTP 429"}`).
    * Shown as a phase: the agent retries by its own backoff and may well
-   * succeed. But the same refusal `REFUSED_RETRIES` times in a row with not a
-   * word between is the provider's answer, and it is the account's: Vibe
+   * succeed. But a refusal (401/402/403/429: the account is not let in or out
+   * of quota) `REFUSED_RETRIES` times in a row with not a word between is the
+   * provider's answer, and it is the account's: Vibe
    * retries a 429 for five minutes a request, then the next request, while the
    * turn shows nothing. That ends the turn as the status, so failover moves to
-   * another account. It counts the agent's refusals; ClikCode keeps no clock. */
+   * another account. A provider fault (500, 503, 529) is no answer about the
+   * account and passes, so it resets the count and the agent's own backoff
+   * runs on. It counts the agent's refusals; ClikCode keeps no clock. */
   private retrying(params: Json): void {
     const target = this.liveTarget(params);
     if (!target) return;
@@ -1662,7 +1667,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const turn = this.turn;
     const status = Number(/\bHTTP (\d{3})\b/.exec(detail)?.[1]);
     if (target !== turn || turn.done) return;
-    if (!status) { turn.refusedRetries = 0; return; }
+    if (!REFUSAL_STATUSES.has(status)) { turn.refusedRetries = 0; return; }
     turn.refusedRetries = (turn.refusedRetries ?? 0) + 1;
     if (turn.refusedRetries < REFUSED_RETRIES) return;
     turn.fail(Object.assign(
