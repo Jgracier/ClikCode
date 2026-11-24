@@ -56,6 +56,8 @@ import { renderFrame, flushFrame, flushAlternateFrame, flushInlineFrame } from '
 import { clearInteractiveFrame, select, board, pickerHost } from './prompter/picker-host.js';
 import { question } from './prompter/prompt-input.js';
 import { paint } from './prompter/paint/frame.js';
+import { contextGaugeLabel } from './render/context-gauge.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 
 /** Who has the screen (see TerminalHarnessPrompter.screenOwner). */
 type ScreenOwner = 'chat' | 'picker' | 'held' | 'suspended' | 'closed';
@@ -190,6 +192,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * before `message` are written, and `into` rows of the one at `message` (the answer that was still streaming). */
   dumpCursor: { session: string | undefined; message: number; into: number } | undefined;
   usageLabel?: string;
+  /** `41k/100k`: the open chat's context against where it compacts (render/context-gauge.ts). */
+  contextGauge?: string;
   /** The owner of a conversation reached over SSH, shown in the status line. */
   remoteMachineName?: string;
   /** An open list, drawn over the chat just above the footer (frame-flush.ts). Empty when none. */
@@ -470,6 +474,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   render(session: HarnessSession, _account?: string, journal?: JournalState): void {
+    // Mid-turn the vendor's own readings (setTurnUsage) are newer than the saved session's.
+    if (!this.turn || this.currentSession?.id !== session.id) this.setContextGauge(contextGaugeLabel(session));
     if (this.currentSession?.id !== session.id) {
       setLifecycleSession(session.id);
       lifecycle('window.conversation', { from: this.currentSession?.id ?? null, harness: session.nativeHarness ?? session.route });
@@ -623,6 +629,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   noteFor(sessionId: string, text: string): void {
     if (this.currentSession?.id === sessionId) { this.activity(text); return; }
     this.heldNotes.set(sessionId, [...(this.heldNotes.get(sessionId) ?? []), text]);
+  }
+
+  /** The open chat's context, read as the vendor reports it mid-turn (worker/turn-bridge.ts). */
+  setTurnUsage(usage: TurnUsage): void {
+    const session = this.currentSession;
+    if (!session) return;
+    this.setContextGauge(contextGaugeLabel({ ...session, lastUsage: { ...session.lastUsage, ...usage, at: new Date().toISOString() } }));
+  }
+
+  setContextGauge(gauge: string | undefined): void {
+    if (this.contextGauge === gauge) return;
+    this.contextGauge = gauge;
+    this.schedulePaint();
   }
 
   usage(label?: string, resetLabel?: string): void {

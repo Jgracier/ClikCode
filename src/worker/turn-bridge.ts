@@ -421,6 +421,10 @@ async function driveWorkerTurn(
           case 'plan':
             rl.setPlan(event.entries);
             return;
+          // The context gauge on the composer rule (`41k/100k`) follows the vendor's readings.
+          case 'usage':
+            rl.setTurnUsage(event.usage);
+            return;
           // The end line says agents and workflows from the saved turn
           // (turnEnd.background); a background terminal is a footer
           // indicator, drawn from here while any runs.

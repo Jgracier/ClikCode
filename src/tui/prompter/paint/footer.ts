@@ -96,7 +96,7 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // Usage lives on the upper composer border, mirroring the title on the
   // lower border. A spent window replaces the percentage with the reset
   // itself (`Resets 5:34PM`); a spent balance says `Out Of Credits`.
-  const usageRule = paintUsageRule(rowWidth, composerUsageLabel(this.usageLabel, this.usageResetLabel));
+  const usageRule = paintUsageRule(rowWidth, composerUsageLabel(this.usageLabel, this.usageResetLabel), this.contextGauge);
   footer.push(usageRule);
   let composerStart = footer.length;
   const composerFooter: string[] = [];

@@ -76,8 +76,13 @@ const RULE_LABEL = (text: string): string => text;
  * same white as the rule it sits on -- a figure that is fine needs no colour
  * to say so, and spending one on it only makes the one that matters quieter
  * by comparison. */
-export function paintUsageRule(width: number, label?: string): string {
-  return paintLabeledRule(width, label, usageLabelIsSpent(label) ? chalk.red : (text) => text);
+export function paintUsageRule(width: number, label?: string, context?: string): string {
+  // The context gauge (`41k/100k`, render/context-gauge.ts) leads; only the usage itself turns red.
+  const full = context && label ? `${context} · ${label}` : context ?? label;
+  const rule = rightLabeledRule(width, full);
+  if (!label || !usageLabelIsSpent(label)) return rule;
+  const at = rule.lastIndexOf(label);
+  return at < 0 ? rule : `${rule.slice(0, at)}${chalk.red(label)}`;
 }
 
 /** The chat's own name, on the rule below the composer. */
