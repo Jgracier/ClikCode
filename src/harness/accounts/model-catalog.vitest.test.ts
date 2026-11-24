@@ -9,7 +9,7 @@ vi.mock('../../runtime/lazy-bridge.js', async (importOriginal) => ({
   modelIdFromDisplay: catalog.modelIdFromDisplay,
 }));
 
-const { harnessModelLabel, modelIdFromLabel, nativeModelLabel } = await import('./model-catalog.js');
+const { copilotModelList, harnessModelLabel, modelIdFromLabel, nativeModelLabel } = await import('./model-catalog.js');
 const { modelRow } = await import('../../tui/pickers/model.js');
 const localHarnessForCommand = catalog.localHarnessForCommand;
 
@@ -71,5 +71,19 @@ describe('native model display metadata', () => {
     expect(modelIdFromLabel(goose, [], 'claude-code:sonnet')).toBe('claude-code/sonnet');
     expect(modelIdFromLabel(goose, [], 'ollama/qwen3:8b')).toBe('ollama/qwen3:8b');
     expect(modelIdFromLabel(goose, ['claude-code/sonnet'], ' claude-code:sonnet ')).toBe('claude-code/sonnet');
+  });
+});
+
+describe('Copilot model list', () => {
+  it('starts the public fallback on auto, the model every plan runs', () => {
+    const listed = copilotModelList(undefined, { models: ['gpt-5.6-sol', 'auto', 'gpt-5-mini'], labels: { 'gpt-5.6-sol': 'GPT-5.6 Sol' } });
+    expect(listed.models).toEqual(['auto', 'gpt-5.6-sol', 'gpt-5-mini']);
+    expect(listed.labels.auto).toBe('Auto');
+    expect(localHarnessForCommand('copilot')?.defaultModel).toBe('auto');
+  });
+
+  it('keeps the account\'s own list as the whole truth', () => {
+    const own = { models: ['gpt-5-mini'], labels: { 'gpt-5-mini': 'GPT-5 mini' } };
+    expect(copilotModelList(own, { models: ['gpt-5.6-sol'], labels: {} })).toBe(own);
   });
 });

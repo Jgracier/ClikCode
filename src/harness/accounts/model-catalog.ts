@@ -631,7 +631,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
   // no hardcoded list stands in for them.
   'copilot-server': async ({ account, state: d }) => {
     const own = await copilotAccountModels(nativeProfileEnvironment(account?.nativeProfile)).catch(quiet('harness/accounts/model-catalog'));
-    const listed = own ?? modelsDevProvider(await modelsDevCache(), 'github-copilot');
+    const listed = copilotModelList(own, own ? undefined : modelsDevProvider(await modelsDevCache(), 'github-copilot'));
     // The account's own list is the whole truth; ids remembered from the
     // public catalog would offer models this plan refuses.
     if (own) d.models.clear();
@@ -669,6 +669,23 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
     d.connect = gooseConnect(providers);
   },
 };
+
+/** Copilot's models: the account's own list (`models.list`), else the
+ * public catalog with `auto` first. `auto` is what every plan runs -- a Free
+ * account with its chat spent lists it alone -- and the public catalog does
+ * not list it: without it the first id there (gpt-5.6-sol) became the
+ * default, and a Free plan refused every turn with "Model ... is not
+ * available" whenever its own list could not be read (2026-11-24). */
+export function copilotModelList(
+  own: { models: string[]; labels: Record<string, string> } | undefined,
+  publicList: { models: readonly string[]; labels: Record<string, string> } | undefined,
+): { models: string[]; labels: Record<string, string> } {
+  if (own) return own;
+  return {
+    models: ['auto', ...(publicList?.models ?? []).filter((model) => model !== 'auto')],
+    labels: { auto: 'Auto', ...publicList?.labels },
+  };
+}
 
 /** The catalog's `modelListFormat`: how a vendor's printed list is read. */
 const PRINTED_MODEL_LIST: Readonly<Record<NonNullable<AiLocalHarnessDefinition['modelListFormat']>, (context: DiscoveryContext, printed: string) => Promise<void>>> = {
