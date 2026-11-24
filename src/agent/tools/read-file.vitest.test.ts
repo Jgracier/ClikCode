@@ -21,7 +21,7 @@ describe('read_file on a file too large to hold', () => {
     } as ToolContext;
   });
   afterEach(async () => {
-    disposeSessionState(ctx.stateDir, ctx.session.sessionId, 'test over');
+    disposeSessionState(ctx.stateDir, ctx.session.sessionId);
     await rm(root, { recursive: true, force: true });
   });
 

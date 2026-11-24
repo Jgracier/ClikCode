@@ -142,27 +142,23 @@ export function formatShellNotifications(notifications: readonly ShellNotificati
   }).join('\n\n');
 }
 
-/** Kill background shells and forget the session. Call when a chat closes.
- * Returns what the model was never told: notifications still queued, and a
- * line for each shell this kills, for a caller that can deliver them later
- * (the worker records them in the conversation's durable queue). */
-export function disposeSessionState(stateDir: string, sessionId: string, reason = 'the session closed'): ShellNotification[] {
+/** Kill background shells, cancel pending wakeups and forget the session.
+ * Called when a chat closes (worker shutdown, a sub-agent ending). Nothing is
+ * told to the model: the worker is held while a shell, wakeup or notification
+ * is pending (worker-idle.ts heldReason), so a session closes on them only
+ * when ClikCode itself is stopped, and that leaves no turn and no text. */
+export function disposeSessionState(stateDir: string, sessionId: string): void {
   const key = `${path.resolve(stateDir)}\0${sessionId}`;
   const state = sessions.get(key);
-  if (!state) return [];
+  if (!state) return;
   state.onNotification = undefined;
-  const undelivered = takeShellNotifications(state);
-  for (const wakeup of state.wakeups.values()) {
-    undelivered.push({ shellId: wakeup.id, command: wakeup.reason, tail: '', reason: 'the session closed before it fired; schedule it again if it is still needed', at: Date.now() });
-  }
+  state.notifications.length = 0;
   cancelWakeups(state);
   for (const shell of state.shells.values()) {
     if (shell.status !== 'running') continue;
-    // Marked first, so its close handler does not queue a second notice.
+    // Marked first, so its close handler queues nothing.
     shell.status = 'killed';
     killProcessTreePortable(shell.child, 'SIGKILL', shell.detached);
-    undelivered.push({ shellId: shell.id, command: shell.command, tail: '', reason, at: Date.now() });
   }
   sessions.delete(key);
-  return undelivered;
 }

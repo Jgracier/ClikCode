@@ -24,7 +24,7 @@ describe.skipIf(process.platform === 'win32')('the monitor tool', () => {
     } as ToolContext;
   });
   afterEach(async () => {
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
     await rm(dir, { recursive: true, force: true });
   });
 

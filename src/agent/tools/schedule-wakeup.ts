@@ -1,8 +1,8 @@
 /** The agent re-prompts itself later. The timer lives in the worker process
  * that holds this conversation (session-state.ts scheduleWakeup): the worker is
- * kept up while one is pending, and one that stops first (shutdown, a crash)
- * tells the model next time that the wakeup never fired -- it is not durable
- * across a stopped worker, and the description says so. */
+ * kept up while one is pending (worker-idle.ts heldReason), so only stopping
+ * ClikCode itself (or a crash) loses one, without a word -- the description
+ * says so. */
 import { defineTool } from '../tool-contract.js';
 import { cancelWakeups, scheduleWakeup } from '../session-state.js';
 
@@ -14,7 +14,7 @@ const MAX_WAKEUP_SECONDS = 3600;
 export const scheduleWakeupTool = defineTool<WakeupArgs>({
   name: 'schedule_wakeup',
   class: 'exec',
-  description: `Schedule a prompt to be sent back to you after a delay (${MIN_WAKEUP_SECONDS}s to ${MAX_WAKEUP_SECONDS}s; other values are clamped), then end your turn: when it fires you continue with that prompt, as a new message. Use it to check on something later, not to poll work that notifies you itself (a background shell's exit, a background agent's result and a monitor's output all arrive on their own). It is held by this conversation's worker and is lost if that worker stops before it fires (you are told next time). Call with stop: true to cancel the pending wakeups.`,
+  description: `Schedule a prompt to be sent back to you after a delay (${MIN_WAKEUP_SECONDS}s to ${MAX_WAKEUP_SECONDS}s; other values are clamped), then end your turn: when it fires you continue with that prompt, as a new message. Use it to check on something later, not to poll work that notifies you itself (a background shell's exit, a background agent's result and a monitor's output all arrive on their own). ClikCode stays up for it, but it is not saved: if ClikCode itself is stopped before it fires, it never fires and you are not told. Call with stop: true to cancel the pending wakeups.`,
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {

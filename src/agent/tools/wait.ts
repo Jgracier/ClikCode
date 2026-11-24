@@ -60,6 +60,8 @@ export const waitTool = defineTool<WaitArgs>({
     }
     const shells = (named.length ? named.map((id) => ctx.session.shells.get(id)!) : args.path && !pattern ? [] : [...ctx.session.shells.values()].filter((shell) => shell.status === 'running'));
     if (pattern && !shells.length) return { output: 'No running background shell to watch for that output.', isError: true };
+    // Nothing that could wake it: a wait now would only be a sleep.
+    if (!shells.length && !args.path) return { output: 'Nothing to wait for: no background shell is running and no path was given. A wait is not a timer: use schedule_wakeup to come back later.', isError: true };
     // What each shell printed that the model has not read: a server that was
     // ready before the wait began wakes it at once.
     const seen = new Map(shells.map((shell) => [shell, shell.unread.slice(-MATCH_WINDOW_CHARS)]));
@@ -126,7 +128,7 @@ export const waitTool = defineTool<WaitArgs>({
           cleanup.push(() => inside.close());
         } catch { /* fail-open-ok: not a directory, or not there yet -- the parent covers it */ }
       }
-      const timer = setTimeout(() => finish(`Waited ${seconds}s; nothing ${shells.length || target ? 'happened' : 'to wait for'} sooner.`), seconds * 1000);
+      const timer = setTimeout(() => finish(`Waited ${seconds}s; nothing happened sooner.`), seconds * 1000);
       cleanup.push(() => clearTimeout(timer));
       const onAbort = (): void => {
         if (settled) return;

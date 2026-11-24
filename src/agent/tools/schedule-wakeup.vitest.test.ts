@@ -53,13 +53,12 @@ describe('the schedule_wakeup tool', () => {
     expect(ctx.session.notifications).toHaveLength(0);
   });
 
-  it('a wakeup the session closes on is reported as lost, never fired late or silently dropped', async () => {
+  it('a wakeup the session closes on is cancelled, never fired late', async () => {
     const stateDir = '/tmp/clikcode-wake-dispose';
     const session = sessionState(stateDir, 'dispose-me');
     await scheduleWakeupTool.run({ delay_seconds: 600, prompt: 'p', reason: 'look at the build' }, { session } as ToolContext);
-    const undelivered = disposeSessionState(stateDir, 'dispose-me');
-    expect(undelivered).toHaveLength(1);
-    expect(formatShellNotifications(undelivered)).toMatch(/^\[background shell wake_1 was stopped: the session closed before it fired/);
+    disposeSessionState(stateDir, 'dispose-me');
+    expect(session.wakeups.size).toBe(0);
     vi.advanceTimersByTime(3_600_000);
     expect(session.notifications).toHaveLength(0);
   });

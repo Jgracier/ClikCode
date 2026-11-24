@@ -18,7 +18,7 @@ describe.skipIf(process.platform === 'win32')('the wait tool', () => {
     } as ToolContext;
   });
   afterEach(async () => {
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -85,6 +85,12 @@ describe.skipIf(process.platform === 'win32')('the wait tool', () => {
     const id = await background('sleep 30');
     expect((await waitTool.run({ shell_ids: [id], seconds: 1 }, ctx)).output).toMatch(/^Waited 1s; nothing happened sooner/);
     await killBashTool.run({ id }, ctx);
+  });
+
+  it('refuses at once with nothing to wait for, instead of sleeping', async () => {
+    const result = await waitTool.run({ seconds: 60 }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.output).toMatch(/^Nothing to wait for/);
   });
 
   it('stops when the turn is cancelled', async () => {

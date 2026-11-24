@@ -5,7 +5,7 @@ import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { startsSuccessor } from './idle-decisions.js';
 import { closePersistentTransport, runningVendorAgents } from '../turn/vendor-process.js';
 import { recordInterruptedAgents } from './handed-off-work.js';
-import { disposeSessionState, takeShellNotifications } from '../agent/session-state.js';
+import { disposeSessionState, formatShellNotifications, takeShellNotifications } from '../agent/session-state.js';
 import { existingSessionAgents } from '../agent/background-agents.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { shutdownLanguageServers } from '../agent/lsp/servers.js';
@@ -62,9 +62,10 @@ export function createShutdown(ctx: WorkerContext) {
     const names = agents.runningAgents().map((agent) => agent.id).join(', ');
     lifecycle('worker.agents.wind-down', { reason, agents: names });
     await Promise.race([agents.stopAll(`ClikCode's worker stopped (${reason}); its work is committed to its branch`), new Promise<void>((resolve) => { setTimeout(resolve, AGENT_WIND_DOWN_MS).unref(); })]);
-    const owed = takeShellNotifications(ctx.agentSession);
-    ctx.agentSession.notifications.push(...owed.filter((note) => note.kind !== 'agent'));
-    await ctx.io.recordNotifications(owed.filter((note) => note.kind === 'agent').map((note) => ({ ...note, reason: 'interrupted' }))).catch(quiet('worker/worker-shutdown'));
+    // Durable, like the vendor's interrupted agents (recordInterruptedAgents): the next worker drops
+    // every other notification an earlier one left, and these say which branch holds each agent's work.
+    const stopped = takeShellNotifications(ctx.agentSession).filter((note) => note.kind === 'agent');
+    if (stopped.length) await ctx.io.recordNotificationText(formatShellNotifications(stopped.map((note) => ({ ...note, reason: 'interrupted' }))), true).catch(quiet('worker/worker-shutdown'));
   };
   const shutdownOnce = async (reason: string): Promise<void> => {
     lifecycle('worker.shutdown', { reason, turnRunning: ctx.turnRunning, clients: observer.attachedCount });
@@ -73,17 +74,17 @@ export function createShutdown(ctx: WorkerContext) {
     await boundedStep(currentStep, () => ctx.outOfTurn?.settle());
     // Background shells the agent tools started are spawned DETACHED on
     // everything but Windows, so they outlive this process rather than dying
-    // with it. disposeSessionState is the only thing that kills them and had
-    // no caller anywhere, which meant a background command survived its
-    // worker, its session and this terminal -- indefinitely. Done on every
-    // shutdown reason, not just the idle one: whenever this worker is going
-    // away, so is the session whose shells these are.
+    // with it; disposeSessionState kills them. Done on every shutdown reason,
+    // not just the idle one: whenever this worker is going away, so is the
+    // session whose shells these are.
     //
-    // Nothing is queued for the model about what this stops: killing
-    // ClikCode leaves no turn behind and no text.
+    // Nothing is queued for the model about the shells and wakeups this
+    // stops: the worker waits for them before an idle exit or a retire, so
+    // only stopping ClikCode itself ends them, and that leaves no turn and no
+    // text. Interrupted agents are the exception (windDownAgents).
     currentStep = 'agent wind-down';
     await windDownAgents(reason);
-    disposeSessionState(stateDirectory(), sessionId, `ClikCode's worker for this conversation stopped (${reason})`);
+    disposeSessionState(stateDirectory(), sessionId);
     // Codex app-server and ACP children are spawned detached too, and were
     // orphaned the same way.
     // Agents the vendor is running die with its process: each is recorded for the next worker, with its task and how to resume it.

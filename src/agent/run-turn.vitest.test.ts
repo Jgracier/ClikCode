@@ -442,7 +442,7 @@ describe('runAgentLoop', () => {
       disposeSessionState(stateDir, h.input.sessionId);
     });
 
-    it('stopped by kill_bash are not reported back; disposing reports the ones it kills', async () => {
+    it('stopped by kill_bash are not reported back; disposing kills the rest without a notice', async () => {
       const h = harness([
         { toolCalls: [{ name: 'bash', args: { command: 'sleep 30', run_in_background: true } }] },
         { toolCalls: [{ name: 'kill_bash', args: { id: 'bash_1' } }] },
@@ -454,8 +454,11 @@ describe('runAgentLoop', () => {
       const killed = state.shells.get('bash_1')!;
       if (killed.exitCode === undefined) await new Promise((resolve) => killed.child.once('close', resolve));
       expect(state.notifications).toHaveLength(0);
-      const undelivered = disposeSessionState(stateDir, h.input.sessionId, 'the worker stopped');
-      expect(undelivered).toEqual([expect.objectContaining({ shellId: 'bash_2', command: 'sleep 31', reason: 'the worker stopped' })]);
+      const running = state.shells.get('bash_2')!;
+      disposeSessionState(stateDir, h.input.sessionId);
+      expect(running.status).toBe('killed');
+      await new Promise((resolve) => { if (running.exitCode !== undefined) resolve(undefined); else running.child.once('close', resolve); });
+      expect(state.notifications).toHaveLength(0);
     });
   });
 

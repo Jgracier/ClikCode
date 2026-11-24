@@ -201,5 +201,5 @@ async function settleInProcessWork(sessionId: string): Promise<void> {
   // An agent this process ran cannot outlive it: it stops now, its work committed to its branch.
   const agents = existingSessionAgents(sessionState(stateDirectory(), sessionId));
   if (agents?.running()) await Promise.race([agents.stopAll('the command that started it ended and no ClikCode worker could keep it; its work is committed to its branch'), new Promise<void>((resolve) => { setTimeout(resolve, 30_000).unref(); })]);
-  disposeSessionState(stateDirectory(), sessionId, 'the command that started it ended and no ClikCode worker could keep it');
+  disposeSessionState(stateDirectory(), sessionId);
 }

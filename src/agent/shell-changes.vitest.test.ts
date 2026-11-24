@@ -38,7 +38,7 @@ describe.skipIf(process.platform === 'win32')('bash changes are undoable', () =>
     } as ToolContext;
   });
   afterEach(async () => {
-    disposeSessionState(path.join(base, 'state'), sessionId, 'test over');
+    disposeSessionState(path.join(base, 'state'), sessionId);
     await fs.rm(base, { recursive: true, force: true });
   });
 

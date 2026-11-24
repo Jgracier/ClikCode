@@ -151,7 +151,7 @@ describe.skipIf(process.platform !== 'linux')('a missing sandbox tool', () => {
     expect(first.isError).toBeFalsy();
     expect(first.output).toBe('[sandbox: bubblewrap (bwrap) is not installed or cannot run here, so commands in this session run unsandboxed]\none');
     expect((await bashTool.run({ command: 'echo two' }, ctx)).output).toBe('two');
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
   });
 });
 
@@ -186,7 +186,7 @@ describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox, for real', () =>
     expect(refused.output).toContain(REFUSED);
     expect(refused.output).toMatch(/\n\[sandbox: this looks like the workspace sandbox refusing a write/);
     expect(existsSync(outside)).toBe(false);
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
   });
 
   it('sandbox: false runs that one command outside it', async () => {
@@ -194,7 +194,7 @@ describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox, for real', () =>
     const result = await bashTool.run({ command: `touch ${outside}`, sandbox: false }, ctx);
     expect(result).toMatchObject({ isError: false, output: '(no output)' });
     expect(existsSync(outside)).toBe(true);
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
   });
 
   it('keeps /dev/null, git and the docker socket working', async () => {
@@ -207,14 +207,14 @@ describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox, for real', () =>
       const docker = await bashTool.run({ command: probe }, ctx);
       expect(docker.output).toBe(execFileSync('sh', ['-c', probe]).toString().trim());
     }
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
   });
 
   it('reads the system and kills a background child', async () => {
     const ctx = contextFor(dir);
     const result = await bashTool.run({ command: 'head -c 1 /etc/hosts >/dev/null; sleep 30 & p=$!; kill $p; wait $p; echo killed=$?' }, ctx);
     expect(result).toMatchObject({ isError: false, output: expect.stringContaining('killed=143') });
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
   });
 
   it.skipIf(process.platform !== 'darwin')('macOS: the per-user temp and cache dirs, with or without TMPDIR, and a workspace named through /tmp', async () => {
@@ -231,11 +231,11 @@ describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox, for real', () =>
     try {
       const tmpCtx = contextFor(viaTmp);
       expect(await bashTool.run({ command: 'echo hi > f && cat f && touch /tmp/clikcode-sandbox-$$ && rm /tmp/clikcode-sandbox-$$' }, tmpCtx)).toMatchObject({ isError: false, output: 'hi' });
-      disposeSessionState(viaTmp, tmpCtx.session.sessionId, 'test over');
+      disposeSessionState(viaTmp, tmpCtx.session.sessionId);
     } finally {
       await rm(viaTmp, { recursive: true, force: true });
     }
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
   });
 
   it('a background shell is sandboxed too', async () => {
@@ -244,7 +244,7 @@ describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox, for real', () =>
     for (let i = 0; i < 50 && !existsSync(join(dir, 'bg.txt')); i++) await new Promise((resolve) => setTimeout(resolve, 100));
     expect(existsSync(join(dir, 'bg.txt'))).toBe(true);
     expect(existsSync(outside)).toBe(false);
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
   });
 });
 

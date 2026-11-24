@@ -24,7 +24,7 @@ describe.skipIf(process.platform === 'win32')('steer while a long call runs', ()
   });
   afterEach(async () => {
     for (const shell of ctx.session.shells.values()) if (shell.status === 'running') await killBashTool.run({ id: shell.id }, ctx).catch(() => undefined);
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
     await rm(dir, { recursive: true, force: true });
   });
 

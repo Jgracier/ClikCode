@@ -18,7 +18,7 @@ describe.skipIf(process.platform === 'win32')('typing into a background shell', 
     } as ToolContext;
   });
   afterEach(async () => {
-    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+    disposeSessionState(dir, ctx.session.sessionId);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -39,7 +39,7 @@ describe.skipIf(process.platform === 'win32')('typing into a background shell', 
 
   it('keeps only the last megabyte of a flood of unread output, and says how much it dropped', async () => {
     const id = await background(`node -e "for (let i = 0; i < 3000; i++) process.stdout.write('a'.repeat(999) + '\\n'); process.stdout.write('END\\n')"`);
-    await waitTool.run({ ids: [id], timeout_ms: 20_000 } as never, ctx).catch(() => undefined);
+    await waitTool.run({ shell_ids: [id], seconds: 20 }, ctx);
     const shell = ctx.session.shells.get(id)!;
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(shell.unread.length).toBe(1024 * 1024);
