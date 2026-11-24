@@ -213,5 +213,12 @@ describe('hybrid search', () => {
     setEmbedderForTests(null);
     const lexical = await run('hindsight', { query: 'login broken' }, B);
     expect(lexical.text).toContain('"login broken" does not come up in this chat.');
+    // A description of the subject, not a phrase from it: the messages holding its words, most first, with no embedder at all.
+    const described = await run('hindsight', { query: 'is the oauth credentials step broken for users' }, B);
+    expect(described.text).toContain('is not in this chat word for word; messages with most of its words, most first:');
+    expect(described.text).toMatch(/#2 user: Users cannot authenticate/);
+    expect(described.text).not.toContain('#3 assistant');
+    const every = await run('hindsight', { query: 'staging api' }, B);
+    expect(every.text).toContain('messages with every one of its words');
   });
 });

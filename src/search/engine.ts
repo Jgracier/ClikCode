@@ -129,9 +129,32 @@ function messageMentions(message: MessageDoc, query: ParsedQuery): Array<{ offse
   }
   if (found.length || query.words.length < 2) return found;
   if (!query.words.every((word) => indexOfWord(message.text, word) >= 0)) return found;
-  const first = query.words[0]!;
-  return [{ offset: indexOfWord(message.text, first), length: first.length, exact: false }];
+  const words = wordsIn(message.text, query);
+  return words.count ? [{ offset: words.offset, length: words.length, exact: false }] : found;
 }
+
+/** Words in nearly every message: a partial match does not count them. */
+const COMMON_WORDS = new Set(['the', 'and', 'for', 'are', 'was', 'were', 'with', 'that', 'this', 'from', 'have', 'has', 'had', 'not', 'but', 'you', 'our', 'can', 'how', 'why', 'what', 'when', 'where', 'which', 'who', 'does', 'did', 'any', 'all', 'into', 'its', 'they', 'them', 'then', 'there', 'been', 'will', 'would', 'should', 'could']);
+/** The words a partial match counts: "is", "it", "the" are in every message, so a query with other words counts only those. */
+const countedWords = (query: ParsedQuery): string[] => { const kept = query.words.filter((word) => word.length >= 3 && !COMMON_WORDS.has(word)); return kept.length ? kept : query.words; };
+
+/** How many of the query's counted words `text` holds, and where the first of them sits. */
+export function wordsIn(text: string, query: ParsedQuery): { count: number; offset: number; length: number } {
+  let count = 0;
+  let offset = -1;
+  let length = 0;
+  for (const word of countedWords(query)) {
+    const at = indexOfWord(text, word);
+    if (at < 0) continue;
+    count += 1;
+    if (offset < 0 || at < offset) { offset = at; length = word.length; }
+  }
+  return { count, offset, length };
+}
+
+/** Every counted word of a query. */
+export const allWords = (query: ParsedQuery): number => countedWords(query).length;
+export const partialWordFloor = (query: ParsedQuery): number => { const all = allWords(query); return all <= 2 ? all : Math.ceil(all / 2); };
 
 /** How a title matches: it is the query, or it holds every word. */
 export function titleMatch(title: string, query: ParsedQuery): ConversationHit['titleMatch'] {

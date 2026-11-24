@@ -15,7 +15,7 @@ import { readTurnChanges } from '../session/turn-changes.js';
 import { activeConversations } from './active.js';
 import { conversationGroups, conversationTitle, findConversation, type ConversationGroup } from './conversations.js';
 import { conversationView, type ConversationView } from './corpus.js';
-import { parseSince, searchConversations, type ConversationHit } from './engine.js';
+import { parseQuery, parseSince, allWords, partialWordFloor, searchConversations, wordsIn, type ConversationHit } from './engine.js';
 import { ago, hitSnippets, mentionCount, parseAnchor, renderFullMessage, renderMessage, runsOn, shortId } from './format.js';
 import { formatElapsed } from '../harness/protocol/format.js';
 import { oneLine, presentTopics, rangeLabel, topicsBefore, type HindsightMessage, type PresentedTopic } from './hindsight.js';
@@ -417,36 +417,47 @@ const hindsightTool: ConversationTool = {
     ].join(' · ');
     const note = 'This is the stored chat, not the current tree.';
     if (query) {
-      const needle = query.toLowerCase().replace(/\s+/g, ' ');
-      const pattern = new RegExp(needle.split(' ').map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'), 'i');
+      const parsed = parseQuery(query);
       const view = await conversationView(found.group);
       const textOf = (message: HindsightMessage): string => view.entries[message.index]?.message.text ?? message.content;
-      const exact = messages.filter((message) => textOf(message).search(pattern) >= 0);
-      const exactLines = exact.slice(0, QUERY_CAP).map((message) => {
+      const lineAt = (message: HindsightMessage, at: number): { index: number; line: string } => {
         const doc = view.entries[message.index]?.message;
-        const at = textOf(message).search(pattern);
-        return { index: message.index, line: doc ? snippetLine(message.index, doc, at) : `#${message.index} ${message.role}: ${oneLine(message.content, 160)}` };
-      });
+        return { index: message.index, line: doc ? snippetLine(message.index, doc, Math.max(0, at)) : `#${message.index} ${message.role}: ${oneLine(message.content, 160)}` };
+      };
+      const phraseAt = (message: HindsightMessage): number => { if (!parsed) return -1; parsed.phrase.lastIndex = 0; return textOf(message).search(parsed.phrase); };
+      const exact = messages.filter((message) => phraseAt(message) >= 0);
+      const exactLines = exact.slice(0, QUERY_CAP).map((message) => lineAt(message, phraseAt(message)));
+      // Not word for word: the messages holding the query's words in any order, most words first (every word of a short query, at
+      // least half of a long one). A long description of a subject almost never appears as one phrase.
+      const worded = exact.length || !parsed ? [] : messages
+        .map((message) => ({ message, words: wordsIn(textOf(message), parsed) }))
+        .filter((hit) => hit.words.count >= partialWordFloor(parsed))
+        .sort((left, right) => right.words.count - left.words.count || right.message.index - left.message.index);
+      const wordedLines = worded.slice(0, QUERY_CAP).map((hit) => lineAt(hit.message, hit.words.offset));
       // In meaning: what the words missed. Exact matches always come first.
       const vector = await queryVector(query);
       let related: { index: number; line: string }[] = [];
       if (vector) {
         await catchUp(found.group);
         const numbers = new Set(messages.map((message) => message.index));
-        const matched = new Set(exact.map((message) => message.index));
+        const matched = new Set([...exact.map((message) => message.index), ...wordedLines.map((line) => line.index)]);
         related = (await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: RELATED_CAP * 2 }))
           .filter((match) => numbers.has(match.position) && !matched.has(match.position))
           .slice(0, RELATED_CAP)
           .map((match) => ({ index: match.position, line: snippetLine(match.position, view.entries[match.position]!.message, match.offset, 0, 160) }));
       }
       void backfill();
-      if (!exactLines.length && !related.length) return { text: maskSecrets(`${header}\n"${oneLine(query, 80)}" does not come up in this chat.\n${note}`) };
+      if (!exactLines.length && !wordedLines.length && !related.length) return { text: maskSecrets(`${header}\n"${oneLine(query, 80)}" does not come up in this chat.\n${note}`) };
       // Index is the topic's back number: 0 the latest, 1 the one before.
       const topics = [presented.current, ...[...presented.earlier].reverse()];
       const lines = [header];
       if (exactLines.length) {
         lines.push(`"${oneLine(query, 80)}" in this chat:`, ...byTopic(exactLines, topics));
         if (exact.length > exactLines.length) lines.push(`(${exact.length - exactLines.length} more)`);
+      } else if (wordedLines.length) {
+        const every = worded[0]!.words.count === allWords(parsed!);
+        lines.push(`"${oneLine(query, 80)}" is not in this chat word for word; messages with ${every ? 'every one of its words' : 'most of its words'}, most first:`, ...byTopic(wordedLines, topics));
+        if (worded.length > wordedLines.length) lines.push(`(${worded.length - wordedLines.length} more)`);
       } else lines.push(`"${oneLine(query, 80)}" does not come up word for word in this chat.`);
       if (related.length) lines.push('Related in meaning:', ...byTopic(related, topics));
       lines.push(note);
