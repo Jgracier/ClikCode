@@ -625,6 +625,10 @@ export interface AiLocalHarnessDefinition {
    * `--reasoning-effort` on haiku4.5, and `auggie model list` publishes no
    * per-model capability to read instead. */
   effortUnsupportedModels?: readonly string[];
+  /** The effort flag is taken only beside a model flag: with no model chosen it is left out and the
+   * vendor runs its default model at its default effort. Junie: "The --effort option (or
+   * JUNIE_EFFORT) requires --model (or JUNIE_MODEL)", and the turn failed. */
+  effortNeedsModel?: boolean;
   /** Vendor config key used when effort is expressed as --config key=value. */
   effortConfigKey?: string;
   /** Canonical permission modes this vendor CLI actually maps to a real flag.
@@ -1274,7 +1278,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // junie 26.9.22 initialize (vendor-sandbox, 2026-10-11): `_meta.steering.supported: true`. Checked 2026-10-12: it does NOT answer `_session/steering`
   // as claude-agent-acp does (idle, with `promptRequired`, it answers `startedNewTurn`), so `acp.steering: false` keeps ClikCode from steering it. session/new (signed in): modes default|plan, config
   // options mode, model, effort (low|medium|high), brave_mode (brave-auto|on|off) -- brave_mode is a config option, not a mode id, so no permission mapping.
-  { command: 'junie', quotaProbe: { none: '`junie --help` has no usage or quota command' }, profileExtraEnv: { JAVA_TOOL_OPTIONS: '-Duser.home={profile}' }, loginSteps: [{ when: 'Share anonymous statistics', send: '{down}{enter}' }, { when: 'Use custom models and endpoints', send: '{enter}' }], subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'junie', displayName: 'Junie CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'], effortConfigId: 'effort', planModeId: 'plan', steering: false, silentRefusalLog: { dir: '~/.junie/logs', pattern: '\\{"type":"[A-Z_]+","message":"((?:[^"\\\\]|\\\\.)*)"' } }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', authFiles: [{ path: '~/.junie/secure_credentials.json', contains: 'jb-account-stored' }], installer: HARNESS_INSTALLERS.junie, loginArgv: [], authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortValues: ['low', 'medium', 'high'] },
+  { command: 'junie', quotaProbe: { none: '`junie --help` has no usage or quota command' }, profileExtraEnv: { JAVA_TOOL_OPTIONS: '-Duser.home={profile}' }, loginSteps: [{ when: 'Share anonymous statistics', send: '{down}{enter}' }, { when: 'Use custom models and endpoints', send: '{enter}' }], subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'junie', displayName: 'Junie CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'], effortConfigId: 'effort', planModeId: 'plan', steering: false, silentRefusalLog: { dir: '~/.junie/logs', pattern: '\\{"type":"[A-Z_]+","message":"((?:[^"\\\\]|\\\\.)*)"' } }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', authFiles: [{ path: '~/.junie/secure_credentials.json', contains: 'jb-account-stored' }], installer: HARNESS_INSTALLERS.junie, loginArgv: [], authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortNeedsModel: true, effortValues: ['low', 'medium', 'high'] },
   // Sign-in evidence: the OAuth record `mcode login` writes under
   // ~/.minimax/auth/prod/<region>/<client>/auth.json (vendor-identity.ts
   // reads the same record for the account's email).
@@ -1910,7 +1914,8 @@ export function modelProvider(harness: AiLocalHarnessDefinition, model: string):
  * separately and the id names one. */
 /** Whether this model takes the harness's effort flag (see `effortUnsupportedModels`). */
 export function harnessModelAcceptsEffort(harness: AiLocalHarnessDefinition, model: string | null | undefined): boolean {
-  return !(model && harness.effortUnsupportedModels?.some((source) => new RegExp(source, 'i').test(model)));
+  if (!model) return !harness.effortNeedsModel;
+  return !harness.effortUnsupportedModels?.some((source) => new RegExp(source, 'i').test(model));
 }
 
 export function modelSelectorArgv(harness: AiLocalHarnessDefinition, model: string): string[] {

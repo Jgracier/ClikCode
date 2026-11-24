@@ -446,6 +446,12 @@ describe('local harness catalog', () => {
     }
   });
 
+  it('leaves Junie\'s effort flag out when no model is chosen: Junie takes --effort only with --model', () => {
+    const junie = localHarnessForCommand('junie')!;
+    expect(harnessAcpLaunch(junie, { effort: 'medium', permissionMode: 'ask' })!.optionArgv).not.toContain('--effort');
+    expect(harnessAcpLaunch(junie, { model: 'gpt-5', effort: 'medium', permissionMode: 'ask' })!.optionArgv).toEqual(expect.arrayContaining(['--model', 'gpt-5', '--effort', 'medium']));
+  });
+
   it('builds the ACP spawn contract from declarations only', () => {
     // Droid's `exec --output-format acp` validates but ignores -m/-r/--auto: its session is set over the protocol.
     expect(harnessAcpLaunch(localHarnessForCommand('antigravity')!, { model: 'chosen-model', effort: 'high', permissionMode: 'ask' }))
