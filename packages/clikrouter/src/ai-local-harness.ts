@@ -1097,7 +1097,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // and --output-format stream-json ("JSON Lines on stdout", which implies
   // --no-interactive). Everything here was already right except --model,
   // which the CLI has and this entry did not.
-  { command: 'kiro', quotaProbe: true, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { listed: true }, provider: 'kiro', displayName: 'Kiro CLI', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], optionPlacement: 'after', compactCommand: { prompt: '/compact', settledBy: '_kiro.dev/compaction/status' } }, effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginRemoteArgv: ['login', '--license', 'free', '--use-device-flow'], loginArgv: ['login'], logoutArgv: ['logout'], statusArgv: ['whoami'], binary: 'kiro-cli', authFiles: [{ path: '~/.local/share/kiro-cli/data.sqlite3', contains: 'kirocli:social:token' }, { path: '~/.local/share/kiro-cli/data.sqlite3', contains: 'kirocli:odic:token' }], installer: HARNESS_INSTALLERS.kiro, modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--trust-all-tools'] } }, turn: { promptGuard: 'double-dash', startArgv: ['chat', '--no-interactive', '--agent-engine', 'v3', '--output-format', 'stream-json'], resumeIdPrefix: ['--resume-id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['chat', '--resume-id'], discoverArgv: ['chat', '--list-sessions', '--format', 'json'], discoverFormat: 'json' } },
+  { command: 'kiro', quotaProbe: true, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { listed: true }, provider: 'kiro', displayName: 'Kiro CLI', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], optionPlacement: 'after', compactCommand: { prompt: '/compact', settledBy: '_kiro.dev/compaction/status' } }, effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginRemoteArgv: ['login', '--license', 'free', '--use-device-flow'], loginArgv: ['login'], logoutArgv: ['logout'], statusArgv: ['whoami'], binary: 'kiro-cli', authFiles: [{ path: '~/.local/share/kiro-cli/data.sqlite3', sqliteQuery: "select value from auth_kv where key in ('kirocli:social:token', 'kirocli:odic:token') order by key", sqliteCarry: "delete from auth_kv where key like 'kirocli:%'; insert into auth_kv select * from source.auth_kv where key like 'kirocli:%'" }], installer: HARNESS_INSTALLERS.kiro, modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--trust-all-tools'] } }, turn: { promptGuard: 'double-dash', startArgv: ['chat', '--no-interactive', '--agent-engine', 'v3', '--output-format', 'stream-json'], resumeIdPrefix: ['--resume-id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['chat', '--resume-id'], discoverArgv: ['chat', '--list-sessions', '--format', 'json'], discoverFormat: 'json' } },
   // Sign-in (2026-10-03, real qwen 0.24 signed out): its provider menus and
   // key/model boxes are read on ClikCode's screen; once configured it sits in
   // its chat, which the step quits.
@@ -1939,6 +1939,18 @@ export interface AiHarnessAuthFile {
   removeLine?: boolean;
   /** A JSON credential must parse and contain these nonempty string paths. */
   jsonFields?: readonly string[];
+  /** The file is a SQLite database: signed in when this read-only query
+   * returns a row whose first column is nonempty (the credential itself, so
+   * a sign-in is told apart by what it holds, not by the vendor's other
+   * writes to the same file). Never a text search of the file: a deleted row
+   * stays in a freed page, and Kiro's signed-out database still held
+   * `kirocli:odic:token` that way. Such a file is never removed at logout. */
+  sqliteQuery?: string;
+  /** How a sign-in carries into another profile's copy of that database:
+   * run there with the signed-in one attached as `source`. The vendor's
+   * chats live in the same file, so it is never copied over a target that
+   * exists. */
+  sqliteCarry?: string;
   /** The vendor cannot run without this one, whatever else is there: the
    * account is signed in only once it exists, and a sign-in is not over until
    * it is written (OpenHands writes its cloud key first and its agent

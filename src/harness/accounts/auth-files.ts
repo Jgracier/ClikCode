@@ -56,9 +56,59 @@ function jsonFieldValues(data: unknown, fields: readonly string[]): unknown[] {
     value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, data));
 }
 
+type Db = { prepare(sql: string): { all(...values: unknown[]): unknown[]; run(...values: unknown[]): unknown }; exec(sql: string): void; close(): void };
+
+type Sqlite = { DatabaseSync: new (file: string, options?: { readOnly: boolean }) => Db };
+
+/** node:sqlite, or undefined on a runtime that only has it behind
+ * --experimental-sqlite (Node 22 before 22.13, inside this package's floor). */
+async function loadSqlite(): Promise<Sqlite | undefined> {
+  try { return await import('node:sqlite') as unknown as Sqlite; } catch { return undefined; }
+}
+
+/** The first column of each row `query` returns from the database at
+ * `path`, opened read-only; undefined when this runtime cannot read SQLite.
+ * Throws when the database cannot be read. */
+async function sqliteValues(path: string, query: string): Promise<string[] | undefined> {
+  await stat(path);
+  const sqlite = await loadSqlite();
+  if (!sqlite) return undefined;
+  const db = new sqlite.DatabaseSync(path, { readOnly: true });
+  try {
+    return db.prepare(query).all().map((row) => {
+      const value = Object.values(row as Record<string, unknown>)[0];
+      return value === null || value === undefined ? '' : String(value);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+/** Run `carry` in the database at `target` with `source` attached as
+ * `source`, in one transaction: the credential rows move, the rest of the
+ * file (the vendor's chats) stays. */
+async function carrySqlite(source: string, target: string, carry: string): Promise<boolean> {
+  const sqlite = await loadSqlite();
+  if (!sqlite) return false;
+  const db = new sqlite.DatabaseSync(target);
+  try {
+    db.prepare('attach database ? as source').run(source);
+    db.exec(`begin; ${carry}; commit`);
+    return true;
+  } catch (error) {
+    try { db.exec('rollback'); } catch { /* fail-open-ok: nothing was begun */ }
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 async function presentAt(path: string, entry: AuthFile): Promise<boolean> {
   try {
     if (path.endsWith('/')) return (await readdir(path)).length > 0;
+    // A runtime that cannot read the database has no evidence either way:
+    // taken as signed in, like a vendor that declares nothing; its turn says.
+    if (entry.sqliteQuery) return (await sqliteValues(path, entry.sqliteQuery))?.some((value) => value.trim().length > 0) ?? true;
     if (entry.jsonFields) {
       const data: unknown = JSON.parse(await readFile(path, 'utf8'));
       return jsonFieldValues(data, entry.jsonFields).every((value) => typeof value === 'string' && value.trim().length > 0);
@@ -109,6 +159,8 @@ async function credentialDigest(path: string, entry: AuthFile): Promise<string> 
     const names = (await readdir(path)).sort();
     return hash((await Promise.all(names.map(async (name) => `${name}:${hash(await readFile(`${path}${name}`).catch(() => ''))}`))).join('\n'));
   }
+  const values = entry.sqliteQuery ? await sqliteValues(path, entry.sqliteQuery) : undefined;
+  if (values) return hash(values.join('\n'));
   const text = await readFile(path);
   if (!entry.jsonFields) return hash(text);
   try { return hash(JSON.stringify(jsonFieldValues(JSON.parse(text.toString('utf8')), entry.jsonFields))); } catch { return 'invalid'; }
@@ -191,6 +243,9 @@ export async function adoptAuthFiles(
       await mkdir(dirname(target), { recursive: true, mode: 0o700 });
       if (source.endsWith('/')) {
         await cp(source, target, { recursive: true, force: true });
+      } else if (entry.sqliteCarry && await stat(target).then(() => true, () => false)) {
+        // Never copied over: the target's chats live in that file.
+        if (!await carrySqlite(source, target, entry.sqliteCarry)) continue;
       } else if (entry.removeLine && entry.contains !== undefined) {
         const holds = (line: string): boolean => line.includes(entry.contains!);
         const kept = (await readFile(target, 'utf8').catch(() => '')).split('\n').filter((line) => line && !holds(line));
@@ -260,7 +315,7 @@ async function keychainSignIn(
  * and `removeLine` lines. A shared config is never deleted for the key
  * inside it. */
 export function removableAuthFiles(harness: Pick<AiLocalHarnessDefinition, 'authFiles'>): AuthFile[] {
-  return (harness.authFiles ?? []).filter((entry) => entry.contains === undefined || entry.removeLine);
+  return (harness.authFiles ?? []).filter((entry) => !entry.sqliteQuery && (entry.contains === undefined || entry.removeLine));
 }
 
 /** Sign out a vendor with no logout command by removing its credential

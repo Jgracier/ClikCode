@@ -144,6 +144,60 @@ describe('vendor credential files', () => {
     expect(await authFilesStamp(vendor, { HOME: root }, {})).not.toBe(before);
   });
 
+  it('Kiro is signed in by a live auth_kv row, never by a deleted token left in a freed page', async () => {
+    const kiro = AI_LOCAL_HARNESSES.find((item) => item.command === 'kiro')!;
+    const { DatabaseSync } = await import('node:sqlite');
+    const dir = join(root, '.local', 'share', 'kiro-cli');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'data.sqlite3');
+    const db = new DatabaseSync(file);
+    db.exec("create table auth_kv (key text primary key, value text); create table conversations (id text, body text)");
+    db.exec("insert into auth_kv values ('kirocli:odic:device-registration', '{}'), ('kirocli:odic:token', '{\"accessToken\":\"t-1\"}')");
+    db.exec("delete from auth_kv where key = 'kirocli:odic:token'");
+    db.close();
+    // What `kiro-cli logout` leaves: the key is still in the file's bytes.
+    expect((await readFile(file)).includes('kirocli:odic:token')).toBe(true);
+    const environment = { HOME: root };
+    expect(await authFilePresent(kiro, environment, {})).toBe(false);
+
+    const signIn = new DatabaseSync(file);
+    signIn.exec("insert into auth_kv values ('kirocli:social:token', '{\"accessToken\":\"t-2\"}')");
+    const before = await authFilesStamp(kiro, environment, {});
+    // A chat written to the same file is not a new sign-in.
+    signIn.exec("insert into conversations values ('c1', 'hello')");
+    expect(await authFilesStamp(kiro, environment, {})).toBe(before);
+    signIn.exec("update auth_kv set value = '{\"accessToken\":\"t-3\"}' where key = 'kirocli:social:token'");
+    expect(await authFilesStamp(kiro, environment, {})).not.toBe(before);
+    signIn.close();
+    expect(await authFilePresent(kiro, environment, {})).toBe(true);
+    // Logout never deletes the database: the vendor's chats are in it.
+    expect(removableAuthFiles(kiro)).toEqual([]);
+  });
+
+  it('carries a Kiro sign-in into the account\'s own database, keeping its chats', async () => {
+    const kiro = AI_LOCAL_HARNESSES.find((item) => item.command === 'kiro')!;
+    const { DatabaseSync } = await import('node:sqlite');
+    const make = async (home: string, rows: string): Promise<string> => {
+      const dir = join(home, '.local', 'share', 'kiro-cli');
+      await mkdir(dir, { recursive: true });
+      const db = new DatabaseSync(join(dir, 'data.sqlite3'));
+      db.exec(`create table auth_kv (key text primary key, value text); create table conversations (id text, body text); ${rows}`);
+      db.close();
+      return join(dir, 'data.sqlite3');
+    };
+    const fresh = await make(join(root, 'fresh'), "insert into auth_kv values ('kirocli:social:token', 'new'), ('kirocli:odic:device-registration', 'reg-new')");
+    const own = await make(join(root, 'own'), "insert into auth_kv values ('kirocli:odic:device-registration', 'reg-old'), ('other:key', 'kept'); insert into conversations values ('c1', 'mine')");
+    expect(await adoptAuthFiles(kiro, { root: join(root, 'fresh'), environment: { HOME: join(root, 'fresh') } }, { root: join(root, 'own'), environment: { HOME: join(root, 'own') } }, {})).toBe(true);
+    const db = new DatabaseSync(own, { readOnly: true });
+    expect(db.prepare('select key, value from auth_kv order by key').all()).toEqual([
+      { key: 'kirocli:odic:device-registration', value: 'reg-new' }, { key: 'kirocli:social:token', value: 'new' }, { key: 'other:key', value: 'kept' },
+    ]);
+    expect(db.prepare('select id from conversations').all()).toEqual([{ id: 'c1' }]);
+    db.close();
+    expect(await authFilePresent(kiro, { HOME: join(root, 'own') }, {})).toBe(true);
+    void fresh;
+  });
+
   it('expands ~ and ${VAR:-default} against the profile environment', () => {
     expect(expandAuthPath('~/.grok/auth.json', {}, '/home/u')).toBe('/home/u/.grok/auth.json');
     expect(expandAuthPath('${GEMINI_CLI_HOME:-~}/.gemini/oauth_creds.json', {}, '/home/u')).toBe('/home/u/.gemini/oauth_creds.json');
