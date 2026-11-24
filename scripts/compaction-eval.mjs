@@ -488,6 +488,8 @@ const VARIANTS = {
   'hs-ids': { tools: true, record: true, maxTurns: 16, env: { ...NUDGE, ...IDS } },
   'hs-ledger': { tools: true, record: true, maxTurns: 16, ledger: true },
   'hs-ids-gate': { tools: true, record: true, maxTurns: 16, env: { ...NUDGE, ...IDS, ...GATE } },
+  /** hs-ids-gate and a line beside the recalled excerpts: they are partial; read or search before answering. */
+  'hs-recall-nudge': { tools: true, record: true, maxTurns: 16, env: { ...NUDGE, ...IDS, ...GATE, CLIKCODE_EVAL_RECALL_NUDGE: '1' } },
   ...JSON.parse(process.env.EVAL_VARIANTS ?? '{}'),
 };
 /** hs-ledger: at each compaction a separate call lists the decisions, rejections (what was ruled out

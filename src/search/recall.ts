@@ -96,6 +96,10 @@ function excerpt(message: MessageDoc, at: number, length: number | undefined, ro
   return `${start > 0 ? '…' : ''}${body}${start + span < text.length ? '…' : ''}`;
 }
 
+/** Eval-only (CLIKCODE_EVAL_RECALL_NUDGE=1): a model given these excerpts tends to answer from them alone, and they are
+ * matched lines, not the whole messages. Said here, beside the request, rather than only in the summary's note. */
+const RECALL_NUDGE = 'These are matched excerpts and may leave out what the request needs. When they do not settle it (a value, a commit, a reason), read the message with hindsight(at=<number>) or search hindsight query=<other words> before answering; do not answer from memory or say it is not recorded without that.';
+
 /** The note for `hits`: each message's number, who said it, and the part that matched. */
 export function recallNote(view: ConversationView, hits: readonly RecallHit[], hasHindsight: boolean, maxChars = RECALL_MAX_CHARS): string {
   const room = Math.floor(maxChars / Math.max(1, hits.length));
@@ -108,6 +112,7 @@ export function recallNote(view: ConversationView, hits: readonly RecallHit[], h
   return wrapRecallNote([
     `From earlier in this conversation, before what your context now holds; matched to this request by ClikCode, not written by the user.${reach}`,
     ...lines,
+    ...hasHindsight && process.env.CLIKCODE_EVAL_RECALL_NUDGE === '1' ? [RECALL_NUDGE] : [],
   ].join('\n'));
 }
 
