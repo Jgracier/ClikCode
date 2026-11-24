@@ -49,7 +49,8 @@ function limitProbes(list) {
   if (!PROBE_LIMIT || list.length <= PROBE_LIMIT) return list;
   const continuity = list.filter((probe) => probe.kind === 'continuity');
   const rest = list.filter((probe) => probe.kind !== 'continuity');
-  const want = Math.max(0, PROBE_LIMIT - continuity.length);
+  // Replacement continuity probes ("c" ids, added later) do not shrink the sample of the rest.
+  const want = Math.max(0, PROBE_LIMIT - continuity.filter((probe) => !/^c\d/.test(probe.id)).length);
   const keep = new Set(continuity.map((probe) => probe.id));
   for (let index = 0; index < want; index += 1) keep.add(rest[Math.floor((index * rest.length) / want)].id);
   return list.filter((probe) => keep.has(probe.id));
