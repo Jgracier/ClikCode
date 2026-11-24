@@ -416,4 +416,17 @@ describe('what an ACP turn reports as it runs', () => {
     expect(usage[0]).toEqual({ contextUsed: 12_000, contextWindow: 200_000, costUsd: expect.closeTo(0.1, 6) });
     expect(usage.at(-1)).toEqual({ input: 900, output: 40, reasoning: 12, cacheRead: 300, totalTokens: 940, stopReason: 'max-tokens' });
   });
+
+  it('counts a sub-agent\'s usage but never takes its context for the conversation\'s', async () => {
+    const session = createAcpSession();
+    const usage: TurnUsage[] = [];
+    const observe = { onUsage: (reading: TurnUsage) => usage.push(reading) };
+    const sub = { sessionUpdate: 'usage_update', used: 190_000, size: 200_000, _meta: { claudeCode: { parentToolUseId: 'agent-1' } } };
+    try {
+      const prompts: Step[][] = [[{ update: sub }, { update: usageUpdate(20_000, 0) }, { update: chunk('ok') }, { answer: true }]];
+      await session.runTurn(input(prompts, observe));
+    } finally { await session.close(); }
+    expect(usage.some((reading) => reading.contextUsed === 190_000)).toBe(false);
+    expect(usage.find((reading) => reading.contextUsed !== undefined)?.contextUsed).toBe(20_000);
+  });
 });

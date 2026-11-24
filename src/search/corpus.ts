@@ -37,10 +37,12 @@ interface SessionDoc {
 
 /** One tool call as a line of text: its label, failed or not, and the
  * output it kept. */
-function activityText(event: { kind: string; label: string; output?: readonly string[] }, outputLines = Number.POSITIVE_INFINITY): string {
+function activityText(event: { kind: string; label: string; id?: string; agent?: boolean; output?: readonly string[] }, outputLines = Number.POSITIVE_INFINITY): string {
   const status = event.kind === 'tool-error' ? ' (failed)' : event.kind === 'tool-start' ? ' (not finished)' : '';
+  // A subagent's call carries the handle hindsight(agent=...) opens its own record with.
+  const handle = event.agent && event.id ? ` [agent ${event.id}]` : '';
   const output = (event.output ?? []).slice(0, outputLines).map((line) => `    ${line}`);
-  return [`  ⏺ ${event.label}${status}`, ...output].join('\n');
+  return [`  ⏺ ${event.label}${handle}${status}`, ...output].join('\n');
 }
 
 function fingerprintOf(role: string, text: string): string {

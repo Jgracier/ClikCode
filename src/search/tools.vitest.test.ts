@@ -3,7 +3,9 @@ import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { resetHarnessStateCaches } from '../session/state/index-file.js';
-import { rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { appendTurnChanges } from '../session/turn-changes.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { takeConversation, workersDirectory, writeWorkerRecord } from '../worker/registry.js';
@@ -159,6 +161,42 @@ describe('hindsight', () => {
     await writeState(state);
     resetCorpusCache();
   }
+
+  it('opens a subagent\'s own record by the handle its call shows', async () => {
+    const config = await mkdtemp(join(tmpdir(), 'hindsight-agent-'));
+    const before = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = config;
+    try {
+      const workspace = '/work/repo';
+      const dir = join(config, 'projects', '-work-repo', 'native-1', 'subagents');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'agent-a1.meta.json'), JSON.stringify({ toolUseId: 'toolu_9', agentType: 'Explore' }));
+      await writeFile(join(dir, 'agent-a1.jsonl'), [
+        { type: 'user', message: { content: 'Find where the codeword is defined' } },
+        { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: '/work/repo/a.ts' } }] } },
+        { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'r1', content: 'const CODEWORD = "PERIWINKLE"' }] } },
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'It is in a.ts.' }] } },
+      ].map((line) => JSON.stringify(line)).join('\n'));
+      await replaceCurrent([
+        { role: 'user', content: 'look it up with a subagent' },
+        { role: 'assistant', content: 'Done.', activities: [{ responseOffset: 0, event: { kind: 'tool-done', label: 'Agent Find the codeword', id: 'toolu_9', agent: true, output: ['It is in a.ts.'] } }] },
+      ], { workspace, nativeSessionId: 'native-1' });
+      const read = await run('hindsight', { from: 1, to: 1 }, CURRENT);
+      expect(read.text).toContain('[agent toolu_9]');
+      const agent = await run('hindsight', { agent: 'toolu_9' }, CURRENT);
+      expect(agent.isError).toBeUndefined();
+      expect(agent.text).toContain('[prompt] Find where the codeword is defined');
+      expect(agent.text).toContain('PERIWINKLE');
+      expect(agent.text).toContain('[agent] It is in a.ts.');
+      const missing = await run('hindsight', { agent: 'nope' }, CURRENT);
+      expect(missing.isError).toBe(true);
+      expect(missing.text).toContain('toolu_9');
+      expect((await run('hindsight', { agent: 'toolu_9', back: 1 }, CURRENT)).isError).toBe(true);
+    } finally {
+      if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before;
+      await rm(config, { recursive: true, force: true });
+    }
+  });
 
   it('is this chat, and says so when the call has none', async () => {
     expect((await run('hindsight', {})).text).toBe('hindsight is this conversation, and this call has none.');

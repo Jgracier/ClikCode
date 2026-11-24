@@ -1599,6 +1599,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       const usage = normalizeTurnUsage(update.usage && typeof update.usage === 'object' ? update.usage : update) ?? {};
       // Its cost is the session's; the turn's is its share.
       if (update.sessionUpdate === 'usage_update') delete usage.costUsd;
+      // A sub-agent's reading is its own window, not the conversation's: its
+      // tokens count toward the turn, its context never drives compaction.
+      if (parentId) { delete usage.contextUsed; delete usage.contextWindow; }
       Object.assign(usage, share);
       if (Object.keys(usage).length) input.onUsage?.(usage);
     }

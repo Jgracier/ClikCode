@@ -322,9 +322,33 @@ async function hindsightMessages(session: HarnessSession, group: ConversationGro
   };
 }
 
+/** One subagent of this chat, read from where its harness keeps it (worker/read-subagent.ts:
+ * a Claude transcript, a Codex child thread, the recorded frames). The parent's record holds
+ * only the call and its result, so this is how a detail the subagent saw outlives the
+ * parent's compaction. */
+async function subagentRecord(session: HarnessSession, agentId: string, maxChars: number): Promise<ConversationToolResult> {
+  const { readConversationSubagent, conversationSubagentEvents } = await import('../worker/read-subagent.js');
+  const transcript = await readSessionTranscript(session.id);
+  const whole: HarnessSession = { ...session, messages: transcript.messages ?? session.messages ?? [], ...(transcript.pendingTurn ?? session.pendingTurn ? { pendingTurn: transcript.pendingTurn ?? session.pendingTurn } : {}) };
+  const agents = new Map(conversationSubagentEvents(whole).filter((event) => event.agent && event.id).map((event) => [event.id!, event.label]));
+  if (!agents.has(agentId)) {
+    const known = [...agents].slice(-10).map(([id, label]) => `${id} · ${oneLine(label, 80)}`);
+    return { text: known.length ? `No subagent ${agentId} in this chat. Its subagents, latest last:\n${known.join('\n')}` : 'This chat has started no subagents.', isError: true };
+  }
+  const account = (await loadIndex())?.accounts.find((item) => item.id === session.accountId);
+  const rows = await readConversationSubagent(whole, account, agentId);
+  const head = `Subagent ${agentId} · ${oneLine(agents.get(agentId) ?? '', 120)}`;
+  if (!rows.length) return { text: `${head}\nIts harness kept no record of its own; the chat has only its call and result.` };
+  const body = rows.map((row) => row.kind === 'prompt' ? `[prompt] ${row.text}`
+    : row.kind === 'text' ? `[agent] ${row.text}`
+    : [`  ⏺ ${row.event.label}${row.event.kind === 'tool-error' ? ' (failed)' : row.event.kind === 'tool-start' ? ' (not finished)' : ''}`, ...(row.event.output ?? []).map((line) => `    ${line}`)].join('\n')).join('\n');
+  const text = `${head}\n${body}`;
+  return { text: maskSecrets(text.length <= maxChars ? text : `${text.slice(0, maxChars)} [… ${text.length - maxChars} more chars; raise maxChars]`) };
+}
+
 const hindsightTool: ConversationTool = {
   name: 'hindsight',
-  description: 'This conversation only, cut into topics from the stored transcript. No arguments opens the topic in progress and lists earlier ones, newest first, with message numbers. back=1 opens the topic before the one in progress: its requests, what finished, what was left unfinished, the user\'s direction-changing lines quoted with their message numbers, tool calls, and the files the turn log still has for those requests. before ("12h", "2d", or a date) keeps topics from before then. query finds a phrase in this chat, then messages related to it in meaning, grouped by topic. from and to, or at, read the stored messages and their tool calls; a span that was compacted is the summary that replaced it. One of back, query, or from/to. A record of this chat, not of the current tree.',
+  description: 'This conversation only, cut into topics from the stored transcript. No arguments opens the topic in progress and lists earlier ones, newest first, with message numbers. back=1 opens the topic before the one in progress: its requests, what finished, what was left unfinished, the user\'s direction-changing lines quoted with their message numbers, tool calls, and the files the turn log still has for those requests. before ("12h", "2d", or a date) keeps topics from before then. query finds a phrase in this chat, then messages related to it in meaning, grouped by topic. from and to, or at, read the stored messages and their tool calls; a span that was compacted is the summary that replaced it. agent opens one subagent\'s own record -- the prompt it was given, its steps and their output, its answer -- by the handle its call shows ("[agent <id>]"); the chat itself keeps only that call and its result. One of back, query, from/to, or agent. A subagent that calls hindsight reads the conversation that started it. A record of this chat, not of the current tree.',
   inputSchema: {
     type: 'object', additionalProperties: false,
     properties: {
@@ -335,11 +359,13 @@ const hindsightTool: ConversationTool = {
       from: { type: 'integer', minimum: 0, description: 'First stored message to read, inclusive.' },
       to: { type: 'integer', minimum: 0, description: 'Last stored message to read, inclusive.' },
       full: { type: 'boolean', description: 'With at, from, or to: the one message (or the first of the range) unshortened, tool output included.' },
+      agent: { type: 'string', description: 'A subagent handle from its call ("[agent <id>]"): read that subagent\'s own record.' },
       maxChars: { type: 'integer', minimum: 500, maximum: MAX_READ_CHARS, description: `Output cap when reading messages (default ${DEFAULT_READ_CHARS}).` },
     },
   },
   async run(args, context) {
     if (!context.currentSessionId) return { text: 'hindsight is this conversation, and this call has none.', isError: true };
+    const agentId = typeof args.agent === 'string' ? args.agent.trim() : '';
     const back = optionalInteger(args.back);
     if (Number.isNaN(back) || (back !== undefined && back < 0)) return { text: 'hindsight back is a message count of 0 or more. 1 is the topic before the one in progress.', isError: true };
     const spanFrom = optionalInteger(args.from);
@@ -354,8 +380,8 @@ const hindsightTool: ConversationTool = {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
     const reading = args.at !== undefined && args.at !== null && args.at !== '' || fromArg !== undefined || toArg !== undefined;
     // back=0 is the list, and a caller that fills every field always sends it.
-    const modes = [back !== undefined && back > 0, Boolean(query), reading].filter(Boolean).length;
-    if (modes > 1) return { text: 'hindsight takes one of back, query, or from/to. before narrows back and the list.', isError: true };
+    const modes = [back !== undefined && back > 0, Boolean(query), reading, Boolean(agentId)].filter(Boolean).length;
+    if (modes > 1) return { text: 'hindsight takes one of back, query, from/to, or agent. before narrows back and the list.', isError: true };
     const now = context.now ?? Date.now();
     const beforeMs = parseSince(typeof args.before === 'string' ? args.before : undefined, now);
     if (typeof args.before === 'string' && args.before.trim() && beforeMs === undefined) return { text: `Cannot read before="${args.before}". Use "2d", "12h", "1w" or a date.`, isError: true };
@@ -364,6 +390,7 @@ const hindsightTool: ConversationTool = {
     if (!found) return { text: 'This conversation has no saved chat to look back through.', isError: true };
     const wanted = context.currentSessionId.toLowerCase();
     const session = found.group.branches.find((item) => item.id.toLowerCase() === wanted) ?? found.branch ?? found.group.newest;
+    if (agentId) return subagentRecord(session, agentId, integer(args.maxChars, DEFAULT_READ_CHARS, 500, MAX_READ_CHARS));
     const loaded = await hindsightMessages(session, found.group);
     const messages = loaded.messages;
     const index = await loadIndex();
