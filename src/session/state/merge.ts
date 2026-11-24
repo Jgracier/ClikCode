@@ -120,6 +120,19 @@ function mergeSessionMeta(baseline: SessionMeta | undefined, working: SessionMet
   return merged;
 }
 
+/** A draft lives only in this process (session/ephemeral.ts), so two copies of
+ * the state that each read it -- a sign-in choosing its account, a background
+ * model sync that read the state before it -- would otherwise replace it whole,
+ * last writer winning. Merged like a stored record: what this copy changed since
+ * it read the draft is its; the rest is the draft as it is now. */
+export function mergedDraft(read: BaselineSession, working: HarnessSession, held: HarnessSession): HarnessSession {
+  const mine = splitSession(working);
+  const now = splitSession(held);
+  const meta = mergeSessionMeta(read.meta, mine.meta, now.meta);
+  const transcript = sameData(read.transcript, mine.transcript) ? now.transcript : mine.transcript;
+  return { ...meta, ...transcript } as HarnessSession;
+}
+
 function splitSession(session: HarnessSession): { meta: SessionMeta; transcript: SessionTranscript } {
   const { messages: _messages, pendingTurn: _pendingTurn, ...meta } = session;
   return { meta, transcript: transcriptOf(session) };

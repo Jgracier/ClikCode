@@ -262,6 +262,86 @@ describe('a draft another process stored meanwhile', () => {
   });
 });
 
+describe('a draft two copies of the state read', () => {
+  it('keeps what one chose when the other, read before, writes back', async () => {
+    // A new chat signs in to Grok: the sign-in picks the account and writes.
+    // The model sync fired by that sign-in had read the state before, and
+    // wrote its copy after. The draft lives only in this process, so it was
+    // replaced whole and lost its account: "local AI session has no account
+    // selected" on the very first turn.
+    root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));
+    process.env.CLIKCODE_HOME = root;
+    const now = new Date().toISOString();
+    const opening = await readState();
+    opening.sessions.push({
+      id: 'g', route: 'local', accountId: null, provider: null, model: null, effort: 'medium',
+      permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
+    } as HarnessSession);
+    await writeState(opening);
+    expect(await listStoredSessionIds()).not.toContain('g');
+
+    const sync = await readState();
+    const signIn = await readState();
+    const chosen = signIn.sessions.find((item) => item.id === 'g')!;
+    // The sign-in's identity check writes the copy before the account is chosen on it.
+    Object.assign(chosen, { provider: 'xai', nativeHarness: 'grok' });
+    await writeState(signIn);
+    Object.assign(chosen, { accountId: 'grok-1', model: 'grok-4' });
+    await writeState(signIn);
+
+    sync.globalSettings = { ...sync.globalSettings, effort: 'high' } as typeof sync.globalSettings;
+    await writeState(sync);
+
+    const draft = (await readState()).sessions.find((item) => item.id === 'g')!;
+    expect({ account: draft.accountId, harness: draft.nativeHarness, model: draft.model }).toEqual({ account: 'grok-1', harness: 'grok', model: 'grok-4' });
+    expect(await listStoredSessionIds()).not.toContain('g');
+  });
+  it('stores the account a sign-in chose, even from a copy read before it', async () => {
+    // ensureSessionOnDisk read the draft while the sign-in had its account
+    // cleared, and stored it after the sign-in set it again.
+    root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));
+    process.env.CLIKCODE_HOME = root;
+    const now = new Date().toISOString();
+    const opening = await readState();
+    opening.sessions.push({
+      id: 'f', route: 'local', accountId: null, provider: null, model: null, effort: 'medium',
+      permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
+    } as HarnessSession);
+    await writeState(opening);
+    const store = await readState();
+    const signIn = await readState();
+    Object.assign(signIn.sessions.find((item) => item.id === 'f')!, { accountId: 'grok-1', nativeHarness: 'grok' });
+    await writeState(signIn);
+
+    const { forceStoreSession, unforceStoreSession } = await import('../ephemeral.js');
+    forceStoreSession('f');
+    try { await writeState(store); } finally { unforceStoreSession('f'); }
+    const { dropEphemeral } = await import('../ephemeral.js');
+    dropEphemeral('f');
+    resetSessionStoreCache();
+    expect((await readState()).sessions.find((item) => item.id === 'f')?.accountId).toBe('grok-1');
+  });
+
+  it('keeps a value a copy put back after changing it', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));
+    process.env.CLIKCODE_HOME = root;
+    const now = new Date().toISOString();
+    const opening = await readState();
+    opening.sessions.push({
+      id: 'h', route: 'local', accountId: 'a-1', provider: 'xai', model: null, effort: 'medium',
+      permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
+    } as HarnessSession);
+    await writeState(opening);
+    const copy = await readState();
+    const draft = copy.sessions.find((item) => item.id === 'h')!;
+    draft.accountId = null;
+    await writeState(copy);
+    draft.accountId = 'a-1';
+    await writeState(copy);
+    expect((await readState()).sessions.find((item) => item.id === 'h')?.accountId).toBe('a-1');
+  });
+});
+
 describe('a streaming turn on a chat read from disk', () => {
   it('writes only its journal while the answer grows, never the transcript again', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));

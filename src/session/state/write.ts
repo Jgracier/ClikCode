@@ -12,7 +12,7 @@ import { deleteSessionTranscript, readSessionTranscript, writeOwnTranscript, wri
 import { clearDeletions, pendingDeletions } from './deletions.js';
 import { HarnessStateVersionError, indexStructureChanged, loadIndex, storeIndex, type StateIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
-import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, baselineSession, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
+import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, baselineSession, indexFromWorking, mergedDraft, mergedIndex, rememberBaseline } from './merge.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readSecretsFile, sameSecret, writeSecretsFile } from './secrets.js';
 
@@ -59,6 +59,24 @@ export async function writeState(state: HarnessState): Promise<void> {
     // Summarize onto the index before the snapshot, and only for a transcript
     // this caller actually opened. A light read leaves the summary alone.
     for (const session of state.sessions ?? []) stampListFacts(session);
+    // A draft lives only in this process, so every copy that read it would
+    // otherwise replace it whole, last writer winning -- a model sync that read
+    // the state before a sign-in chose the account, then the store before the
+    // first turn, both wrote the draft back without it. Merged first, onto this
+    // copy, so holding it and storing it (forced) both use the merged one.
+    const drafts = (state as BaselinedState)[DRAFT_BASELINE];
+    if (drafts?.size) {
+      const showing = new Map(ephemeralSessions().map((session) => [session.id, session]));
+      const stored = new Set((disk?.sessions ?? []).map((session) => session.id));
+      for (const session of state.sessions ?? []) {
+        const read = drafts.get(session.id);
+        const current = showing.get(session.id);
+        if (!read || !current || stored.has(session.id)) continue;
+        const merged = mergedDraft(read, session, current);
+        for (const key of Object.keys(session)) if (!(key in merged)) delete (session as unknown as Record<string, unknown>)[key];
+        Object.assign(session, merged);
+      }
+    }
     const taken = baselineOf(state, baseline);
     clock.snapshot = Date.now() - clock.start - clock.index;
     const sessions = [...(state.sessions ?? [])];
@@ -74,12 +92,16 @@ export async function writeState(state: HarnessState): Promise<void> {
       if (!writing.has(session.id) && !draftPinned(session.id)) dropEphemeral(session.id);
     }
     for (const session of sessions) {
-      if (isBlankConversation(session) && !diskIds.has(session.id) && !sessionForceStored(session.id)) holdEphemeral(session);
-      else dropEphemeral(session.id);
+      if (isBlankConversation(session) && !diskIds.has(session.id) && !sessionForceStored(session.id)) {
+        holdEphemeral(session);
+        // What this copy has now said about the draft: its next write merges
+        // against that, not against what it first read -- a sign-in that
+        // clears the account mid-way and then sets it again changed it.
+        if (drafts?.has(session.id)) drafts.set(session.id, baselineSession(session, undefined));
+      } else dropEphemeral(session.id);
     }
     const persisted = sessions.filter((session) => !isBlankConversation(session) || diskIds.has(session.id) || sessionForceStored(session.id));
     const persistedState = { ...state, sessions: persisted };
-    const drafts = (state as BaselinedState)[DRAFT_BASELINE];
     const next = baseline && disk ? mergedIndex(baseline, persistedState, disk, drafts, removed) : indexFromWorking(persistedState, disk, removed);
     const tombstoned = new Set(Object.keys(disk?.deletedSessions ?? {}));
     next.version = HARNESS_STATE_VERSION;
