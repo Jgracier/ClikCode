@@ -39,6 +39,24 @@ export const VENDOR_THRESHOLD_BACKSTOP = 1.5;
  * compacted again 2-10 calls later; the floor plus this keeps 50k for a first compaction and
  * puts the next one ~35k of new work away. */
 export const COMPACTION_HEADROOM = 35_000;
+/** Where one model call grew the context by more than half the headroom, the headroom is twice
+ * that growth: Claude Code stops a turn when its context refills within fewer than 3 model calls
+ * of a compaction three times running (2.1.330 bundle, its rapid-refill breaker), so the next
+ * compaction must be at least 3 of the largest calls away. Other vendors re-compacting every
+ * call or two waste the same calls. The margin is for the vendor's own count differing. */
+const STEP_CALLS = 2;
+const STEP_MARGIN = 5_000;
+/** The headroom is not raised past this by one outlier call. */
+const MAX_HEADROOM = 120_000;
+/** A vendor's compaction floor and largest one-call growth, measured across recent conversations
+ * on a harness and model (turn/vendor-floors.ts). */
+export interface VendorMeasures { floor?: number; step?: number }
+/** The headroom past a compaction's floor for a conversation whose largest call grew the context
+ * by `step` tokens. */
+export function compactionHeadroom(step?: number): number {
+  if (!step || step <= 0) return COMPACTION_HEADROOM;
+  return Math.min(MAX_HEADROOM, Math.max(COMPACTION_HEADROOM, STEP_CALLS * step + STEP_MARGIN));
+}
 
 /** What a compaction's summary keeps, where the harness takes instructions for it: the state the
  * work is in, not the story of how it got there. ClikCode's record keeps every turn, and recall
@@ -187,11 +205,16 @@ const CLAUDE_COMPACTION_FLOOR = 60_000;
  * stopped the turn ("Autocompact is thrashing"). Sonnet at 100k answered 91.7% vs 89.8% at 50k. */
 export const CLAUDE_MIN_TRIGGER = CLAUDE_COMPACTION_FLOOR + COMPACTION_HEADROOM;
 /** The threshold (tokens) a vendor is launched with for ClikCode's `threshold`. */
-export function vendorTrigger(setting: VendorThresholdSetting | undefined, threshold: number, record?: CompactionRecord): number {
+export function vendorTrigger(setting: VendorThresholdSetting | undefined, threshold: number, record?: CompactionRecord, known: VendorMeasures = {}): number {
   if (setting?.unit !== 'claude-window') return threshold;
-  // Measured: the floor plus the headroom (effectiveThreshold) is the trigger. Not yet: the
-  // highest floor seen across conversations plus the headroom.
-  return record?.vendorFloor !== undefined ? effectiveThreshold(threshold, record) : Math.max(threshold, CLAUDE_MIN_TRIGGER);
+  // Measured in this conversation: its floor plus the headroom (effectiveThreshold). Else the
+  // floor measured for this harness and model in recent conversations (turn/vendor-floors.ts),
+  // and the fixed estimate only where nothing has been measured yet.
+  if (record?.vendorFloor !== undefined) return effectiveThreshold(threshold, { ...record, largestStep: Math.max(record.largestStep ?? 0, known.step ?? 0) || undefined });
+  const step = Math.max(record?.largestStep ?? 0, known.step ?? 0) || undefined;
+  const floor = known.floor ?? CLAUDE_COMPACTION_FLOOR;
+  const trigger = floor + compactionHeadroom(step);
+  return Math.max(threshold, known.floor !== undefined ? trigger : Math.max(trigger, CLAUDE_MIN_TRIGGER));
 }
 export function claudeCompactWindow(threshold: number): Record<string, string> {
   const window = threshold + CLAUDE_OUTPUT_ROOM + CLAUDE_BUFFER;
@@ -203,10 +226,10 @@ export function claudeCompactWindow(threshold: number): Record<string, string> {
 /** ClikCode's threshold (tokens) in the vendor's own terms, for a model whose window is `window`
  * (tokens) where known. Undefined when it cannot be said: a share of an unknown window -- the
  * vendor keeps its own default then, and ClikCode compacts after the turn instead. */
-export function vendorThresholdPlan(setting: VendorThresholdSetting | undefined, threshold: number, window?: number, record?: CompactionRecord): VendorThresholdPlan | undefined {
+export function vendorThresholdPlan(setting: VendorThresholdSetting | undefined, threshold: number, window?: number, record?: CompactionRecord, known?: VendorMeasures): VendorThresholdPlan | undefined {
   if (!setting) return undefined;
   const unit = setting.unit ?? 'tokens';
-  if (unit === 'claude-window') return { kind: 'env', env: claudeCompactWindow(vendorTrigger(setting, threshold, record)) };
+  if (unit === 'claude-window') return { kind: 'env', env: claudeCompactWindow(vendorTrigger(setting, threshold, record, known)) };
   let value: number;
   if (unit === 'tokens') value = threshold;
   else {
@@ -239,6 +262,9 @@ export interface CompactionRecord {
    * Claude Code's boundary reports only what the summary kept (11-21k); its first call after it
    * sent 39-53k, with up to five re-read files (5k each), the skill and tool listings re-added. */
   vendorFloor?: number;
+  /** The most one model call grew the context in this conversation (vendor-observer.ts): the
+   * headroom keeps the next compaction more than two such calls away (compactionHeadroom). */
+  largestStep?: number;
   /** A rewrite whose fresh thread the next turn has yet to write. */
   rewrite?: true;
   /** A native compaction whose next turn has yet to tell the model where the whole conversation is. */
@@ -272,7 +298,7 @@ export function turnsSinceCompaction(session: CompactableSession): number {
  * compact again every few calls. */
 export function effectiveThreshold(threshold: number, record: CompactionRecord | undefined): number {
   const floor = record?.vendorFloor ?? record?.after ?? record?.floor;
-  return floor !== undefined ? Math.max(threshold, floor + COMPACTION_HEADROOM) : threshold;
+  return floor !== undefined ? Math.max(threshold, floor + compactionHeadroom(record?.largestStep)) : threshold;
 }
 
 /** The record of a compaction made now, carrying the previous one's floor forward. */
@@ -282,8 +308,11 @@ export function nextCompactionRecord(
   fields: Pick<CompactionRecord, 'rewrite' | 'noteRecord'>,
 ): CompactionRecord {
   const floor = previous?.after ?? previous?.floor;
-  const vendorFloor = previous?.vendorFloor;
-  return { at: new Date().toISOString(), through, ...(floor !== undefined ? { floor } : {}), ...(vendorFloor !== undefined ? { vendorFloor } : {}), ...fields };
+  const { vendorFloor, largestStep } = previous ?? {};
+  return {
+    at: new Date().toISOString(), through, ...(floor !== undefined ? { floor } : {}),
+    ...(vendorFloor !== undefined ? { vendorFloor } : {}), ...(largestStep !== undefined ? { largestStep } : {}), ...fields,
+  };
 }
 
 /** Note a reading of the vendor's context after one of its own compactions: the first that rose
@@ -295,7 +324,18 @@ export function noteVendorFloor(record: CompactionRecord | undefined, previous: 
   return true;
 }
 
-/** Note what the first turn after a compaction ran on. True when the record changed. */
+/** Note one model call's growth of the context (`used` over the reading before it). True when it
+ * is the conversation's largest yet. */
+export function noteContextStep(record: CompactionRecord | undefined, previous: number | undefined, used: number): number | undefined {
+  if (previous === undefined || used <= previous) return undefined;
+  const step = used - previous;
+  if (record && step > (record.largestStep ?? 0)) record.largestStep = step;
+  return step;
+}
+
+/** Note what the first turn after a compaction ran on, from the end of that turn: the fallback
+ * where no reading came during it (the observer takes its first call's, vendor-observer.ts) --
+ * this one counts the turn's own work too. True when the record changed. */
 export function noteContextAfterCompaction(session: CompactableSession): boolean {
   const record = session.compaction;
   if (!record || record.after !== undefined || turnsSinceCompaction(session) < 1) return false;

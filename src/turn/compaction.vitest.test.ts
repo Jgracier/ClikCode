@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import {
   CODEX_COMPACT_PROMPT, COMPACTED, COMPACTING, COMPACT_INSTRUCTIONS, DEFAULT_COMPACT_AT_TOKENS, claudeCompactSettings, compactAt, compactDescription, compactFailedLine, compactionMechanism, contextTokens,
-  claudeCompactWindow, effectiveThreshold, handoffTokens, nextCompactionRecord, CLAUDE_MIN_TRIGGER, isCompactRequest, noteCompactAt, noteContextAfterCompaction, noteVendorFloor, vendorTrigger, parseCompactAt, shouldCompact,
+  claudeCompactWindow, compactionHeadroom, effectiveThreshold, noteContextStep, type CompactionRecord, handoffTokens, nextCompactionRecord, CLAUDE_MIN_TRIGGER, isCompactRequest, noteCompactAt, noteContextAfterCompaction, noteVendorFloor, vendorTrigger, parseCompactAt, shouldCompact,
   turnsSinceCompaction, vendorThresholdPlan,
 } from './compaction.js';
 
@@ -161,6 +161,32 @@ describe('a vendor\'s own threshold, in its own terms', () => {
     expect(next.vendorFloor).toBe(52_000);
     expect(effectiveThreshold(50_000, next)).toBe(87_000);
     expect(vendorTrigger(setting, 50_000)).toBe(CLAUDE_MIN_TRIGGER);
+  });
+
+  it('Claude Code: headroom keeps two of the chat\'s largest calls clear of its thrash rule', () => {
+    expect(compactionHeadroom()).toBe(35_000);
+    expect(compactionHeadroom(10_000)).toBe(35_000);
+    expect(compactionHeadroom(27_000)).toBe(59_000);
+    expect(compactionHeadroom(500_000)).toBe(120_000);
+    const record: CompactionRecord = { at: at(5), through: 3, vendorFloor: 52_000 };
+    expect(noteContextStep(record, undefined, 60_000)).toBeUndefined();
+    expect(noteContextStep(record, 60_000, 58_000)).toBeUndefined();
+    expect(noteContextStep(record, 60_000, 87_000)).toBe(27_000);
+    expect(noteContextStep(record, 87_000, 90_000)).toBe(3_000);
+    expect(record.largestStep).toBe(27_000);
+    expect(effectiveThreshold(50_000, record)).toBe(111_000);
+    expect(nextCompactionRecord(record, 9, {}).largestStep).toBe(27_000);
+  });
+
+  it('Claude Code: a new chat starts from the floor measured for its harness and model', () => {
+    const setting = harness('claude').compactThreshold;
+    expect(vendorTrigger(setting, 50_000, undefined, {})).toBe(CLAUDE_MIN_TRIGGER);
+    expect(vendorTrigger(setting, 50_000, undefined, { floor: 52_000 })).toBe(87_000);
+    expect(vendorTrigger(setting, 50_000, undefined, { floor: 52_000, step: 27_000 })).toBe(111_000);
+    expect(vendorTrigger(setting, 200_000, undefined, { floor: 52_000 })).toBe(200_000);
+    // The chat's own floor wins; a known larger step still widens it.
+    const record: CompactionRecord = { at: at(5), through: 3, vendorFloor: 44_000 };
+    expect(vendorTrigger(setting, 50_000, record, { floor: 52_000, step: 27_000 })).toBe(103_000);
   });
 
   it('Codex: tokens in the thread\'s config, with the state-only summary prompt', () => {

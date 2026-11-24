@@ -15,6 +15,7 @@ import { fullRecordNote, recordReachFor, writeFullRecord } from '../session/full
 import { wrapResourceNote } from './resource-note-text.js';
 import { topicContents } from '../search/topic-contents.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
+import { knownVendorMeasures } from './vendor-floors.js';
 import { compactAt, compactionMechanism, effectiveThreshold, nextCompactionRecord, vendorThresholdPlan, vendorTrigger, type CompactionMechanism, type CompactionRecord } from './compaction.js';
 import { targetContextWindow } from './transfer.js';
 import { knownVendorCommands } from './vendor-commands.js';
@@ -87,9 +88,12 @@ export async function compactThresholdLaunch(
     ? await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(quiet('turn/compaction-run'))
     : undefined;
   const threshold = effectiveThreshold(compactAt(state.globalSettings), session?.compaction);
-  const plan = vendorThresholdPlan(setting, threshold, window, session?.compaction);
+  // A first launch, a new chat or a switched account or model starts from what this harness and
+  // model were measured to leave (turn/vendor-floors.ts), not a fixed estimate.
+  const known = knownVendorMeasures(harness.command, model);
+  const plan = vendorThresholdPlan(setting, threshold, window, session?.compaction, known);
   if (!plan) return NOTHING;
-  const set = { set: true, threshold: vendorTrigger(setting, threshold, session?.compaction) };
+  const set = { set: true, threshold: vendorTrigger(setting, threshold, session?.compaction, known) };
   if (plan.kind === 'config') return { environment: {}, config: plan.config, ...set };
   if (plan.kind === 'env') return { environment: plan.env, config: {}, ...set };
   const text = `${JSON.stringify(plan.settings)}\n`;

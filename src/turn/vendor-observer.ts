@@ -1,7 +1,8 @@
 /** What one vendor turn's transports report, folded into the checkpoint and the
  * screen: the shared observer, usage and pending work. */
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
-import { COMPACTED, contextTokens, nextCompactionRecord, noteVendorFloor } from './compaction.js';
+import { COMPACTED, contextTokens, nextCompactionRecord, noteContextStep, noteVendorFloor } from './compaction.js';
+import { rememberVendorMeasure } from './vendor-floors.js';
 import { markTurn } from '../runtime/turn-latency.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -28,22 +29,43 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   let turnUsage: TurnUsage | undefined;
   let backgroundNow: BackgroundWork | undefined;
   let activeTransport: VendorTransport | undefined;
+  // A compaction says "Compacting…" and "Compacted" (turn/compaction.ts), not the vendor's rows for it.
+  const compacting = Boolean(ctx.run.compaction);
   // After the vendor's own compaction, its first call on the compacted thread is the floor its
-  // next trigger must clear (compaction.ts noteVendorFloor).
+  // next trigger must clear (compaction.ts noteVendorFloor); after ClikCode's, this turn's first
+  // call is (its end-of-turn reading counts the turn's own work too). Each call's growth over
+  // the one before sets how far past the floor the next compaction goes (compactionHeadroom).
+  // Kept per harness and model too, for the next chat's first launch (turn/vendor-floors.ts).
   let floorPending = false;
   let lastContext: number | undefined;
+  let largestStep = 0;
+  const remember = (measure: { floor?: number; step?: number }): void => {
+    void rememberVendorMeasure(harness.command, ctx.model, session.id, measure);
+  };
+  const noteContext = (used: number): void => {
+    const record = session.compaction;
+    if (floorPending && noteVendorFloor(record, lastContext, used)) {
+      floorPending = false;
+      lifecycle('turn.vendor-floor', { harness: harness.command, floor: used, vendorFloor: record?.vendorFloor });
+      remember({ floor: used });
+      checkpoint.touch();
+    } else if (lastContext === undefined && record && record.after === undefined && Date.parse(record.at) < ctx.startedAt) {
+      record.after = used;
+      checkpoint.touch();
+    } else {
+      const before = record?.largestStep;
+      const step = noteContextStep(record, lastContext, used);
+      if (step !== undefined && step > largestStep) { largestStep = step; remember({ step }); }
+      if (record?.largestStep !== before) checkpoint.touch();
+    }
+    lastContext = used;
+  };
   const noteUsage = (usage: TurnUsage): void => {
     turnUsage = { ...turnUsage, ...usage };
     const shown = turnUsage!;
     const used = contextTokens(shown);
-    if (used !== undefined) {
-      if (floorPending && noteVendorFloor(session.compaction, lastContext, used)) {
-        floorPending = false;
-        lifecycle('turn.vendor-floor', { harness: harness.command, floor: used, vendorFloor: session.compaction?.vendorFloor });
-        checkpoint.touch();
-      }
-      lastContext = used;
-    }
+    // A compaction's own readings are of the summarizing call, not of the conversation.
+    if (used !== undefined && !compacting) noteContext(used);
     session.lastUsage = { ...shown, at: new Date().toISOString() };
     prompter?.setTurnUsage(shown);
   };
@@ -60,8 +82,6 @@ export function createVendorObserver(ctx: VendorTurnContext) {
    * screen alike, so what is shown and what is saved cannot differ. */
   const sink = turnSink(checkpoint, prompter);
   const toolLog = createToolLog();
-  // A compaction says "Compacting…" and "Compacted" (turn/compaction.ts), not the vendor's rows for it.
-  const compacting = Boolean(ctx.run.compaction);
   const onActivity = (event: HarnessActivityEvent): void => {
     pendingWork.note(event);
     toolLog.note(event);
