@@ -91,6 +91,10 @@ describe('the host Chrome arguments', () => {
   it('keeps WebDriver hidden, and on a virtual display uses X11 and the real GPU instead of finding the user\'s Wayland desktop', () => {
     const plain = hostChromeArgs({ headless: false, virtualDisplay: false });
     expect(plain).toContain('--disable-blink-features=AutomationControlled');
+    // Chrome keeps the last --disable-features: ours must be there to replace Playwright's, which turns Cast off (a bot tell).
+    const features = plain.filter(arg => arg.startsWith('--disable-features='));
+    expect(features).toHaveLength(1);
+    expect(features[0]).not.toMatch(/MediaRouter/);
     expect(plain.some(arg => arg.startsWith('--ozone-platform'))).toBe(false);
     expect(hostChromeArgs({ headless: false, virtualDisplay: true })).toEqual(expect.arrayContaining(['--ozone-platform=x11', '--use-gl=angle', '--use-angle=gl-egl']));
     expect(hostChromeArgs({ headless: true, virtualDisplay: true })).toContain('--window-size=1440,900');

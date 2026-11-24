@@ -32,7 +32,9 @@ export async function runningHostDisplay(stateDir: string, alive: (pid: number) 
 }
 
 /** Chrome's own arguments for the host. FedCm off: Google's sign-in button then uses its popup, not a browser-drawn dialog that no page tool
- * can see or press. Playwright's default --enable-automation (left out by the caller) and Chrome's port-0 debugging each advertise WebDriver
+ * can see or press. This --disable-features also has to stay: Chrome keeps only the last one given, so it replaces Playwright's default
+ * list, which turns MediaRouter (Cast) off, and a Chrome without Cast is what fingerprint.com names a "chromium_automation" bot (measured
+ * 2026-11-24: Playwright's list alone flagged it, the same Chrome with this one passed). Playwright's default --enable-automation (left out by the caller) and Chrome's port-0 debugging each advertise WebDriver
  * to sites; the private CDP connection stays, the signal to page JavaScript goes. On a virtual display Chrome is told to use X11 (else it
  * finds the user's Wayland compositor) and to draw WebGL through EGL on the machine's GPU: on Xvfb it otherwise reports the software
  * "SwiftShader" renderer, the classic headless-server tell, where EGL reports the real card (measured 2026-11-20: "AMD Radeon 780M"). */
