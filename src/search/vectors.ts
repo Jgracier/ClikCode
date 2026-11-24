@@ -267,7 +267,7 @@ const MEDIAN_FROM = 32;
 
 /** This conversation's messages nearest `query`, best first, at most one per
  * message (its best chunk), only those still in the conversation as it is. */
-export async function semanticMatches(group: Pick<ConversationGroup, 'id'>, view: ConversationView, query: Float32Array, embedderId: string, options: { limit?: number; min?: number } = {}): Promise<SemanticMatch[]> {
+export async function semanticMatches(group: Pick<ConversationGroup, 'id'>, view: ConversationView, query: Float32Array, embedderId: string, options: { limit?: number; min?: number; lift?: number } = {}): Promise<SemanticMatch[]> {
   const have = await load(vectorFilePath(group.id));
   if (have.embedder !== embedderId || !have.records.size) return [];
   const positions = new Map<string, number>();
@@ -284,6 +284,6 @@ export async function semanticMatches(group: Pick<ConversationGroup, 'id'>, view
   }
   const ranked = [...best.values()].sort((left, right) => right.score - left.score);
   const median = ranked.length >= MEDIAN_FROM ? ranked[Math.floor(ranked.length / 2)]!.score : -1;
-  const min = Math.max(options.min ?? MIN_SIMILARITY, median + LIFT);
+  const min = Math.max(options.min ?? MIN_SIMILARITY, median + (options.lift ?? LIFT));
   return ranked.filter((match) => match.score >= min).slice(0, options.limit ?? 20);
 }

@@ -15,7 +15,7 @@ import { conversationGroups, findConversation } from './conversations.js';
 import { conversationView, indexOfWord, type ConversationView, type MessageDoc } from './corpus.js';
 import { isContinuation } from './hindsight.js';
 import { queryVector } from './hybrid.js';
-import { semanticMatches } from './vectors.js';
+import { semanticMatches, type SemanticMatch } from './vectors.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { wrapRecallNote } from '../turn/resource-note-text.js';
 
@@ -47,10 +47,15 @@ export interface RecallOutcome {
   skipped?: 'no-boundary' | 'short' | 'continuation' | 'no-conversation' | 'timeout';
 }
 
+/** Words the eval's PLAIN mode never takes: its probe frame, and question words. */
+const EVAL_STOP = new Set(['sentences', 'exact', 'names', 'values', 'question', 'what', 'which', 'when', 'where', 'whom', 'with', 'that', 'this', 'from', 'about', 'into', 'their', 'there', 'they', 'were', 'have', 'does', 'did', 'why', 'how', 'user', 'assistant', 'conversation']);
+
 /** Identifiers, paths, numbers with letters, and quoted phrases of a request: what can only match a
  * place in the conversation by being the same thing. Lower-cased. */
 export function distinctiveWords(query: string): string[] {
   const words = new Set<string>();
+  // Eval: PLAIN=1 takes every word of 4+ letters; lexicalHits' MAX_WORD_HITS cap keeps only the rare ones.
+  if (process.env.CLIKCODE_EVAL_RECALL_PLAIN === '1') for (const match of query.matchAll(/[A-Za-z0-9_][A-Za-z0-9_./:#@-]*[A-Za-z0-9_]/g)) if (match[0].length >= 4 && !EVAL_STOP.has(match[0].toLowerCase())) words.add(match[0].toLowerCase());
   for (const match of query.matchAll(/["`']([^"`'\n]{4,80})["`']/g)) words.add(match[1]!.trim().toLowerCase());
   for (const match of query.matchAll(/[A-Za-z0-9_][A-Za-z0-9_./:#@-]*[A-Za-z0-9_]/g)) {
     const word = match[0];
@@ -106,6 +111,20 @@ export function recallNote(view: ConversationView, hits: readonly RecallHit[], h
   ].join('\n'));
 }
 
+/** Eval only: `matches` re-scored by cosine + weight x (idf share of the request's words in the chunk). */
+function termRanked(view: ConversationView, outside: readonly number[], matches: SemanticMatch[], query: string, weight: number): SemanticMatch[] {
+  const terms = [...new Set((query.toLowerCase().match(/[a-z0-9_][a-z0-9_./:#@-]*[a-z0-9_]/g) ?? []).filter((word) => word.length >= 4 && !EVAL_STOP.has(word)))];
+  if (!terms.length) return matches;
+  const texts = outside.map((position) => view.entries[position]!.message.text.toLowerCase());
+  const idf = terms.map((term) => Math.log((texts.length + 1) / (1 + texts.filter((text) => text.includes(term)).length)));
+  const total = idf.reduce((sum, value) => sum + value, 0) || 1;
+  return matches.map((match) => {
+    const chunk = view.entries[match.position]!.message.text.slice(match.offset, match.offset + match.length).toLowerCase();
+    const share = terms.reduce((sum, term, index) => sum + (chunk.includes(term) ? idf[index]! : 0), 0) / total;
+    return { ...match, score: match.score + weight * share };
+  }).sort((left, right) => right.score - left.score);
+}
+
 async function search(sessionId: string, query: string, boundary: number, hasHindsight: boolean, deadline: number, context?: string): Promise<RecallOutcome> {
   const found = findConversation(await conversationGroups(), sessionId);
   if (!found) return { hits: [], skipped: 'no-conversation' };
@@ -129,7 +148,14 @@ async function search(sessionId: string, query: string, boundary: number, hasHin
       const allowed = new Set(outside);
       const taken = new Set(hits.map((hit) => hit.position));
       const min = Number(process.env.CLIKCODE_EVAL_RECALL_MIN) || undefined;
-      for (const match of await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: 20, ...(min ? { min } : {}) })) {
+      // Eval: GATE_LIFT lowers the standout lift (0 = top-k above the floor); GATE_TERMS=<weight>
+      // re-ranks by the share of the request's rare words (by inverse message frequency) in the chunk.
+      const liftKnob = process.env.CLIKCODE_EVAL_GATE_LIFT;
+      const lift = liftKnob !== undefined && liftKnob !== '' && Number.isFinite(Number(liftKnob)) ? Number(liftKnob) : undefined;
+      const termWeight = Number(process.env.CLIKCODE_EVAL_GATE_TERMS) || 0;
+      let matches = await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: termWeight ? 400 : 20, ...(min ? { min } : {}), ...(lift !== undefined ? { lift } : {}) });
+      if (termWeight) matches = termRanked(view, outside, matches, query, termWeight).slice(0, 20);
+      for (const match of matches) {
         if (hits.length >= maxMessages) break;
         if (!allowed.has(match.position) || taken.has(match.position)) continue;
         hits.push({ position: match.position, score: Math.round(match.score * 1000) / 1000, by: 'meaning', at: match.offset, length: match.length });
