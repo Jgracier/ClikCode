@@ -217,6 +217,7 @@ function acpLaunchInput(input: {
     ...(live ? { currentPermissionMode: async () => live.permissionMode && turnPermissionMode(harness, live.permissionMode) } : {}),
     ...(additionalDirectories.length ? { additionalDirectories } : {}),
     acp: harness.acp,
+    ...(harness.keyringAuth ? { keyringAuth: true } : {}),
     // Plan mode as an ACP session mode (catalog acp.planModeId); the
     // agent leaving it -- its plan approved -- turns the chat's off.
     ...((session.planMode || planStored) && harness.acp?.planModeId ? {

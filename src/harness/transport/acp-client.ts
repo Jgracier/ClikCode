@@ -21,6 +21,7 @@ import { claudeRateLimitReading } from '../accounts/usage-reading.js';
 import { activityOutput, editDiffFromInput, thoughtLabel, toolCall } from '../protocol/activity-events.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { type JsonRpcPeer } from './jsonrpc-peer.js';
+import { lockedKeyringMessage, systemKeyringLocked } from '../accounts/keyring-locked.js';
 import { panicMessage } from './rust-panic.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd } from './background-turn.js';
 import { PersistentSession, runOneTurn, turnFailure, type CommandEnd, type PersistentSessionOptions, type VendorWorkSession } from './persistent-session.js';
@@ -132,6 +133,8 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   /** The harness's catalog ACP entry: how model, effort and permission mode
    * are selected over the protocol, and what its usage readings mean. */
   acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'planModeId' | 'usageTotals' | 'cumulativeChunks' | 'steering' | 'compactCommand'>;
+  /** The vendor keeps its sign-in in the system keyring (catalog `keyringAuth`): a startup stall checks whether it is locked. */
+  keyringAuth?: boolean;
   /** The chat's Plan mode is on: the session runs in `acp.planModeId`; the
    * agent leaving it is onPlanModeExit. */
   planMode?: boolean;
@@ -942,7 +945,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         protocolVersion: 1,
         clientCapabilities: ACP_CLIENT_CAPABILITIES,
         clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' },
-      }, setup));
+      }, setup)).catch(async (error: unknown) => {
+        // A vendor that reads its sign-in from a locked keyring waits on an
+        // unlock prompt it cannot show; say so instead of "stalled".
+        if (input.keyringAuth && (error as { code?: unknown })?.code === 'ERR_JSONRPC_TIMEOUT' && await systemKeyringLocked()) {
+          throw Object.assign(new Error(lockedKeyringMessage(input.displayName ?? input.command)), { code: 'ERR_KEYRING_LOCKED', cause: error });
+        }
+        throw error;
+      });
       live.capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
       const extensions = initialized._meta?.['minimax-code/extensions']?.methods;
       live.steering = input.acp?.steering === false ? undefined
