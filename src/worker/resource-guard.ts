@@ -15,27 +15,33 @@ const STOP_INTERVAL_MS = 20_000;
 const EFFECTIVE_SHARE = 0.25;
 const SLICE_CEILING_SHARE = 0.97;
 
-interface AgentBudget { used: number; limit: number; ratio: number }
+interface AgentBudget {
+  used: number; limit: number; ratio: number;
+  /** Measured as the whole machine's use and the machine has not said it is critical: a guess, which may nudge
+   * but never stops a command. */
+  guess?: boolean;
+}
 export function desktopReserve(total: number): number { return Math.max(4 * GIB, total * 0.08); }
 export function agentBudget(sample: MemorySample): AgentBudget {
   const byMachine = sample.used + sample.available - desktopReserve(sample.total);
   const bySlice = sample.ceiling ? sample.ceiling * SLICE_CEILING_SHARE : Infinity;
   const limit = Math.max(0, Math.min(byMachine, bySlice));
   const ratio = limit > 0 ? sample.used / limit : Infinity;
-  return { used: sample.used, limit, ratio: sample.critical ? Math.max(ratio, 1) : ratio };
+  return { used: sample.used, limit, ratio: sample.critical ? Math.max(ratio, 1) : ratio, ...(sample.machineWide && !sample.critical ? { guess: true } : {}) };
 }
 
 function worthStopping(unit: Unit, budget: AgentBudget): boolean {
   return unit.freeable >= Math.max(GIB, budget.limit * 0.03);
 }
 type GuardAction = { kind: 'none' } | { kind: 'nudge'; worker: number; unit?: Unit } | { kind: 'stop'; worker: number; unit: Unit };
-/** Only a measured unit large enough to relieve pressure is stopped. */
+/** Only a measured unit large enough to relieve pressure is stopped, and only on evidence: agents' own memory
+ * (a cgroup) or the machine saying it is critical. */
 export function decideAction(budget: AgentBudget, inventory: Inventory): GuardAction {
   if (budget.ratio < NUDGE_AT || !inventory.workers.length) return { kind: 'none' };
   const bySize = [...inventory.units].sort((a, b) => b.freeable - a.freeable);
   const commands = bySize.filter((unit) => unit.kind === 'command');
   const owned = commands.filter((unit) => unit.owner !== undefined);
-  if (budget.ratio >= 1) {
+  if (budget.ratio >= 1 && !budget.guess) {
     const command = commands.find((unit) => worthStopping(unit, budget));
     if (command) return { kind: 'stop', worker: command.owner ?? Math.min(...inventory.workers), unit: command };
   }

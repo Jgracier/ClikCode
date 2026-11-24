@@ -81,7 +81,10 @@ describe('resource guard', () => {
     expect(macBudget.ratio).toBeGreaterThan(1);
     const macInventory = await macProbe.inventory();
     const macUnit = macInventory.units[0]!;
-    expect(decideAction(macBudget, macInventory)).toMatchObject({ kind: 'stop', worker: 100 });
+    // Machine-wide use is no evidence against one command: it nudges only, until the machine says critical.
+    expect(decideAction(macBudget, macInventory)).toMatchObject({ kind: 'nudge', worker: 100 });
+    const criticalBudget = agentBudget({ ...(await macProbe.sample())!, critical: true });
+    expect(decideAction(criticalBudget, macInventory)).toMatchObject({ kind: 'stop', worker: 100 });
     expect(await macProbe.stop(macUnit.target)).toBe(true);
     expect(stopped).toBe(2);
   });

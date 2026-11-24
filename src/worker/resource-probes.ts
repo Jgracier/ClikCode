@@ -50,6 +50,9 @@ export interface MemorySample {
   /** The machine says memory is critical now: Linux, agents stalled on memory
    * 10%+ of the last 10 s; macOS, the kernel's critical pressure level. */
   critical: boolean;
+  /** `used` is the whole machine's, not agents' own (no cgroup): a browser or an IDE counts as much as an
+   * agent's command, so it is no evidence against any one command. */
+  machineWide?: boolean;
 }
 
 export interface Probe {
@@ -296,15 +299,19 @@ export function processProbe(platform: NodeJS.Platform = process.platform, optio
   stopTree?: (target: Extract<StopTarget, { pids: number[] }>) => boolean | Promise<boolean>;
 } = {}): Probe {
   const readTable = options.readTable ?? (() => readProcessTable(platform));
+  const readMemory = options.readMemory ?? (async () => {
+    const total = totalmem();
+    // macOS's free pages omit reclaimable inactive and purgeable pages.
+    const mac = platform === 'darwin' ? await macPressure() : undefined;
+    if (platform === 'darwin' && mac?.availableBytes === undefined) return undefined;
+    const available = mac?.availableBytes ?? freemem();
+    return { total, available, used: total - available, critical: mac?.critical ?? false };
+  });
   return {
-    sample: options.readMemory ?? (async () => {
-      const total = totalmem();
-      // macOS's free pages omit reclaimable inactive and purgeable pages.
-      const mac = platform === 'darwin' ? await macPressure() : undefined;
-      if (platform === 'darwin' && mac?.availableBytes === undefined) return undefined;
-      const available = mac?.availableBytes ?? freemem();
-      return { total, available, used: total - available, critical: mac?.critical ?? false };
-    }),
+    sample: async () => {
+      const sample = await readMemory();
+      return sample && { ...sample, machineWide: true };
+    },
     inventory: async () => tableInventory(await readTable()),
     stop: async (target) => {
       if (!('pids' in target)) return false;
