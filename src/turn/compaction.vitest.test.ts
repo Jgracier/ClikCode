@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import {
   CODEX_COMPACT_PROMPT, COMPACTED, COMPACTING, COMPACT_INSTRUCTIONS, DEFAULT_COMPACT_AT_TOKENS, claudeCompactSettings, compactAt, compactDescription, compactFailedLine, compactionMechanism, contextTokens,
-  claudeCompactWindow, effectiveThreshold, handoffTokens, nextCompactionRecord, CLAUDE_MIN_TRIGGER, isCompactRequest, noteCompactAt, noteContextAfterCompaction, parseCompactAt, shouldCompact,
+  claudeCompactWindow, effectiveThreshold, handoffTokens, nextCompactionRecord, CLAUDE_MIN_TRIGGER, isCompactRequest, noteCompactAt, noteContextAfterCompaction, noteVendorFloor, vendorTrigger, parseCompactAt, shouldCompact,
   turnsSinceCompaction, vendorThresholdPlan,
 } from './compaction.js';
 
@@ -140,6 +140,27 @@ describe('a vendor\'s own threshold, in its own terms', () => {
     // 40k: the floor window (100k) leaves 80k after the output room; 50% of it is 40k.
     expect(claudeCompactWindow(40_000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000', CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '50' });
     expect(claudeCompactWindow(67_000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' });
+  });
+
+  it('Claude Code: once its own floor is measured, the trigger is that floor plus headroom, not the fixed estimate', () => {
+    const setting = harness('claude').compactThreshold;
+    // The boundary's reading (what the summary kept) is lower than the one before it; the first
+    // call on the compacted thread rises above it and is the floor.
+    const record: CompactionRecord = { at: at(5), through: 3 };
+    expect(noteVendorFloor(record, 95_000, 18_000)).toBe(false);
+    expect(noteVendorFloor(record, 18_000, 44_000)).toBe(true);
+    expect(record.vendorFloor).toBe(44_000);
+    expect(vendorThresholdPlan(setting, effectiveThreshold(50_000, record), undefined, record))
+      .toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '112000' } });
+    // A higher floor later (more re-read files) raises it; a lower one does not lower it.
+    expect(noteVendorFloor(record, 20_000, 52_000)).toBe(true);
+    expect(noteVendorFloor(record, 20_000, 41_000)).toBe(true);
+    expect(record.vendorFloor).toBe(52_000);
+    // Carried to the next compaction's record, and preferred to an end-of-turn reading.
+    const next = nextCompactionRecord({ ...record, after: 90_000 }, 9, {});
+    expect(next.vendorFloor).toBe(52_000);
+    expect(effectiveThreshold(50_000, next)).toBe(87_000);
+    expect(vendorTrigger(setting, 50_000)).toBe(CLAUDE_MIN_TRIGGER);
   });
 
   it('Codex: tokens in the thread\'s config, with the state-only summary prompt', () => {

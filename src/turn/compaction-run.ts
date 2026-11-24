@@ -87,9 +87,9 @@ export async function compactThresholdLaunch(
     ? await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(quiet('turn/compaction-run'))
     : undefined;
   const threshold = effectiveThreshold(compactAt(state.globalSettings), session?.compaction);
-  const plan = vendorThresholdPlan(setting, threshold, window);
+  const plan = vendorThresholdPlan(setting, threshold, window, session?.compaction);
   if (!plan) return NOTHING;
-  const set = { set: true, threshold: vendorTrigger(setting, threshold) };
+  const set = { set: true, threshold: vendorTrigger(setting, threshold, session?.compaction) };
   if (plan.kind === 'config') return { environment: {}, config: plan.config, ...set };
   if (plan.kind === 'env') return { environment: plan.env, config: {}, ...set };
   const text = `${JSON.stringify(plan.settings)}\n`;

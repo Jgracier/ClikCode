@@ -1,7 +1,7 @@
 /** What one vendor turn's transports report, folded into the checkpoint and the
  * screen: the shared observer, usage and pending work. */
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
-import { COMPACTED, nextCompactionRecord } from './compaction.js';
+import { COMPACTED, contextTokens, nextCompactionRecord, noteVendorFloor } from './compaction.js';
 import { markTurn } from '../runtime/turn-latency.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -28,9 +28,22 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   let turnUsage: TurnUsage | undefined;
   let backgroundNow: BackgroundWork | undefined;
   let activeTransport: VendorTransport | undefined;
+  // After the vendor's own compaction, its first call on the compacted thread is the floor its
+  // next trigger must clear (compaction.ts noteVendorFloor).
+  let floorPending = false;
+  let lastContext: number | undefined;
   const noteUsage = (usage: TurnUsage): void => {
     turnUsage = { ...turnUsage, ...usage };
     const shown = turnUsage!;
+    const used = contextTokens(shown);
+    if (used !== undefined) {
+      if (floorPending && noteVendorFloor(session.compaction, lastContext, used)) {
+        floorPending = false;
+        lifecycle('turn.vendor-floor', { harness: harness.command, floor: used, vendorFloor: session.compaction?.vendorFloor });
+        checkpoint.touch();
+      }
+      lastContext = used;
+    }
     session.lastUsage = { ...shown, at: new Date().toISOString() };
     prompter?.setTurnUsage(shown);
   };
@@ -114,6 +127,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
       // conversation is, and recall (search/recall.ts) searches what came before it.
       if (message === COMPACTED && !compacting) {
         session.compaction = nextCompactionRecord(session.compaction, session.messages?.length ?? 0, { noteRecord: true });
+        floorPending = true;
         lifecycle('turn.vendor-compacted', { harness: harness.command, through: session.compaction.through, context: session.lastUsage?.contextUsed });
         checkpoint.touch();
       }

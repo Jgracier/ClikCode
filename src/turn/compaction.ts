@@ -187,8 +187,11 @@ const CLAUDE_COMPACTION_FLOOR = 60_000;
  * stopped the turn ("Autocompact is thrashing"). Sonnet at 100k answered 91.7% vs 89.8% at 50k. */
 export const CLAUDE_MIN_TRIGGER = CLAUDE_COMPACTION_FLOOR + COMPACTION_HEADROOM;
 /** The threshold (tokens) a vendor is launched with for ClikCode's `threshold`. */
-export function vendorTrigger(setting: VendorThresholdSetting | undefined, threshold: number): number {
-  return setting?.unit === 'claude-window' ? Math.max(threshold, CLAUDE_MIN_TRIGGER) : threshold;
+export function vendorTrigger(setting: VendorThresholdSetting | undefined, threshold: number, record?: CompactionRecord): number {
+  if (setting?.unit !== 'claude-window') return threshold;
+  // Measured: the floor plus the headroom (effectiveThreshold) is the trigger. Not yet: the
+  // highest floor seen across conversations plus the headroom.
+  return record?.vendorFloor !== undefined ? effectiveThreshold(threshold, record) : Math.max(threshold, CLAUDE_MIN_TRIGGER);
 }
 export function claudeCompactWindow(threshold: number): Record<string, string> {
   const window = threshold + CLAUDE_OUTPUT_ROOM + CLAUDE_BUFFER;
@@ -200,10 +203,10 @@ export function claudeCompactWindow(threshold: number): Record<string, string> {
 /** ClikCode's threshold (tokens) in the vendor's own terms, for a model whose window is `window`
  * (tokens) where known. Undefined when it cannot be said: a share of an unknown window -- the
  * vendor keeps its own default then, and ClikCode compacts after the turn instead. */
-export function vendorThresholdPlan(setting: VendorThresholdSetting | undefined, threshold: number, window?: number): VendorThresholdPlan | undefined {
+export function vendorThresholdPlan(setting: VendorThresholdSetting | undefined, threshold: number, window?: number, record?: CompactionRecord): VendorThresholdPlan | undefined {
   if (!setting) return undefined;
   const unit = setting.unit ?? 'tokens';
-  if (unit === 'claude-window') return { kind: 'env', env: claudeCompactWindow(vendorTrigger(setting, threshold)) };
+  if (unit === 'claude-window') return { kind: 'env', env: claudeCompactWindow(vendorTrigger(setting, threshold, record)) };
   let value: number;
   if (unit === 'tokens') value = threshold;
   else {
@@ -231,6 +234,11 @@ export interface CompactionRecord {
   after?: number;
   /** The previous compaction's floor (its `after`), the estimate of this one's until measured. */
   floor?: number;
+  /** The context of the vendor's first model call after one of its own compactions -- the floor
+   * its next trigger must clear -- the highest seen in this conversation (vendor-observer.ts).
+   * Claude Code's boundary reports only what the summary kept (11-21k); its first call after it
+   * sent 39-53k, with up to five re-read files (5k each), the skill and tool listings re-added. */
+  vendorFloor?: number;
   /** A rewrite whose fresh thread the next turn has yet to write. */
   rewrite?: true;
   /** A native compaction whose next turn has yet to tell the model where the whole conversation is. */
@@ -263,7 +271,7 @@ export function turnsSinceCompaction(session: CompactableSession): number {
  * so a conversation whose summary, tools or one huge tool result sit near the threshold does not
  * compact again every few calls. */
 export function effectiveThreshold(threshold: number, record: CompactionRecord | undefined): number {
-  const floor = record?.after ?? record?.floor;
+  const floor = record?.vendorFloor ?? record?.after ?? record?.floor;
   return floor !== undefined ? Math.max(threshold, floor + COMPACTION_HEADROOM) : threshold;
 }
 
@@ -274,7 +282,17 @@ export function nextCompactionRecord(
   fields: Pick<CompactionRecord, 'rewrite' | 'noteRecord'>,
 ): CompactionRecord {
   const floor = previous?.after ?? previous?.floor;
-  return { at: new Date().toISOString(), through, ...(floor !== undefined ? { floor } : {}), ...fields };
+  const vendorFloor = previous?.vendorFloor;
+  return { at: new Date().toISOString(), through, ...(floor !== undefined ? { floor } : {}), ...(vendorFloor !== undefined ? { vendorFloor } : {}), ...fields };
+}
+
+/** Note a reading of the vendor's context after one of its own compactions: the first that rose
+ * above the reading before it is its first model call on the compacted thread (the boundary's own
+ * reading, what the summary kept, comes first and lower). True when it was taken. */
+export function noteVendorFloor(record: CompactionRecord | undefined, previous: number | undefined, used: number): boolean {
+  if (!record || previous === undefined || used <= previous) return false;
+  record.vendorFloor = Math.max(record.vendorFloor ?? 0, used);
+  return true;
 }
 
 /** Note what the first turn after a compaction ran on. True when the record changed. */
