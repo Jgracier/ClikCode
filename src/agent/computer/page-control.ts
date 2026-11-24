@@ -4,6 +4,7 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { sleep } from '../../runtime/sleep.js';
 import { StoppedError } from './stopped.js';
+import { approach, glideTo, holdMs, typeLikeAPerson } from './human-input.js';
 import type { Frame, Locator, Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
@@ -98,17 +99,24 @@ export async function clickWith(page: Page, target: Locator | undefined, step: S
   const extras = clickExtras(step) ?? { button: 'left' as const, clickCount: 1, modifiers: [] };
   const at = step.x !== undefined || step.y !== undefined ? { x: num(step.x, 'x'), y: num(step.y, 'y') } : undefined;
   if (target) {
-    await target.click({ button: extras.button, clickCount: extras.clickCount, ...(extras.modifiers.length ? { modifiers: extras.modifiers as never } : {}), ...(at ? { position: at } : {}), timeout: 6_000 });
+    const spot = await approach(page, target, at);
+    await target.click({ button: extras.button, clickCount: extras.clickCount, ...(extras.modifiers.length ? { modifiers: extras.modifiers as never } : {}), ...(spot ?? at ? { position: spot ?? at } : {}), delay: holdMs(), timeout: 6_000 });
     return;
   }
   if (!at) throw new Error('Click needs a target, or x and y (viewport pixels).');
-  await withModifiers(page, extras.modifiers, () => page.mouse.click(at.x, at.y, { button: extras.button, clickCount: extras.clickCount }));
+  await glideTo(page, at);
+  await withModifiers(page, extras.modifiers, () => page.mouse.click(at.x, at.y, { button: extras.button, clickCount: extras.clickCount, delay: holdMs() }));
 }
 
 export async function hoverStep(page: Page, target: Locator | undefined, step: StepExtras): Promise<void> {
-  if (target) { await target.hover({ timeout: 6_000, ...(step.x !== undefined && step.y !== undefined ? { position: { x: num(step.x, 'x'), y: num(step.y, 'y') } } : {}) }); return; }
+  if (target) {
+    const given = step.x !== undefined && step.y !== undefined ? { x: num(step.x, 'x'), y: num(step.y, 'y') } : undefined;
+    const spot = await approach(page, target, given);
+    await target.hover({ timeout: 6_000, ...(spot ?? given ? { position: spot ?? given } : {}) });
+    return;
+  }
   if (step.x === undefined || step.y === undefined) throw new Error('Hover needs a target, or x and y (viewport pixels).');
-  await page.mouse.move(num(step.x, 'x'), num(step.y, 'y'), { steps: 4 });
+  await glideTo(page, { x: num(step.x, 'x'), y: num(step.y, 'y') });
 }
 
 async function centre(target: Locator): Promise<Point> {
@@ -329,8 +337,9 @@ export async function fillTarget(page: Page, target: Locator, text: string, name
   }
   // Typing, not setting a value: forms that check each key press (a phone box, an enabled Continue) only see real input.
   if (text.length <= 200 && kind.tag !== 'TEXTAREA') {
+    await approach(page, target);
     await target.fill('', { timeout: 10_000 });
-    await target.pressSequentially(text, { timeout: 10_000 });
+    await typeLikeAPerson(page, text);
     await target.blur().catch(quiet('agent/computer/page-control'));
   } else await target.fill(text, { timeout: Math.min(60_000, 10_000 + text.length / 5) });
   return `Filled ${name}.`;

@@ -1,4 +1,5 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
+import { approach, holdMs } from '../computer/human-input.js';
 import { pickLink, describeLink, type LinkPick } from '../computer/email-links.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
@@ -142,16 +143,31 @@ const journalKey = (stateDir: string, tab?: string): string => tab ? `${stateDir
 /** Radios, checkboxes and switches are often visually hidden behind a styled label, and a
  * click can land on something in front: fall back to clicking the element itself. */
 async function press(target: Locator, at?: 'start' | 'end'): Promise<void> {
+  const page = target.page();
   // Where the middle of a label is a link ("I agree to the Terms"), the edge is the box: click there.
   if (at) {
     const box = await target.boundingBox({ timeout: 6_000 });
-    if (box) { await target.click({ position: { x: at === 'start' ? Math.min(6, box.width / 2) : Math.max(box.width - 6, box.width / 2), y: box.height / 2 }, timeout: 6_000 }); return; }
+    if (box) {
+      const position = { x: at === 'start' ? Math.min(6, box.width / 2) : Math.max(box.width - 6, box.width / 2), y: box.height / 2 };
+      await approach(page, target, position);
+      await target.click({ position, delay: holdMs(), timeout: 6_000 });
+      return;
+    }
   }
   // A checkbox or radio is toggled on the element itself: a pointer click at its centre can land on a link in
-  // its label ("I agree to the Terms and Privacy Policy") and open that page instead.
+  // its label ("I agree to the Terms and Privacy Policy") and open that page instead. A real click on the box comes first
+  // (a script's click is marked untrusted, which bot checks read); a box that is hidden behind its styling gets the script's.
   const toggle = await target.evaluate(node => { const input = node as unknown as { tagName: string; type?: string }; return input.tagName === 'INPUT' && (input.type === 'checkbox' || input.type === 'radio'); }, undefined, { timeout: 2_000 }).catch(() => false);
-  if (toggle) { await target.evaluate(node => (node as unknown as { click(): void }).click(), undefined, { timeout: 3_000 }); return; }
-  try { await target.click({ timeout: 6_000 }); }
+  if (toggle) {
+    const before = await target.isChecked({ timeout: 1_000 }).catch(() => undefined);
+    const spot = await approach(page, target);
+    const clicked = spot ? await target.click({ position: spot, delay: holdMs(), timeout: 2_500 }).then(() => true, () => false) : false;
+    const toggled = clicked && (before === undefined || await target.isChecked({ timeout: 1_000 }).catch(() => !before) !== before);
+    if (!toggled) await target.evaluate(node => (node as unknown as { click(): void }).click(), undefined, { timeout: 3_000 });
+    return;
+  }
+  const spot = await approach(page, target);
+  try { await target.click({ ...(spot ? { position: spot } : {}), delay: holdMs(), timeout: 6_000 }); }
   catch (error) {
     if (!(error instanceof Error) || !/timeout/i.test(error.message)) throw error;
     await target.evaluate(node => (node as unknown as { click(): void }).click(), undefined, { timeout: 3_000 });
