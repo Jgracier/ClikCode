@@ -478,6 +478,8 @@ async function chain() {
  *   (`record`), and eval-only knobs as environment (topic-contents.ts, recall.ts). */
 const NUDGE = { CLIKCODE_EVAL_SEARCH_NUDGE: '1' };
 const IDS = { CLIKCODE_EVAL_ID_LIST: '1' };
+/** The gate fix: top-k by meaning, re-ranked by the request's rare words (src/search/recall.ts termRanked). */
+const GATE = { CLIKCODE_EVAL_GATE_LIFT: '0', CLIKCODE_EVAL_GATE_TERMS: '0.3' };
 const VARIANTS = {
   recall: { tools: false },
   hindsight: { tools: true },
@@ -485,6 +487,7 @@ const VARIANTS = {
   'hs-nudge': { tools: true, record: true, maxTurns: 16, env: NUDGE },
   'hs-ids': { tools: true, record: true, maxTurns: 16, env: { ...NUDGE, ...IDS } },
   'hs-ledger': { tools: true, record: true, maxTurns: 16, ledger: true },
+  'hs-ids-gate': { tools: true, record: true, maxTurns: 16, env: { ...NUDGE, ...IDS, ...GATE } },
   ...JSON.parse(process.env.EVAL_VARIANTS ?? '{}'),
 };
 /** hs-ledger: at each compaction a separate call lists the decisions, rejections (what was ruled out
