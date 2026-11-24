@@ -239,4 +239,14 @@ describe('vendor knowledge lives in the catalog, not in branches', () => {
     expect(byCommand.get('goose')?.modelsDevCatalog).toBe(true);
     expect(byCommand.get('hermes')?.effortHelpArgv).toEqual(['chat', '--help']);
   });
+
+  // Pi read its pinned model (settings.json) only from an account's own profile: an account
+  // running from the home dir never saw ~/.pi/agent/settings.json and started on the first
+  // model Pi lists -- one a ChatGPT plan refuses. The home fallback is nativeStateDir.
+  it('gives every harness that reads model files from its profile a home fallback', () => {
+    for (const harness of allLocalHarnesses()) {
+      if (!harness.modelCatalogFiles?.length || !harness.profileEnv || harness.profileEnv === 'HOME') continue;
+      expect(harness.nativeStateDir, `${harness.command} reads ${harness.modelCatalogFiles.join(', ')} but has no nativeStateDir`).toBeTruthy();
+    }
+  });
 });

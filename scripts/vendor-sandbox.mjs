@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Run a command with every vendor CLI's storage in a throwaway directory.
  *
- *   node scripts/vendor-sandbox.mjs [--auth <harness>]... -- <command> [args...]
+ *   node scripts/vendor-sandbox.mjs [--auth <harness>[@<account id>]]... -- <command> [args...]
  *
  * A live check of a harness (a `session/new`, a PONG turn, `clikcode send`)
  * otherwise writes a real chat into the user's own vendor history, and
@@ -11,7 +11,11 @@
  * that is deleted afterwards, whatever the command does.
  *
  * --auth links that harness's sign-in files (its catalog `authFiles`) into
- * the sandbox. Linked, not copied: a vendor that refreshes its token in the
+ * the sandbox. --auth <harness>@<account id> links them from that ClikCode
+ * account's own profile (~/.clikcode/profiles/<harness>/<id>) instead of the
+ * home sign-in: an account added through ClikCode signs in there, and the
+ * home copy may be another account's, expired, or empty. File by file, never
+ * the whole profile (it holds that account's chats). Linked, not copied: a vendor that refreshes its token in the
  * sandbox would otherwise leave the user's own copy holding a spent one. A
  * harness that declares none keeps its sign-in elsewhere and can only be run
  * signed out, or on a model that needs no sign-in (OpenCode's free models do). Git, npm, gh and the other tools a turn may use keep the
@@ -31,7 +35,7 @@ const { AI_LOCAL_HARNESSES, HOME_REDIRECT_ENV_DEFAULTS } = createRequire(import.
 const argv = process.argv.slice(2);
 const split = argv.indexOf('--');
 if (split < 0 || split === argv.length - 1) {
-  console.error('usage: node scripts/vendor-sandbox.mjs [--auth <harness>]... [--link <~/path>]... -- <command> [args...]');
+  console.error('usage: node scripts/vendor-sandbox.mjs [--auth <harness>[@<account id>]]... [--link <~/path>]... -- <command> [args...]');
   process.exit(2);
 }
 const auth = [];
@@ -84,7 +88,8 @@ const expand = (path, base) => path
   // A directory is declared with its trailing slash (Kimi's credentials/),
   // which a symlink's own path cannot carry.
   .replace(/\/+$/, '');
-for (const command of auth) {
+for (const entry of auth) {
+  const [command, account] = entry.split('@');
   const harness = AI_LOCAL_HARNESSES.find((item) => item.command === command);
   if (!harness) { console.error(`no harness named ${command}`); process.exit(2); }
   const files = harness.authFiles ?? [];
@@ -94,7 +99,40 @@ for (const command of auth) {
     const env = harness.authEnv?.length ? ` It also signs in from ${harness.authEnv.join(', ')}, which this run inherits from your environment.` : '';
     console.error(`${command} declares no sign-in files, so --auth links nothing and it runs signed out here.${env} If it keeps a sign-in file under your home, find where in the vendor's own documentation and pass it as --link <~/path> (or a home-relative path such as .config/x).`);
   }
-  for (const { path } of files) link(path);
+  const profile = account ? profileOf(command, account) : undefined;
+  for (const { path } of files) link(path, profile && profilePath(harness, path, profile));
+  // The account's model settings come with it (Pi's settings.json pins the model the account
+  // runs): a model the vendor would pick without them may be one the plan refuses.
+  const root = profile && profileRoot(harness, files);
+  for (const file of profile && root ? harness.modelCatalogFiles ?? [] : []) link(`${root}/${file}`, join(profile, file));
+}
+
+/** Where the profile directory sits in the sandbox: its home, or the default the profile
+ * variable falls back to (`${PI_CODING_AGENT_DIR:-~/.pi/agent}` gives ~/.pi/agent). */
+function profileRoot(harness, files) {
+  if (harness.profileEnv === 'HOME') return '~';
+  for (const { path } of files) {
+    const found = path.match(new RegExp(`^\\$\\{${harness.profileEnv}:-([^}]*)\\}`));
+    if (found) return found[1];
+  }
+  return undefined;
+}
+
+/** The profile directory of one ClikCode account: its id, or the start of it. */
+function profileOf(command, account) {
+  const root = join(process.env.CLIKCODE_HOME?.trim() || join(realHome, '.clikcode'), 'profiles', command);
+  const found = (() => { try { return readdirSync(root).filter((name) => name.startsWith(account)); } catch { return []; } })();
+  if (found.length !== 1) { console.error(`${command}@${account}: ${found.length ? 'more than one' : 'no'} profile under ${root} matches`); process.exit(2); }
+  return join(root, found[0]);
+}
+
+/** Where `path` lives in an account's profile: the profile is the harness's HOME, or the
+ * directory its profile variable names (Pi's PI_CODING_AGENT_DIR). A path outside both is
+ * the home's, shared by every account. */
+function profilePath(harness, path, profile) {
+  if (harness.profileEnv === 'HOME') return expand(path, profile);
+  const own = new RegExp(`^\\$\\{${harness.profileEnv}:-[^}]*\\}`);
+  return harness.profileEnv && own.test(path) ? path.replace(own, profile).replace(/\/+$/, '') : undefined;
 }
 // ~/x is expanded by the shell when unquoted, and then arrives as an absolute
 // path inside the real home; ~/x quoted, and .config/x, are home-relative.
@@ -115,7 +153,12 @@ function expandGlob(path) {
 }
 
 /** Link one sign-in path; a catalog may list the same file twice (Cline). */
-function link(path) {
+function link(path, fromProfile) {
+  if (fromProfile) {
+    const to = expand(path, home);
+    if (existsSync(fromProfile) && !existsSync(to)) { mkdirSync(dirname(to), { recursive: true }); symlinkSync(fromProfile, to); }
+    return;
+  }
   for (const from of expandGlob(expand(path, realHome))) {
     // A match under the real home maps to the same place under the sandbox's.
     const to = from.startsWith(`${realHome}/`) ? join(home, from.slice(realHome.length)) : expand(path, home);
