@@ -14,6 +14,10 @@ describe('ClikCode account failover', () => {
     expect(classifyAccountFailure(refusal)).toBe('account-ineligible');
   });
 
+  it("treats Junie's no-models reply (a JetBrains account with no AI plan) as this account's refusal", () => {
+    expect(classifyAccountFailure(new Error('No models are currently available for submission: model_not_available'))).toBe('account-ineligible');
+  });
+
   it("treats Copilot's 'Execution failed: Model is not available' reply as this account's refusal", () => {
     // Copilot 1.0.x over ACP, a model the account's list offers but its plan does not serve.
     expect(classifyAccountFailure(new Error('Error: Execution failed: Model "gpt-5.6-sol" is not available.'))).toBe('account-ineligible');
