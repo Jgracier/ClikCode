@@ -39,7 +39,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   let floorPending = false;
   let lastContext: number | undefined;
   let largestStep = 0;
-  const remember = (measure: { floor?: number; step?: number }): void => {
+  const remember = (measure: { floor?: number; step?: number; window?: number }): void => {
     void rememberVendorMeasure(harness.command, ctx.model, session.id, measure);
   };
   const noteContext = (used: number): void => {
@@ -66,6 +66,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     const used = contextTokens(shown);
     // A compaction's own readings are of the summarizing call, not of the conversation.
     if (used !== undefined && !compacting) noteContext(used);
+    if ((shown.contextWindow ?? 0) > 0) remember({ window: shown.contextWindow });
     session.lastUsage = { ...shown, at: new Date().toISOString() };
     prompter?.setTurnUsage(shown);
   };

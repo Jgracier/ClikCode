@@ -51,7 +51,10 @@ const STEP_MARGIN = 5_000;
 const MAX_HEADROOM = 120_000;
 /** A vendor's compaction floor and largest one-call growth, measured across recent conversations
  * on a harness and model (turn/vendor-floors.ts). */
-export interface VendorMeasures { floor?: number; step?: number }
+/** `window`: the smallest context window the model reported. A routed model (Copilot's `auto`)
+ * runs each turn on a model of its choosing -- 272k one turn, 922k the next (2026-11-24) -- and
+ * a share set against the larger fires below the floor on the smaller, every call. */
+export interface VendorMeasures { floor?: number; step?: number; window?: number }
 /** The headroom past a compaction's floor for a conversation whose largest call grew the context
  * by `step` tokens. */
 export function compactionHeadroom(step?: number): number {

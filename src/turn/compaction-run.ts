@@ -84,13 +84,16 @@ export async function compactThresholdLaunch(
   const setting = harness.compactThreshold;
   if (!setting) return NOTHING;
   const unit = setting.unit ?? 'tokens';
-  const window = unit === 'share' || unit === 'percent'
-    ? await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(quiet('turn/compaction-run'))
-    : undefined;
   const threshold = effectiveThreshold(compactAt(state.globalSettings), session?.compaction);
   // A first launch, a new chat or a switched account or model starts from what this harness and
   // model were measured to leave (turn/vendor-floors.ts), not a fixed estimate.
   const known = knownVendorMeasures(harness.command, model);
+  // A share is of the smallest window the model has reported: a routed model's next turn may
+  // run on the smaller one, and a share of the larger would fire below the floor there.
+  const reported = unit === 'share' || unit === 'percent'
+    ? await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(quiet('turn/compaction-run'))
+    : undefined;
+  const window = reported && known.window ? Math.min(reported, known.window) : reported ?? known.window;
   const plan = vendorThresholdPlan(setting, threshold, window, session?.compaction, known);
   if (!plan) return NOTHING;
   const set = { set: true, threshold: vendorTrigger(setting, threshold, session?.compaction, known) };

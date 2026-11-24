@@ -17,7 +17,7 @@ export type { VendorMeasures };
 /** The conversations each harness and model keeps readings for. */
 const KEPT_CONVERSATIONS = 8;
 
-interface Reading { floor?: number; step?: number; at: string }
+interface Reading { floor?: number; step?: number; window?: number; at: string }
 interface Kept { v: 1; models: Record<string, Record<string, Reading>> }
 
 
@@ -43,6 +43,7 @@ function highest(readings: Iterable<Reading>): VendorMeasures {
   for (const reading of readings) {
     if (reading.floor !== undefined) out.floor = Math.max(out.floor ?? 0, reading.floor);
     if (reading.step !== undefined) out.step = Math.max(out.step ?? 0, reading.step);
+    if (reading.window !== undefined) out.window = Math.min(out.window ?? Infinity, reading.window);
   }
   return out;
 }
@@ -54,18 +55,21 @@ export function knownVendorMeasures(harness: string, model: string | null | unde
   const own = models[keyOf(harness, model)];
   if (own) return highest(Object.values(own));
   const prefix = `${harness}\u0000`;
-  return highest(Object.entries(models).filter(([key]) => key.startsWith(prefix)).flatMap(([, chats]) => Object.values(chats)));
+  // A window is the model's own: another model's says nothing about this one.
+  const { window: _otherModels, ...measures } = highest(Object.entries(models).filter(([key]) => key.startsWith(prefix)).flatMap(([, chats]) => Object.values(chats)));
+  return measures;
 }
 
 let writing: Promise<void> = Promise.resolve();
 
-/** Keeps a conversation's reading where it is higher than what it had. */
+/** Keeps a conversation's reading where it is higher than what it had (a window: lower). */
 export function rememberVendorMeasure(
   harness: string, model: string | null | undefined, conversation: string, measure: VendorMeasures,
 ): Promise<void> {
   const kept = load().models[keyOf(harness, model)]?.[conversation];
   const higher = (name: keyof VendorMeasures) => measure[name] !== undefined && measure[name]! > (kept?.[name] ?? 0);
-  if (!higher('floor') && !higher('step')) return writing;
+  const lowerWindow = measure.window !== undefined && measure.window > 0 && measure.window < (kept?.window ?? Infinity);
+  if (!higher('floor') && !higher('step') && !lowerWindow) return writing;
   writing = writing.then(async () => {
     const data = load();
     const key = keyOf(harness, model);
@@ -75,6 +79,7 @@ export function rememberVendorMeasure(
     for (const name of ['floor', 'step'] as const) {
       if (measure[name] !== undefined) next[name] = Math.max(before?.[name] ?? 0, measure[name]!);
     }
+    if (lowerWindow) next.window = Math.min(before?.window ?? Infinity, measure.window!);
     chats[conversation] = next;
     const recent = Object.entries(chats).sort(([, a], [, b]) => Date.parse(b.at) - Date.parse(a.at)).slice(0, KEPT_CONVERSATIONS);
     const written: Kept = { v: 1, models: { ...data.models, [key]: Object.fromEntries(recent) } };
