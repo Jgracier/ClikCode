@@ -30,6 +30,13 @@ const MAX_WORD_HITS = 3;
 /** The embedder is waited for at most this long, within the budget. */
 const MAX_EMBED_WAIT_MS = 600;
 
+/** Knobs the compaction eval (scripts/compaction-eval.mjs) varies, read per call; unset, each is the
+ * shipped value above. Never set outside the eval. */
+const evalKnob = (name: string, fallback: number): number => {
+  const value = Number(process.env[`CLIKCODE_EVAL_RECALL_${name}`]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
 export interface RecallHit { position: number; score: number; by: 'words' | 'meaning'; at: number; length?: number }
 
 export interface RecallOutcome {
@@ -56,7 +63,7 @@ export function distinctiveWords(query: string): string[] {
 
 /** Matches by words: each distinctive word of the request found in at most MAX_WORD_HITS messages
  * before the boundary and in none after it. A message scores the words it has. */
-export function lexicalHits(view: ConversationView, outside: readonly number[], inside: readonly number[], words: readonly string[]): RecallHit[] {
+export function lexicalHits(view: ConversationView, outside: readonly number[], inside: readonly number[], words: readonly string[], maxWordHits = MAX_WORD_HITS): RecallHit[] {
   const scores = new Map<number, RecallHit>();
   for (const word of words) {
     if (inside.some((position) => indexOfWord(view.entries[position]!.message.text, word) >= 0)) continue;
@@ -64,9 +71,9 @@ export function lexicalHits(view: ConversationView, outside: readonly number[], 
     for (const position of outside) {
       const at = indexOfWord(view.entries[position]!.message.text, word);
       if (at >= 0) found.push({ position, at });
-      if (found.length > MAX_WORD_HITS) break;
+      if (found.length > maxWordHits) break;
     }
-    if (!found.length || found.length > MAX_WORD_HITS) continue;
+    if (!found.length || found.length > maxWordHits) continue;
     for (const { position, at } of found) {
       const prior = scores.get(position);
       if (prior) prior.score += 1;
@@ -85,8 +92,8 @@ function excerpt(message: MessageDoc, at: number, length: number | undefined, ro
 }
 
 /** The note for `hits`: each message's number, who said it, and the part that matched. */
-export function recallNote(view: ConversationView, hits: readonly RecallHit[], hasHindsight: boolean): string {
-  const room = Math.floor(RECALL_MAX_CHARS / Math.max(1, hits.length));
+export function recallNote(view: ConversationView, hits: readonly RecallHit[], hasHindsight: boolean, maxChars = RECALL_MAX_CHARS): string {
+  const room = Math.floor(maxChars / Math.max(1, hits.length));
   const lines = [...hits].sort((left, right) => left.position - right.position).map((hit) => {
     const message = view.entries[hit.position]!.message;
     const where = hit.at >= message.contentLength ? `${message.role} (tool call)` : message.role;
@@ -99,7 +106,7 @@ export function recallNote(view: ConversationView, hits: readonly RecallHit[], h
   ].join('\n'));
 }
 
-async function search(sessionId: string, query: string, boundary: number, hasHindsight: boolean, deadline: number): Promise<RecallOutcome> {
+async function search(sessionId: string, query: string, boundary: number, hasHindsight: boolean, deadline: number, context?: string): Promise<RecallOutcome> {
   const found = findConversation(await conversationGroups(), sessionId);
   if (!found) return { hits: [], skipped: 'no-conversation' };
   const view = await conversationView(found.group);
@@ -108,34 +115,46 @@ async function search(sessionId: string, query: string, boundary: number, hasHin
   const outside = own.slice(0, cut);
   const inside = own.slice(cut);
   if (!outside.length) return { hits: [], skipped: 'no-boundary' };
-  const hits = lexicalHits(view, outside, inside, distinctiveWords(query)).slice(0, RECALL_MAX_MESSAGES);
-  const wait = Math.min(MAX_EMBED_WAIT_MS, deadline - Date.now());
-  if (hits.length < RECALL_MAX_MESSAGES && wait > 0) {
-    const vector = await queryVector(query, wait);
+  const maxMessages = evalKnob('MAX', RECALL_MAX_MESSAGES);
+  // Eval: QUERY=context adds the last assistant turn to both searches, context-meaning to the meaning one only.
+  const queryMode = process.env.CLIKCODE_EVAL_RECALL_QUERY;
+  const withContext = context && queryMode ? `${context.slice(-1500)}\n\n${query}` : query;
+  const lexical = lexicalHits(view, outside, inside, distinctiveWords(queryMode === 'context' ? withContext : query), evalKnob('WORD_HITS', MAX_WORD_HITS));
+  const meaningFirst = process.env.CLIKCODE_EVAL_RECALL_ORDER === 'meaning';
+  const hits = meaningFirst ? [] : lexical.slice(0, maxMessages);
+  const wait = Math.min(evalKnob('EMBED_WAIT', MAX_EMBED_WAIT_MS), deadline - Date.now());
+  if (hits.length < maxMessages && wait > 0) {
+    const vector = await queryVector(withContext, wait);
     if (vector) {
       const allowed = new Set(outside);
       const taken = new Set(hits.map((hit) => hit.position));
-      for (const match of await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: 20 })) {
-        if (hits.length >= RECALL_MAX_MESSAGES) break;
+      const min = Number(process.env.CLIKCODE_EVAL_RECALL_MIN) || undefined;
+      for (const match of await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: 20, ...(min ? { min } : {}) })) {
+        if (hits.length >= maxMessages) break;
         if (!allowed.has(match.position) || taken.has(match.position)) continue;
         hits.push({ position: match.position, score: Math.round(match.score * 1000) / 1000, by: 'meaning', at: match.offset, length: match.length });
+        taken.add(match.position);
       }
     }
   }
-  return hits.length ? { hits, note: recallNote(view, hits, hasHindsight) } : { hits };
+  if (meaningFirst) {
+    const taken = new Set(hits.map((hit) => hit.position));
+    for (const hit of lexical) { if (hits.length >= maxMessages) break; if (!taken.has(hit.position)) hits.push(hit); }
+  }
+  return hits.length ? { hits, note: recallNote(view, hits, hasHindsight, evalKnob('CHARS', RECALL_MAX_CHARS)) } : { hits };
 }
 
 /** `turnText` with what recall found appended, or as it is. `boundary`: how many of the chat's first
  * messages the context holds only as a summary or not at all (recallBoundary). Never throws. */
 export async function withRecall(
-  input: { sessionId: string; query: string; boundary: number; hasHindsight: boolean; budgetMs?: number }, turnText: string,
+  input: { sessionId: string; query: string; boundary: number; hasHindsight: boolean; budgetMs?: number; context?: string }, turnText: string,
 ): Promise<string> {
   const outcome = await recall(input);
   return outcome.note ? `${turnText}\n\n${outcome.note}` : turnText;
 }
 
 /** What recall finds for this request, within the budget. Never throws. */
-export async function recall(input: { sessionId: string; query: string; boundary: number; hasHindsight: boolean; budgetMs?: number }): Promise<RecallOutcome> {
+export async function recall(input: { sessionId: string; query: string; boundary: number; hasHindsight: boolean; budgetMs?: number; context?: string }): Promise<RecallOutcome> {
   const started = Date.now();
   const query = input.query.trim();
   let outcome: RecallOutcome;
@@ -143,10 +162,10 @@ export async function recall(input: { sessionId: string; query: string; boundary
   else if (query.length < MIN_QUERY_CHARS) outcome = { hits: [], skipped: 'short' };
   else if (isContinuation(query)) outcome = { hits: [], skipped: 'continuation' };
   else {
-    const budget = input.budgetMs ?? RECALL_BUDGET_MS;
+    const budget = input.budgetMs ?? evalKnob('BUDGET', RECALL_BUDGET_MS);
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<RecallOutcome>((resolve) => { timer = setTimeout(() => resolve({ hits: [], skipped: 'timeout' }), budget); });
-    const work = search(input.sessionId, query, input.boundary, input.hasHindsight, started + budget)
+    const work = search(input.sessionId, query, input.boundary, input.hasHindsight, started + budget, input.context)
       .catch((error: unknown): RecallOutcome => {
         lifecycle('turn.recall.error', { message: error instanceof Error ? error.message : String(error) });
         return { hits: [] };

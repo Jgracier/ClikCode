@@ -127,6 +127,7 @@ await build({
       "export { recall } from './src/search/recall.ts';",
       "export { topicContents } from './src/search/topic-contents.ts';",
       "export { wrapResourceNote } from './src/turn/resource-note-text.ts';",
+      "export { fullRecordNote, recordReachFor } from './src/session/full-record.ts';",
       "export { claudeCompactSettings } from './src/turn/compaction.ts';",
       "export { conversationGroups, findConversation } from './src/search/conversations.ts';",
       "export { indexConversation, vectorFilePath } from './src/search/vectors.ts';",
@@ -457,20 +458,57 @@ async function chain() {
     // after the boundary. Recall within its own budget (RECALL_BUDGET_MS), as a turn has it.
     // hindsight: the same, and ClikCode's MCP server too, as a chat in ClikCode has it.
     const boundary = opens[state.from];
-    for (const condition of ['recall', 'hindsight'].filter((name) => CONDITIONS.includes(name))) {
-      const tools = condition === 'hindsight';
+    for (const condition of CONDITIONS.filter((name) => name in VARIANTS)) {
       const session = await storedSession(messageEnd);
-      const contents = await clik.topicContents(session, tools);
-      await askAll(id, condition, threshold, async (probe) => {
-        const request = `${tools ? TOOL_PROBE_PREFIX : PROBE_PREFIX}${probe.question}`;
-        const started = Date.now();
-        const found = await clik.recall({ sessionId: conv, query: request, boundary, hasHindsight: tools });
-        const row = { key: `${threshold}|${probe.id}`, condition, model: MODEL, boundary, ms: Date.now() - started, hits: found.hits.map((hit) => `${hit.position}:${hit.by}:${hit.score}`), skipped: found.skipped, chars: found.note?.length ?? 0 };
-        appendFileSync(saved('recall-log.jsonl'), `${JSON.stringify(row)}\n`);
-        return `${contents ? `${clik.wrapResourceNote(contents)}\n\n` : ''}${request}${found.note ? `\n\n${found.note}` : ''}`;
-      }, tools ? toolArgs(`${condition}|${threshold}`) : []);
+      const variant = VARIANTS[condition];
+      const lastAssistant = [...tail].reverse().find((turn) => typeof turn.assistant === 'string' && turn.assistant.trim())?.assistant;
+      await askAll(id, condition, threshold, (probe) => variantPrompt(condition, threshold, probe, session, boundary, lastAssistant),
+        variant.tools ? toolArgs(`${condition}|${threshold}`) : []);
     }
   }
+}
+
+/** The conditions after compaction, each the conversation in ClikCode's store with the context
+ * holding what is after the boundary; recall within its own budget (RECALL_BUDGET_MS), as a turn has it.
+ * - recall: recall + topic contents, no tools.
+ * - hindsight: the same and ClikCode's MCP server, as a chat in ClikCode has it (the note as the eval
+ *   first built it: contents only).
+ * - hs-*: the note as withCompactionNote (turn/compaction-run.ts) builds it, fullRecordNote first
+ *   (`record`), and eval-only knobs as environment (topic-contents.ts, recall.ts). */
+const NUDGE = { CLIKCODE_EVAL_SEARCH_NUDGE: '1' };
+const IDS = { CLIKCODE_EVAL_ID_LIST: '1' };
+const VARIANTS = {
+  recall: { tools: false },
+  hindsight: { tools: true },
+  'hs-record': { tools: true, record: true },
+  'hs-nudge': { tools: true, record: true, env: NUDGE },
+  'hs-ids': { tools: true, record: true, env: { ...NUDGE, ...IDS } },
+  ...JSON.parse(process.env.EVAL_VARIANTS ?? '{}'),
+};
+const contentsCache = new Map();
+async function withEnv(env, work) {
+  const prior = Object.fromEntries(Object.keys(env).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, env);
+  try { return await work(); } finally { for (const [name, value] of Object.entries(prior)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } }
+}
+async function variantPrompt(condition, threshold, probe, session, boundary, lastAssistant) {
+  const variant = VARIANTS[condition];
+  const tools = variant.tools;
+  return withEnv(variant.env ?? {}, async () => {
+    const cacheKey = `${condition}|${boundary}`;
+    if (!contentsCache.has(cacheKey)) {
+      const contents = await clik.topicContents(session, tools, { through: boundary });
+      const reach = variant.record ? clik.recordReachFor(tools, undefined) : undefined;
+      contentsCache.set(cacheKey, [reach ? clik.fullRecordNote(reach) : '', contents ?? ''].filter(Boolean).join('\n\n'));
+    }
+    const note = contentsCache.get(cacheKey);
+    const request = `${tools ? TOOL_PROBE_PREFIX : PROBE_PREFIX}${probe.question}`;
+    const started = Date.now();
+    const found = await clik.recall({ sessionId: conv, query: request, boundary, hasHindsight: tools, context: lastAssistant });
+    const row = { key: `${threshold}|${probe.id}`, condition, model: MODEL, boundary, ms: Date.now() - started, hits: found.hits.map((hit) => `${hit.position}:${hit.by}:${hit.score}`), skipped: found.skipped, chars: found.note?.length ?? 0, noteChars: note.length };
+    appendFileSync(saved('recall-log.jsonl'), `${JSON.stringify(row)}\n`);
+    return `${note ? `${clik.wrapResourceNote(note)}\n\n` : ''}${request}${found.note ? `\n\n${found.note}` : ''}`;
+  });
 }
 
 let stored;
@@ -570,6 +608,8 @@ function grid() {
       if (probe.kind === 'continuity') cats.push('continuity');
       else cats.push(after(probe.stretch[1]) <= RECENT_SHARE ? 'recent' : 'older');
       if (['decision', 'rejection', 'identifier'].includes(probe.kind)) cats.push('decision/id', ...(cats.includes('recent') ? ['recent d/id'] : []));
+      if (probe.kind === 'fact' || probe.kind === 'identifier') cats.push(probe.kind);
+      if (probe.kind === 'decision' || probe.kind === 'rejection') cats.push('decision');
       return { ...probe, cats, uid: `${dir}:${probe.id}` };
     });
     for (const probe of list) probesBy[probe.uid] = probe;
@@ -655,7 +695,9 @@ function grid() {
     }
     return cost / full;
   };
-  const CATS = ['recent', 'decision/id', 'recent d/id', 'continuity', 'older', 'all'];
+  // fact, identifier and decision (with rejection) are the pass rule's kinds.
+  const CATS = ['fact', 'identifier', 'decision', 'continuity', 'recent', 'older', 'all'];
+  const PASS_KINDS = ['fact', 'identifier', 'decision'];
   const fmt = (cell) => (cell ? `${(100 * cell.acc).toFixed(0).padStart(3)}% ${(100 * cell.diff >= 0 ? '+' : '')}${(100 * cell.diff).toFixed(1)} [${(100 * cell.low).toFixed(1)},${(100 * cell.high).toFixed(1)}]`.padEnd(26) : '-'.padEnd(26));
   const rows = [];
   console.log(`model ${MODEL}; conversations ${convs.join(', ')}; probes ${Object.keys(probesBy).length}; categories: ${CATS.map((cat) => `${cat} ${Object.values(probesBy).filter((probe) => probe.cats.includes(cat)).length}`).join(', ')}`);
@@ -668,7 +710,8 @@ function grid() {
   rows.push({ cell: 'full', ...fullRow }, { cell: 'noise', ...noise });
   const thresholdList = [...new Set(Object.keys(cells).map((key) => Number(key.split('|')[1])))].sort((left, right) => right - left);
   for (const threshold of thresholdList) {
-    for (const condition of ['compact', 'recall', 'hindsight']) {
+    const conditionList = [...new Set(Object.keys(cells).map((key) => key.split('|')[0]))].filter((name) => name !== 'trace').sort((left, right) => (left === 'compact' ? -1 : right === 'compact' ? 1 : left.localeCompare(right)));
+    for (const condition of conditionList) {
       const scores = cells[`${condition}|${threshold}`];
       if (!scores) continue;
       const stats = Object.fromEntries(CATS.map((cat) => [cat, paired(scores, baseMean, cat)]));
@@ -676,17 +719,19 @@ function grid() {
       const run = modelled(threshold);
       const probe = probeCost(`${condition}|${threshold}`) / probeCost('baseline|0');
       const tools = costs[`${condition}|${threshold}`].tools / costs[`${condition}|${threshold}`].n;
-      const holds = ['recent', 'decision/id'].every((cat) => stats[cat] && stats[cat].low >= -0.03) && stats.continuity && stats.continuity.diff >= -0.03;
+      // The pass rule: on each kind the paired 95% interval's lower bound within 3 points of full
+      // context, and continuity not lower than full context's on the same probes.
+      const holds = PASS_KINDS.every((cat) => stats[cat] && stats[cat].low >= -0.03) && Boolean(stats.continuity) && stats.continuity.diff >= 0;
       rows.push({ cell: `${threshold / 1000}k ${condition}`, threshold, condition, ...stats, tests, run, probe, tools, holds });
       console.log(`${`${threshold / 1000}k ${condition}`.padEnd(17)}${CATS.map((cat) => fmt(stats[cat])).join('')}${`${Math.round(100 * run)}%`.padEnd(10)}${`${Math.round(100 * probe)}%`.padEnd(12)}${`${Math.round(100 * tools)}%`.padEnd(7)}${Object.keys(scores).length}${holds ? '  HOLDS' : ''}`);
     }
   }
-  console.log('McNemar exact p, recent / decision-id, against baseline sample 0 (lost-gained):');
-  for (const row of rows.filter((item) => item.tests)) console.log(`  ${row.cell.padEnd(16)} ${['recent', 'decision/id', 'all'].map((cat) => `${cat} ${row.tests[cat].lost}-${row.tests[cat].gained} p=${row.tests[cat].p.toFixed(3)}`).join('  ')}`);
+  console.log('McNemar exact p, fact / identifier / decision / all, against baseline sample 0 (lost-gained):');
+  for (const row of rows.filter((item) => item.tests)) console.log(`  ${row.cell.padEnd(16)} ${[...PASS_KINDS, 'all'].map((cat) => `${cat} ${row.tests[cat].lost}-${row.tests[cat].gained} p=${row.tests[cat].p.toFixed(3)}`).join('  ')}`);
   // Recall: the time it added and what it attached, per condition (this eval's rows carry their time).
   const recallRows = data.flatMap(({ dir }) => lines(dir, 'recall-log.jsonl').filter((row) => row.ms !== undefined && (row.model ?? 'haiku') === MODEL).map((row) => ({ ...row, dir })));
   const pct = (list, share) => list[Math.min(list.length - 1, Math.floor(share * list.length))];
-  for (const condition of ['recall', 'hindsight']) {
+  for (const condition of [...new Set(recallRows.map((row) => row.condition))]) {
     const some = recallRows.filter((row) => row.condition === condition);
     if (!some.length) continue;
     const ms = some.map((row) => row.ms).sort((left, right) => left - right);
@@ -697,6 +742,11 @@ function grid() {
     console.log(`recall (${condition}): ${some.length} turns; added ms median ${pct(ms, 0.5)} p95 ${pct(ms, 0.95)} max ${ms.at(-1)}; attached on ${attached.length} (${Math.round(100 * attached.length / some.length)}%), ${byMeaning} by meaning; attached tokens median ${Math.round(pct(tokens, 0.5) ?? 0)} p95 ${Math.round(pct(tokens, 0.95) ?? 0)} max ${Math.round(tokens.at(-1) ?? 0)}; skipped ${JSON.stringify(skipped)}`);
   }
   const toolRows = data.flatMap(({ dir }) => lines(dir, `tool-log${TAG}.jsonl`));
+  for (const condition of [...new Set(toolRows.map((row) => String(row.at).split('|')[0]))]) {
+    const some = toolRows.filter((row) => String(row.at).split('|')[0] === condition);
+    const ms = some.map((row) => row.ms).sort((left, right) => left - right);
+    console.log(`  tool calls (${condition}): ${some.length}; ms median ${pct(ms, 0.5)} p95 ${pct(ms, 0.95)}`);
+  }
   if (toolRows.length) {
     const byName = toolRows.reduce((all, row) => ({ ...all, [row.name]: (all[row.name] ?? 0) + 1 }), {});
     const ms = toolRows.map((row) => row.ms).sort((left, right) => left - right);
@@ -707,8 +757,10 @@ function grid() {
     + Object.values(loadFrom(dir, tagged('chains.json'), {})).flatMap((state) => state.compactions).reduce((all, item) => all + (weighted(item.usage) || (item.context + 5 * item.summaryChars / 4) / 1e6), 0)
     + (MODEL === 'haiku' ? lines(dir, 'probe-gen.jsonl').reduce((all, row) => all + weighted(row.usage), 0) : 0), 0);
   console.log(`spent (tokens at the Haiku weights: input 1, write 1.25, read 0.1, output 5 per million): $${spent.toFixed(2)}`);
-  const lowest = rows.filter((row) => row.holds && row.condition === 'hindsight').map((row) => row.threshold).sort((left, right) => left - right)[0];
-  console.log(`lowest threshold where compaction + recall + contents + hindsight holds: ${lowest ? `${lowest / 1000}k` : 'none'}`);
+  for (const condition of [...new Set(rows.filter((row) => row.condition).map((row) => row.condition))]) {
+    const lowest = rows.filter((row) => row.holds && row.condition === condition).map((row) => row.threshold).sort((left, right) => left - right)[0];
+    console.log(`lowest threshold where ${condition} holds: ${lowest ? `${lowest / 1000}k` : 'none'}`);
+  }
   writeFileSync(join(evalsRoot, `grid${TAG}.json`), `${JSON.stringify(rows, null, 1)}\n`);
 }
 
