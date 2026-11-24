@@ -105,6 +105,16 @@ for (const entry of auth) {
   // runs): a model the vendor would pick without them may be one the plan refuses.
   const root = profile && profileRoot(harness, files);
   for (const file of profile && root ? harness.modelCatalogFiles ?? [] : []) link(`${root}/${file}`, join(profile, file));
+  // An API-key account keeps its key in the profile (profile-key.ts), not in a vendor
+  // sign-in file: it comes with the account as the variables the vendor reads.
+  for (const [name, value] of Object.entries(profile ? storedKey(profile) : {})) env[name] = value;
+}
+
+function storedKey(profile) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(profile, '.clikcode-key.json'), 'utf8'));
+    return Object.fromEntries(Object.entries(parsed).filter(([name, value]) => /^[A-Z][A-Z0-9_]*$/.test(name) && typeof value === 'string' && value));
+  } catch { return {}; }
 }
 
 /** Where the profile directory sits in the sandbox: its home, or the default the profile
