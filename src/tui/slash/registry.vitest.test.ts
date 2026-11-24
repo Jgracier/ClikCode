@@ -315,7 +315,7 @@ describe('commands ClikCode used to emulate on a vendor', () => {
   it('offers /compact on every harness (ClikCode compacts where the vendor cannot), naming the threshold', () => {
     expect(availability('compact', harness())).toEqual({ available: true });
     const row = slashPalette(session(), harness()).find((item) => item.value === '/compact');
-    expect(row?.detail).toMatch(/compact this conversation now; \/compact <tokens> sets when it compacts by itself \(now \d+k\)/);
+    expect(row?.detail).toMatch(/compact this conversation now; \/compact auto\|off\|<tokens> sets when it compacts by itself \(now (auto|off|\d+k)\)/);
   });
 });
 

@@ -9,6 +9,8 @@ import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
 import { CLIKCODE_USER_AGENT } from '../../version.js';
 import { modelLabel } from '../../harness/model-label.js';
+import { compactSetting } from '../../turn/compaction.js';
+import { tunedModels } from '../../turn/context-tune.js';
 
 export async function aiModelsList(): Promise<void> {
   const state = await readState({ transcripts: [] });
@@ -71,7 +73,7 @@ export async function aiUsage(now: number = Date.now(), options: { by?: string; 
     totals.unknownCostCalls += rollup.calls; // folded records keep no cost
   }
   const all = usageByPeriod(state, 'year');
-  emitResult({ providers: [...providers.values()].sort((left, right) => left.name.localeCompare(right.name)), days: usageDays(state, now), autoTune: tuneSaving(all) });
+  emitResult({ providers: [...providers.values()].sort((left, right) => left.name.localeCompare(right.name)), days: usageDays(state, now), autoTune: { ...tuneSaving(all), setting: compactSetting(state.globalSettings), models: tunedModels() } });
 }
 
 /** Reports the separate ClikDeploy OAuth/API-key gateway identity, never a BYO provider login. */

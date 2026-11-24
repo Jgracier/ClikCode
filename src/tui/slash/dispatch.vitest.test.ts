@@ -84,7 +84,11 @@ describe('one dispatch for every client', () => {
     expect(await dispatchLine(recordingHost({ runTurn }), 's1', '/compact')).toEqual({ notice: 'Nothing to compact yet.' });
     expect(await dispatchLine(recordingHost(), 's1', '/compact 120k')).toEqual({ notice: 'Compacts at 120k tokens.' });
     expect((await readState({ transcripts: [] })).globalSettings.compactAt).toBe(120_000);
-    await expect(dispatchLine(recordingHost(), 's1', '/compact soon')).rejects.toThrow('usage: /compact [tokens, such as 150k]');
+    await expect(dispatchLine(recordingHost(), 's1', '/compact soon')).rejects.toThrow('usage: /compact [auto | off | tokens, such as 150k]');
+    expect(await dispatchLine(recordingHost(), 's1', '/compact off')).toEqual({ notice: "Compaction is left to each vendor's own default." });
+    expect((await readState({ transcripts: [] })).globalSettings.compactAt).toBe('off');
+    expect((await dispatchLine(recordingHost(), 's1', '/compact auto')).notice).toContain('auto-tune');
+    expect((await readState({ transcripts: [] })).globalSettings.compactAt).toBeUndefined();
   });
 
   it('puts /capabilities in the host\'s panel', async () => {

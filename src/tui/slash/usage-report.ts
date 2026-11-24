@@ -9,6 +9,8 @@ import { invocationRollups, invocationTokenCount } from '../../session/state/inv
 import { accountBackAt, accountQuotaSpent, accountUsageText, outOfUsageText, usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { costSplitParts } from '../render/usage-words.js';
 import { accountUsage } from '../../session/picker-rows.js';
+import { compactSetting } from '../../turn/compaction.js';
+import { lossRate, searchRate, tunedModels } from '../../turn/context-tune.js';
 import { periodKey, tuneSaving, usageByPeriod, type UsagePeriod, type UsagePeriodRow } from '../../session/usage-periods.js';
 
 type Invocation = HarnessState['invocations'][number];
@@ -236,7 +238,8 @@ export function usageReportAll(
     return `  ${label.padEnd(11)}  ${figures.join(' · ')}`;
   });
   const totals = usageTotalsText(state, { now, providerName: name });
-  return { text: [...(sections.length ? sections : ['No providers yet']), ['Last 7 days', ...(week.length ? week : ['  Nothing recorded'])].join('\n'), ...(totals ? [totals] : [])].join('\n\n') };
+  const tune = contextTuneText(state);
+  return { text: [...(sections.length ? sections : ['No providers yet']), ['Last 7 days', ...(week.length ? week : ['  Nothing recorded'])].join('\n'), ...(totals ? [totals] : []), ...(tune ? [tune] : [])].join('\n\n') };
 }
 
 /** `−32%`: the share auto-tune saved, or nothing where no turn was measured. */
@@ -294,4 +297,30 @@ export function usagePeriodText(state: HarnessState, period: UsagePeriod, option
       return `  ${compactCount(row.tokens).padStart(width)}  ${[accountName(state, row.accountId, name, row), `${row.turns} ${row.turns === 1 ? 'turn' : 'turns'}`, cost, savingText([row])].filter(Boolean).join(' · ')}`;
     })].join('\n');
   }).join('\n\n');
+}
+
+const k = (tokens: number): string => `${Math.round(tokens / 1000)}k`;
+
+/** Where auto-tune has each model, what its turns show, and its last change (turn/context-tune.ts). */
+export function contextTuneText(state: Pick<HarnessState, 'globalSettings'>): string {
+  const setting = compactSetting(state.globalSettings);
+  const models = tunedModels();
+  if (setting === 'auto' && !models.length) return '';
+  const head = setting === 'auto' ? 'Context auto-tune (/compact auto)'
+    : setting === 'off' ? "Context auto-tune: off -- each vendor compacts at its own default (/compact auto turns it on)"
+      : `Context auto-tune: off -- every model compacts at ${k(setting)} (/compact auto turns it on)`;
+  const rows = models.map(({ harness, model, tune }) => {
+    const rate = (counts: typeof tune.full): string => counts.turns
+      ? `loss ${lossRate(counts).toFixed(2)}/turn, search ${searchRate(counts).toFixed(2)}/turn over ${counts.turns} turns` : 'no turns yet';
+    const last = tune.log.at(-1);
+    return [
+      `  ${harness} · ${model || 'default model'} · ${k(tune.level)}${tune.confirmed !== undefined ? ` (last held ${k(tune.confirmed)})` : ''}`,
+      `    whole context: ${rate(tune.full)}`,
+      `    cut context:   ${rate(tune.cut)}`,
+      ...(tune.evalWanted !== undefined ? [`    eval needed: ${k(tune.evalWanted)} waits on the graded eval (scripts/compaction-eval.mjs --record)`] : []),
+      ...(tune.evalLevel !== undefined ? [`    graded eval passed at ${k(tune.evalLevel)}${tune.evalAt ? ` (${tune.evalAt.slice(0, 10)})` : ''}`] : []),
+      ...(last ? [`    last change ${last.at.slice(0, 16).replace('T', ' ')}: ${last.from === last.to ? k(last.to) : `${k(last.from)} -> ${k(last.to)}`} -- ${last.why}`] : []),
+    ].join('\n');
+  });
+  return [head, ...rows].join('\n');
 }

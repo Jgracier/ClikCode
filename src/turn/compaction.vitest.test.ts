@@ -35,7 +35,9 @@ describe('the threshold', () => {
     noteCompactAt({ compactAt: 250_000 });
     expect(compactDescription()).toContain('(now 250k)');
     noteCompactAt({});
-    expect(compactDescription()).toContain('(now 100k)');
+    expect(compactDescription()).toContain('(now auto)');
+    noteCompactAt({ compactAt: 'off' });
+    expect(compactDescription()).toContain('(now off)');
   });
 });
 

@@ -1,6 +1,7 @@
 /** ClikCode's one compaction: when and how a conversation is compacted, for every harness.
  *
- * One threshold (globalSettings.compactAt, default DEFAULT_COMPACT_AT_TOKENS; `/compact <tokens>`
+ * One threshold per harness and model (globalSettings.compactAt: `auto`, the default, tuned per
+ * model by turn/context-tune.ts; a number for every model; or `off`; `/compact auto|off|<tokens>`
  * sets it). The same number caps what a handoff to another provider may carry (handoffTokens).
  *
  * Automatic: the vendor's own agent loop is the one place that sees the context before every
@@ -103,10 +104,19 @@ export function parseCompactAt(word: string): number | undefined {
   return Math.round(Number(match[1]) * (unit === 'm' ? 1_000_000 : unit === 'k' ? 1_000 : 1));
 }
 
-/** The threshold the user set, or the default. */
-export function compactAt(settings: { compactAt?: unknown } | undefined): number {
+/** The context setting: `auto` (absent, the default: tuned per model, turn/context-tune.ts),
+ * `off` (the vendor compacts by its own default), or a number of tokens for every model. */
+export function compactSetting(settings: { compactAt?: unknown } | undefined): 'auto' | 'off' | number {
   const set = settings?.compactAt;
-  return typeof set === 'number' && Number.isFinite(set) && set >= MIN_COMPACT_AT_TOKENS ? set : DEFAULT_COMPACT_AT_TOKENS;
+  if (set === 'off') return 'off';
+  return typeof set === 'number' && Number.isFinite(set) && set >= MIN_COMPACT_AT_TOKENS ? set : 'auto';
+}
+
+/** A fixed threshold the user set, else the default -- where no harness and model are at hand
+ * (turn/context-tune.ts contextThreshold has the tuned one). */
+export function compactAt(settings: { compactAt?: unknown } | undefined): number {
+  const set = compactSetting(settings);
+  return typeof set === 'number' ? set : DEFAULT_COMPACT_AT_TOKENS;
 }
 
 /** `150k`, `1.5m`. */
@@ -116,11 +126,12 @@ export function tokenLabel(tokens: number): string {
 
 /** The threshold last read from the state file in this process (session/state/read.ts), for
  * what is drawn synchronously: the /compact entry's description. */
-let knownCompactAt: number | undefined;
-export function noteCompactAt(settings: { compactAt?: unknown } | undefined): void { knownCompactAt = compactAt(settings); }
-export const currentCompactAt = (): number => knownCompactAt ?? DEFAULT_COMPACT_AT_TOKENS;
+let knownCompactAt: 'auto' | 'off' | number | undefined;
+export function noteCompactAt(settings: { compactAt?: unknown } | undefined): void { knownCompactAt = compactSetting(settings); }
+export const currentCompactAt = (): 'auto' | 'off' | number => knownCompactAt ?? 'auto';
+export const compactSettingLabel = (setting: 'auto' | 'off' | number): string => typeof setting === 'number' ? tokenLabel(setting) : setting;
 export function compactDescription(): string {
-  return `compact this conversation now; /compact <tokens> sets when it compacts by itself (now ${tokenLabel(currentCompactAt())})`;
+  return `compact this conversation now; /compact auto|off|<tokens> sets when it compacts by itself (now ${compactSettingLabel(currentCompactAt())})`;
 }
 
 /** How much context the conversation holds now, in tokens: what the latest model call read

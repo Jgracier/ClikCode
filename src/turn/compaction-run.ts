@@ -16,7 +16,8 @@ import { wrapResourceNote } from './resource-note-text.js';
 import { topicContents } from '../search/topic-contents.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { knownVendorMeasures } from './vendor-floors.js';
-import { compactAt, compactionMechanism, effectiveThreshold, nextCompactionRecord, vendorThresholdPlan, vendorTrigger, type CompactionMechanism, type CompactionRecord } from './compaction.js';
+import { contextThreshold } from './context-tune.js';
+import { compactionMechanism, effectiveThreshold, nextCompactionRecord, vendorThresholdPlan, vendorTrigger, type CompactionMechanism, type CompactionRecord } from './compaction.js';
 import { targetContextWindow } from './transfer.js';
 import { knownVendorCommands } from './vendor-commands.js';
 import { leavePersistentTransport, nativeAvailableCommands } from './vendor-process.js';
@@ -84,10 +85,13 @@ export async function compactThresholdLaunch(
   const setting = harness.compactThreshold;
   if (!setting) return NOTHING;
   const unit = setting.unit ?? 'tokens';
-  const threshold = effectiveThreshold(compactAt(state.globalSettings), session?.compaction);
   // A first launch, a new chat or a switched account or model starts from what this harness and
   // model were measured to leave (turn/vendor-floors.ts), not a fixed estimate.
   const known = knownVendorMeasures(harness.command, model);
+  // Off leaves the vendor its own default; auto is this model's tuned level (turn/context-tune.ts).
+  const level = contextThreshold(state.globalSettings, harness.command, model, { ...(known.floor !== undefined ? { floor: known.floor } : {}), ...(known.window ? { window: known.window } : {}) });
+  if (level === undefined) return NOTHING;
+  const threshold = effectiveThreshold(level, session?.compaction);
   // A share is of the smallest window the model has reported: a routed model's next turn may
   // run on the smaller one, and a share of the larger would fire below the floor there.
   const reported = unit === 'share' || unit === 'percent'

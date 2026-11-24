@@ -21,14 +21,18 @@ export async function compactConversation(
   return undefined;
 }
 
-/** `/compact <tokens>`: kept for every harness and every conversation (globalSettings.compactAt). */
+/** `/compact auto|off|<tokens>`: kept for every harness and every conversation (globalSettings.compactAt). */
 async function setCompactThreshold(word: string): Promise<string> {
-  const tokens = parseCompactAt(word);
-  if (tokens === undefined) throw new Error('usage: /compact [tokens, such as 150k]');
-  if (tokens < MIN_COMPACT_AT_TOKENS) throw new Error(`The threshold must be at least ${tokenLabel(MIN_COMPACT_AT_TOKENS)} tokens.`);
+  const mode = word.trim().toLowerCase();
+  const tokens = mode === 'auto' || mode === 'off' ? undefined : parseCompactAt(word);
+  if (tokens === undefined && mode !== 'auto' && mode !== 'off') throw new Error('usage: /compact [auto | off | tokens, such as 150k]');
+  if (tokens !== undefined && tokens < MIN_COMPACT_AT_TOKENS) throw new Error(`The threshold must be at least ${tokenLabel(MIN_COMPACT_AT_TOKENS)} tokens.`);
   const state = await readState({ transcripts: [] });
-  state.globalSettings.compactAt = tokens;
+  if (mode === 'auto') delete state.globalSettings.compactAt;
+  else state.globalSettings.compactAt = tokens ?? 'off';
   await writeState(state);
   noteCompactAt(state.globalSettings);
-  return `Compacts at ${tokenLabel(tokens)} tokens.`;
+  if (mode === 'auto') return 'Compacts where auto-tune has each model (starting at 100k; /usage all shows the levels).';
+  if (mode === 'off') return "Compaction is left to each vendor's own default.";
+  return `Compacts at ${tokenLabel(tokens!)} tokens.`;
 }

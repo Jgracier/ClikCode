@@ -214,6 +214,9 @@ export interface HarnessSession {
   compaction?: import('../turn/compaction.js').CompactionRecord;
   /** What the context would read under the vendor's default compaction (turn/context-shadow.ts). */
   contextShadow?: import('../turn/context-shadow.js').ContextShadow;
+  /** Files this conversation has read and not changed since, newest last: a read of one again is a
+   *  context auto-tune signal (turn/context-signals.ts). */
+  readFiles?: string[];
   /** The vendor thread was started from a record that did not carry the conversation whole: the
    * messages before this one reached it fitted or not at all (turn/compaction.ts recallBoundary). */
   recallFrom?: number;
@@ -322,9 +325,10 @@ export interface HarnessDefaultSettings {
   /** Global only: what a message typed mid-turn does (`/send`,
    *  turn/send-mode.ts). Absent means steer. */
   sendMode?: 'steer' | 'queue';
-  /** Global only: the context, in tokens, at which ClikCode compacts a conversation
-   *  (`/compact <tokens>`, turn/compaction.ts). Absent means the default. */
-  compactAt?: number;
+  /** Global only: the context, in tokens, at which ClikCode compacts a conversation, `off` to
+   *  leave it to the vendor, or `auto` (absent too) to tune it per model (`/compact`,
+   *  turn/compaction.ts compactSetting, turn/context-tune.ts). */
+  compactAt?: number | 'auto' | 'off';
 }
 
 export interface HarnessState {

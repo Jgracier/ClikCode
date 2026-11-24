@@ -4,7 +4,10 @@ import { recordReachFor, writeFullRecord } from '../session/full-record.js';
 import { reachesBuiltInMcp } from '../harness/transport/acp-mcp-servers.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { carriedLine, startConversationThread } from './thread-start.js';
-import { compactAt } from './compaction.js';
+import { DEFAULT_COMPACT_AT_TOKENS } from './compaction.js';
+import { contextThreshold } from './context-tune.js';
+import { vendorDefaultTrigger } from './context-shadow.js';
+import { knownVendorMeasures } from './vendor-floors.js';
 import { targetContextWindow } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import { nativeSessionStore } from '../session/discovery/registry.js';
@@ -60,7 +63,9 @@ export async function takeUp(
   const recordReach = record.turns.length ? recordReachFor(reachesBuiltInMcp(harness, transport), recordPath) : undefined;
   // Never more than the compaction threshold; a compaction ClikCode does itself (no native one,
   // compaction-run.ts compactByRewrite) fits it to half of that, so it is not due again at once.
-  const threshold = compactAt(state.globalSettings);
+  const known = knownVendorMeasures(harness.command, ctx.model);
+  const threshold = contextThreshold(state.globalSettings, harness.command, ctx.model, { ...(known.floor !== undefined ? { floor: known.floor } : {}), ...(contextWindow ? { window: contextWindow } : {}) })
+    ?? vendorDefaultTrigger(contextWindow, harness.compactThreshold?.unit === 'claude-window') ?? DEFAULT_COMPACT_AT_TOKENS;
   const rewrite = Boolean(session.compaction?.rewrite);
   const capTokens = rewrite ? Math.floor(threshold / 2) : threshold;
   const start = await startConversationThread({

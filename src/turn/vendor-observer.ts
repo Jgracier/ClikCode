@@ -16,6 +16,8 @@ import { sessionTurnTransport } from '../harness/transport/select.js';
 import { mergeBackgroundWork, type BackgroundWork, type BackgroundWorkUpdate } from '../harness/protocol/background-agents.js';
 import { createPendingWorkTracker } from './pending-work.js';
 import { createToolLog } from './tool-log.js';
+import { createSignalTracker, type SignalCounts } from './context-signals.js';
+import type { TuneBounds } from './context-tune.js';
 import { unfinishedUsageRecorder } from './turn-steps.js';
 import { turnSink } from './turn-output.js';
 import { nativeAvailableCommands } from './vendor-process.js';
@@ -101,11 +103,14 @@ export function createVendorObserver(ctx: VendorTurnContext) {
    * screen alike, so what is shown and what is saved cannot differ. */
   const sink = turnSink(checkpoint, prompter);
   const toolLog = createToolLog();
+  // What the turn shows about lost context, for auto-tune (turn/context-signals.ts).
+  const signals = createSignalTracker(session.readFiles ??= []);
   const onActivity = (event: HarnessActivityEvent): void => {
     pendingWork.note(event);
     toolLog.note(event);
     if (event.kind === 'tool-done' || event.kind === 'tool-error') lifecycle('turn.tool', { ...toolLog.finished(event) });
     if (compacting) return;
+    signals.note(event as Parameters<typeof signals.note>[0]);
     sink.activity(withWorkspacePaths(event, session.workspace));
   };
   /** A transport's thought is the whole of it so far: one row per id,
@@ -201,6 +206,14 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     usage: (): TurnUsage | undefined => turnUsage,
     /** The attempt's context readings, beside the vendor-default shadow of them. */
     contextTally: (): ContextTally => tally,
+    /** This turn's auto-tune signals; undefined for a compaction turn. */
+    signals: (request: string): SignalCounts | undefined => compacting ? undefined : signals.counts(request),
+    /** The bounds auto-tune keeps this model's level in. */
+    tuneBounds: (): TuneBounds => {
+      const known = knownVendorMeasures(harness.command, ctx.model);
+      const window = turnUsage?.contextWindow || catalogWindow || known.window;
+      return { ...(known.floor !== undefined ? { floor: known.floor } : {}), ...(window ? { window } : {}) };
+    },
     /** The per-attempt resets, and the transport this attempt runs on. */
     beginAttempt(transport: VendorTransport): void {
       activeTransport = transport;

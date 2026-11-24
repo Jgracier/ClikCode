@@ -185,7 +185,7 @@ export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'r
 export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('new', 'Conversation', 'start a fresh conversation (the current one stays resumable)', { aliases: ['clear', 'reset'], argHint: '[first message]' }),
   // The description names the threshold as it stands (turn/compaction.ts).
-  Object.defineProperty(entry('compact', 'Conversation', '', { argHint: '[tokens]' }), 'description', { get: compactDescription, enumerable: true }),
+  Object.defineProperty(entry('compact', 'Conversation', '', { argHint: '[auto|off|tokens]' }), 'description', { get: compactDescription, enumerable: true }),
   entry('history', 'Conversation', 'show this conversation'),
   entry('hindsight', 'Conversation', 'this conversation by topic, with the files each changed; numbered as /fork and /redo take them'),
   entry('copy', 'Conversation', 'copy the last answer'),

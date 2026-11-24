@@ -18,7 +18,9 @@ import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
-import { VENDOR_THRESHOLD_BACKSTOP, COMPACT_REQUEST, COMPACTING, NOTHING_TO_COMPACT, compactAt, compactFailedLine, isCompactRequest, noteContextAfterCompaction, shouldCompact } from '../turn/compaction.js';
+import { contextThreshold } from '../turn/context-tune.js';
+import { knownVendorMeasures } from '../turn/vendor-floors.js';
+import { VENDOR_THRESHOLD_BACKSTOP, COMPACT_REQUEST, COMPACTING, NOTHING_TO_COMPACT, compactFailedLine, isCompactRequest, noteContextAfterCompaction, shouldCompact } from '../turn/compaction.js';
 import { compactThresholdLaunch, hasThreadToCompact } from '../turn/compaction-run.js';
 import { persistentWorkRunning } from '../turn/vendor-process.js';
 import { isClikCodeAgent } from '../session/route.js';
@@ -162,10 +164,15 @@ export function createTurnRunner(ctx: WorkerContext) {
     // A vendor whose own threshold carries ClikCode's compacts itself, mid-turn. Here it is only
     // checked: a context well past the threshold means the vendor ignored its setting.
     const account = state.accounts.find((item) => item.id === session.accountId);
+    const model = session.model ?? account?.models[0] ?? session.reported?.model ?? null;
+    // Off: compaction is the vendor's alone.
+    const known = knownVendorMeasures(harness.command, model);
+    const level = contextThreshold(state.globalSettings, harness.command, model, { ...(known.floor !== undefined ? { floor: known.floor } : {}), ...(known.window ? { window: known.window } : {}) });
+    if (level === undefined) return false;
     const launch = account && turnBackendForAccount(account) === 'vendor'
-      ? await compactThresholdLaunch(harness, state, session.model ?? account.models[0] ?? session.reported?.model ?? null, session) : undefined;
+      ? await compactThresholdLaunch(harness, state, model, session) : undefined;
     const vendorCompacts = !!launch?.set;
-    const threshold = vendorCompacts ? (launch.threshold ?? compactAt(state.globalSettings)) * VENDOR_THRESHOLD_BACKSTOP : compactAt(state.globalSettings);
+    const threshold = vendorCompacts ? (launch.threshold ?? level) * VENDOR_THRESHOLD_BACKSTOP : level;
     if (!hasThreadToCompact(session) || !shouldCompact(session, threshold, turnStarted)) return false;
     if (ctx.turnRunning || agentSession.notifications.length || ctx.vendorBackground.busy || ctx.outOfTurn.active
       || session.queuedTurns?.some((entry) => entry.kind === 'notification') || await persistentWorkRunning(sessionId)) return false;
