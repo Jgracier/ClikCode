@@ -119,10 +119,10 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
  * running is left alone. Another account of this provider is the next attempt;
  * another provider or route continues the same request there.
  * A failover moves the account on its own: only an account id the user changed
- * since `seenAccount` is adopted, so the retry is not pulled back. Plan mode
+ * (or model) since `seen` is adopted, so the retry is not pulled back. Plan mode
  * the vendor itself left is kept until the user changes it. */
 async function followLiveSettings(
-  ctx: VendorTurnContext, seen: { accountId: string | null | undefined; plan: boolean | undefined },
+  ctx: VendorTurnContext, seen: { accountId: string | null | undefined; model: string | null | undefined; plan: boolean | undefined },
 ): Promise<'switch' | void> {
   const live = ctx.run.liveSettings;
   const { session } = ctx;
@@ -145,7 +145,10 @@ async function followLiveSettings(
       await settleThread(ctx);
     }
   }
-  if (live.model !== undefined && live.model !== ctx.model) {
+  // Likewise the model: a retry on another model (vendor-recovery.ts) moves it
+  // on its own, so only a model the user changed since is adopted.
+  if (live.model !== undefined && live.model !== seen.model) {
+    seen.model = live.model;
     ctx.model = live.model ?? null;
     session.model = ctx.model;
   }
@@ -171,7 +174,7 @@ export async function sendVendorTurn(input: AccountTurnInput): Promise<'switch' 
   const ctx = await createVendorTurnContext(input);
   // The account this turn holds now. A later failover changes the account it runs;
   // only a different id in the live settings is the user's choice.
-  const seen = { accountId: ctx.account.id as string | null | undefined, plan: undefined as boolean | undefined };
+  const seen = { accountId: ctx.account.id as string | null | undefined, model: (ctx.run.liveSettings ? ctx.run.liveSettings.model : ctx.model) as string | null | undefined, plan: undefined as boolean | undefined };
   try {
     await startVendorTurn(ctx);
     // A chat that just moved here: the agent is told so, ahead of everything
