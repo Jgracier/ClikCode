@@ -5,7 +5,7 @@
  * query values; nothing from a request or response body is read. */
 import type { Page, Request } from 'playwright-core';
 import { quiet } from '../../runtime/lifecycle-log.js';
-import { readConsole, watchConsole } from './console-log.js';
+import { captureScripts, readConsole, watchConsole } from './console-log.js';
 import { safeUrl } from './network-capture.js';
 import { sleep } from '../../runtime/sleep.js';
 
@@ -58,6 +58,7 @@ export async function whyBlank(page: Page, options: { seconds?: number } = {}): 
   };
   page.on('request', onRequest); page.on('requestfailed', onFailed); page.on('requestfinished', onFinished);
   const started = Date.now();
+  await captureScripts(page); // the reload below is what records the page's own errors
   try {
     await page.reload({ waitUntil: 'commit', timeout: Math.min(budget, 15_000) }).catch(quiet('agent/computer/why-blank'));
     await page.waitForLoadState('networkidle', { timeout: budget }).catch(quiet('agent/computer/why-blank'));

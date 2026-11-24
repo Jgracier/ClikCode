@@ -496,17 +496,34 @@ export async function closeTab(args: TabArgs, deps: Pick<PageDeps, 'stateDir' | 
   return `Closed the tab${url ? ` (${url.slice(0, 80)})` : ''}.\n${await listTabs({ ...deps, displayUrl: value => value.slice(0, 120) })}`;
 }
 
+/** Moves one entry back (-1) or forward (1) in the tab's own history and waits for the page there to be readable; false when there
+ * is no such entry. Goes through Chrome's history list instead of page.goBack: a page restored from the back-forward cache sends
+ * no load events, and the stealth driver's goBack then waits for one until it times out (and so does every step after it). */
+async function historyStep(page: Page, delta: -1 | 1, ms = 20_000): Promise<boolean> {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const { currentIndex, entries } = await session.send('Page.getNavigationHistory');
+    const entry = entries[currentIndex + delta];
+    if (!entry) return false;
+    await session.send('Page.navigateToHistoryEntry', { entryId: entry.id });
+    for (const until = Date.now() + ms; Date.now() < until; await sleep(50)) {
+      if (page.url() !== entry.url) continue;
+      if (await page.evaluate('document.readyState').catch(() => 'loading') !== 'loading') return true;
+    }
+    throw new Error(`The page did not come back within ${Math.round(ms / 1000)}s (${entry.url}).`);
+  } finally {
+    await session.detach().catch(quiet('agent/computer/page-control'));
+  }
+}
+
 /** The actions that need no steps runner. `page` is the tab in front. */
 export async function pageAction(page: Page, args: PageArgs & { action: string; target?: string; text?: string; find?: string; full?: boolean }, deps: PageDeps): Promise<ToolRunResult> {
   switch (args.action) {
     case 'back':
     case 'forward':
     case 'reload': {
-      const before = page.url();
-      const options = { waitUntil: 'domcontentloaded' as const, timeout: 20_000 };
-      const response = args.action === 'back' ? await page.goBack(options) : args.action === 'forward' ? await page.goForward(options) : await page.reload(options);
-      // goBack/goForward answer null for a move inside the same document too (a single-page app), so the address is the proof.
-      if (!response && args.action !== 'reload' && page.url() === before) {
+      const moved = args.action === 'reload' ? (await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }), true) : await historyStep(page, args.action === 'back' ? -1 : 1);
+      if (!moved) {
         await deps.settle(page);
         return { output: `There is no ${args.action === 'back' ? 'earlier' : 'later'} page in this tab's history.\n\n${(await deps.view(page, true)).output}`, isError: true };
       }
@@ -522,7 +539,7 @@ export async function pageAction(page: Page, args: PageArgs & { action: string; 
       return { ...view, output: `Switched tabs.\n\n${view.output}` };
     }
     case 'evaluate': return { output: await evaluateOnPage(page, args, deps) };
-    case 'console': return { output: await readConsole(page, { ...(args.level ? { level: args.level } : {}), ...(args.limit ? { limit: args.limit } : {}), ...(args.find ? { find: args.find } : {}), ...(args.clear ? { clear: true } : {}) }) };
+    case 'console': return { output: await readConsole(page, { scripts: true, ...(args.level ? { level: args.level } : {}), ...(args.limit ? { limit: args.limit } : {}), ...(args.find ? { find: args.find } : {}), ...(args.clear ? { clear: true } : {}) }) };
     case 'screenshot': {
       if (!deps.acceptsImages) return { output: 'This host cannot show images. Use observe to read the page.' };
       const target = args.target?.trim() ? await deps.locate(page, args.target) : undefined;

@@ -251,9 +251,11 @@ describe.skipIf(!smoke)('page control in real Chrome', () => {
 
   it('returns console messages and page errors, scrubbed', async () => {
     const page = await computerPage(stateDir);
+    expect((await run({ action: 'console' })).output).toContain('recorded in this tab from now on');
     await page.reload();
     await page.waitForTimeout(500);
     const all = (await run({ action: 'console' })).output;
+    expect(all).not.toContain('from now on');
     expect(all).toContain('[log] hello from page');
     expect(all).toContain('late failure');
     expect(all).not.toContain(PASSWORD);

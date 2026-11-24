@@ -27,7 +27,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('uses an isolated Chrome 
     expect(await computerPage(stateDir)).toBe(page);
   } finally {
     await closeComputerBrowser(stateDir);
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 30_000);
 
@@ -40,7 +40,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('explains when another Ch
     await expect(openComputerPage(stateDir)).rejects.toThrow('open outside ClikCode');
   } finally {
     await external.close();
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 30_000);
 
@@ -69,7 +69,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('opens, fills and clicks 
   } finally {
     await closeComputerBrowser(stateDir);
     server.close();
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 30_000);
 
@@ -109,7 +109,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('takes a key file the sit
     lockCredentialVault(stateDir);
     server.close();
     await closeComputerBrowser(stateDir);
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 60_000);
 
@@ -181,7 +181,7 @@ it.skipIf(!smoke)('acts on anything by reference, several steps at a time, and f
   } finally {
     await closeComputerBrowser(stateDir);
     server.close();
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 120_000);
 
@@ -212,7 +212,7 @@ it.skipIf(!smoke)('waits for words to appear, and finds the lines of a long page
   } finally {
     await closeComputerBrowser(stateDir);
     server.close();
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 90_000);
 
@@ -235,7 +235,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('gives each chat its own 
     expect((await allComputerPages(stateDir)).length).toBeGreaterThanOrEqual(2);
   } finally {
     await closeComputerBrowser(stateDir);
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 60_000);
 
@@ -269,7 +269,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('reads a signup form and 
   } finally {
     await closeComputerBrowser(stateDir);
     server.close();
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 30_000);
 
@@ -318,6 +318,6 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('fills a form from the sa
   } finally {
     await closeComputerBrowser(stateDir);
     server.close();
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 60_000);

@@ -159,7 +159,8 @@ export class LiveView {
     cdp.on('Page.screencastFrame', (frame: ScreenFrame) => { void this.onFrame(frame); });
     cdp.on('Page.frameNavigated', (event: { frame: { parentId?: string; url: string } }) => { if (!event.frame.parentId) this.sendPage(event.frame.url); });
     await cdp.send('Page.enable');
-    await cdp.send('Runtime.enable');
+    // No Runtime.enable: Runtime.evaluate works without it, and a page can tell when it is on (fingerprinting and CAPTCHA
+    // scripts score it as "developer tools open"), which matters most on exactly the pages handed to a phone.
     const added = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: DESCRIBE_SCRIPT }) as { identifier: string };
     this.scriptId = added.identifier;
     await cdp.send('Runtime.evaluate', { expression: DESCRIBE_SCRIPT }).catch(quiet('agent/computer/handoff-live'));
