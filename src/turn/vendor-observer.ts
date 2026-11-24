@@ -1,7 +1,7 @@
 /** What one vendor turn's transports report, folded into the checkpoint and the
  * screen: the shared observer, usage and pending work. */
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
-import { COMPACTED } from './compaction.js';
+import { COMPACTED, nextCompactionRecord } from './compaction.js';
 import { markTurn } from '../runtime/turn-latency.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -113,7 +113,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
       // conversation keeps it as it keeps one ClikCode ran -- the next turn is told where the whole
       // conversation is, and recall (search/recall.ts) searches what came before it.
       if (message === COMPACTED && !compacting) {
-        session.compaction = { at: new Date().toISOString(), through: session.messages?.length ?? 0, noteRecord: true };
+        session.compaction = nextCompactionRecord(session.compaction, session.messages?.length ?? 0, { noteRecord: true });
         lifecycle('turn.vendor-compacted', { harness: harness.command, through: session.compaction.through, context: session.lastUsage?.contextUsed });
         checkpoint.touch();
       }

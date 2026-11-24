@@ -15,7 +15,7 @@ import { fullRecordNote, recordReachFor, writeFullRecord } from '../session/full
 import { wrapResourceNote } from './resource-note-text.js';
 import { topicContents } from '../search/topic-contents.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
-import { compactAt, compactionMechanism, vendorThresholdPlan, type CompactionMechanism } from './compaction.js';
+import { compactAt, compactionMechanism, effectiveThreshold, nextCompactionRecord, vendorThresholdPlan, vendorTrigger, type CompactionMechanism, type CompactionRecord } from './compaction.js';
 import { targetContextWindow } from './transfer.js';
 import { knownVendorCommands } from './vendor-commands.js';
 import { leavePersistentTransport, nativeAvailableCommands } from './vendor-process.js';
@@ -43,7 +43,7 @@ async function updateSession(id: string, change: (session: HarnessSession) => vo
 /** A native compaction finished: what the conversation keeps of it (the guard's starting point). */
 export async function recordCompaction(id: string): Promise<void> {
   await updateSession(id, (session) => {
-    session.compaction = { at: new Date().toISOString(), through: session.messages?.length ?? 0, noteRecord: true };
+    session.compaction = nextCompactionRecord(session.compaction, session.messages?.length ?? 0, { noteRecord: true });
   });
 }
 
@@ -54,7 +54,7 @@ export async function compactByRewrite(id: string): Promise<void> {
   await leavePersistentTransport(id);
   await updateSession(id, (session) => {
     forgetNativeThread(session);
-    session.compaction = { at: new Date().toISOString(), through: session.messages?.length ?? 0, rewrite: true };
+    session.compaction = nextCompactionRecord(session.compaction, session.messages?.length ?? 0, { rewrite: true });
   });
 }
 
@@ -66,15 +66,19 @@ export interface CompactThresholdLaunch {
   /** Keys of the thread's config (Codex app-server). */
   config: Record<string, unknown>;
   set: boolean;
+  /** The threshold (tokens) the vendor was set to, when `set`. */
+  threshold?: number;
 }
 
 const NOTHING: CompactThresholdLaunch = { environment: {}, config: {}, set: false };
 
-/** This launch's threshold for `harness` on `model`. A settings file is named by what it holds, so
+/** This launch's threshold for `harness` on `model`, past the floor of `session`'s last compaction
+ * (compaction.ts effectiveThreshold). A settings file is named by what it holds, so
  * a changed threshold is a changed launch: a long-lived vendor process is keyed by its
  * environment (vendor-process.ts vendorChildKey, codex-app-server ensureLive) and restarts for it. */
 export async function compactThresholdLaunch(
   harness: Pick<AiLocalHarnessDefinition, 'command' | 'compactThreshold'>, state: Pick<HarnessState, 'globalSettings' | 'sessions'>, model: string | null,
+  session?: { compaction?: CompactionRecord },
 ): Promise<CompactThresholdLaunch> {
   const setting = harness.compactThreshold;
   if (!setting) return NOTHING;
@@ -82,10 +86,12 @@ export async function compactThresholdLaunch(
   const window = unit === 'share' || unit === 'percent'
     ? await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(quiet('turn/compaction-run'))
     : undefined;
-  const plan = vendorThresholdPlan(setting, compactAt(state.globalSettings), window);
+  const threshold = effectiveThreshold(compactAt(state.globalSettings), session?.compaction);
+  const plan = vendorThresholdPlan(setting, threshold, window);
   if (!plan) return NOTHING;
-  if (plan.kind === 'config') return { environment: {}, config: plan.config, set: true };
-  if (plan.kind === 'env') return { environment: plan.env, config: {}, set: true };
+  const set = { set: true, threshold: vendorTrigger(setting, threshold) };
+  if (plan.kind === 'config') return { environment: {}, config: plan.config, ...set };
+  if (plan.kind === 'env') return { environment: plan.env, config: {}, ...set };
   const text = `${JSON.stringify(plan.settings)}\n`;
   const directory = join(stateDirectory(), 'cache');
   const file = join(directory, `${harness.command}-compact-${createHash('sha256').update(text).digest('hex').slice(0, 12)}.json`);
@@ -93,7 +99,7 @@ export async function compactThresholdLaunch(
     await mkdir(directory, { recursive: true });
     await writeFile(file, text);
   }
-  return { environment: { [plan.env]: file }, config: {}, set: true };
+  return { environment: { [plan.env]: file }, config: {}, ...set };
 }
 
 /** The first request after a native compaction names where the whole conversation is

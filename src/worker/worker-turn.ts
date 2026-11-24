@@ -162,9 +162,10 @@ export function createTurnRunner(ctx: WorkerContext) {
     // A vendor whose own threshold carries ClikCode's compacts itself, mid-turn. Here it is only
     // checked: a context well past the threshold means the vendor ignored its setting.
     const account = state.accounts.find((item) => item.id === session.accountId);
-    const vendorCompacts = !!account && turnBackendForAccount(account) === 'vendor'
-      && (await compactThresholdLaunch(harness, state, session.model ?? account.models[0] ?? session.reported?.model ?? null)).set;
-    const threshold = compactAt(state.globalSettings) * (vendorCompacts ? VENDOR_THRESHOLD_BACKSTOP : 1);
+    const launch = account && turnBackendForAccount(account) === 'vendor'
+      ? await compactThresholdLaunch(harness, state, session.model ?? account.models[0] ?? session.reported?.model ?? null, session) : undefined;
+    const vendorCompacts = !!launch?.set;
+    const threshold = vendorCompacts ? (launch.threshold ?? compactAt(state.globalSettings)) * VENDOR_THRESHOLD_BACKSTOP : compactAt(state.globalSettings);
     if (!hasThreadToCompact(session) || !shouldCompact(session, threshold, turnStarted)) return false;
     if (ctx.turnRunning || agentSession.notifications.length || ctx.vendorBackground.busy || ctx.outOfTurn.active
       || session.queuedTurns?.some((entry) => entry.kind === 'notification') || await persistentWorkRunning(sessionId)) return false;

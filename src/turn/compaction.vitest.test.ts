@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import {
   CODEX_COMPACT_PROMPT, COMPACTED, COMPACTING, COMPACT_INSTRUCTIONS, DEFAULT_COMPACT_AT_TOKENS, claudeCompactSettings, compactAt, compactDescription, compactFailedLine, compactionMechanism, contextTokens,
-  claudeCompactWindow, effectiveThreshold, handoffTokens, isCompactRequest, noteCompactAt, noteContextAfterCompaction, parseCompactAt, shouldCompact,
+  claudeCompactWindow, effectiveThreshold, handoffTokens, nextCompactionRecord, CLAUDE_MIN_TRIGGER, isCompactRequest, noteCompactAt, noteContextAfterCompaction, parseCompactAt, shouldCompact,
   turnsSinceCompaction, vendorThresholdPlan,
 } from './compaction.js';
 
@@ -107,15 +107,23 @@ describe('when it compacts by itself', () => {
     expect(turnsSinceCompaction({ messages, compaction: { at: at(5), through: 6 } })).toBe(0);
   });
 
-  it('raises the threshold where a compaction could not get under half of it, instead of compacting every few calls', () => {
-    expect(effectiveThreshold(threshold, { at: at(5), through: 0, after: 40_000 })).toBe(150_000);
-    expect(effectiveThreshold(threshold, { at: at(5), through: 0, after: 100_000 })).toBe(200_000);
-    const session = { messages: turns(1), lastUsage: { contextUsed: 100_000, at: at(6) }, compaction: { at: at(5), through: 0 } };
+  it('raises the threshold to what a compaction left plus headroom, instead of compacting every few calls', () => {
+    expect(effectiveThreshold(threshold, { at: at(5), through: 0, after: 40_000 })).toBe(threshold);
+    expect(effectiveThreshold(threshold, { at: at(5), through: 0, after: 150_000 })).toBe(185_000);
+    expect(effectiveThreshold(threshold, { at: at(5), through: 0, after: 165_000 })).toBe(200_000);
+    const session = { messages: turns(1), lastUsage: { contextUsed: 130_000, at: at(6) }, compaction: { at: at(5), through: 0 } };
     expect(noteContextAfterCompaction(session)).toBe(true);
-    expect(session.compaction).toMatchObject({ after: 100_000 });
+    expect(session.compaction).toMatchObject({ after: 130_000 });
     expect(noteContextAfterCompaction(session)).toBe(false);
-    expect(shouldCompact({ ...session, messages: turns(4), lastUsage: { contextUsed: 180_000, at: at(11) } }, threshold, ended)).toBe(false);
-    expect(shouldCompact({ ...session, messages: turns(4), lastUsage: { contextUsed: 210_000, at: at(11) } }, threshold, ended)).toBe(true);
+    expect(shouldCompact({ ...session, messages: turns(4), lastUsage: { contextUsed: 160_000, at: at(11) } }, threshold, ended)).toBe(false);
+    expect(shouldCompact({ ...session, messages: turns(4), lastUsage: { contextUsed: 170_000, at: at(11) } }, threshold, ended)).toBe(true);
+  });
+
+  it('carries what the last compaction left into the next record, so the raised threshold outlives it', () => {
+    const record = nextCompactionRecord({ at: at(5), through: 0, after: 45_000 }, 7, { noteRecord: true });
+    expect(record).toMatchObject({ through: 7, floor: 45_000, noteRecord: true });
+    expect(record.after).toBeUndefined();
+    expect(effectiveThreshold(50_000, record)).toBe(80_000);
   });
 });
 
@@ -124,8 +132,10 @@ describe('a vendor\'s own threshold, in its own terms', () => {
 
   it('Claude Code: the auto-compact window its threshold is 33k under, with a percent below its 100k floor', () => {
     expect(plan('claude', 150_000)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '183000' } });
-    // The default (50k) sits below the floor: the floor window and 62.5% of its 80k.
-    expect(plan('claude', DEFAULT_COMPACT_AT_TOKENS)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000', CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '62.5' } });
+    // The default (50k) is under what Claude Code's own compaction leaves plus headroom: it is launched
+    // at that (95k) so it does not compact again within a few calls.
+    expect(CLAUDE_MIN_TRIGGER).toBe(95_000);
+    expect(plan('claude', DEFAULT_COMPACT_AT_TOKENS)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '128000' } });
     expect(plan('claude', 500_000, 200_000)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '533000' } });
     // 40k: the floor window (100k) leaves 80k after the output room; 50% of it is 40k.
     expect(claudeCompactWindow(40_000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000', CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '50' });
@@ -193,8 +203,12 @@ describe('a launch', () => {
   it('carries the threshold the user set, and a changed one is a changed launch', async () => {
     await withHome(async (read) => {
       const { compactThresholdLaunch } = await import('./compaction-run.js');
-      expect(await compactThresholdLaunch(harness('aider'), state(200_000), null)).toEqual({ environment: { AIDER_MAX_CHAT_HISTORY_TOKENS: '200000' }, config: {}, set: true });
-      expect(await compactThresholdLaunch(harness('codex'), state(200_000), 'gpt-5')).toEqual({ environment: {}, config: { model_auto_compact_token_limit: 200_000, compact_prompt: CODEX_COMPACT_PROMPT }, set: true });
+      expect(await compactThresholdLaunch(harness('aider'), state(200_000), null)).toEqual({ environment: { AIDER_MAX_CHAT_HISTORY_TOKENS: '200000' }, config: {}, set: true, threshold: 200_000 });
+      expect(await compactThresholdLaunch(harness('codex'), state(200_000), 'gpt-5')).toEqual({ environment: {}, config: { model_auto_compact_token_limit: 200_000, compact_prompt: CODEX_COMPACT_PROMPT }, set: true, threshold: 200_000 });
+      // After a compaction that left 45k, the next trigger is 45k + headroom.
+      expect((await compactThresholdLaunch(harness('aider'), state(50_000), null, { compaction: { at: at(5), through: 0, after: 45_000 } })).environment).toEqual({ AIDER_MAX_CHAT_HISTORY_TOKENS: '80000' });
+      // Claude Code is set, and reported, at its own raised trigger: the backstop sits over that.
+      expect(await compactThresholdLaunch(harness('claude'), state(50_000), null)).toMatchObject({ environment: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '128000' }, set: true, threshold: 95_000 });
       expect((await compactThresholdLaunch(harness('claude'), state(100_000), null)).environment).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '133000' });
       expect((await compactThresholdLaunch(harness('goose'), state(100_000), 'gpt-x')).environment).toEqual({ GOOSE_AUTO_COMPACT_THRESHOLD: '0.25' });
       const before = (await compactThresholdLaunch(harness('gemini'), state(200_000), 'gemini-3-pro')).environment.GEMINI_CLI_SYSTEM_DEFAULTS_PATH!;

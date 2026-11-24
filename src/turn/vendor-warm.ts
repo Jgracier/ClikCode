@@ -49,7 +49,7 @@ export async function warmVendor(sessionId: string): Promise<boolean> {
   if (transport !== 'acp' && transport !== 'codex-app-server') return false;
   if (!(await inspectNativeHarness(harness).catch(quiet('turn/vendor-warm')))?.installed) return false;
   // Opened as its first turn will launch (vendor-attempt.ts prepareAttempt), threshold included, so that turn takes this child.
-  const threshold = await compactThresholdLaunch(harness, state, session.model ?? account.models[0] ?? session.reported?.model ?? null);
+  const threshold = await compactThresholdLaunch(harness, state, session.model ?? account.models[0] ?? session.reported?.model ?? null, session);
   const environment = { ...turnEnvironment(harness, account, session.permissionMode ?? 'ask'), ...threshold.environment };
   // A warm-up is nobody's request: a profile with no sign-in on disk is not
   // started (its vendor could open its own sign-in), and is marked as

@@ -34,6 +34,11 @@ export const TURNS_BETWEEN_COMPACTIONS = 2;
  * only past this multiple of the threshold -- the vendor ignored its setting (Grok and Vibe did,
  * live). Above 1 so a turn whose last call crossed the line is left to the vendor's next call. */
 export const VENDOR_THRESHOLD_BACKSTOP = 1.5;
+/** Room a conversation gets past what its compaction left before the next one. MEASURED
+ * 2026-11-23: a compaction leaves 37-57k (summary, system prompt, tools), so a fixed 50k trigger
+ * compacted again 2-10 calls later; the floor plus this keeps 50k for a first compaction and
+ * puts the next one ~35k of new work away. */
+export const COMPACTION_HEADROOM = 35_000;
 
 /** What a compaction's summary keeps, where the harness takes instructions for it: the state the
  * work is in, not the story of how it got there. ClikCode's record keeps every turn, and recall
@@ -173,6 +178,18 @@ export const MAX_THRESHOLD_SHARE = 0.95;
 const CLAUDE_OUTPUT_ROOM = 20_000;
 const CLAUDE_BUFFER = 13_000;
 const CLAUDE_MIN_WINDOW = 100_000;
+/** What Claude Code's own compaction leaves: its summary, system prompt and tools. MEASURED
+ * 2026-11-23: 37-57k. */
+const CLAUDE_COMPACTION_FLOOR = 60_000;
+/** The lowest trigger Claude Code is launched with. Its process compacts itself many times in one
+ * turn, so the floor-aware threshold (effectiveThreshold) reaches it only at its next launch; a
+ * 62.5k trigger over a ~55k floor refilled within three calls three times running, and Claude Code
+ * stopped the turn ("Autocompact is thrashing"). Sonnet at 100k answered 91.7% vs 89.8% at 50k. */
+export const CLAUDE_MIN_TRIGGER = CLAUDE_COMPACTION_FLOOR + COMPACTION_HEADROOM;
+/** The threshold (tokens) a vendor is launched with for ClikCode's `threshold`. */
+export function vendorTrigger(setting: VendorThresholdSetting | undefined, threshold: number): number {
+  return setting?.unit === 'claude-window' ? Math.max(threshold, CLAUDE_MIN_TRIGGER) : threshold;
+}
 export function claudeCompactWindow(threshold: number): Record<string, string> {
   const window = threshold + CLAUDE_OUTPUT_ROOM + CLAUDE_BUFFER;
   if (window >= CLAUDE_MIN_WINDOW) return { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(window) };
@@ -186,7 +203,7 @@ export function claudeCompactWindow(threshold: number): Record<string, string> {
 export function vendorThresholdPlan(setting: VendorThresholdSetting | undefined, threshold: number, window?: number): VendorThresholdPlan | undefined {
   if (!setting) return undefined;
   const unit = setting.unit ?? 'tokens';
-  if (unit === 'claude-window') return { kind: 'env', env: claudeCompactWindow(threshold) };
+  if (unit === 'claude-window') return { kind: 'env', env: claudeCompactWindow(vendorTrigger(setting, threshold)) };
   let value: number;
   if (unit === 'tokens') value = threshold;
   else {
@@ -212,6 +229,8 @@ export interface CompactionRecord {
   through: number;
   /** The context the first turn after it ran on, once known. */
   after?: number;
+  /** The previous compaction's floor (its `after`), the estimate of this one's until measured. */
+  floor?: number;
   /** A rewrite whose fresh thread the next turn has yet to write. */
   rewrite?: true;
   /** A native compaction whose next turn has yet to tell the model where the whole conversation is. */
@@ -239,12 +258,23 @@ export function turnsSinceCompaction(session: CompactableSession): number {
   return messages.slice(from).filter((message) => message.role === 'user' && !message.automatic).length;
 }
 
-/** The threshold for this conversation: the user's, raised where its latest compaction could not
- * get under half of it (one huge tool result stays in any summary) -- to twice what the
- * compaction left, so it does not compact again every few calls. */
+/** The threshold for this conversation: the user's, or -- once a compaction has run -- what it
+ * left (measured, else the previous compaction's) plus COMPACTION_HEADROOM where that is higher,
+ * so a conversation whose summary, tools or one huge tool result sit near the threshold does not
+ * compact again every few calls. */
 export function effectiveThreshold(threshold: number, record: CompactionRecord | undefined): number {
-  const after = record?.after;
-  return after !== undefined && after > threshold / 2 ? Math.max(threshold, after * 2) : threshold;
+  const floor = record?.after ?? record?.floor;
+  return floor !== undefined ? Math.max(threshold, floor + COMPACTION_HEADROOM) : threshold;
+}
+
+/** The record of a compaction made now, carrying the previous one's floor forward. */
+export function nextCompactionRecord(
+  previous: CompactionRecord | undefined,
+  through: number,
+  fields: Pick<CompactionRecord, 'rewrite' | 'noteRecord'>,
+): CompactionRecord {
+  const floor = previous?.after ?? previous?.floor;
+  return { at: new Date().toISOString(), through, ...(floor !== undefined ? { floor } : {}), ...fields };
 }
 
 /** Note what the first turn after a compaction ran on. True when the record changed. */

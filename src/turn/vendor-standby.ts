@@ -54,7 +54,7 @@ export function openFailoverStandby(ctx: VendorTurnContext, transport: VendorTra
   void (async () => {
     lifecycle('worker.standby', { harness: harness.command, account: standbyFor.id.slice(0, 8), process: persistentStandby });
     // Launched as the turn it stands by for would be, threshold included (vendor-attempt.ts prepareAttempt).
-    const threshold = await compactThresholdLaunch(harness, state, model ?? session.reported?.model ?? null);
+    const threshold = await compactThresholdLaunch(harness, state, model ?? session.reported?.model ?? null, session);
     const standbyEnvironment = { ...turnEnvironment(harness, standbyFor, permission), ...threshold.environment };
     if (transport === 'codex-app-server') {
       await prepareCodexStandby({ harness, account: standbyFor, session, model, effort: turnEffort(ctx), environment: standbyEnvironment, compactConfig: threshold.config });

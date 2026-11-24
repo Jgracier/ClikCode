@@ -38,7 +38,7 @@ export interface AttemptRecord {
 async function prepareAttempt(ctx: VendorTurnContext) {
   const { harness, session } = ctx;
   // A vendor with an auto-compaction threshold of its own compacts at ClikCode's, mid-turn.
-  const threshold = await compactThresholdLaunch(harness, ctx.state, ctx.model ?? session.reported?.model ?? null);
+  const threshold = await compactThresholdLaunch(harness, ctx.state, ctx.model ?? session.reported?.model ?? null, session);
   const environment = {
     ...turnEnvironment(harness, ctx.account, turnPermissionMode(harness, session.permissionMode)),
     // Goose on another agent's CLI runs it as one of the user's own accounts.
