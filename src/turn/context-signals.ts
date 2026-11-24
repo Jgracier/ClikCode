@@ -10,7 +10,9 @@
  * - the user correcting it or repeating themselves ("I already said", "as I told you"), which
  *   is also how a re-asked question shows.
  *
- * Dependency-free, so tests and the report can use it. */
+ * No ClikCode imports, so tests and the report can use it. */
+
+import { isAbsolute, resolve } from 'node:path';
 
 export interface SignalCounts {
   turns: number;
@@ -30,7 +32,8 @@ export function addCounts(into: SignalCounts, add: SignalCounts): void {
   into.corrections += add.corrections;
 }
 
-/** The files a conversation has read and not changed since (HarnessSession.readFiles), newest last. */
+/** The files a conversation has read and not changed since (HarnessSession.readFiles), newest last:
+ * the path, or `<path>#<part>` for part of one. */
 const KEPT_FILES = 400;
 
 const CORRECTION = /\b(i (already|just) (told|said|asked|gave|showed)|as i (said|told you|mentioned)|i told you|we (already|just) (did|went over|covered)|you (already|just) (did|asked|said|read)|did you forget|you forgot|i said (that|this|it|already)|not what i (said|asked)|like i said|remember (i|we|that) )/i;
@@ -57,17 +60,83 @@ function pathOf(input: Record<string, unknown> | undefined): string | undefined 
   return undefined;
 }
 
+/** The part of a file a read tool asked for: a page read after another page is not a re-read. */
+function rangeOf(input: Record<string, unknown> | undefined): string {
+  const part = ['offset', 'limit', 'start_line', 'end_line', 'startLine', 'endLine', 'line', 'lines', 'view_range', 'range']
+    .map((key) => input?.[key]).filter((value) => value !== undefined && value !== null);
+  return part.length ? JSON.stringify(part) : '';
+}
+
+/** A shell call's command line: Claude's `command` string, Codex's argv (`bash -lc <line>`). */
+function commandOf(input: Record<string, unknown> | undefined): string | undefined {
+  const value = input?.command ?? input?.cmd;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value) && value.every((part) => typeof part === 'string')) {
+    const shell = value.findIndex((part) => part === '-c' || part === '-lc');
+    return shell >= 0 && typeof value[shell + 1] === 'string' ? value[shell + 1] : value.join(' ');
+  }
+  return undefined;
+}
+
+const unquote = (word: string): string => word.replace(/^(['"])(.*)\1$/, '$2');
+const SHELL_READER = /^(cat|head|tail|nl|less|more|bat|sed)$/;
+
+/** The files a shell line reads whole or in part, each with the part asked for -- `cat a`,
+ * `head -n 50 a`, `sed -n 1,80p a` -- or undefined when the line does anything else (a pipe into
+ * another reader still reads; a redirect into a file, `sed -i`, or any other program is not
+ * a read). Agents that read through the shell (Codex always does) show re-reads this way. */
+export function shellReads(line: string): { path: string; range: string }[] | undefined {
+  if (/[<>`$]|\btee\b/.test(line)) return undefined;
+  const found: { path: string; range: string }[] = [];
+  for (const segment of line.split(/&&|;|\|\|/)) {
+    const first = segment.split('|')[0]!.trim();
+    if (!first) continue;
+    const words = first.split(/\s+/).map(unquote);
+    const program = words[0]!.replace(/^.*\//, '');
+    if (!SHELL_READER.test(program)) return undefined;
+    if (program === 'sed' && !words.includes('-n')) return undefined;
+    if (words.some((word) => word === '-i' || word.startsWith('-i') && program === 'sed' || word === '-f')) return undefined;
+    const flags: string[] = [];
+    const paths: string[] = [];
+    for (let index = 1; index < words.length; index += 1) {
+      const word = words[index]!;
+      if (word.startsWith('-')) {
+        flags.push(word);
+        if ((word === '-n' || word === '-c') && program !== 'sed' && words[index + 1] !== undefined) flags.push(words[++index]!);
+        continue;
+      }
+      if (program === 'sed' && /^(\d+(,\d+)?p|\/.*\/p?|\$p|\d+,\$p)$/.test(word)) { flags.push(word); continue; }
+      paths.push(word);
+    }
+    for (const path of paths) found.push({ path, range: program === 'cat' || program === 'bat' || program === 'less' || program === 'more' || program === 'nl' ? '' : `${program} ${flags.join(' ')}` });
+  }
+  return found;
+}
+
+const words = (line: string): string[] => line.split(/[\s;&|<>()]+/).map(unquote).filter(Boolean);
+
 const isHindsight = (name: string | undefined): boolean => /(^|[_.:])hindsight$/i.test(name ?? '');
 
 /** One turn's signals, from its tool events. `files` is the conversation's list (kept on the
  * session), changed in place. A subagent's calls are its own context and are not counted. */
-export function createSignalTracker(files: string[]): { note(event: ToolEvent): void; counts(request: string): SignalCounts } {
+export function createSignalTracker(files: string[], cwd?: string): { note(event: ToolEvent): void; counts(request: string): SignalCounts } {
   const hindsightIds = new Set<string>();
   const started = new Set<string>();
   const turn = emptyCounts();
+  // One entry per file and part read: `<path>` for the whole of it, `<path>#<part>` for a page.
+  const absolute = (path: string): string => (cwd && !isAbsolute(path) ? resolve(cwd, path) : path);
   const forget = (path: string): void => {
-    const at = files.indexOf(path);
-    if (at >= 0) files.splice(at, 1);
+    const file = absolute(path);
+    for (let at = files.length - 1; at >= 0; at -= 1) {
+      if (files[at] === file || files[at]!.startsWith(`${file}#`)) files.splice(at, 1);
+    }
+  };
+  const noteRead = (path: string, range: string): void => {
+    const key = range ? `${absolute(path)}#${range}` : absolute(path);
+    const at = files.indexOf(key);
+    if (at >= 0) { turn.reReads += 1; files.splice(at, 1); }
+    files.push(key);
+    if (files.length > KEPT_FILES) files.splice(0, files.length - KEPT_FILES);
   };
   return {
     note(event) {
@@ -83,13 +152,19 @@ export function createSignalTracker(files: string[]): { note(event: ToolEvent): 
           if (event.id) hindsightIds.add(event.id);
           return;
         }
-        const path = pathOf(event.call?.input);
+        const input = event.call?.input;
+        const line = event.category === 'run' || event.category === undefined ? commandOf(input) : undefined;
+        if (line !== undefined) {
+          const reads = shellReads(line);
+          if (reads) for (const { path, range } of reads) noteRead(path, range);
+          // Anything else the line does may change a file it names.
+          else for (const word of words(line)) forget(word);
+          return;
+        }
+        const path = pathOf(input);
         if (!path) return;
-        if (event.category === 'read') {
-          if (files.includes(path)) { turn.reReads += 1; forget(path); }
-          files.push(path);
-          if (files.length > KEPT_FILES) files.splice(0, files.length - KEPT_FILES);
-        } else if (event.category === 'edit') forget(path);
+        if (event.category === 'read') noteRead(path, rangeOf(input));
+        else if (event.category === 'edit') forget(path);
         return;
       }
       if ((event.kind === 'tool-done' || event.kind === 'tool-error') && (isHindsight(name) || (event.id !== undefined && hindsightIds.has(event.id)))) {

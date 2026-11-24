@@ -104,7 +104,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   const sink = turnSink(checkpoint, prompter);
   const toolLog = createToolLog();
   // What the turn shows about lost context, for auto-tune (turn/context-signals.ts).
-  const signals = createSignalTracker(session.readFiles ??= []);
+  const signals = createSignalTracker(session.readFiles ??= [], session.workspace);
   const onActivity = (event: HarnessActivityEvent): void => {
     pendingWork.note(event);
     toolLog.note(event);
