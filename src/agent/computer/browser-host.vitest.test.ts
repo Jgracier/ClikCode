@@ -86,7 +86,7 @@ describe('where the running browser shows itself', () => {
   });
 });
 
-import { hostChromeArgs } from './browser-host.js';
+import { hostChromeArgs, plainUserAgent } from './browser-host.js';
 describe('the host Chrome arguments', () => {
   it('keeps WebDriver hidden, and on a virtual display uses X11 and the real GPU instead of finding the user\'s Wayland desktop', () => {
     const plain = hostChromeArgs({ headless: false, virtualDisplay: false });
@@ -95,5 +95,13 @@ describe('the host Chrome arguments', () => {
     expect(hostChromeArgs({ headless: false, virtualDisplay: true })).toEqual(expect.arrayContaining(['--ozone-platform=x11', '--use-gl=angle', '--use-angle=gl-egl']));
     expect(hostChromeArgs({ headless: true, virtualDisplay: true })).toContain('--window-size=1440,900');
     expect(hostChromeArgs({ headless: true, virtualDisplay: true }).some(arg => arg.startsWith('--ozone-platform'))).toBe(false);
+  });
+});
+
+describe('plainUserAgent', () => {
+  it('drops the HeadlessChrome marker and leaves a plain agent alone', () => {
+    expect(plainUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.0.0 Safari/537.36'))
+      .toBe('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36');
+    expect(plainUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')).toBeUndefined();
   });
 });

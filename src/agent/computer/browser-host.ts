@@ -42,6 +42,13 @@ export function hostChromeArgs(options: { headless: boolean; virtualDisplay: boo
     ...(options.virtualDisplay && !options.headless ? ['--ozone-platform=x11', '--use-gl=angle', '--use-angle=gl-egl'] : [])];
 }
 
+/** The user agent a headless Chrome should send instead of its own: the same string without "Headless" (Chrome 149 headless sends
+ * "HeadlessChrome/149..."), the one word that marks it a robot (measured 2026-11-24: BrowserScan "Robot", a Microsoft account signup
+ * blocked). Undefined when the agent is already a plain one. The client hints brands are already "Google Chrome" in headless. */
+export function plainUserAgent(userAgent: string): string | undefined {
+  return /HeadlessChrome\//.test(userAgent) ? userAgent.replace(/HeadlessChrome\//g, 'Chrome/') : undefined;
+}
+
 export async function runComputerHost(stateDir: string): Promise<void> {
   const profile = computerProfile(stateDir);
   await fs.mkdir(profile, { recursive: true, mode: 0o700 });
@@ -54,12 +61,23 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   const inbox = downloadsInbox(stateDir);
   await fs.mkdir(inbox, { recursive: true, mode: 0o700 });
   let context;
+  const launch = (extra: string[] = []) => launchComputerBrowser(chromium, profile, {
+    headless, viewport: null, acceptDownloads: true, downloadsPath: inbox,
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: [...hostChromeArgs({ headless, virtualDisplay }), ...extra],
+  }, stateDir);
   try {
-    context = await launchComputerBrowser(chromium, profile, {
-      headless, viewport: null, acceptDownloads: true, downloadsPath: inbox,
-      ignoreDefaultArgs: ['--enable-automation'],
-      args: hostChromeArgs({ headless, virtualDisplay }),
-    }, stateDir);
+    context = await launch();
+    // Headless Chrome names itself in every request. Its version is only known once it runs, so it is asked once and started again
+    // with the plain agent on the command line, which covers every tab any worker opens (a per-page override would miss theirs).
+    if (headless) {
+      const page = context.pages()[0] ?? await context.newPage();
+      const plain = plainUserAgent(await page.evaluate(() => navigator.userAgent).catch(() => ''));
+      if (plain) {
+        await context.close();
+        context = await launch([`--user-agent=${plain}`]);
+      }
+    }
   } catch (error) {
     // The worker that started this process cannot see its output: leave the reason where it will look.
     await writeHostStatus(stateDir, { pid: process.pid, state: 'failed', text: error instanceof Error ? error.message : String(error) });
