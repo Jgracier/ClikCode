@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll } from 'vitest';
 import { describe, expect, it } from 'vitest';
-import { holdResourceNote, stripResourceNotes, withResourceNotes, wrapResourceNote } from './resource-notes.js';
+import { holdResourceNote, stripResourceNotes, withMoveNote, withResourceNotes, wrapResourceNote } from './resource-notes.js';
 import { normalizeImportedTranscript } from './failover-prompt.js';
 import { LiveTurnInputBroker } from './live-input.js';
 
@@ -22,6 +22,16 @@ describe('resource notes', () => {
     expect(withResourceNotes('s1', 'next')).toBe('next');
     expect(existsSync(join(testHome, 'resource-notes', 's1.json'))).toBe(false);
     expect(withResourceNotes('other', 'untouched')).toBe('untouched');
+  });
+
+  it('never go in front of a command prompt: /compact goes alone and the notes wait for the next turn', async () => {
+    await holdResourceNote('cmd', 'Disk I/O is stalling the machine (8% full stall time).');
+    expect(withResourceNotes('cmd', '/compact')).toBe('/compact');
+    expect(withResourceNotes('cmd', '/review src')).toBe('/review src');
+    expect(withResourceNotes('cmd', 'go on')).toContain('8% full stall time');
+    expect(withMoveNote({ moveNote: 'moved here' }, '/compact')).toBe('/compact');
+    expect(withMoveNote({ moveNote: 'moved here' }, 'go on')).toContain('moved here');
+    expect(withResourceNotes('cmd', '/home/x is broken')).toBe('/home/x is broken');
   });
 
   it('keeps the latest pending warning of each kind but preserves stop notices', async () => {

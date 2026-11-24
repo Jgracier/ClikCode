@@ -429,9 +429,10 @@ export async function completeTurnCheckpoint(
   if (!session.pendingTurn?.automatic) {
     session.attachments = [];
     session.shellNotes = [];
+    // The note a moved chat's first turn carried (session/move.ts) was said; a command prompt
+    // (`/compact`) went without it (turn/resource-notes.ts).
+    delete session.moveNote;
   }
-  // The note a moved chat's first turn carried (session/move.ts) was said.
-  delete session.moveNote;
   await nameSession(session, sources);
   await checkpoint.complete(response);
   return response;

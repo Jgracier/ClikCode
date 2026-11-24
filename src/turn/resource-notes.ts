@@ -6,7 +6,7 @@ import { atomicWriteFile } from '../session/store/files.js';
 import { join } from 'node:path';
 import { safeRecordFileName, stateDirectory } from '../session/store/paths.js';
 
-import { wrapResourceNote } from './resource-note-text.js';
+import { isCommandPrompt, wrapResourceNote } from './resource-note-text.js';
 export { stripResourceNotes, wrapResourceNote } from './resource-note-text.js';
 
 function pathFor(sessionId: string): string { return join(stateDirectory(), 'resource-notes', `${safeRecordFileName(sessionId)}.json`); }
@@ -31,8 +31,10 @@ export async function holdResourceNote(sessionId: string, note: string): Promise
   const pending = readNotes(sessionId).filter((held) => !key || warningKey(held) !== key);
   await atomicWriteFile(pathFor(sessionId), JSON.stringify([...pending, wrapResourceNote(note)]), { durable: false });
 }
-/** Attach queued notices to the next outgoing turn, then consume them. */
+/** Attach queued notices to the next outgoing turn, then consume them. A command prompt
+ * (`/compact`) is sent as it is and the notices wait for the turn after it. */
 export function withResourceNotes(sessionId: string, turnText: string): string {
+  if (isCommandPrompt(turnText)) return turnText;
   const notes = readNotes(sessionId);
   if (!notes.length) return turnText;
   rmSync(pathFor(sessionId), { force: true });
@@ -45,5 +47,5 @@ export function withResourceNotes(sessionId: string, turnText: string): string {
  * Kept on the session, not on disk beside it: it goes with the chat, and is
  * cleared when that turn completes (turn-journal.ts), not when it starts. */
 export function withMoveNote(session: { moveNote?: string }, turnText: string): string {
-  return session.moveNote ? `${wrapResourceNote(session.moveNote)}\n\n${turnText}` : turnText;
+  return session.moveNote && !isCommandPrompt(turnText) ? `${wrapResourceNote(session.moveNote)}\n\n${turnText}` : turnText;
 }

@@ -11,6 +11,10 @@ const RECALL_OPEN = '<clikcode_recall>';
 const RECALL_CLOSE = '</clikcode_recall>';
 const TRAILING_RECALL = /\s*<clikcode_recall>[\s\S]*?<\/clikcode_recall>\s*$/;
 
+/** A prompt that is a vendor command (`/compact`, a passthrough `/review`): the vendor reads it as
+ * one only when it is the whole prompt, so no note goes in front of it -- a held note waits for
+ * the next request instead. */
+export const isCommandPrompt = (text: string): boolean => /^\/[A-Za-z][\w:-]*(?:\s|$)/.test(text.trimStart());
 export function wrapResourceNote(text: string): string { return `${OPEN}\n${text.trim()}\n${CLOSE}`; }
 export function wrapRecallNote(text: string): string { return `${RECALL_OPEN}\n${text.trim()}\n${RECALL_CLOSE}`; }
 export function stripResourceNotes(content: string): string { return content.replace(LEADING_NOTES, '').replace(TRAILING_RECALL, ''); }
