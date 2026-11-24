@@ -10,12 +10,15 @@ import { COMMAND_GROUP } from './command-groups.js';
 const MIB = 2 ** 20;
 const TICK_MS = 5_000;
 const WARN_PRESSURE = 5;
-const STOP_PRESSURE = 15;
+/** A command is stopped only when the machine is frozen in practice -- every task stalled on the disk at least
+ * half the time -- for STOP_AFTER_MS. A heavy install or build that merely slows the disk is warned, never ended:
+ * its I/O is the work it was asked to do. */
+const STOP_PRESSURE = 50;
 const CLEAR_PRESSURE = 2;
 const MIN_BYTES_PER_SECOND = 16 * MIB;
 const MIN_IOPS = 1_000;
 const MIN_MACHINE_SHARE = 0.5;
-const STOP_AFTER_MS = 20_000;
+const STOP_AFTER_MS = 2 * 60_000;
 const STOP_COOLDOWN_MS = 60_000;
 const SETTLE_MS = 30_000;
 const GLOBAL_WARN_COOLDOWN_MS = 24 * 60 * 60_000;

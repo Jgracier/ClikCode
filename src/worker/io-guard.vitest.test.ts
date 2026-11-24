@@ -116,6 +116,30 @@ describe('disk I/O guard', () => {
     expect(ioCandidate(first, waitingElsewhere)).toBeUndefined();
   });
 
+  it('warns a heavy owned job that only slows the disk, and never stops it', () => {
+    vi.useFakeTimers();
+    const home = mkdtempSync(join(tmpdir(), 'clikcode-io-guard-'));
+    const oldHome = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
+    const notes: string[] = [];
+    let index = 0;
+    // An npm install at 20% full stall for 5 min: the old 15%/20 s bar killed it.
+    const readings = Array.from({ length: 61 }, (_, i) => sample(1_000 + i * 5_000, 20, i * 100 * MIB, i * 60 * MIB));
+    const stop = vi.fn(() => true);
+    const close = startIoGuard({ sessionId: 'heavy', scopeDir: '/unused', labels: new Map(), read: () => readings[index++],
+      now: () => Date.now(), stop, deliver: (note) => notes.push(note) });
+    try {
+      vi.advanceTimersByTime(305_000);
+      expect(notes).toHaveLength(1);
+      expect(notes[0]).toContain('Disk I/O is stalling');
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      close();
+      if (oldHome === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = oldHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('warns, stops one owned group after sustained stalls, and avoids repeat stops when pressure stays high', () => {
     vi.useFakeTimers();
     const home = mkdtempSync(join(tmpdir(), 'clikcode-io-guard-'));
@@ -129,14 +153,10 @@ describe('disk I/O guard', () => {
     const notes: string[] = [];
     const stopped: string[] = [];
     let index = 0;
+    // 2.5 min at 60% full stall (frozen), then 55% (the stop did not halve it).
     const readings = [
-      sample(1_000, 20, 0, 0, identity),
-      sample(6_000, 20, 100 * MIB, 60 * MIB, identity),
-      sample(11_000, 20, 200 * MIB, 120 * MIB, identity),
-      sample(16_000, 20, 300 * MIB, 180 * MIB, identity),
-      sample(21_000, 20, 400 * MIB, 240 * MIB, identity),
-      sample(26_000, 20, 500 * MIB, 300 * MIB, identity),
-      ...Array.from({ length: 13 }, (_, i) => sample(31_000 + i * 5_000, 18, (600 + i * 100) * MIB, (360 + i * 60) * MIB, identity)),
+      ...Array.from({ length: 31 }, (_, i) => sample(1_000 + i * 5_000, 60, i * 100 * MIB, i * 60 * MIB, identity)),
+      ...Array.from({ length: 13 }, (_, i) => sample(156_000 + i * 5_000, 55, (3_100 + i * 100) * MIB, (1_860 + i * 60) * MIB, identity)),
     ].map((reading) => ({ ...reading, commands: reading.commands.map((command) => ({ ...command, path: group })) }));
     const stopGuard = startIoGuard({
       sessionId: 'test', scopeDir: '/unused', labels: new Map(),
@@ -144,7 +164,9 @@ describe('disk I/O guard', () => {
       stop: (path) => { stopped.push(path); return true; }, deliver: (note) => notes.push(note),
     });
     try {
-      vi.advanceTimersByTime(90_000);
+      vi.advanceTimersByTime(100_000);
+      expect(stopped).toEqual([]);
+      vi.advanceTimersByTime(120_000);
       expect(notes).toHaveLength(2);
       expect(notes[0]).toContain('Disk I/O is stalling');
       expect(notes[1]).toContain('ClikCode stopped');
