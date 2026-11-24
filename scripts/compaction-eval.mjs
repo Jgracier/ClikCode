@@ -54,6 +54,18 @@ function limitProbes(list) {
   for (let index = 0; index < want; index += 1) keep.add(rest[Math.floor((index * rest.length) / want)].id);
   return list.filter((probe) => keep.has(probe.id));
 }
+/** The probes an audit (probe-audit.json, {drop: {id: reason}}) left in: a probe whose question is
+ * broken (asks about a placeholder message, a false premise, a key that is not the answer) is dropped
+ * from grading, not re-asked. */
+function audited(list, dir) {
+  const drop = (dir ? loadFrom(dir, 'probe-audit.json', {}) : load('probe-audit.json', {})).drop ?? {};
+  return list.filter((probe) => !drop[probe.id]);
+}
+/** Graded probes: limitProbes, then the audit. */
+const graded = (list, dir) => audited(limitProbes(list), dir);
+/** Verdicts: judge-v2.json (the hedge and equivalence rules) when there is one, else judge.json. */
+const JUDGE_FILE = option('--judge-file', 'judge-v2.json');
+const judgedIn = (dir) => { const v2 = dir ? loadFrom(dir, JUDGE_FILE) : load(JUDGE_FILE); return v2 ?? (dir ? loadFrom(dir, 'judge.json', {}) : load('judge.json', {})); };
 const PRICE = { input: 1, write: 1.25, read: 0.1, output: 5 };
 const CONCURRENCY = Number(option('--concurrency', '3'));
 const JUDGE_MODEL = option('--judge-model', 'sonnet');
@@ -267,7 +279,10 @@ function threadFile(id) {
 const RARE = 0.05;
 async function probes() {
   const extend = argv.includes('--extend');
-  if (load('probes.json') && !extend) { console.log('probes exist; --extend adds to them'); return; }
+  /** --continuity: only end-of-work probes, from the last substantive turns (placeholder pings
+   * like "x7216073" at a conversation's end are skipped), ids "c0".. */
+  const onlyEnd = argv.includes('--continuity');
+  if (load('probes.json') && !extend && !onlyEnd) { console.log('probes exist; --extend adds to them'); return; }
   const { turns } = segment();
   const n = turns.length;
   const text = (from, to) => turns.slice(from, to).map((turn) => `[turn ${turn.index}] USER: ${turn.user}\nASSISTANT: ${turn.assistant}`).join('\n\n');
@@ -300,15 +315,19 @@ async function probes() {
     if (keys.some((key) => norm(probe.question).includes(norm(key))) || !keys.some(rare)) return;
     made.push({ stretch, kind: kind ?? probe.kind, question: probe.question, answer: keys });
   };
-  const results = await pool(stretches, async ([from, to]) => {
+  const results = onlyEnd ? [] : await pool(stretches, async ([from, to]) => {
     const body = text(from, to);
     return { body, from, to, list: await ask(body, 'four questions: kind "fact", "decision" (what the user or assistant decided, and why), "rejection" (an option the user turned down or ruled out), "identifier" (an exact name, path, id or value)') };
   });
   for (const { body, from, to, list } of results) for (const probe of list) keep(probe, body, [from, to]);
-  const endBody = text(n - 8, n);
-  for (const probe of await ask(endBody, 'six questions of kind "continuity", about where the work stands at the very end: what the user asked for most recently, what step the work is on, what the assistant was doing last, what is to be done next, the latest decision, and the latest file or thing worked on')) keep(probe, endBody, [n - 8, n], 'continuity');
+  const junk = (turn) => /^x\w*$/.test(turn.user.trim()) || !String(turn.assistant ?? '').trim();
+  let endTo = n;
+  if (onlyEnd) while (endTo > 8 && junk(turns[endTo - 1])) endTo -= 1;
+  const endBody = text(endTo - 8, endTo);
+  const pings = onlyEnd && endTo < n ? ' The conversation went on after this only with placeholder test messages, which do not count: ask about the substantive work below, and never about placeholder messages or turn numbers.' : '';
+  for (const probe of await ask(endBody, `six questions of kind "continuity", about where the work stands at the very end: what the user asked for most recently, what step the work is on, what the assistant was doing last, what is to be done next, the latest decision, and the latest file or thing worked on.${pings}`)) keep(probe, endBody, [endTo - 8, endTo], 'continuity');
   const prior = load('probes.json', []);
-  const prefix = extend ? 'v' : 'p';
+  const prefix = onlyEnd ? 'c' : extend ? 'v' : 'p';
   let fresh = made.map((probe, index) => ({ id: `${prefix}${index}`, ...probe }));
   const most = Number(option('--max-new', '1000'));
   if (fresh.length > most) fresh = fresh.filter((_, index) => Math.floor(index * most / fresh.length) !== Math.floor((index - 1) * most / fresh.length));
@@ -545,7 +564,7 @@ function grid() {
     const sizes = seg.turns.map(turnBytes);
     const total = sizes.reduce((sum, size) => sum + size, 0);
     const after = (to) => sizes.slice(to).reduce((sum, size) => sum + size, 0) / total;
-    const list = limitProbes(loadFrom(dir, 'probes.json', [])).map((probe) => {
+    const list = graded(loadFrom(dir, 'probes.json', []), dir).map((probe) => {
       const cats = ['all'];
       if (probe.kind === 'continuity') cats.push('continuity');
       else cats.push(after(probe.stretch[1]) <= RECENT_SHARE ? 'recent' : 'older');
@@ -555,7 +574,7 @@ function grid() {
     for (const probe of list) probesBy[probe.uid] = probe;
     const answers = loadFrom(dir, tagged('answers.json'), []).filter((row) => !row.error);
     const keyOf = Object.fromEntries(list.map((probe) => [probe.id, probe.answer]));
-    const judged = loadFrom(dir, 'judge.json', {});
+    const judged = judgedIn(dir);
     for (const row of answers) { row.strict = keyOf[row.probe] ? grade(row.answer, keyOf[row.probe]) : undefined; row.correct = keyOf[row.probe] ? verdict(judged, row, keyOf[row.probe]) : undefined; }
     return { dir, seg, list, answers, chains: loadFrom(dir, tagged('chains.json'), {}), fixed: loadFrom(dir, 'overhead.json')?.tokens ?? 0, haikuAnswers: MODEL === 'haiku' ? answers : loadFrom(dir, 'answers.json', []) };
   });
@@ -698,8 +717,8 @@ function grid() {
  * know" does not. judge.json, by probe and answer text; grid and analyze read it. */
 async function judge() {
   const { turns } = segment();
-  const list = limitProbes(load('probes.json'));
-  const judged = load('judge.json', {});
+  const list = graded(load('probes.json'));
+  const judged = load(JUDGE_FILE, {});
   const files = readdirSync(evalDir).filter((name) => /^(trace-)?answers.*\.json$/.test(name) && !name.includes('-v1'));
   const rows = files.flatMap((name) => load(name, [])).filter((row) => !row.error && typeof row.answer === 'string');
   const plainText = (turn) => `USER: ${turn.user}\nASSISTANT: ${typeof turn.assistant === 'string' ? turn.assistant : ''}`;
@@ -718,7 +737,10 @@ async function judge() {
     for (let start = 0; start < fresh.length; start += 25) {
       const batch = fresh.slice(start, start + 25);
       const prompt = 'You grade answers to a memory question about a past conversation. Each answer is CORRECT only if it states, in substance, every key fact below as the passage means it; '
-        + 'paraphrase and extra detail are fine, but a different number, name, identifier or value, a missing key fact, a contradiction, or a refusal or "I do not know" is WRONG. Judge each answer on its own.\n\n'
+        + 'paraphrase and extra detail are fine, but a different number, name, identifier or value, a missing key fact, a contradiction, or a refusal or "I do not know" is WRONG. Judge each answer on its own.\n'
+        + (JUDGE_FILE === 'judge.json' ? '' : 'An answer that commits to the right value is CORRECT even with a caveat or hedge ("I believe", "if I recall"). It is WRONG if it declines, names the right value only as one of several candidates without choosing it, or attributes it to a different thing. '
+          + 'Equivalent forms of a key count: a full path for a ~/ or relative path, a short hash for a longer one or the reverse, a number written differently, a faithful paraphrase of a phrase.\n')
+        + '\n'
         + `<passage>\n${passage}\n</passage>\n\nQuestion: ${probe.question}\nKey facts (quoted from the passage): ${probe.answer.map((key) => JSON.stringify(key)).join('; ')}\n\n`
         + batch.map((answer, index) => `<answer n="${index + 1}">\n${answer.slice(0, 2000)}\n</answer>`).join('\n')
         + `\n\nReturn JSON only: an array of ${batch.length} booleans, the verdicts in order (true = correct).`;
@@ -729,9 +751,9 @@ async function judge() {
       // The last flat array of the right length: a judge sometimes corrects itself after a first try.
       for (const match of (result.text ?? '').matchAll(/\[[^[\]]*\]/g)) { try { const value = JSON.parse(match[0]); if (Array.isArray(value) && value.length === batch.length) verdicts = value; } catch { /* not JSON */ } }
       if (!Array.isArray(verdicts) || verdicts.length !== batch.length || verdicts.some((value) => typeof value !== 'boolean')) { console.log(`  ${probe.id}: no usable verdicts (${(result.error ?? result.text).slice(0, 160)})`); continue; }
-      const all = load('judge.json', {});
+      const all = load(JUDGE_FILE, {});
       batch.forEach((answer, index) => { all[answerHash(probe.id, answer)] = verdicts[index]; });
-      save('judge.json', all);
+      save(JUDGE_FILE, all);
       console.log(`  ${probe.id}: ${verdicts.filter(Boolean).length}/${batch.length} correct`);
     }
   });
@@ -779,11 +801,11 @@ async function meaningGate(query, keys, boundary) {
  * Writes failures.json. */
 async function analyze() {
   const { turns, opens, messageEnd } = segment();
-  const list = limitProbes(load('probes.json'));
+  const list = graded(load('probes.json'));
   const byId = Object.fromEntries(list.map((probe) => [probe.id, probe]));
   const answers = load(tagged('answers.json'), []).filter((row) => !row.error && byId[row.probe]);
   const base = {};
-  const judged = load('judge.json', {});
+  const judged = judgedIn();
   for (const row of answers.filter((item) => item.condition === 'baseline')) (base[row.probe] ??= []).push(verdict(judged, row, byId[row.probe].answer) ? 1 : 0);
   const chains = load(tagged('chains.json'), {});
   const textOf = (part) => part.map((turn) => `${turn.providerNote ?? ''}\n${turn.user}\n${typeof turn.assistant === 'string' ? turn.assistant : ''}\n${JSON.stringify([turn.parts, turn.tools]).replace(/\\n/g, ' ').replace(/\\"/g, '"')}`).join('\n');
