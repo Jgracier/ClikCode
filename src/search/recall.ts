@@ -111,7 +111,11 @@ export function recallNote(view: ConversationView, hits: readonly RecallHit[], h
   ].join('\n'));
 }
 
-/** Eval only: `matches` re-scored by cosine + weight x (idf share of the request's words in the chunk). */
+/** The meaning gate's defaults: no standout lift, rare-word re-rank at this weight. */
+const GATE_LIFT = 0;
+const GATE_TERM_WEIGHT = 0.3;
+
+/** `matches` re-scored by cosine + weight x (idf share of the request's words in the chunk). */
 function termRanked(view: ConversationView, outside: readonly number[], matches: SemanticMatch[], query: string, weight: number): SemanticMatch[] {
   const terms = [...new Set((query.toLowerCase().match(/[a-z0-9_][a-z0-9_./:#@-]*[a-z0-9_]/g) ?? []).filter((word) => word.length >= 4 && !EVAL_STOP.has(word)))];
   if (!terms.length) return matches;
@@ -148,12 +152,14 @@ async function search(sessionId: string, query: string, boundary: number, hasHin
       const allowed = new Set(outside);
       const taken = new Set(hits.map((hit) => hit.position));
       const min = Number(process.env.CLIKCODE_EVAL_RECALL_MIN) || undefined;
-      // Eval: GATE_LIFT lowers the standout lift (0 = top-k above the floor); GATE_TERMS=<weight>
-      // re-ranks by the share of the request's rare words (by inverse message frequency) in the chunk.
+      // Top-k by meaning above the floor (no standout lift), re-ranked by the share of the request's
+      // rare words (by inverse message frequency) in the chunk: the compaction eval's floor run.
+      // CLIKCODE_EVAL_GATE_LIFT / CLIKCODE_EVAL_GATE_TERMS override them (TERMS=0 turns the re-rank off).
       const liftKnob = process.env.CLIKCODE_EVAL_GATE_LIFT;
-      const lift = liftKnob !== undefined && liftKnob !== '' && Number.isFinite(Number(liftKnob)) ? Number(liftKnob) : undefined;
-      const termWeight = Number(process.env.CLIKCODE_EVAL_GATE_TERMS) || 0;
-      let matches = await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: termWeight ? 400 : 20, ...(min ? { min } : {}), ...(lift !== undefined ? { lift } : {}) });
+      const lift = liftKnob !== undefined && liftKnob !== '' && Number.isFinite(Number(liftKnob)) ? Number(liftKnob) : GATE_LIFT;
+      const termsKnob = process.env.CLIKCODE_EVAL_GATE_TERMS;
+      const termWeight = termsKnob !== undefined && termsKnob !== '' && Number.isFinite(Number(termsKnob)) ? Number(termsKnob) : GATE_TERM_WEIGHT;
+      let matches = await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: termWeight ? 400 : 20, ...(min ? { min } : {}), lift });
       if (termWeight) matches = termRanked(view, outside, matches, query, termWeight).slice(0, 20);
       for (const match of matches) {
         if (hits.length >= maxMessages) break;

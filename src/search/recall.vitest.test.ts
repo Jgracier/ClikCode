@@ -104,8 +104,11 @@ describe('automatic recall', () => {
     const login = await recall({ sessionId: A, query: 'how did we authenticate credentials before?', boundary: 30, hasHindsight: false });
     expect(login.hits.map((hit) => [hit.position, hit.by])).toEqual([[17, 'meaning']]);
     expect(login.note).not.toContain('hindsight(');
-    // Near every message is near none in particular: nothing.
-    expect((await recall({ sessionId: A, query: 'what about the sql schema work', boundary: 30, hasHindsight: true })).hits).toEqual([]);
+    // Near every message is near none in particular: no standout lift, so the nearest by meaning
+    // (re-ranked by the request's rare words) are still brought back.
+    const broad = (await recall({ sessionId: A, query: 'what about the sql schema work', boundary: 30, hasHindsight: true })).hits;
+    expect(broad.length).toBeGreaterThan(0);
+    expect(broad.every((hit) => hit.by === 'meaning' && hit.position < 30)).toBe(true);
     // Outside the boundary only: #17 is in the context when the boundary is before it.
     expect((await recall({ sessionId: A, query: 'how did we authenticate credentials before?', boundary: 10, hasHindsight: true })).hits).toEqual([]);
   });

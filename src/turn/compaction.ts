@@ -19,11 +19,11 @@
  *
  * Chalk free and dependency free: the slash registry and the webview import it. */
 
-/** MEASURED 2026-11-23 (scripts/compaction-eval.mjs, two ~210k-token conversations, Haiku through
- * Claude Code): what the last 100k tokens held is answered as well as with nothing compacted (84%
- * against 88%), at 60-64% of the full context's cost; 80k fell to 76% and 40k to 44%. What is
- * older is lost to any threshold alike, and recall brings part of it back. */
-export const DEFAULT_COMPACT_AT_TOKENS = 100_000;
+/** MEASURED 2026-11-23 (scripts/compaction-eval.mjs, six conversations, ~326 judged probes, Haiku
+ * through Claude Code, with recall + hindsight, the search nudge and the identifier list): 50k
+ * answers as well as nothing compacted (83.4% against 83.3%, 95% range -4.6..+4.4) at 44% of the
+ * full context's cost; 100k was 5.4 points down (decisions -9.2), 40k lost facts (-6.8). */
+export const DEFAULT_COMPACT_AT_TOKENS = 50_000;
 /** Below this a compaction costs more than it saves. */
 export const MIN_COMPACT_AT_TOKENS = 20_000;
 /** Turns after a compaction before another may run by itself. About one in ten sessions carries

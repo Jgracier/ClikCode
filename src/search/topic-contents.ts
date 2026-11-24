@@ -22,19 +22,19 @@ export function topicContentsText(messages: readonly HindsightMessage[], hasHind
     return `${rangeLabel(topic)}: ${oneLine(first, 110)}${then ? ` | then: ${oneLine(then.text, 70)}` : ''}`;
   });
   const header = `This conversation's topics, by message number${hasHindsight ? ' (hindsight from/to reads any of them whole)' : ''}:`;
-  let used = header.length + lines.reduce((sum, line) => sum + line.length + 1, 0);
+  const nudge = hasHindsight && process.env.CLIKCODE_EVAL_SEARCH_NUDGE !== '0' ? [SEARCH_NUDGE] : [];
+  let used = header.length + lines.reduce((sum, line) => sum + line.length + 1, 0) + nudge.reduce((sum, line) => sum + line.length + 1, 0);
   let dropped = 0;
   /** Room held back for the line that says how many were left out. */
   const omittedRoom = (): number => dropped ? 40 : 0;
   while (used + omittedRoom() > maxChars && dropped < lines.length - 1) { used -= lines[dropped]!.length + 1; dropped += 1; }
-  const nudge = hasHindsight && process.env.CLIKCODE_EVAL_SEARCH_NUDGE ? [SEARCH_NUDGE] : [];
   return [header, ...dropped ? [`(${dropped} earlier topic${dropped === 1 ? '' : 's'} not listed)`] : [], ...lines.slice(dropped), ...nudge].join('\n');
 }
 
-/** Eval only (CLIKCODE_EVAL_SEARCH_NUDGE): the summary is not the conversation; look before saying it is not there. */
+/** With hindsight (the compaction eval's floor run; CLIKCODE_EVAL_SEARCH_NUDGE=0 leaves it out): the summary is not the conversation; look before saying it is not there. */
 const SEARCH_NUDGE = 'Your summary leaves out most of what these messages said. When a question is about anything before your summary (a value, a name, a commit, why something was decided), search with hindsight query=<its words> or read the messages above with from/to before answering; never answer that it is not recorded, or from memory, without searching first.';
 
-/** Eval only (CLIKCODE_EVAL_ID_LIST): about 1.5k tokens. */
+/** The compacted part's identifier list (CLIKCODE_EVAL_ID_LIST=0 leaves it out): about 1.5k tokens. */
 export const IDENTIFIER_LIST_MAX_CHARS = 6000;
 
 const IDENTIFIER_PATTERNS: Array<{ rank: number; pattern: RegExp }> = [
@@ -110,8 +110,8 @@ export async function topicContents(session: { id: string; messages?: readonly T
     if (message.role === 'user' || message.role === 'assistant') messages.push({ index: positions?.[local] ?? local, role: message.role, content: message.content ?? '' });
   });
   const contents = topicContentsText(messages, hasHindsight);
-  if (!process.env.CLIKCODE_EVAL_ID_LIST) return contents;
-  // Eval only: the identifiers of the messages the context holds only as a summary (local index < through).
+  if (process.env.CLIKCODE_EVAL_ID_LIST === '0') return contents;
+  // The identifiers of the messages the context holds only as a summary (local index < through).
   const through = options.through ?? raw.length;
   const compacted: HindsightMessage[] = [];
   raw.forEach((message, local) => {
