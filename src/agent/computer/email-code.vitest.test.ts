@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EMAIL_CLIENT_SECRET, senderMatch, startConsent, type GoogleEndpoints } from './email-api.js';
-import { codeFromMailbox, emailedCode, holdForEmail, emailVerificationCode, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from './email-code.js';
+import { codeFromMailbox, emailedCode, emailedPassword, passwordFromMailbox, holdForEmail, emailVerificationCode, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from './email-code.js';
 import { saveNamedSecret } from './credential-vault.js';
 import { Parked } from './parking.js';
 import { listTasks } from './work-queue.js';
@@ -166,4 +166,23 @@ it('reads a subject-only code and refuses conflicting subject and body codes', (
 it('retrieves a Bubbles-style message through the mailbox code reader', async () => {
   messages = [mail('bubbles', 'code@mail.auth.usebubbles.com', '1234', { subject: '1234 is your bubbles login code', html: '<p>Let’s verify your account by adding in the code below:</p><p>1234</p>' })];
   expect(await emailedCode(dir, { site: 'https://www.usebubbles.com', since: Date.now() - 60000, endpoints, ...fast })).toEqual({ code: '1234' });
+});
+
+describe('a password the site emailed', () => {
+  it('reads the value after a password label and nothing that is only words, a link or a mask', () => {
+    expect(emailedPassword({ subject: 'Welcome to TimeBuzzer', text: 'Your account is ready. Username: me@example.com Password: Xk7#pq2Lm' })).toBe('Xk7#pq2Lm');
+    expect(emailedPassword({ subject: 'Account', text: 'Your temporary password is "aB3dE5fG".' })).toBe('aB3dE5fG');
+    expect(emailedPassword({ subject: 'Reset', text: 'Click the link below to reset your password: https://acme.io/reset?t=abc123' })).toBeUndefined();
+    expect(emailedPassword({ subject: 'Changed', text: 'Your password has been changed. Password: ********' })).toBeUndefined();
+    expect(emailedPassword({ subject: 'Hi', text: 'This document is password protected.' })).toBeUndefined();
+    expect(emailedPassword({ subject: 'Two', text: 'Password: Aa11bb22 and later password: Cc33dd44' })).toBeUndefined();
+  });
+
+  it('finds it in the mailbox from weeks ago, says which mailbox it came to, and leaves the email for a later sign-in', async () => {
+    messages = [{ id: 'p', at: Date.now() - 10 * 86_400_000, from: 'TimeBuzzer <hello@timebuzzer.com>', subject: 'Your TimeBuzzer account', html: '<p>Password: <b>Q9x!mT4z</b></p>' }];
+    const first = await passwordFromMailbox(dir, 'https://my.timebuzzer.com/login', { endpoints, timeoutMs: 500 });
+    expect(first).toEqual({ password: 'Q9x!mT4z', mailbox: 'me@example.com' });
+    expect(await passwordFromMailbox(dir, 'https://my.timebuzzer.com/login', { endpoints, timeoutMs: 500 })).toEqual(first);
+    expect(await passwordFromMailbox(dir, 'https://acme.io/login', { endpoints, timeoutMs: 300 })).toBeUndefined();
+  });
 });

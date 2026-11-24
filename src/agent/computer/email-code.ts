@@ -74,3 +74,44 @@ export async function codeFromMailbox(stateDir: string, site: string, since: num
   if ('code' in found) return found.code;
   return holdForEmail(stateDir, site, found.hold);
 }
+
+/** Words a "password:" label is followed by that are not the password itself ("Password: reset it here", "password below"). */
+const NOT_A_PASSWORD = /^(?:reset|change|below|here|link|button|click|set|create|choose|update|required|is|was|will|you|your|the|a|an)$/i;
+/**
+ * The password a site emailed for a new account ("Your password: Xk7#pq2", "Temporary password is ..."), else undefined.
+ * Only a value that looks generated counts (6-64 characters with a digit or a symbol), so a sentence after the word is never
+ * typed into a box, and two different values are not guessed between.
+ */
+export function emailedPassword(mail: { subject: string; text: string }): string | undefined {
+  if (MARKETING.test(mail.subject) || MARKETING.test(mail.text.slice(0, 200))) return undefined;
+  const flat = mail.text.replace(/\s+/g, ' ');
+  const found = new Set<string>();
+  const pattern = /\b(?:temporary |initial |one[- ]time |new |generated |your )?(?:password|passwort|mot de passe|contraseña)\b(?:\s+is)?(?:\s*[:=]\s*|\s+)["'“]?([^\s"'”<>]{6,64})/gi;
+  for (const match of flat.matchAll(pattern)) {
+    const value = match[1]!.replace(/[.,;)]+$/, '');
+    if (value.length < 6 || NOT_A_PASSWORD.test(value) || /^https?:/i.test(value) || value.includes('@')) continue;
+    // A masked "********" or a word with no digit or symbol ("protected") is not a password.
+    if (!/[\p{L}\p{N}]/u.test(value) || !/\d|[^\p{L}\p{N}]/u.test(value)) continue;
+    found.add(value);
+  }
+  return found.size === 1 ? [...found][0] : undefined;
+}
+
+/** How far back a site's emailed password is looked for: account emails are kept, and the account may be days old. */
+const PASSWORD_EMAIL_DAYS = 30;
+
+/**
+ * The password this site emailed when the account was made, from a connected mailbox (inbox and spam, one quick look, not
+ * claimed: it stays the account's password), with the mailbox it came to, which is the account's sign-in address. Undefined when
+ * no mailbox is connected or none was sent.
+ */
+export async function passwordFromMailbox(stateDir: string, site: string, options: { signal?: AbortSignal; timeoutMs?: number; endpoints?: GoogleEndpoints } = {}): Promise<{ password: string; mailbox: string } | undefined> {
+  if (!(await emailConnected(stateDir))) return undefined;
+  try {
+    const mail = await findEmail(stateDir, { hints: await loginAddresses(stateDir, site), site, since: Date.now() - PASSWORD_EMAIL_DAYS * 86_400_000, timeoutMs: options.timeoutMs ?? 8_000, pollMs: 2_000, spam: true, accept: mail => emailedPassword(mail) !== undefined, signal: options.signal, endpoints: options.endpoints });
+    return { password: emailedPassword(mail)!, mailbox: mail.mailbox };
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    return undefined;
+  }
+}

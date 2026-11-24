@@ -48,7 +48,7 @@ import { chooseOption } from '../computer/page-choose.js';
 import { followPopup, SIGN_IN_CLICK } from '../computer/google-popup.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { emailConnected, emailStatus, findEmail, loginAddresses } from '../computer/email-api.js';
-import { codeFromMailbox, emailVerificationCode, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
+import { codeFromMailbox, emailVerificationCode, passwordFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
 import { connectEmail } from '../computer/email-consent.js';
 import { beginJournal, noteStep, recordVerified } from '../computer/recipe-recorder.js';
 import { chooseValue, labelledCandidates } from '../computer/read-value.js';
@@ -1214,6 +1214,18 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     if (field.password && !(confirmSignIn && !signingUp)) {
       const own = await sitePasswordFor(ctx.stateDir, page, email);
       if (own) { registerSecret(own); values.set(field.step, own); continue; }
+      // A site that emails the password it made for the account (no password box at signup): read from the mailbox, kept in
+      // the vault under the address it came to, and typed without being shown.
+      if (!signingUp && page.url().startsWith('https:')) {
+        const mailed = await passwordFromMailbox(ctx.stateDir, page.url(), { signal: ctx.signal });
+        if (mailed) {
+          registerSecret(mailed.password);
+          await saveLoginFields(ctx.stateDir, page.url(), { username: email ?? mailed.mailbox, password: mailed.password }).catch(quiet('agent/tools/computer-web'));
+          values.set(field.step, mailed.password);
+          report.push(`The password for this site came from the email it sent to ${mailed.mailbox}; saved for this site. It was not shown to you.`);
+          continue;
+        }
+      }
     }
     // A secret kept with the profile (never shown to the agent) fills the box it is for: the password, a recovery code.
     const secretKey = secretFieldFor(profile, field.hint);
