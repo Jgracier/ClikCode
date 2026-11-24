@@ -1,4 +1,5 @@
 /** Select a usable account for a turn or a failover. */
+import { accountRefusesModel, recordModelRefusal } from '../harness/accounts/model-refusals.js';
 import { quiet } from '../runtime/lifecycle-log.js';
 import { USAGE_RECHECK_MS, accountCanTakeTurn, modelQuotaRefusalHolds, quotaRefusalHolds, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
 import { quotaScopeForModel } from '../harness/accounts/quota-scope.js';
@@ -7,7 +8,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { usageExhaustedMessage } from './usage-exhausted.js';
 import chalk from 'chalk';
-import { accountSwitchNotice, accountVerification, verificationNotice, type AccountFailureKind, type AccountMoveReason } from './failover.js';
+import { accountSwitchNotice, accountVerification, isModelRefusal, verificationNotice, type AccountFailureKind, type AccountMoveReason } from './failover.js';
 import { recordQuotaRefusal } from './account-outcome.js';
 import { earlyMoveTarget } from './account-burn.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
@@ -94,8 +95,9 @@ export function nextUsableFailoverAccount(
   model?: string,
 ): AiHarnessAccount | undefined {
   const usable = (candidate: AiHarnessAccount): boolean => accountCanTakeTurn(candidate, now, quotaScopeForModel(candidate, model))
+    && !accountRefusesModel(candidate, model, now)
     && (!attempted.has(candidate.id) || resetPassedSince(candidate, attempted.get(candidate.id)!, now));
-  const unconfirmed = (candidate: AiHarnessAccount): boolean => !attempted.has(candidate.id)
+  const unconfirmed = (candidate: AiHarnessAccount): boolean => !attempted.has(candidate.id) && !accountRefusesModel(candidate, model, now)
     && candidate.status === 'ready' && !candidate.verification && !modelQuotaRefusalHolds(candidate, now, quotaScopeForModel(candidate, model))
     && now - confirmedAt(candidate) >= USAGE_RECHECK_MS;
   const rank = (account: AiHarnessAccount): [tier: number, order: number] => usable(account)
@@ -241,6 +243,7 @@ export async function accountAfterFailure(input: {
     recordQuotaRefusal(state, account, failure, Date.now(), input.model);
     tally.exhaustedAny = true;
   } else tally.lastOtherFailure = failure;
+  if (kind === 'account-ineligible' && input.model && isModelRefusal(failure)) recordModelRefusal(account, input.model);
   const verification = kind === 'account-ineligible' ? accountVerification(failure) : undefined;
   if (verification) {
     account.verification = { ...verification, at: new Date().toISOString() };

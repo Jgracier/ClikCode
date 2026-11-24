@@ -48,6 +48,9 @@ export interface AiHarnessAccount {
    * verifies it (e.g. Google's "Verify your account"). A fact about the
    * account, cleared by a turn that succeeds or by the user saying it is done. */
   verification?: { url?: string; at: string };
+  /** Models the vendor refused to run on this account, by when (model-refusals.ts):
+   * not started on, and not failed over to with that model, while the refusal holds. */
+  refusedModels?: Record<string, string>;
   /** When the vendor last signed this account in. A live vendor child holds
    * the credentials it started with, so this is part of what makes a child
    * reusable: a sign-out and sign-in starts a fresh one. */

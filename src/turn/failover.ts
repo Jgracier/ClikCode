@@ -103,7 +103,22 @@ const THROTTLE_TEXT = /(?:rate[ _-]?limit|\bRATE_LIMITED\b|too many requests|tem
  *  the user was told "account failed" -- true but useless, since it names
  *  neither the problem nor the fix. Signing in again cannot help, which is
  *  why this is distinct from authentication-required. */
-const INELIGIBLE_TEXT = /(?:not eligible|can't use your (?:\w+ ){0,2}subscription|payment is past due|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|(?:no|not have a) valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available|not authorized to use this copilot feature|model is not supported when using [\w ]+ with a (?:chatgpt|\w+) account|execution failed: model "[^"\n]+" is not available|no models are currently available for submission)/i;
+const INELIGIBLE_TEXT = /(?:not eligible|can't use your (?:\w+ ){0,2}subscription|payment is past due|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|(?:no|not have a) valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available|not authorized to use this copilot feature|no models are currently available for submission)/i;
+/** The plan refusing one model, not the account: another model may run on it.
+ * Verbatim: Codex "The 'gpt-5.3-codex-spark' model is not supported when using
+ * Codex with a ChatGPT account" (through Pi too), Devin 'execution failed: model
+ * "..." is not available'. Classified account-ineligible (INELIGIBLE_TEXT). */
+const MODEL_REFUSAL_TEXT = /(?:model is not supported when using [\w ]+ with a (?:chatgpt|\w+) account|execution failed: model "[^"\n]+" is not available)/i;
+
+/** Whether an account-ineligible failure is the vendor refusing the model on
+ * this account (model-refusals.ts), rather than refusing the account. */
+export function isModelRefusal(failure: unknown): boolean {
+  if ((failure as { errorKind?: unknown } | null)?.errorKind === 'model_not_on_plan') return true;
+  return MODEL_REFUSAL_TEXT.test(carriedErrorText(failure));
+}
+
+const refusesAccountOrModel = (text: string): boolean => INELIGIBLE_TEXT.test(text) || MODEL_REFUSAL_TEXT.test(text);
+
 /** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
  * agy 1.2.7 on a real authenticated Antigravity account, which is where this
  * came from: ClikCode sent `--effort` alongside `--model`, and Antigravity
@@ -167,7 +182,8 @@ export function accountFailureReason(kind: AccountFailureKind): string {
  * actual verification step). */
 export function accountVerification(error: unknown): { url?: string } | undefined {
   const text = carriedErrorText(error);
-  if (!INELIGIBLE_TEXT.test(text)) return undefined;
+  // A refused model is the plan's answer about one model; nothing to verify.
+  if (!INELIGIBLE_TEXT.test(text) || isModelRefusal(error)) return undefined;
   const urls = [...text.matchAll(/https:\/\/[^\s"')]+/g)].map((match) => match[0]);
   const url = urls.find((candidate) => /^https:\/\/accounts\.google\.com\//.test(candidate)) ?? urls[0];
   return url ? { url } : {};
@@ -282,7 +298,7 @@ export function agentTurnFailureKind(result: { text: string; statusCode?: number
   const status = result.statusCode;
   if (result.errorKind === 'auth' || status === 401) return 'authentication-required';
   if (status === 403) return 'other';
-  if (status === 402 || result.errorKind === 'quota') return INELIGIBLE_TEXT.test(result.text) ? 'account-ineligible' : 'quota-exhausted';
+  if (status === 402 || result.errorKind === 'quota') return refusesAccountOrModel(result.text) ? 'account-ineligible' : 'quota-exhausted';
   if (status === 429) return 'temporarily-throttled';
   return status === undefined ? 'other' : classifyAccountFailure(new Error(result.text), { statusCode: status });
 }
@@ -346,7 +362,7 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // A 402 that says the plan is absent (Droid: "No active subscription found") is the
   // account's eligibility, not a spent quota: another account may be fine, and this
   // one is not "exhausted".
-  if (effectiveStatus === 402 && INELIGIBLE_TEXT.test(text)) return 'account-ineligible';
+  if (effectiveStatus === 402 && refusesAccountOrModel(text)) return 'account-ineligible';
   if (effectiveStatus === 402) return 'quota-exhausted';
   // 403 is also "this model is not on your plan", "region blocked", a WAF, or
   // a content policy refusal. Marking the account needs_login for those sends
@@ -354,7 +370,7 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // Kimi prefixes a plan denial with "Authentication required: 403"; Gemini
   // prefixes an individual-account shutdown with client wording. Re-login
   // cannot fix either, so these explicit eligibility denials take precedence.
-  if (INELIGIBLE_TEXT.test(text)) return 'account-ineligible';
+  if (refusesAccountOrModel(text)) return 'account-ineligible';
   if (AUTH_TEXT.test(text) || INTERACTIVE_LOGIN_TEXT.test(text)) return 'authentication-required';
   if (rateLimitStatus === 'rejected' || (QUOTA_TEXT.test(text) && !CONTEXT_TEXT.test(text))) return 'quota-exhausted';
   if (AUTH_LOOSE_TEXT.test(text)) return 'authentication-required';

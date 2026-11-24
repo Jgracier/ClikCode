@@ -6,7 +6,10 @@ import { closeStandby, leavePersistentTransport, standbyFor } from './vendor-pro
 import { moveThreadToAccount } from '../session/carry.js';
 import { nativeThreadHoldsConversation } from './native-thread-continuity.js';
 import { switchAccountAfterFailure } from './account-switch.js';
-import type { AccountFailureKind } from './failover.js';
+import { isModelRefusal, type AccountFailureKind } from './failover.js';
+import { recordModelRefusal } from '../harness/accounts/model-refusals.js';
+import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
+import { nextUsableFailoverAccount, turnBackendForAccount } from './account-routing.js';
 import { classifyTurnFailure } from './account-evidence.js';
 import { nativeTurnFailure } from '../harness/protocol/turn-result.js';
 import { continueAnswer, editAnswer, retell } from './vendor-thread-takeup.js';
@@ -59,6 +62,34 @@ async function retryOnFreshThread(ctx: VendorTurnContext, failed: Failed): Promi
 /** Moves the turn to the next account and sets up what its retry sends.
  * Where a switch spends its time, one line per switch (account-switch.ts):
  * the choice of account, the old process closing, the thread copy, the record. */
+/** The vendor refused this model on this account ("not supported when using
+ * Codex with a ChatGPT account"): the refusal is recorded on the account
+ * (model-refusals.ts), and when no other account would run the model the turn
+ * retries here on the next model this account runs. The refused model was
+ * most often a default ClikCode resolved, and failing the turn left the user
+ * a chat that refused every message. Bounded: each refusal removes a model. */
+async function retryOnAnotherModel(ctx: VendorTurnContext, failed: Failed): Promise<boolean> {
+  const refused = ctx.model;
+  if (!refused || (ctx.attempt.modelsRefused ?? 0) >= MAX_MODEL_RETRIES) return false;
+  recordModelRefusal(ctx.account, refused);
+  await ctx.checkpoint.persistNow();
+  const now = Date.now();
+  const elsewhere = nextUsableFailoverAccount(ctx.state, ctx.account, (item) => turnBackendForAccount(item) === 'vendor', new Map([[ctx.account.id, now]]), now, refused);
+  if (elsewhere) return false;
+  const next = await resolveNativeModel(ctx.harness, ctx.account);
+  if (!next || next === refused) return false;
+  ctx.attempt.modelsRefused = (ctx.attempt.modelsRefused ?? 0) + 1;
+  diagnostic('vendor.model-refused', `${ctx.harness.displayName} does not run ${refused} on ${ctx.account.label}; using ${next}`);
+  // The model is part of how the vendor process was launched.
+  await leavePersistentTransport(ctx.session.id);
+  ctx.model = next;
+  ctx.session.model = next;
+  if (!failed.cliOutputStarted) editAnswer(ctx, 'clear');
+  return true;
+}
+
+const MAX_MODEL_RETRIES = 3;
+
 async function switchAccount(ctx: VendorTurnContext, failed: Failed): Promise<void> {
   const { session, harness, attempt } = ctx;
   const { failure, failureKind, responseBefore, wroteBefore, cliOutputStarted } = failed;
@@ -140,5 +171,6 @@ export async function recoverFromFailure(ctx: VendorTurnContext, observer: Vendo
   // signInForTurn marks the attempt's one sign-in (attempt.authRetried).
   if (failureKind === 'authentication-required' && !ctx.attempt.authRetried && await retryAfterSignIn(ctx, failed)) return;
   if (failureKind === 'native-thread-invalid' && !ctx.attempt.nativeThreadRetried) { await retryOnFreshThread(ctx, failed); return; }
+  if (failureKind === 'account-ineligible' && isModelRefusal(failure) && await retryOnAnotherModel(ctx, failed)) return;
   await switchAccount(ctx, failed);
 }

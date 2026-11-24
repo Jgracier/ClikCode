@@ -31,6 +31,14 @@ const later = new Date(Date.now() + 86_400_000).toISOString();
 const earlier = new Date(Date.now() - 86_400_000).toISOString();
 
 describe('stored-usage account switch', () => {
+  it('never fails a model over to an account whose vendor refused that model there', () => {
+    const now = new Date().toISOString();
+    const current = account('current');
+    const refuses = account('refuses', { refusedModels: { 'gpt-x': now } });
+    expect(nextUsableFailoverAccount(state([current, refuses]), current, () => true, new Map(), Date.now(), 'gpt-x')).toBeUndefined();
+    expect(nextUsableFailoverAccount(state([current, refuses]), current, () => true, new Map(), Date.now(), 'gpt-y')?.id).toBe('refuses');
+  });
+
   it('can fail over to an API-key account served by the same vendor CLI', () => {
     const current = account('current', { provider: 'aider', quotaState: 'exhausted' });
     const key = account('key', { provider: 'aider', authKind: 'api-key', credentialRef: 'env:OPENAI_API_KEY' });

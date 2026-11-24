@@ -2,6 +2,7 @@
  * itself -- its CLI, its config, or its own bundled table -- and cached only
  * for as long as what it was derived from stays the same. */
 
+import { accountRefusesModel } from './model-refusals.js';
 import { quiet, swallowed } from '../../runtime/lifecycle-log.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -346,13 +347,16 @@ export async function resolveNativeModel(
   account?: AiHarnessAccount,
 ): Promise<string | undefined> {
   const catalog = await nativeModelCatalog(harness, account);
-  const free = freePlanModels(harness, account, catalog);
-  const chosen = catalog.configured?.trim()
-    || (harness.defaultModel && catalog.models.includes(harness.defaultModel) ? harness.defaultModel : undefined);
+  // A model the vendor refused on this account is no start for it, however
+  // it was chosen (model-refusals.ts).
+  const runs = (model: string | undefined): string | undefined => model && !accountRefusesModel(account, model) ? model : undefined;
+  const free = new Set([...freePlanModels(harness, account, catalog)].filter((model) => runs(model)));
+  const chosen = runs(catalog.configured?.trim())
+    || (harness.defaultModel && catalog.models.includes(harness.defaultModel) ? runs(harness.defaultModel) : undefined);
   // A free plan starts on a model it runs, not on a default it refuses
   // (Cursor's ACP session opens on a named model a Free plan cannot use).
   if (planIsFree(account?.plan) && free.size && !(chosen && free.has(chosen))) return preferredFreeModel(free);
-  return chosen ?? catalog.models.find((model) => model.trim().length > 0);
+  return chosen ?? catalog.models.find((model) => model.trim().length > 0 && runs(model));
 }
 
 async function syncAccountModels(accountId: string, models: readonly string[]): Promise<void> {

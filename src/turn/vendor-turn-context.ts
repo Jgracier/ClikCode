@@ -3,6 +3,7 @@ import { diagnostic } from '../runtime/lifecycle-log.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
+import { accountRefusesModel } from '../harness/accounts/model-refusals.js';
 import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessCanRunTurns, harnessSupportsImages, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
@@ -23,6 +24,8 @@ interface AttemptState {
   standbyOpened: boolean;
   /** A fresh native thread gets one recovery attempt per account. */
   nativeThreadRetried: boolean;
+  /** Models this turn moved off on its account because the vendor refused them (vendor-recovery.ts). */
+  modelsRefused?: number;
 }
 
 export interface VendorTurnContext {
@@ -82,9 +85,15 @@ export async function createVendorTurnContext(input: AccountTurnInput): Promise<
   // not be attributed to anything. Cheap to call (the catalog is cached,
   // and an ACP session keeps it current) and persisted, so the next turn
   // on this session finds it already there.
-  if (!model) {
+  // A model the vendor refused on this account (model-refusals.ts) would be
+  // refused again: the chat's model was usually a default resolved earlier and
+  // saved, which then looks like a choice. Failover already preferred an
+  // account that runs it; this is the account that turn got.
+  const refused = model && accountRefusesModel(input.account, model) ? model : undefined;
+  if (!model || refused) {
     model = await resolveNativeModel(harness, input.account) ?? null;
     if (model) session.model = model;
+    if (refused && model) diagnostic('vendor.model-refused', `${harness.displayName} does not run ${refused} on ${input.account.label}; using ${model}`);
   }
   // A vendor that takes no images is sent none, and nothing about them in
   // words: the user is told, and the files stay attached.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { accountSwitchNoteText } from './account-switch-note.js';
-import { accountFailureReason, accountMoveReasonText, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, quotaRetryHint } from './failover.js';
+import { accountFailureReason, accountMoveReasonText, accountVerification, isModelRefusal, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, quotaRetryHint } from './failover.js';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
@@ -283,6 +283,13 @@ describe('the verification notice for an ineligible account', () => {
       stderrTail: 'Eligibility check failed: Verify your account to continue.\nhttps://accounts.google.com/signin/continue?sarp=1&x=2\n',
     });
     expect(accountVerificationHint(error)).toBe('Google needs verification: https://accounts.google.com/signin/continue?sarp=1&x=2');
+  });
+  it('is silent for a refused model: the plan answered about one model, there is nothing to verify', () => {
+    const refusal = new Error("The 'gpt-5.3-codex-spark' model is not supported when using Codex with a ChatGPT account.");
+    expect(isModelRefusal(refusal)).toBe(true);
+    expect(accountVerification(refusal)).toBeUndefined();
+    expect(isModelRefusal(Object.assign(new Error('x'), { errorKind: 'model_not_on_plan' }))).toBe(true);
+    expect(isModelRefusal(new Error('Eligibility check failed: Verify your account to continue.'))).toBe(false);
   });
   it('is silent for other failures', () => {
     expect(accountVerificationHint(new Error('RESOURCE_EXHAUSTED quota reached'))).toBeUndefined();

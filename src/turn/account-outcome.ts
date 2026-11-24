@@ -1,4 +1,5 @@
 /** What a turn's outcome records on its account. */
+import { clearModelRefusal } from '../harness/accounts/model-refusals.js';
 import { clearQuotaMark, markQuotaExhausted, vendorWindows, windowKey, windowSpent } from '../harness/accounts/usage-reading.js';
 import { quotaScopeForModel } from '../harness/accounts/quota-scope.js';
 import { quotaRetryHint, quotaRollingWindowMs } from './failover.js';
@@ -19,6 +20,7 @@ export function recordSuccessfulAccountTurn(account: AiHarnessAccount, model?: s
     if (!Object.keys(account.quotaScopes).length) account.quotaScopes = undefined;
   }
   account.verification = undefined;
+  clearModelRefusal(account, model);
 }
 
 /** A free-plan refusal can arrive before the billing probe has named the

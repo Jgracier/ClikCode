@@ -217,4 +217,24 @@ describe('ACP model catalog refresh', () => {
     await recordLiveModelCatalog(unconfigured, undefined, offered(), true);
     expect(await resolveNativeModel(unconfigured)).toBe('catalog-default');
   });
+
+  it('never starts an account on a model its vendor refused there, configured or not', async () => {
+    const harness = {
+      command: 'test-resolve-refused', binary: 'missing-test-resolve-refused', transport: 'acp', defaultModel: 'catalog-default',
+      acp: { argv: [], listsModels: true },
+    } as unknown as AiLocalHarnessDefinition;
+    const account = {
+      id: 'acct-refused', provider: 'p', label: 'A', authKind: 'oauth', models: [], status: 'ready', credentialRef: 'x',
+      refusedModels: { 'users-choice': new Date().toISOString() },
+    } as unknown as AiHarnessAccount;
+    await recordLiveModelCatalog(harness, account, {
+      models: { availableModels: [{ modelId: 'users-choice' }, { modelId: 'catalog-default' }, { modelId: 'third' }], currentModelId: 'users-choice' },
+    }, true);
+    expect(await resolveNativeModel(harness, account)).toBe('catalog-default');
+    account.refusedModels!['catalog-default'] = new Date().toISOString();
+    expect(await resolveNativeModel(harness, account)).toBe('third');
+    // A refusal lapses: plans change.
+    account.refusedModels = { 'users-choice': new Date(Date.now() - 8 * 24 * 3600_000).toISOString() };
+    expect(await resolveNativeModel(harness, account)).toBe('users-choice');
+  });
 });
