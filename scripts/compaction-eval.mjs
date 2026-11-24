@@ -492,7 +492,6 @@ const VARIANTS = {
  * the lines are appended to a ledger carried unchanged through later compactions (never re-summarised),
  * capped at LEDGER_MAX_CHARS (~2k tokens) by dropping the oldest. ledger.json keeps each stretch's lines
  * and usage, so the extraction is paid once per compaction and counted in the cell's run cost. */
-const LEDGER_MAX_CHARS = Number(process.env.EVAL_LEDGER_MAX_CHARS ?? 8000);
 const ledgers = {};
 const LEDGER_PROMPT = 'Below is a stretch of a conversation between a user and an AI coding assistant; each message starts with its number in brackets. '
   + 'List what a later reader would need exactly and could not reconstruct from a summary:\n'
@@ -518,6 +517,7 @@ async function buildLedger(threshold, state, turns, opens) {
 }
 /** The ledger as the context holds it after the last compaction: every stretch's lines in order, the oldest dropped first past the cap. */
 function ledgerText(stretches) {
+  const LEDGER_MAX_CHARS = Number(process.env.EVAL_LEDGER_MAX_CHARS ?? 8000); // read here: grid runs before module constants below are set
   const all = stretches.flatMap((item) => item.lines);
   let chars = 0;
   const kept = [];
