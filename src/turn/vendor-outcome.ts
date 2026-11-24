@@ -3,6 +3,7 @@
 import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { compactSetting } from './compaction.js';
 import { noteTurnSignals } from './context-tune.js';
+import { turnWasCut } from './context-shadow.js';
 import { harnessReplyError } from '../runtime/lazy-bridge.js';
 import { adoptListedNativeId } from '../session/discovery/cli-listing.js';
 import { keepsNoHistory, rememberStatelessRoute } from './thread-start.js';
@@ -89,12 +90,15 @@ export async function completeVendorTurn(ctx: VendorTurnContext, observer: Vendo
     diagnostic('vendor.exited-with-tools-running', `${count} tool${count === 1 ? '' : 's'}`);
   }
   const usage = observer.usage() as TurnUsage | undefined;
-  const invocation = recordInvocation(state, { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage, context: observer.contextTally() });
+  const tally = observer.contextTally();
+  const invocation = recordInvocation(state, { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage, context: tally });
   // Auto-tune: this turn's signals, counted with the cut turns or the whole ones (turn/context-tune.ts).
+  // Cut is any call that read less than the vendor's default would have: the shadow itself is reset
+  // once it passes the vendor's trigger, so its state at the turn's end does not say.
   const signals = observer.signals(ctx.askedText);
   if (signals) {
     const setting = compactSetting(state.globalSettings);
-    void noteTurnSignals(harness.command, ctx.model, signals, (session.contextShadow?.removed ?? 0) > 0, observer.tuneBounds(), setting === 'auto')
+    void noteTurnSignals(harness.command, ctx.model, signals, turnWasCut(tally), observer.tuneBounds(), setting === 'auto')
       .then((change) => { if (change) lifecycle('context.tune', { harness: harness.command, model: ctx.model, ...change }); }, quiet('turn/vendor-outcome'));
   }
   // Claude answers a background agent's end with its refusal when the account has just run out, and

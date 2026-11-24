@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addToTally, emptyTally, noteShadowReading, tokensWithoutTune, vendorDefaultTrigger, type ContextShadow } from './context-shadow.js';
+import { addToTally, emptyTally, noteShadowReading, tokensWithoutTune, turnWasCut, vendorDefaultTrigger, type ContextShadow } from './context-shadow.js';
 
 describe('context shadow', () => {
   it('places the vendor default near the top of the window', () => {
@@ -51,5 +51,18 @@ describe('context shadow', () => {
     expect(tally).toEqual({ calls: 2, contextSum: 22_000, shadowSum: 202_000 });
     expect(tokensWithoutTune(25_000, tally)).toBe(205_000);
     expect(tokensWithoutTune(25_000, {})).toBe(25_000);
+  });
+
+  it('counts a turn as cut when a call read less, even once the shadow has met the vendor again', () => {
+    const shadow: ContextShadow = { removed: 0 };
+    const tally = emptyTally();
+    const trigger = 100_000;
+    addToTally(tally, 90_000, noteShadowReading(shadow, 90_000, undefined, trigger));
+    addToTally(tally, 20_000, noteShadowReading(shadow, 20_000, 'c1', trigger));
+    addToTally(tally, 40_000, noteShadowReading(shadow, 40_000, 'c1', trigger));
+    // 40k + 70k removed passes the trigger: the sides meet, and the shadow keeps nothing removed.
+    expect(shadow.removed).toBe(0);
+    expect(turnWasCut(tally)).toBe(true);
+    expect(turnWasCut({ calls: 1, contextSum: 5, shadowSum: 5 })).toBe(false);
   });
 });

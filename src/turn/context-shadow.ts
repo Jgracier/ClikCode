@@ -72,6 +72,9 @@ export function addToTally(tally: ContextTally, used: number, shadow: number): v
   tally.shadowSum += shadow;
 }
 
+/** Some call of the turn read less than it would have without ClikCode's threshold. */
+export const turnWasCut = (tally: ContextTally): boolean => tally.shadowSum > tally.contextSum;
+
 /** A turn's tokens without ClikCode's threshold: its own, plus what the shadow read beyond it. */
 export function tokensWithoutTune(tokens: number, record: { contextSum?: number; shadowSum?: number }): number {
   const extra = (record.shadowSum ?? 0) - (record.contextSum ?? 0);
