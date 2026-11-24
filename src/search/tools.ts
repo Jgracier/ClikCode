@@ -45,7 +45,7 @@ export interface ConversationTool {
  * ClikCode's own agent, the MCP server's instructions for vendors. When to
  * reach for the tools is said here, once; each description says only what
  * its tool does, and the anchor format is described once, on search. */
-export const CONVERSATION_TOOLS_NOTE = 'The user\'s other ClikCode conversations (any provider) are searchable: when they mention other work, another chat or agent, use search_conversations, read_conversation and active_conversations instead of guessing or asking them to paste it. What this chat was doing before is hindsight, which reads only this conversation.';
+export const CONVERSATION_TOOLS_NOTE = 'The user\'s other ClikCode conversations (any provider) are searchable: when they mention other work, another chat or agent, use search_conversations, read_conversation and active_conversations instead of guessing or asking them to paste it. What this chat was doing before is hindsight, which reads only this conversation, including what its subagents saw (agent).';
 
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 20;
@@ -327,15 +327,18 @@ async function hindsightMessages(session: HarnessSession, group: ConversationGro
  * only the call and its result, so this is how a detail the subagent saw outlives the
  * parent's compaction. */
 async function subagentRecord(session: HarnessSession, agentId: string, maxChars: number): Promise<ConversationToolResult> {
-  const { readConversationSubagent, conversationSubagentEvents } = await import('../worker/read-subagent.js');
+  const { readConversationSubagent, conversationSubagentEvents, subagentCallId } = await import('../worker/read-subagent.js');
   const transcript = await readSessionTranscript(session.id);
   const whole: HarnessSession = { ...session, messages: transcript.messages ?? session.messages ?? [], ...(transcript.pendingTurn ?? session.pendingTurn ? { pendingTurn: transcript.pendingTurn ?? session.pendingTurn } : {}) };
-  const agents = new Map(conversationSubagentEvents(whole).filter((event) => event.agent && event.id).map((event) => [event.id!, event.label]));
+  const calls = conversationSubagentEvents(whole).filter((event) => event.agent && event.id);
+  const agents = new Map(calls.map((event) => [event.id!, event.label]));
+  const account = (await loadIndex())?.accounts.find((item) => item.id === session.accountId);
+  // The model may hold the vendor's own id for it instead (Claude's Task result prints "agentId: ...").
+  if (!agents.has(agentId)) agentId = await subagentCallId(whole, account, agentId) ?? agentId;
   if (!agents.has(agentId)) {
     const known = [...agents].slice(-10).map(([id, label]) => `${id} · ${oneLine(label, 80)}`);
     return { text: known.length ? `No subagent ${agentId} in this chat. Its subagents, latest last:\n${known.join('\n')}` : 'This chat has started no subagents.', isError: true };
   }
-  const account = (await loadIndex())?.accounts.find((item) => item.id === session.accountId);
   const rows = await readConversationSubagent(whole, account, agentId);
   const head = `Subagent ${agentId} · ${oneLine(agents.get(agentId) ?? '', 120)}`;
   if (!rows.length) return { text: `${head}\nIts harness kept no record of its own; the chat has only its call and result.` };
@@ -348,7 +351,7 @@ async function subagentRecord(session: HarnessSession, agentId: string, maxChars
 
 const hindsightTool: ConversationTool = {
   name: 'hindsight',
-  description: 'This conversation only, cut into topics from the stored transcript. No arguments opens the topic in progress and lists earlier ones, newest first, with message numbers. back=1 opens the topic before the one in progress: its requests, what finished, what was left unfinished, the user\'s direction-changing lines quoted with their message numbers, tool calls, and the files the turn log still has for those requests. before ("12h", "2d", or a date) keeps topics from before then. query finds a phrase in this chat, then messages related to it in meaning, grouped by topic. from and to, or at, read the stored messages and their tool calls; a span that was compacted is the summary that replaced it. agent opens one subagent\'s own record -- the prompt it was given, its steps and their output, its answer -- by the handle its call shows ("[agent <id>]"); the chat itself keeps only that call and its result. One of back, query, from/to, or agent. A subagent that calls hindsight reads the conversation that started it. A record of this chat, not of the current tree.',
+  description: 'This conversation only, cut into topics from the stored transcript. No arguments opens the topic in progress and lists earlier ones, newest first, with message numbers. back=1 opens the topic before the one in progress: its requests, what finished, what was left unfinished, the user\'s direction-changing lines quoted with their message numbers, tool calls, and the files the turn log still has for those requests. before ("12h", "2d", or a date) keeps topics from before then. query finds a phrase in this chat, then messages related to it in meaning, grouped by topic. from and to, or at, read the stored messages and their tool calls; a span that was compacted is the summary that replaced it. agent opens one subagent\'s own record -- the prompt it was given, its steps and their output, its answer -- by the handle its call shows ("[agent <id>]") or the agent id its result named; an unknown id lists this chat\'s subagents. The chat itself keeps only a subagent\'s call and result, so what a subagent read or found and did not report back is there. One of back, query, from/to, or agent. A subagent that calls hindsight reads the conversation that started it. A record of this chat, not of the current tree.',
   inputSchema: {
     type: 'object', additionalProperties: false,
     properties: {

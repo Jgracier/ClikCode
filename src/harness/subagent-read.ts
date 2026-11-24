@@ -123,6 +123,16 @@ export async function findClaudeSubagent(workspace: string, sessionId: string, p
   return undefined;
 }
 
+/** The `Task` call that started Claude sub-agent `agentId` (the id its result prints), from its sidecar. */
+export async function claudeSubagentCallId(workspace: string, sessionId: string, agentId: string, profile?: string): Promise<string | undefined> {
+  if (!/^[\w-]+$/.test(agentId)) return undefined;
+  for (const dir of claudeSubagentDirs(workspace, sessionId, profile)) {
+    const meta = record(await readFile(join(dir, `agent-${agentId}.meta.json`), 'utf8').then(JSON.parse).catch(() => undefined /* fail-open-ok: not in this directory */));
+    if (typeof meta?.toolUseId === 'string') return meta.toolUseId;
+  }
+  return undefined;
+}
+
 /** The rows of a Claude Code sub-agent, from the transcript on disk. */
 export async function readClaudeSubagent(workspace: string, sessionId: string, parentCallId: string, profile?: string): Promise<{ agentId: string; rows: SubAgentRow[] } | undefined> {
   const found = await findClaudeSubagent(workspace, sessionId, parentCallId, profile);

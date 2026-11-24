@@ -188,6 +188,10 @@ describe('hindsight', () => {
       expect(agent.text).toContain('[prompt] Find where the codeword is defined');
       expect(agent.text).toContain('PERIWINKLE');
       expect(agent.text).toContain('[agent] It is in a.ts.');
+      // By the id Claude's Task result prints, too.
+      const byVendorId = await run('hindsight', { agent: 'a1' }, CURRENT);
+      expect(byVendorId.isError).toBeUndefined();
+      expect(byVendorId.text).toContain('PERIWINKLE');
       const missing = await run('hindsight', { agent: 'nope' }, CURRENT);
       expect(missing.isError).toBe(true);
       expect(missing.text).toContain('toolu_9');

@@ -3,7 +3,7 @@ import { quiet } from '../runtime/lifecycle-log.js';
 import type { HarnessSession } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
-import { liveSubAgentRows, readClaudeSubagent, type SubAgentRow } from '../harness/subagent-read.js';
+import { claudeSubagentCallId, liveSubAgentRows, readClaudeSubagent, type SubAgentRow } from '../harness/subagent-read.js';
 import { persistentTransports } from '../turn/vendor-process.js';
 import type { CodexSession } from '../harness/transport/codex-app-server.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
@@ -15,6 +15,15 @@ export function conversationSubagentEvents(session: HarnessSession) {
     ...(session.messages ?? []).flatMap((message) => readTurnActivities(message.activities, message.content.length)),
     ...readTurnActivities(session.pendingTurn?.activities, session.pendingTurn?.response?.length ?? 0),
   ].map((activity) => activity.event);
+}
+
+/** The call id of a subagent the model names by its vendor's own id (Codex child thread, Claude agent id). */
+export async function subagentCallId(session: HarnessSession, account: AiHarnessAccount | undefined, agentId: string): Promise<string | undefined> {
+  const events = conversationSubagentEvents(session).filter((event) => event.agent && event.id);
+  const byThread = [...events].reverse().find((event) => event.agentId === agentId)?.id;
+  if (byThread || session.nativeHarness !== 'claude' || !session.nativeSessionId) return byThread;
+  const callId = await claudeSubagentCallId(session.workspace ?? '', session.nativeSessionId, agentId, nativeProfileEnvironment(account?.nativeProfile).CLAUDE_CONFIG_DIR).catch(quiet('worker/read-subagent'));
+  return callId && events.some((event) => event.id === callId) ? callId : undefined;
 }
 
 export async function readConversationSubagent(session: HarnessSession, account: AiHarnessAccount | undefined, parentId: string): Promise<SubAgentRow[]> {
