@@ -24,18 +24,18 @@ describe('the threshold', () => {
   });
 
   it('is the user\'s, kept in the global settings, or 50k', () => {
-    expect(DEFAULT_COMPACT_AT_TOKENS).toBe(50_000);
-    expect(compactAt(undefined)).toBe(50_000);
+    expect(DEFAULT_COMPACT_AT_TOKENS).toBe(100_000);
+    expect(compactAt(undefined)).toBe(100_000);
     expect(compactAt({ compactAt: 300_000 })).toBe(300_000);
-    expect(compactAt({ compactAt: 5 })).toBe(50_000);
-    expect(compactAt({ compactAt: 'big' })).toBe(50_000);
+    expect(compactAt({ compactAt: 5 })).toBe(100_000);
+    expect(compactAt({ compactAt: 'big' })).toBe(100_000);
   });
 
   it('is named in the /compact description', () => {
     noteCompactAt({ compactAt: 250_000 });
     expect(compactDescription()).toContain('(now 250k)');
     noteCompactAt({});
-    expect(compactDescription()).toContain('(now 50k)');
+    expect(compactDescription()).toContain('(now 100k)');
   });
 });
 
@@ -132,10 +132,10 @@ describe('a vendor\'s own threshold, in its own terms', () => {
 
   it('Claude Code: the auto-compact window its threshold is 33k under, with a percent below its 100k floor', () => {
     expect(plan('claude', 150_000)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '183000' } });
-    // The default (50k) is under what Claude Code's own compaction leaves plus headroom: it is launched
-    // at that (95k) so it does not compact again within a few calls.
+    // A threshold under what Claude Code's own compaction leaves plus headroom is launched at that
+    // (95k) so it does not compact again within a few calls; the default (100k) is above it.
     expect(CLAUDE_MIN_TRIGGER).toBe(95_000);
-    expect(plan('claude', DEFAULT_COMPACT_AT_TOKENS)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '128000' } });
+    expect(plan('claude', DEFAULT_COMPACT_AT_TOKENS)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '133000' } });
     expect(plan('claude', 500_000, 200_000)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '533000' } });
     // 40k: the floor window (100k) leaves 80k after the output room; 50% of it is 40k.
     expect(claudeCompactWindow(40_000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000', CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '50' });

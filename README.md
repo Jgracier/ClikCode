@@ -455,7 +455,7 @@ reference reads better that way. All of them, grouped as `/help` groups them:
 | Command | What it does |
 | --- | --- |
 | `/new [first message]` (also `/clear`, `/reset`) | start a fresh conversation (the current one stays resumable) |
-| `/compact [tokens]` | compact this conversation now, with the tool's own compaction; `/compact 150k` sets the size at which ClikCode compacts every conversation by itself (default 150k tokens) |
+| `/compact [tokens]` | compact this conversation now, with the tool's own compaction; `/compact 150k` sets the size at which ClikCode compacts every conversation by itself (default 100k tokens) |
 | `/history` | show this conversation; a summary carried for its opening turns comes first |
 | `/hindsight` | this conversation cut into topics, newest first, with the files each one changed, numbered by your prompts — the numbers `/fork @N` and `/redo @N` take |
 | `/copy` | copy the last answer |
