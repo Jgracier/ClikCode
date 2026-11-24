@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { BrowserContext } from 'playwright-core';
-import { launchFirst, separateProfileDir, separateProfiles } from './browser-host.js';
+import { launchFirst, profileNetLaunch, separateProfileDir, separateProfiles, type ProfileNet } from './browser-host.js';
 
 it('uses the first browser that is installed', async () => {
   const tried: string[] = [];
@@ -152,5 +152,52 @@ describe('separate profiles', () => {
       fail = false;
       expect(await profiles.open('signup')).toEqual({ port: 9100 });
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('keeps the egress a profile was given, starts its Chrome again when the way out changes, and goes home on "home"', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-sep-'));
+    try {
+      const launched: Array<{ net?: ProfileNet; context: ReturnType<typeof fakeContext> }> = [];
+      const servers: Record<string, string | undefined> = { prod: 'socks5://127.0.0.1:41000', home: undefined };
+      const zones: string[] = [];
+      const profiles = separateProfiles(dir, async (_at, net) => { const context = fakeContext(); launched.push({ ...(net ? { net } : {}), context }); return context as unknown as BrowserContext; },
+        async () => 9000 + launched.length,
+        { server: async name => { if (!(name in servers)) throw new Error(`No egress is named "${name}".`); return servers[name]; }, timeZone: async name => { zones.push(name); return 'America/Chicago'; } });
+      expect(await profiles.open('signup')).toEqual({ port: 9001 });
+      expect(await profiles.open('signup', 'prod')).toEqual({ port: 9002, egress: 'prod' });
+      expect(launched[0]!.context.closed).toBe(1);
+      expect(launched[1]!.net).toEqual({ egress: 'prod', server: 'socks5://127.0.0.1:41000', timeZone: 'America/Chicago' });
+      // Named once, it sticks: a plain ask reuses the running Chrome, and a new host starts it on the same egress.
+      expect(await profiles.open('signup')).toEqual({ port: 9002, egress: 'prod' });
+      expect(zones).toEqual(['prod']);
+      const again = separateProfiles(dir, async (_at, net) => { const context = fakeContext(); launched.push({ ...(net ? { net } : {}), context }); return context as unknown as BrowserContext; },
+        async () => 9000 + launched.length, { server: async name => servers[name], timeZone: async () => undefined });
+      expect(await again.open('signup')).toEqual({ port: 9003, egress: 'prod' });
+      await again.closeAll();
+      // A tunnel started again on a new port: the old Chrome's proxy reaches nothing, so it starts again.
+      servers.prod = 'socks5://127.0.0.1:42000';
+      expect(await profiles.open('signup')).toEqual({ port: 9004, egress: 'prod' });
+      await expect(profiles.open('signup', 'nowhere')).rejects.toThrow('No egress is named "nowhere"');
+      expect(JSON.parse(await fs.readFile(path.join(separateProfileDir(dir, 'signup'), 'clikcode-egress.json'), 'utf8'))).toEqual({ egress: 'prod' });
+      expect(await profiles.open('signup', 'home')).toEqual({ port: 9005 });
+      expect(launched[4]!.net).toBeUndefined();
+      expect(await profiles.open('signup')).toEqual({ port: 9005 });
+      await profiles.closeAll();
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('a host with no egress service refuses a profile on an egress', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-sep-'));
+    try {
+      const profiles = separateProfiles(dir, async () => fakeContext() as unknown as BrowserContext, async () => 9000);
+      await expect(profiles.open('signup', 'prod')).rejects.toThrow('cannot send a separate profile through an egress');
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('sets the proxy, WebRTC and clock on the Chrome process, and nothing for home', () => {
+    expect(profileNetLaunch(undefined)).toEqual({ args: [] });
+    expect(profileNetLaunch({ egress: 'prod', server: 'socks5://127.0.0.1:41000', timeZone: 'America/Chicago' })).toEqual({
+      args: ['--proxy-server=socks5://127.0.0.1:41000', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'], env: { TZ: 'America/Chicago' } });
+    expect(profileNetLaunch({ egress: 'prod', server: 'socks5://127.0.0.1:41000' })).toEqual({ args: ['--proxy-server=socks5://127.0.0.1:41000', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] });
   });
 });

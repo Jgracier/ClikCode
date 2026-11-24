@@ -7,7 +7,7 @@ import { createServer as createHttp } from 'node:http';
 import { createServer as createTcp, connect as netConnect, type AddressInfo, type Server } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { addEgress, egressList, egressProblem, egressSetting, parseEgress, removeEgress } from './settings.js';
-import { checkEgress, egressServer, fetchVia, sshTunnelArgs, TunnelManager, type TunnelChild, type TunnelDeps } from './egress.js';
+import { checkEgress, egressServer, egressTimeZone, fetchVia, sshTunnelArgs, TunnelManager, type TunnelChild, type TunnelDeps } from './egress.js';
 
 let dir: string;
 beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-egress-')); });
@@ -197,5 +197,23 @@ describe('reading a page through an egress', () => {
       { name: 'prod', via: 'ssh prod-host', ok: true, ip: '157.173.195.175' },
       { name: 'broken', via: 'ssh nowhere', ok: false, error: 'The ssh tunnel to nowhere ended before it was ready.' },
     ]);
+  });
+});
+
+describe('egressTimeZone', () => {
+  it('asks through the egress, keeps the answer, and falls back to it when the lookup fails', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-geo-'));
+    try {
+      const asked: Array<[string | undefined, string]> = [];
+      const answer = async (server: string | undefined, url: string) => { asked.push([server, url]); return JSON.stringify({ ip: '157.173.195.175', timezone: 'America/Chicago' }); };
+      expect(await egressTimeZone(dir, 'prod', 'socks5://127.0.0.1:41000', answer)).toBe('America/Chicago');
+      expect(asked).toEqual([['socks5://127.0.0.1:41000', 'https://ipinfo.io/json']]);
+      const down = async () => { throw new Error('offline'); };
+      expect(await egressTimeZone(dir, 'prod', 'socks5://127.0.0.1:41000', down)).toBe('America/Chicago');
+      expect(await egressTimeZone(dir, 'other', 'socks5://127.0.0.1:41000', down)).toBeUndefined();
+      // A name that is not a time zone is never handed to Chrome; the second service is asked instead.
+      const odd = async (_: string | undefined, url: string) => url.includes('ipinfo') ? JSON.stringify({ timezone: 'Mars/Olympus; rm -rf' }) : JSON.stringify({ query: '1.2.3.4', timezone: 'Europe/Berlin' });
+      expect(await egressTimeZone(dir, 'eu', 'socks5://127.0.0.1:41000', odd)).toBe('Europe/Berlin');
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 });

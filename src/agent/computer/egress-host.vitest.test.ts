@@ -105,17 +105,24 @@ describe('asking the host over its socket', () => {
     const socket = egressSocketPath(dir, 4444);
     const opened: string[] = [];
     const ensure = async () => { throw new Error('not an egress request'); };
-    const served = await serveEgress(socket, { ensure }, async name => { opened.push(name); if (name === 'broken') throw new Error('Chrome did not start.'); return { port: 9333 }; });
+    const served = await serveEgress(socket, { ensure }, async (name, egress) => { opened.push(egress ? `${name}@${egress}` : name); if (name === 'broken') throw new Error('Chrome did not start.'); return { port: 9333, ...(egress && egress !== 'home' ? { egress } : {}) }; });
     const hostFile = async () => JSON.stringify({ pid: 4444, egressSocket: socket });
     try {
       expect(await requestSeparateProfile(dir, 'signup', hostFile)).toBe(9333);
+      expect(await requestSeparateProfile(dir, 'signup', hostFile, 5_000, 'prod')).toBe(9333);
+      expect(await requestSeparateProfile(dir, 'signup', hostFile, 5_000, 'home')).toBe(9333);
+      await expect(requestSeparateProfile(dir, 'signup', hostFile, 5_000, 'Bad Name')).rejects.toThrow('An egress name is lower-case letters');
       await expect(requestSeparateProfile(dir, 'broken', hostFile)).rejects.toThrow('Chrome did not start.');
       await expect(requestSeparateProfile(dir, '../chrome', hostFile)).rejects.toThrow('A profile name is lower-case letters');
-      expect(opened).toEqual(['signup', 'broken']);
+      expect(opened).toEqual(['signup', 'signup@prod', 'signup@home', 'broken']);
     } finally { await served.stop(); }
     const plain = await serveEgress(socket, { ensure });
     try { await expect(requestSeparateProfile(dir, 'signup', hostFile)).rejects.toThrow('does not open separate profiles'); }
     finally { await plain.stop(); }
+    // A host from before profile egress opens the profile on home and does not say so: the worker refuses that answer.
+    const older = await serveEgress(socket, { ensure }, async () => ({ port: 9333 }));
+    try { await expect(requestSeparateProfile(dir, 'signup', hostFile, 5_000, 'prod')).rejects.toThrow('older than profiles on an egress'); }
+    finally { await older.stop(); }
   });
 
   it('a host that serves no egress (an older one, or none) is told apart from a failure', async () => {

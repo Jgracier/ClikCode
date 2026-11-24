@@ -5,11 +5,12 @@ import path from 'node:path';
 import type { BrowserContext } from 'playwright-core';
 import { leaveDialogsToWorkers } from './page-dialogs.js';
 import { hostStatusFile, launchComputerBrowser, shouldRunHeadless, VIRTUAL_DISPLAY_ENV, writeHostStatus } from './browser-launch.js';
-import { headlessSetting } from './settings.js';
+import { headlessSetting, HOME_EGRESS } from './settings.js';
 import { restoreTabs, startBrowserJanitor, takeRecycle } from './browser-janitor.js';
 import { startHandoffDesk } from './handoff-desk.js';
 import { findTailnetAddress } from './tailnet-handoff.js';
 import { startEgressService } from './egress-host.js';
+import { egressServer, egressTimeZone, tunnelManager } from './egress.js';
 import { pidIsAlive } from '../../session/store/locks.js';
 import { downloadsInbox } from './downloads.js';
 
@@ -55,27 +56,70 @@ export function plainUserAgent(userAgent: string): string | undefined {
 /** Where the separate persistent profile `name` keeps its cookies and history: beside the shared one, never inside it. */
 export function separateProfileDir(stateDir: string, name: string): string { return path.join(stateDir, 'computer', 'profiles', name); }
 
-/** The host's separate profiles: one more persistent Chrome per name, started on the first ask and kept until the host stops (or its
- * window is closed). Workers reach each over its own local debugging port; nothing in it is shared with the main profile. */
-export function separateProfiles(stateDir: string, launch: (dir: string) => Promise<BrowserContext>, readPort: (dir: string) => Promise<number> = devToolsPort): { open(name: string): Promise<{ port: number }>; closeAll(): Promise<void> } {
-  const open = new Map<string, Promise<{ context: BrowserContext; port: number }>>();
+/** How a separate profile's Chrome reaches the internet when it leaves through an egress: the proxy, and the clock of the address it
+ * leaves from. */
+export interface ProfileNet { egress: string; server: string; timeZone?: string }
+
+/** Chrome's own arguments and environment for a profile on an egress. Everything is set on the process, not patched into pages (a
+ * patched page is itself a tell): the proxy for every request, WebRTC kept to the proxy (else its STUN request goes straight out and
+ * reports the home address, measured 2026-11-24: "srflx:98.97.3.234" from a tab on prod), and TZ so the clock matches the exit address. */
+export function profileNetLaunch(net: ProfileNet | undefined): { args: string[]; env?: Record<string, string> } {
+  if (!net) return { args: [] };
   return {
-    async open(name) {
-      let held = open.get(name);
-      if (!held) {
-        held = (async () => {
-          const dir = separateProfileDir(stateDir, name);
-          await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-          // A port file left by a Chrome that is gone would name a dead port.
-          await fs.unlink(path.join(dir, 'DevToolsActivePort')).catch(quiet('agent/computer/browser-host'));
-          const context = await launch(dir);
-          (context as unknown as { once(event: 'close', callback: () => void): void }).once('close', () => { if (open.get(name) === held) open.delete(name); });
-          try { return { context, port: await readPort(dir) }; } catch (error) { await context.close().catch(quiet('agent/computer/browser-host')); throw error; }
-        })();
-        open.set(name, held);
-        held.catch(() => { if (open.get(name) === held) open.delete(name); });
-      }
-      return { port: (await held).port };
+    args: [`--proxy-server=${net.server}`, '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
+    ...(net.timeZone ? { env: { TZ: net.timeZone } } : {}),
+  };
+}
+
+/** The egress a separate profile keeps (in its own folder): a profile is one identity, and one identity keeps one address. */
+const profileEgressFile = (dir: string): string => path.join(dir, 'clikcode-egress.json');
+async function storedProfileEgress(dir: string): Promise<string | undefined> {
+  try {
+    const name = (JSON.parse(await fs.readFile(profileEgressFile(dir), 'utf8')) as { egress?: unknown }).egress;
+    return typeof name === 'string' && name && name !== HOME_EGRESS ? name : undefined;
+  } catch { return undefined; }
+}
+
+export interface ProfileNetwork {
+  /** The proxy server for an egress (undefined: this computer's own connection). */
+  server(egress: string): Promise<string | undefined>;
+  /** The time zone of the egress's exit address, asked only when a Chrome is about to start. */
+  timeZone(egress: string, server: string): Promise<string | undefined>;
+}
+
+/** The host's separate profiles: one more persistent Chrome per name, started on the first ask and kept until the host stops (or its
+ * window is closed). Workers reach each over its own local debugging port; nothing in it is shared with the main profile. A profile may
+ * leave through an egress: named once it sticks (`home` clears it), and a different way out (or a tunnel started again on a new port)
+ * starts that profile's Chrome again, since a running Chrome's proxy and clock are fixed. */
+export function separateProfiles(stateDir: string, launch: (dir: string, net?: ProfileNet) => Promise<BrowserContext>, readPort: (dir: string) => Promise<number> = devToolsPort, network?: ProfileNetwork): { open(name: string, egress?: string): Promise<{ port: number; egress?: string }>; closeAll(): Promise<void> } {
+  interface Held { context: BrowserContext; port: number; server?: string; egress?: string; closed: boolean }
+  const open = new Map<string, Promise<Held>>();
+  return {
+    async open(name, egress) {
+      const previous = open.get(name);
+      // One ask at a time per profile: a second waits for the first and reuses what it started.
+      const held: Promise<Held> = (async () => {
+        const old = await previous?.catch(() => undefined);
+        const dir = separateProfileDir(stateDir, name);
+        await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+        const wanted = egress === undefined ? await storedProfileEgress(dir) : egress === HOME_EGRESS ? undefined : egress;
+        if (wanted && !network) throw new Error('This browser host cannot send a separate profile through an egress.');
+        const server = wanted ? await network!.server(wanted) : undefined;
+        if (egress !== undefined) await fs.writeFile(profileEgressFile(dir), JSON.stringify({ egress: server ? wanted : HOME_EGRESS }), { mode: 0o600 });
+        if (old && !old.closed && old.server === server) return old;
+        if (old && !old.closed) { old.closed = true; await old.context.close().catch(quiet('agent/computer/browser-host')); }
+        const net = server && wanted ? { egress: wanted, server, timeZone: await network!.timeZone(wanted, server).catch(() => undefined) } : undefined;
+        // A port file left by a Chrome that is gone would name a dead port.
+        await fs.unlink(path.join(dir, 'DevToolsActivePort')).catch(quiet('agent/computer/browser-host'));
+        const context = await launch(dir, net);
+        const entry: Held = { context, port: 0, ...(server ? { server, egress: wanted } : {}), closed: false };
+        (context as unknown as { once(event: 'close', callback: () => void): void }).once('close', () => { entry.closed = true; });
+        try { entry.port = await readPort(dir); return entry; } catch (error) { await context.close().catch(quiet('agent/computer/browser-host')); throw error; }
+      })();
+      open.set(name, held);
+      held.catch(() => { if (open.get(name) === held) open.delete(name); });
+      const { port, egress: through } = await held;
+      return { port, ...(through ? { egress: through } : {}) };
     },
     async closeAll() {
       const all = [...open.values()];
@@ -109,10 +153,11 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   await fs.mkdir(inbox, { recursive: true, mode: 0o700 });
   let context;
   let userAgentArgs: string[] = [];
-  const launchAt = (dir: string, extra: string[] = []) => launchComputerBrowser(chromium, dir, {
+  const launchAt = (dir: string, extra: string[] = [], env?: Record<string, string>) => launchComputerBrowser(chromium, dir, {
     headless, viewport: null, acceptDownloads: true, downloadsPath: inbox,
     ignoreDefaultArgs: ['--enable-automation'],
     args: [...hostChromeArgs({ headless, virtualDisplay }), ...extra],
+    ...(env ? { env: { ...process.env, ...env } as Record<string, string> } : {}),
   }, stateDir);
   const launch = (extra: string[] = []) => launchAt(profile, extra);
   try {
@@ -137,8 +182,12 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   const hostFile = computerHostFile(stateDir);
   // The egress contexts and their tunnels live here, for this Chrome's whole life (egress-host.ts); workers find the socket in host.json.
   // Separate profiles are started here too: this process has the display and outlives the worker that asks.
-  const profiles = separateProfiles(stateDir, dir => launchAt(dir, userAgentArgs));
-  const egress = await startEgressService(stateDir, profile, undefined, name => profiles.open(name)).catch(quiet('agent/computer/browser-host'));
+  const tunnels = tunnelManager(stateDir);
+  const profiles = separateProfiles(stateDir, (dir, net) => { const { args, env } = profileNetLaunch(net); return launchAt(dir, [...userAgentArgs, ...args], env); }, undefined, {
+    server: name => egressServer(stateDir, name, tunnels),
+    timeZone: (name, server) => egressTimeZone(stateDir, name, server),
+  });
+  const egress = await startEgressService(stateDir, profile, tunnels, (name, through) => profiles.open(name, through)).catch(quiet('agent/computer/browser-host'));
   await writeHostStatus(stateDir, { pid: process.pid, state: 'running' });
   const record = JSON.stringify({ pid: process.pid, display: hostDisplay({ headless, virtualDisplay }), ...(egress ? { egressSocket: egress.socket } : {}) });
   try {

@@ -317,3 +317,31 @@ export async function checkEgress(stateDir: string, options: { url?: string; tun
   }
   return out;
 }
+
+/** A time zone name this runtime knows (an answer from the network is checked before Chrome is told to use it). */
+function knownTimeZone(zone: unknown): string | undefined {
+  if (typeof zone !== 'string' || !/^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+){0,2}$/.test(zone)) return undefined;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); return zone; } catch { return undefined; }
+}
+
+const geoFile = (stateDir: string): string => path.join(stateDir, 'computer', 'egress-geo.json');
+
+/** The time zone of the address an egress leaves from, asked through the egress itself (a page there sees that address, so a browser
+ * leaving through it should keep that clock: a St. Louis address with a Denver clock is a mismatch sites score). The last answer per
+ * egress is kept on disk and used when the lookup fails; undefined when neither is known. */
+export async function egressTimeZone(stateDir: string, name: string, server: string | undefined, read: typeof fetchVia = fetchVia): Promise<string | undefined> {
+  let saved: Record<string, { ip?: string; timeZone?: string; at?: string }> = {};
+  try { saved = JSON.parse(await fs.readFile(geoFile(stateDir), 'utf8')) as typeof saved; } catch { saved = {}; }
+  for (const url of ['https://ipinfo.io/json', 'http://ip-api.com/json?fields=query,timezone']) {
+    try {
+      const answer = JSON.parse(await read(server, url, 10_000)) as { ip?: unknown; query?: unknown; timezone?: unknown };
+      const timeZone = knownTimeZone(answer.timezone);
+      if (!timeZone) continue;
+      const ip = typeof answer.ip === 'string' ? answer.ip : typeof answer.query === 'string' ? answer.query : undefined;
+      saved[name] = { ...(ip ? { ip } : {}), timeZone, at: new Date().toISOString() };
+      await fs.mkdir(path.dirname(geoFile(stateDir)), { recursive: true }).then(() => fs.writeFile(geoFile(stateDir), JSON.stringify(saved, null, 2), { mode: 0o600 })).catch(quiet('agent/computer/egress'));
+      return timeZone;
+    } catch { /* the next lookup, then the saved answer */ }
+  }
+  return knownTimeZone(saved[name]?.timeZone);
+}

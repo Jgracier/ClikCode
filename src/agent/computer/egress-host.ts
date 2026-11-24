@@ -97,11 +97,12 @@ export function egressSocketPath(stateDir: string, pid = process.pid): string {
   return process.platform === 'win32' ? `\\\\.\\pipe\\clikcode-egress-${pid}` : path.join(stateDir, 'computer', `egress-${pid}.sock`);
 }
 
-/** Opens (or finds) the separate persistent profile `name` and answers with its Chrome's local debugging port. */
-export type SeparateProfileOpener = (name: string) => Promise<{ port: number }>;
+/** Opens (or finds) the separate persistent profile `name` and answers with its Chrome's local debugging port. `egress` (a name, or
+ * `home`) changes the way out the profile keeps; left out, it keeps the one it has. */
+export type SeparateProfileOpener = (name: string, egress?: string) => Promise<{ port: number; egress?: string }>;
 
-/** Serves `{"egress":"<name>"}` lines with `{"id":"<browserContextId>","server":"..."}`, and `{"profile":"<name>"}` lines with
- * `{"port":<n>}`; either may be `{"error":"..."}`. */
+/** Serves `{"egress":"<name>"}` lines with `{"id":"<browserContextId>","server":"..."}`, and `{"profile":"<name>"}` lines (optionally
+ * with `"egress"`) with `{"port":<n>}`; either may be `{"error":"..."}`. */
 export async function serveEgress(socketPath: string, contexts: Pick<EgressContexts, 'ensure'>, openProfile?: SeparateProfileOpener): Promise<{ stop(): Promise<void> }> {
   if (process.platform !== 'win32') await fs.unlink(socketPath).catch(quiet('agent/computer/egress-host'));
   const server: Server = createServer(client => {
@@ -120,7 +121,9 @@ export async function serveEgress(socketPath: string, contexts: Pick<EgressConte
       const name = String((forProfile ? asked.profile : asked?.egress) ?? '');
       if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(name)) { client.end(`${JSON.stringify({ error: `${forProfile ? 'A profile' : 'An egress'} name is lower-case letters, digits and dashes.` })}\n`); return; }
       if (forProfile && !openProfile) { client.end(`${JSON.stringify({ error: 'This browser host does not open separate profiles.' })}\n`); return; }
-      void (forProfile ? openProfile!(name) : contexts.ensure(name)).then(
+      const through = forProfile && asked.egress !== undefined ? String(asked.egress) : undefined;
+      if (through !== undefined && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(through)) { client.end(`${JSON.stringify({ error: 'An egress name is lower-case letters, digits and dashes.' })}\n`); return; }
+      void (forProfile ? openProfile!(name, through) : contexts.ensure(name)).then(
         held => client.end(`${JSON.stringify(held)}\n`),
         (error: unknown) => client.end(`${JSON.stringify({ error: (error instanceof Error ? error.message : String(error)).slice(0, 300) })}\n`),
       );
@@ -183,8 +186,10 @@ export async function requestHostedContext(stateDir: string, name: string, readH
 }
 
 /** Asks the browser host to open (or find) the separate persistent profile `name`; answers its Chrome's local debugging port. */
-export async function requestSeparateProfile(stateDir: string, name: string, readHostFile: HostFileReader = readHostJson(stateDir), ms = 60_000): Promise<number> {
-  const answer = await askHost(readHostFile, { profile: name }, ms, `The browser host did not open the profile "${name}" in time.`);
-  if (typeof answer.port === 'number' && Number.isInteger(answer.port) && answer.port > 0) return answer.port;
-  throw new Error('The browser host gave no profile port.');
+export async function requestSeparateProfile(stateDir: string, name: string, readHostFile: HostFileReader = readHostJson(stateDir), ms = 60_000, egress?: string): Promise<number> {
+  const answer = await askHost(readHostFile, { profile: name, ...(egress !== undefined ? { egress } : {}) }, ms, `The browser host did not open the profile "${name}" in time.`);
+  if (!(typeof answer.port === 'number' && Number.isInteger(answer.port) && answer.port > 0)) throw new Error('The browser host gave no profile port.');
+  // A host from before profile egress opens the profile on home and says nothing of an egress: not what was asked.
+  if (egress !== undefined && egress !== 'home' && answer.egress !== egress) throw new Error('The running ClikCode browser is older than profiles on an egress. They work once it restarts, which it does on its own when it is recycled or next started.');
+  return answer.port;
 }

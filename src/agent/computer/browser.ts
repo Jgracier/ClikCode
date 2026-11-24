@@ -189,14 +189,17 @@ const cloudRunKey = (stateDir: string): string => `${stateDir}\u0000\u0000cloud`
 const profileRunKey = (stateDir: string, name: string): string => `${stateDir}\u0000\u0000profile:${name}`;
 
 /** Connect to the host's separate profile `name`, asking the host to start it (and starting the host) when needed. */
-async function connectSeparateProfile(stateDir: string, name: string, start: boolean): Promise<Connected> {
+/** The debugging port each separate profile's connection reached: a profile started again on another egress has a new one. */
+const profilePorts = sharedState('browser-profile-ports', () => new WeakMap<Browser, number>());
+
+async function connectSeparateProfile(stateDir: string, name: string, start: boolean, egress?: string): Promise<Connected> {
   const host = await connect(stateDir);
   if (!host) {
     if (!start) throw new Error('ClikCode browser is closed. Open a URL with browser_use first.');
     await startHost(stateDir);
   } else await host.browser.close().catch(quiet('agent/computer/browser'));
   let port: number;
-  try { port = await requestSeparateProfile(stateDir, name); }
+  try { port = await requestSeparateProfile(stateDir, name, undefined, undefined, egress); }
   catch (error) {
     // A host from before separate profiles reads the request as an egress with no name.
     if (error instanceof EgressNotServed || /^An egress name is/.test((error as Error).message)) throw new Error('The running ClikCode browser is older than separate profiles. They work once it restarts, which it does on its own when it is recycled or next started.');
@@ -206,16 +209,17 @@ async function connectSeparateProfile(stateDir: string, name: string, start: boo
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 8_000 });
   const context = browser.contexts()[0];
   if (!context) { await browser.close(); throw new Error(`The separate profile "${name}" opened no window.`); }
+  profilePorts.set(browser, port);
   await serveDownloads(browser, stateDir).catch(quiet('agent/computer/browser'));
   return { browser, context };
 }
 
-async function browserFor(stateDir: string, start: boolean, cloud = false, profile?: string): Promise<Connected> {
+async function browserFor(stateDir: string, start: boolean, cloud = false, profile?: string, egress?: string): Promise<Connected> {
   const runKey = cloud ? cloudRunKey(stateDir) : profile ? profileRunKey(stateDir, profile) : stateDir;
   let opening = running.get(runKey);
   if (!opening) {
     opening = (async () => {
-      if (profile && !cloud) return connectSeparateProfile(stateDir, profile, start);
+      if (profile && !cloud) return connectSeparateProfile(stateDir, profile, start, egress);
       if (cloud) {
         const remote = await browserUseConnection(stateDir, start);
         if (remote) return remote;
@@ -375,15 +379,24 @@ export async function moveTabToLocal(stateDir: string, tab?: string): Promise<{ 
 
 /** Move this chat's tab into the separate persistent profile `name` at the same address: a Chrome profile of its own (cookies,
  * history, sign-ins), kept on disk across sessions, which never sees the shared profile's sign-ins. The old tab closes once the new
- * one is open. */
-export async function moveTabToProfile(stateDir: string, name: string, tab?: string): Promise<{ page: Page; moved: boolean }> {
+ * one is open. `egress` sends the whole profile through that way out from now on (`home`: back to this computer's own connection);
+ * the host starts the profile's Chrome again when its way out changes, so its pages reopen. */
+export async function moveTabToProfile(stateDir: string, name: string, tab?: string, egress?: string): Promise<{ page: Page; moved: boolean }> {
   if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(name)) throw new Error('A profile name is lower-case letters, digits and dashes (up to 32).');
+  if (egress !== undefined && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(egress)) throw new Error('An egress name is lower-case letters, digits and dashes (up to 32).');
   const key = ownerKey(stateDir, tab);
   if (cloudOwners.has(key) || await browserProvider(stateDir) === 'browser-use') throw new Error('This tab is in the managed cloud browser. Bring it back with cloud clear: true first.');
+  const runKey = profileRunKey(stateDir, name);
+  const held = egress !== undefined ? await running.get(runKey)?.catch(() => undefined) : undefined;
+  if (held) {
+    // Tell the host first: on a new way out it starts the profile's Chrome again, and this connection is to the old one.
+    const port = await requestSeparateProfile(stateDir, name, undefined, undefined, egress);
+    if (port !== profilePorts.get(held.browser)) { running.delete(runKey); await held.browser.close().catch(quiet('agent/computer/browser')); }
+  }
   const current = mine(stateDir, tab);
-  if (current && profilePages.get(current) === name) return { page: current, moved: false };
+  if (current && !current.isClosed() && profilePages.get(current) === name) return { page: current, moved: false };
   const address = current && /^https?:/i.test(current.url()) ? current.url() : undefined;
-  const connected = await browserFor(stateDir, true, false, name);
+  const connected = await browserFor(stateDir, true, false, name, egress);
   const page = await pageInHostedContext(connected);
   profilePages.set(page, name);
   const before = owned.get(key) ?? [];
