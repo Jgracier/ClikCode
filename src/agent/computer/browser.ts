@@ -198,7 +198,7 @@ async function connectSeparateProfile(stateDir: string, name: string, start: boo
   let port: number;
   try { port = await requestSeparateProfile(stateDir, name); }
   catch (error) {
-    if (error instanceof EgressNotServed) throw new Error('The running ClikCode browser is older than separate profiles. They work once it restarts (it does so on its own after a while; `clikcode computer restart` does it now).');
+    if (error instanceof EgressNotServed) throw new Error('The running ClikCode browser is older than separate profiles. They work once it restarts, which it does on its own when it is recycled or next started.');
     throw error;
   }
   const { chromium } = await import('playwright-core');
