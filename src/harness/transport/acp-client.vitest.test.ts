@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { acpActivityEvent, acpApprovalDetail, acpMessageChange, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, createAcpSession, runAcpTurn } from './acp-client.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
+import { createSignalTracker } from '../../turn/context-signals.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 
 describe('shared ACP adapter contract', () => {
@@ -279,6 +280,26 @@ describe('shared ACP adapter contract', () => {
     expect(acpActivityEvent({
       sessionUpdate: 'tool_call', toolCallId: 'ag', title: 'Task: review the tests', status: 'in_progress',
     })).toMatchObject({ kind: 'tool-start', agent: true });
+  });
+
+  it('keeps the name claude-agent-acp gives a call whose input has not streamed yet', () => {
+    // Its first frame: `name`, an empty rawInput; the later ones carry only `_meta.claudeCode.toolName`.
+    const first = acpActivityEvent({
+      sessionUpdate: 'tool_call', toolCallId: 'h', name: 'mcp__clikcode__hindsight', title: 'hindsight', kind: 'other', status: 'pending', rawInput: {},
+      _meta: { claudeCode: { toolName: 'mcp__clikcode__hindsight' } },
+    });
+    expect(first).toMatchObject({ kind: 'tool-start', call: { name: 'mcp__clikcode__hindsight' } });
+    expect(first?.call).not.toHaveProperty('input');
+    const later = acpActivityEvent({
+      sessionUpdate: 'tool_call_update', toolCallId: 'h', title: 'hindsight', status: 'completed',
+      _meta: { claudeCode: { toolName: 'mcp__clikcode__hindsight' } },
+      content: [{ type: 'content', content: { type: 'text', text: 'found' } }],
+    });
+    expect(later?.call?.name).toBe('mcp__clikcode__hindsight');
+    const tracker = createSignalTracker([]);
+    tracker.note(first!);
+    tracker.note(later!);
+    expect(tracker.counts('next')).toMatchObject({ turns: 1, hindsight: 1 });
   });
 
   it('describes what is being approved', () => {

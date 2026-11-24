@@ -296,10 +296,16 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
  * ("Read config") whose first word stands in for one, and the raw input. */
 function acpToolCall(update: Json): Pick<HarnessActivityEvent, 'call'> {
   const raw = update.rawInput && typeof update.rawInput === 'object' && !Array.isArray(update.rawInput) ? update.rawInput as Record<string, unknown> : undefined;
-  if (!raw || !Object.keys(raw).length) return {};
+  // claude-agent-acp names the call (`name` on its first frame, `_meta.claudeCode.toolName` on
+  // every one) and sends that first frame with the input still empty: the name is kept regardless,
+  // so a call known only by name (hindsight, for auto-tune) is still known.
+  const meta = update._meta && typeof update._meta === 'object' ? update._meta as Json : undefined;
+  const named = [update.name, meta?.claudeCode?.toolName].find((value): value is string => typeof value === 'string' && value.trim() !== '')?.trim();
+  const input = raw && Object.keys(raw).length ? raw : undefined;
+  if (!input && !named) return {};
   const title = typeof (update.title ?? update.name) === 'string' ? String(update.title ?? update.name).trim() : '';
-  const name = (typeof update.name === 'string' && update.name.trim()) || title.split(/[\s:(]/, 1)[0] || String(update.kind ?? 'tool');
-  return { call: toolCall(name, raw) };
+  const name = named || title.split(/[\s:(]/, 1)[0] || String(update.kind ?? 'tool');
+  return { call: toolCall(name, input) };
 }
 
 /** The row an ACP call gets. Its title is the agent's own sentence ("Read
