@@ -172,6 +172,15 @@ describe('ACP status updates and extension notifications', () => {
     } finally { await session.close(); }
   });
 
+  it('takes a "Not ready" none followed by an account as signed in (Junie)', async () => {
+    const { seen } = await run({ steps: [
+      { send: { method: '_auth/status_update', params: { authStatus: { kind: 'none', label: 'Not ready', detail: 'Waiting for account or model' } } } },
+      { send: { method: '_auth/status_update', params: { authStatus: { kind: 'account', label: 'JetBrains AI' } } } },
+      { after: 2500 },
+    ] });
+    expect(seen.requests.some((r) => r.method === 'session/prompt')).toBe(true);
+  });
+
   it('ignores a signed-in status', async () => {
     const { seen } = await run({ steps: [{ send: { method: '_auth/status_update', params: { authStatus: { kind: 'subscription' } } } }] });
     expect(seen.requests.length).toBeGreaterThan(0);

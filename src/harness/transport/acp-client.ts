@@ -46,6 +46,8 @@ const READ_LIKE_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search', 'th
 const DETAIL_LINE_CAP = 12;
 /** How long an agent may take to answer before the wait is named. */
 const START_NOTICE_MS = 1_000;
+/** How long an ACP `none` auth status waits for a later status naming an account (authStatus). */
+const AUTH_NONE_GRACE_MS = 2_000;
 /** A fallback, not the ordering: a task whose terminal `task_updated` patch came is ended by the
  * next SDK frame (its own `task_notification`, which the SDK sends right behind the patch from the
  * same step, or any other frame, which says none is coming). Only a patch with nothing at all
@@ -1813,18 +1815,34 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   /** claude-agent-acp pushes the identity it runs as (`_auth/status_update`
    * {authStatus:{kind,label}}). `none` is a known sign-out -- "cannot
-   * determine" is silence -- so the turn ends now with the sign-in path
-   * rather than waiting for the vendor to fail the prompt itself. */
+   * determine" is silence -- so the turn ends with the sign-in path rather
+   * than waiting for the vendor to fail the prompt itself. Not at once: Junie
+   * opens every session with `none` "Not ready" ("Waiting for account or
+   * model") and names its account a millisecond later (read 2026-11-24), so a
+   * `none` stands only if no other status follows within AUTH_NONE_GRACE_MS. */
+  private signOutPending: ReturnType<typeof setTimeout> | undefined;
+
   private authStatus(params: Json): void {
     const status = params.authStatus;
-    if (!status || typeof status !== 'object' || status.kind !== 'none') return;
+    if (!status || typeof status !== 'object') return;
+    if (status.kind !== 'none') {
+      clearTimeout(this.signOutPending);
+      this.signOutPending = undefined;
+      return;
+    }
     const turn = this.turn;
     if (!turn || turn.done) return;
     const command = turn.input.command;
-    turn.fail(Object.assign(
-      new Error(`${command} is not signed in${typeof status.label === 'string' && status.label ? ` (${status.label})` : ''}: sign in with \`${command} auth login\` or your account's sign-in`),
-      { rpcCode: ACP_AUTH_REQUIRED_CODE, statusCode: 401, acpSignedOut: true },
-    ));
+    clearTimeout(this.signOutPending);
+    this.signOutPending = setTimeout(() => {
+      this.signOutPending = undefined;
+      if (turn.done) return;
+      turn.fail(Object.assign(
+        new Error(`${command} is not signed in${typeof status.label === 'string' && status.label ? ` (${status.label})` : ''}: sign in with \`${command} auth login\` or your account's sign-in`),
+        { rpcCode: ACP_AUTH_REQUIRED_CODE, statusCode: 401, acpSignedOut: true },
+      ));
+    }, AUTH_NONE_GRACE_MS);
+    this.signOutPending.unref?.();
   }
 
   /** Prompts open for the agent's requests, by JSON-RPC id: the agent
