@@ -7,7 +7,7 @@ import type { ChildProcess } from 'node:child_process';
 import { killProcessTreePortable } from './spawn.js';
 import { forwardParentSignals } from './parent-signals.js';
 import { LineBuffer } from '../protocol/json-lines.js';
-import { swallowed } from '../../runtime/lifecycle-log.js';
+import { lifecycle, swallowed } from '../../runtime/lifecycle-log.js';
 
 type JsonRpcMessage = Record<string, any>;
 
@@ -187,6 +187,7 @@ export class JsonRpcPeer {
       const crash = this.options.crashReport?.(this.stderrTail);
       if (crash === undefined || this.isClosed) return;
       this.handleClose(new Error(`the agent crashed: ${crash}`));
+      lifecycle('agent.crash.kill', { pid: this.child.pid, reason: crash.slice(0, 300) });
       killProcessTreePortable(this.child, 'SIGTERM', this.options.detached === true);
     });
     // A child that exits mid-write raises EPIPE asynchronously on the stream.
