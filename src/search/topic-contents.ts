@@ -34,7 +34,7 @@ export function topicContentsText(messages: readonly HindsightMessage[], hasHind
 /** With hindsight (the compaction eval's floor run; CLIKCODE_EVAL_SEARCH_NUDGE=0 leaves it out): the summary is not the conversation; look before saying it is not there. */
 const SEARCH_NUDGE = 'Your summary leaves out most of what these messages said. When a question is about anything before your summary (a value, a name, a commit, why something was decided), search with hindsight query=<its words> or read the messages above with from/to before answering; never answer that it is not recorded, or from memory, without searching first.';
 
-/** The compacted part's identifier list (CLIKCODE_EVAL_ID_LIST=0 leaves it out): about 1.5k tokens. */
+/** The compacted part's identifier list (CLIKCODE_EVAL_ID_LIST=0 leaves it out): about 1.5k tokens (CLIKCODE_EVAL_ID_MAX_CHARS sets it in the eval). */
 export const IDENTIFIER_LIST_MAX_CHARS = 6000;
 
 const IDENTIFIER_PATTERNS: Array<{ rank: number; pattern: RegExp }> = [
@@ -47,7 +47,8 @@ const IDENTIFIER_PATTERNS: Array<{ rank: number; pattern: RegExp }> = [
 /** The identifiers of `messages` (commit hashes, names with digits, CONSTANT_NAMES, paths, URLs), each
  * once, with the words before it and its message number, rarest kinds first within `maxChars`, listed
  * in message order. What a summary drops first and a question names exactly. Undefined when none. */
-export function identifierListText(messages: readonly HindsightMessage[], maxChars = IDENTIFIER_LIST_MAX_CHARS): string | undefined {
+export function identifierListText(messages: readonly HindsightMessage[], maxChars = Number(process.env.CLIKCODE_EVAL_ID_MAX_CHARS) || IDENTIFIER_LIST_MAX_CHARS): string | undefined {
+  const contextChars = Number(process.env.CLIKCODE_EVAL_ID_CONTEXT) || 45;
   const byValue = new Map<string, { index: number; rank: number; order: number; count: number; line: string }>();
   for (const message of messages) {
     const text = message.content.replace(/\s+/g, ' ');
@@ -59,7 +60,7 @@ export function identifierListText(messages: readonly HindsightMessage[], maxCha
         const prior = byValue.get(key);
         if (prior) { prior.count += 1; continue; }
         const at = match.index ?? 0;
-        const before = text.slice(Math.max(0, at - CONTEXT_CHARS), at).replace(/^\S*\s/, '').replace(/[`*]/g, '');
+        const before = text.slice(Math.max(0, at - contextChars), at).replace(/^\S*\s/, '').replace(/[`*]/g, '');
         byValue.set(key, { index: message.index, rank, order: byValue.size, count: 1, line: `#${message.index} ${before}${value}` });
       }
     }
@@ -80,9 +81,6 @@ export function identifierListText(messages: readonly HindsightMessage[], maxCha
   }
   return [header, ...kept.sort((left, right) => left.order - right.order).map((item) => item.line)].join('\n');
 }
-
-/** Words kept before each identifier. */
-const CONTEXT_CHARS = Number(process.env.CLIKCODE_EVAL_ID_CONTEXT) || 45;
 
 /** `items` in an order that takes from every part of the conversation evenly (bit-reversed index). */
 function spread<T>(items: T[]): T[] {
