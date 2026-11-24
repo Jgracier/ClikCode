@@ -11,6 +11,7 @@ describe('context signals', () => {
     tracker.note({ kind: 'tool-start', id: 'r1', category: 'read', call: { name: 'Read', input: {} } });
     tracker.note(read('r1', '/a'));
     tracker.note(read('r1', '/a'));
+    tracker.note({ kind: 'tool-done', id: 'r1' });
     expect(files).toEqual(['/a']);
     tracker.note({ kind: 'tool-start', id: 'r2', category: 'read', call: { name: 'Read', input: {} } });
     tracker.note(read('r2', '/a'));
@@ -59,6 +60,38 @@ describe('context signals', () => {
 });
 
 const run = (id: string, command: unknown) => ({ kind: 'tool-start', id, category: 'run', call: { name: 'Bash', input: { command } } });
+
+describe('a read whose arguments arrive a field at a time (claude-agent-acp)', () => {
+  // What claude-agent-acp 0.110 sends for Read(offset 401, limit 400): the kind and title once,
+  // then rawInput growing a field at a time with neither, then the whole input.
+  const frames = (id: string, offset: number) => [
+    { kind: 'tool-start', id, category: 'read' },
+    { kind: 'tool-start', id, call: { name: 'read', input: { file_path: '/w/n.txt' } } },
+    { kind: 'tool-start', id, call: { name: 'read', input: { file_path: '/w/n.txt', offset } } },
+    { kind: 'tool-start', id, category: 'read', call: { name: 'Read', input: { file_path: '/w/n.txt', offset, limit: 400 } } },
+  ];
+
+  it('counts pages of one file as pages, and only the page read twice as a re-read', () => {
+    const files: string[] = [];
+    const tracker = createSignalTracker(files);
+    for (const [id, offset] of [['p1', 1], ['p2', 401], ['p3', 801], ['p4', 1]] as const) {
+      for (const frame of frames(id, offset)) tracker.note(frame);
+      tracker.note({ kind: 'tool-done', id });
+    }
+    expect(tracker.counts('x').reReads).toBe(1);
+    expect(files).toEqual(['/w/n.txt#[401,400]', '/w/n.txt#[801,400]', '/w/n.txt#[1,400]']);
+  });
+
+  it('counts a read the turn never saw end, in the order it ran around an edit', () => {
+    const files: string[] = [];
+    const tracker = createSignalTracker(files);
+    for (const frame of frames('a', 1)) tracker.note(frame);
+    tracker.note({ kind: 'tool-start', id: 'e', category: 'edit', call: { name: 'Edit', input: { file_path: '/w/n.txt' } } });
+    for (const frame of frames('b', 1)) tracker.note(frame);
+    expect(tracker.counts('x').reReads).toBe(0);
+    expect(files).toEqual(['/w/n.txt#[1,400]']);
+  });
+});
 
 describe('context signals through the shell', () => {
   it('reads cat, head and sed -n as reads, each part on its own', () => {

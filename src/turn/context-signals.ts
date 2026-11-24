@@ -138,13 +138,21 @@ export function createSignalTracker(files: string[], cwd?: string): { note(event
     files.push(key);
     if (files.length > KEPT_FILES) files.splice(0, files.length - KEPT_FILES);
   };
+  const reads = new Map<string, { category?: string; path?: string; range?: string }>();
+  const settle = (id: string): void => {
+    const read = reads.get(id);
+    reads.delete(id);
+    if (read?.category === 'read' && read.path) noteRead(read.path, read.range ?? '');
+  };
+  // Held reads come first when a later call may change a file, so the order stays as it ran.
+  const settleAll = (): void => { for (const id of [...reads.keys()]) settle(id); };
   return {
     note(event) {
       if (event.parentId) return;
       const name = event.call?.name;
       if (event.kind === 'tool-start') {
         // A call arrives in frames: Claude's first names the tool alone, before its arguments have
-        // streamed. Each call counts once, from the first frame that says what it does.
+        // streamed. A search or a command counts once, from the first frame that says what it does.
         if (event.id && started.has(event.id)) return;
         const seen = (): void => { if (event.id) started.add(event.id); };
         if (isHindsight(name)) {
@@ -157,25 +165,37 @@ export function createSignalTracker(files: string[], cwd?: string): { note(event
         const line = event.category === 'run' || event.category === undefined ? commandOf(input) : undefined;
         if (line !== undefined) {
           seen();
-          const reads = shellReads(line);
-          if (reads) for (const { path, range } of reads) noteRead(path, range);
+          settleAll();
+          const shell = shellReads(line);
+          if (shell) for (const { path, range } of shell) noteRead(path, range);
           // Anything else the line does may change a file it names.
           else for (const word of words(line)) forget(word);
           return;
         }
+        // A file call's arguments can arrive a field at a time (claude-agent-acp sends `{file_path}`,
+        // then `{file_path, offset}`, then the whole input, and a later frame may drop the kind), so a
+        // read is held by id, each frame refining it, and counted when the call ends.
+        const held = event.id ? reads.get(event.id) : undefined;
+        const category = event.category ?? held?.category;
         const path = pathOf(input);
-        if (!path) return;
-        seen();
-        if (event.category === 'read') noteRead(path, rangeOf(input));
-        else if (event.category === 'edit') forget(path);
+        if (!path) {
+          if (event.id && category && !held) reads.set(event.id, { category });
+          return;
+        }
+        if (category === 'edit') { seen(); settleAll(); forget(path); return; }
+        if (!event.id) { if (category === 'read') noteRead(path, rangeOf(input)); return; }
+        reads.set(event.id, { category, path, range: rangeOf(input) });
         return;
       }
+      if ((event.kind === 'tool-done' || event.kind === 'tool-error') && event.id) settle(event.id);
       if ((event.kind === 'tool-done' || event.kind === 'tool-error') && (isHindsight(name) || (event.id !== undefined && hindsightIds.has(event.id)))) {
         if (event.id) hindsightIds.delete(event.id);
         if (event.kind === 'tool-error' || EMPTY_HINDSIGHT.test((event.output ?? []).join('\n'))) turn.hindsightEmpty += 1;
       }
     },
     counts(request) {
+      // A call the turn never saw end (cut off, or its end carried no id) still read what it named.
+      settleAll();
       return { ...turn, turns: 1, corrections: isCorrection(request) ? 1 : 0 };
     },
   };
