@@ -29,7 +29,7 @@ import { type LoginField } from '../computer/login-fields.js';
 import { isSecretRef, registerSecret, resolveSecretRef, scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
 import { hideRecoveryCodes, otpauthIn, QR_TARGET, recoveryCodesIn, RECOVERY_TARGET } from '../computer/recovery-codes.js';
 import { profileLoginAnswers } from '../computer/profile-login.js';
-import { classifyPasswordPage, newPasswordPath, readPasswordPageContext, signInPath } from '../computer/password-page.js';
+import { classifyPasswordPage, newPasswordPath, readPasswordPageContext, resetPasswordPage, signInPath } from '../computer/password-page.js';
 import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { answerDialog, bindDialogs, dialogNote, hasPendingDialog, pendingDialogNote, settleWaitingDialog, withDialogNotices, withDialogs } from '../computer/page-dialogs.js';
@@ -1124,7 +1124,8 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   // confirm prompt and fill the profile email with no chance to change it.
   const loginPage = signInAddress;
   // The page's own words decide a page the address and boxes do not (a post-signup "Create your new password"): see classifyPasswordPage.
-  const pageKind = passwordFields.length ? classifyPasswordPage({ ...await readPasswordPageContext(scope), url: page.url() }) : undefined;
+  const pageContext = passwordFields.length ? await readPasswordPageContext(scope) : undefined;
+  const pageKind = pageContext ? classifyPasswordPage({ ...pageContext, url: page.url() }) : undefined;
   const newPasswordPage = pageKind?.kind === 'signup' && await generatedPasswordsAllowed(ctx.stateDir);
   const signingUp = newPasswordPage || !loginPage && (passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
     || (passwordFields.length > 0 && newPasswordPath(page.url())));
@@ -1142,7 +1143,9 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     // The vault keeps logins for https sites only, and a password that cannot be kept is not worth making.
     if (!generated && page.url().startsWith('https:') && await generatedPasswordsAllowed(ctx.stateDir)) {
       policy = await readPasswordPolicy(scope);
-      generated = await savedPasswordFor(ctx.stateDir, page.url(), email) ?? generatePassword(policy);
+      // A reset page refuses the account's current password ("previously used"): it always gets a new one, which holdSignup saves.
+      const reset = resetPasswordPage(page.url(), pageContext?.headings);
+      generated = (reset ? undefined : await savedPasswordFor(ctx.stateDir, page.url(), email)) ?? generatePassword(policy);
       mine = true;
     }
     generated ??= profile ? await readProfileSecret(ctx.stateDir, profile, PASSWORD_SECRET) : undefined;

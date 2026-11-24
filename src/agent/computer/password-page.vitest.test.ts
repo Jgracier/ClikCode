@@ -1,7 +1,7 @@
 /** Sign-up or sign-in for a page with password boxes, on local fixture pages (no network). */
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { classifyPasswordPage, newPasswordPath, readPasswordPageContext, signInPath } from './password-page.js';
+import { classifyPasswordPage, newPasswordPath, readPasswordPageContext, resetPasswordPage, signInPath } from './password-page.js';
 
 let browser: Browser | undefined;
 beforeAll(async () => {
@@ -113,4 +113,13 @@ it('classifies by the path, never the query or a reset step under /signin', () =
   for (const url of ['https://x.test/login', 'https://accounts.google.com/v3/signin/identifier?x=1', 'https://x.auth0.com/u/login/identifier', 'https://x.test/sign-in']) expect(signInPath(url), url).toBe(true);
   expect(signInPath('https://login.twilio.com/u/reset-password/change')).toBe(false);
   expect(classifyPasswordPage({ ...base, url: 'https://x.test/login?next=/signup' }).kind).toBe('signin');
+});
+
+it('a reset page is told apart from a sign-up, so the saved password is never offered back to it', () => {
+  expect(resetPasswordPage('https://sso.online.tableau.com/public/reset-password?token=x')).toBe(true);
+  expect(resetPasswordPage('https://x.test/users/password/edit')).toBe(true);
+  expect(resetPasswordPage('https://x.test/forgot')).toBe(true);
+  expect(resetPasswordPage('https://x.test/account', 'Choose a new password | Acme')).toBe(true);
+  expect(resetPasswordPage('https://x.test/signup')).toBe(false);
+  expect(resetPasswordPage('https://x.test/welcome', 'Create your new password')).toBe(false);
 });

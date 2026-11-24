@@ -84,6 +84,12 @@ const SIGN_IN_PATH = /\/log[-_]?in\b|sign[-_]?in|identifier/i;
 export const signInPath = (url: string): boolean => { const where = pagePath(url); return SIGN_IN_PATH.test(where) && !NEW_PASSWORD_PATH.test(where); };
 /** The path makes or replaces a password. */
 export const newPasswordPath = (url: string): boolean => NEW_PASSWORD_PATH.test(pagePath(url));
+/** A path that replaces a forgotten or old password (not a sign-up): the reset half of NEW_PASSWORD_PATH. */
+const RESET_PATH = /password\/(?:edit|reset)|(?:reset|change|forgot)[-_ ]?password|(?:^|\/)(?:forgot|reset)(?:$|[/_-])/i;
+const RESET_HEADING = /\breset (?:your )?password|\bchoose a new password|\bchange (?:your )?password|\bforgot (?:your )?password/i;
+/** A page that replaces an account's password: by its path, else its headings. The site refuses the old password here ("previously
+ * used"), so the one saved for it must never be offered back. */
+export const resetPasswordPage = (url: string, headings = ''): boolean => RESET_PATH.test(pagePath(url)) || RESET_HEADING.test(headings);
 
 /** The page's own words and layout decide. Sign-in wins on a /login address; a forgot-password link or an already known account
  * only gives way to explicit new/create/set/confirm wording. */
