@@ -458,6 +458,7 @@ async function chain() {
     // after the boundary. Recall within its own budget (RECALL_BUDGET_MS), as a turn has it.
     // hindsight: the same, and ClikCode's MCP server too, as a chat in ClikCode has it.
     const boundary = opens[state.from];
+    if (CONDITIONS.some((name) => VARIANTS[name]?.ledger)) ledgers[threshold] = await buildLedger(threshold, state, turns, opens);
     for (const condition of CONDITIONS.filter((name) => name in VARIANTS)) {
       const session = await storedSession(messageEnd);
       const variant = VARIANTS[condition];
@@ -483,8 +484,46 @@ const VARIANTS = {
   'hs-record': { tools: true, record: true, maxTurns: 16 },
   'hs-nudge': { tools: true, record: true, maxTurns: 16, env: NUDGE },
   'hs-ids': { tools: true, record: true, maxTurns: 16, env: { ...NUDGE, ...IDS } },
+  'hs-ledger': { tools: true, record: true, maxTurns: 16, ledger: true },
   ...JSON.parse(process.env.EVAL_VARIANTS ?? '{}'),
 };
+/** hs-ledger: at each compaction a separate call lists the decisions, rejections (what was ruled out
+ * and why) and exact identifiers of the stretch being compacted, one line each with its message number;
+ * the lines are appended to a ledger carried unchanged through later compactions (never re-summarised),
+ * capped at LEDGER_MAX_CHARS (~2k tokens) by dropping the oldest. ledger.json keeps each stretch's lines
+ * and usage, so the extraction is paid once per compaction and counted in the cell's run cost. */
+const LEDGER_MAX_CHARS = Number(process.env.EVAL_LEDGER_MAX_CHARS ?? 8000);
+const ledgers = {};
+const LEDGER_PROMPT = 'Below is a stretch of a conversation between a user and an AI coding assistant; each message starts with its number in brackets. '
+  + 'List what a later reader would need exactly and could not reconstruct from a summary:\n'
+  + '- D: each decision made (what was chosen, in a few words, and why if stated)\n'
+  + '- R: each rejection (what was ruled out or reverted, and why)\n'
+  + '- I: each exact identifier that mattered (commit hash, file path, name, number, setting, URL, error code), copied character for character, with a few words saying what it is\n'
+  + 'One item per line, in this form: [message number] D|R|I: text. At most 50 lines, the ones that matter most; no preamble, no headings, nothing else.\n\n';
+function ledgerLines(text) { return String(text ?? '').split('\n').map((line) => line.trim()).filter((line) => /^\[\d+\]\s*[DRI]:/.test(line)).map((line) => line.slice(0, 300)); }
+async function buildLedger(threshold, state, turns, opens) {
+  const store = load('ledger.json', {});
+  const stretches = store[threshold] ?? [];
+  for (const [index, cut] of state.compactions.entries()) {
+    if (stretches[index]?.from === cut.from && stretches[index]?.to === cut.to) continue;
+    const body = turns.slice(cut.from, cut.to).map((turn, at) => `[${opens[cut.from + at]}] USER: ${turn.user ?? ''}\n[${Math.min(opens[cut.from + at] + 1, (opens[cut.from + at + 1] ?? Infinity) - 1)}] ASSISTANT: ${typeof turn.assistant === 'string' ? turn.assistant : ''}`).join('\n\n').slice(0, 400_000);
+    const result = await claude([], { input: `${LEDGER_PROMPT}${body}` });
+    if (result.error) { console.log(`T=${threshold / 1000}k: ledger extraction failed (${result.error.slice(0, 200)})`); process.exit(1); }
+    stretches[index] = { from: cut.from, to: cut.to, lines: ledgerLines(result.text), usage: result.usage };
+    store[threshold] = stretches;
+    save('ledger.json', store);
+    console.log(`T=${threshold / 1000}k: ledger for turns ${cut.from}-${cut.to - 1}: ${stretches[index].lines.length} lines`);
+  }
+  return ledgerText(stretches.slice(0, state.compactions.length));
+}
+/** The ledger as the context holds it after the last compaction: every stretch's lines in order, the oldest dropped first past the cap. */
+function ledgerText(stretches) {
+  const all = stretches.flatMap((item) => item.lines);
+  let chars = 0;
+  const kept = [];
+  for (const line of [...all].reverse()) { if (chars + line.length + 1 > LEDGER_MAX_CHARS) break; kept.unshift(line); chars += line.length + 1; }
+  return kept.length ? `Ledger of the decisions (D), rejections (R) and identifiers (I) from before your summary, each with its message number; read around a number with hindsight from/to for detail${kept.length < all.length ? ` (the oldest ${all.length - kept.length} lines dropped)` : ''}:\n${kept.join('\n')}` : '';
+}
 const contentsCache = new Map();
 async function withEnv(env, work) {
   const prior = Object.fromEntries(Object.keys(env).map((name) => [name, process.env[name]]));
@@ -499,7 +538,7 @@ async function variantPrompt(condition, threshold, probe, session, boundary, las
     if (!contentsCache.has(cacheKey)) {
       const contents = await clik.topicContents(session, tools, { through: boundary });
       const reach = variant.record ? clik.recordReachFor(tools, undefined) : undefined;
-      contentsCache.set(cacheKey, [reach ? clik.fullRecordNote(reach) : '', contents ?? ''].filter(Boolean).join('\n\n'));
+      contentsCache.set(cacheKey, [reach ? clik.fullRecordNote(reach) : '', contents ?? '', variant.ledger ? ledgers[threshold] ?? '' : ''].filter(Boolean).join('\n\n'));
     }
     const note = contentsCache.get(cacheKey);
     const request = `${tools ? TOOL_PROBE_PREFIX : PROBE_PREFIX}${probe.question}`;
@@ -689,13 +728,20 @@ function grid() {
     const bytes = one.seg.turns.reduce((sum, turn) => sum + turnBytes(turn), 0);
     return first ? (first.usage.input + first.usage.write + first.usage.read - probeFixed) / bytes : 0.36;
   };
-  const modelled = (threshold) => {
+  // A ledger condition carries its ledger after each compaction as the summary is carried, and pays its extraction calls.
+  const modelled = (threshold, condition = '') => {
     let cost = 0;
     let full = 0;
     for (const item of data) {
       const k = scale(item.dir);
       full += modelledCost(item.seg, undefined, item.fixed, k).total;
-      cost += modelledCost(item.seg, threshold ? item.chains[threshold] : undefined, item.fixed, k).total;
+      let chainState = threshold ? item.chains[threshold] : undefined;
+      const stretches = condition.includes('ledger') && chainState ? loadFrom(item.dir, 'ledger.json', {})[threshold] ?? [] : [];
+      if (stretches.length) {
+        chainState = { ...chainState, compactions: chainState.compactions.map((cut, index) => ({ ...cut, summaryChars: cut.summaryChars + ledgerText(stretches.slice(0, index + 1)).length })) };
+        cost += stretches.reduce((sum, stretch) => sum + weighted(stretch.usage), 0);
+      }
+      cost += modelledCost(item.seg, chainState, item.fixed, k).total;
     }
     return cost / full;
   };
@@ -720,7 +766,7 @@ function grid() {
       if (!scores) continue;
       const stats = Object.fromEntries(CATS.map((cat) => [cat, paired(scores, baseMean, cat)]));
       const tests = Object.fromEntries(CATS.map((cat) => [cat, mcnemar(scores, cat)]));
-      const run = modelled(threshold);
+      const run = modelled(threshold, condition);
       const probe = probeCost(`${condition}|${threshold}`) / probeCost('baseline|0');
       const tools = costs[`${condition}|${threshold}`].tools / costs[`${condition}|${threshold}`].n;
       // The pass rule: on each kind the paired 95% interval's lower bound within 3 points of full
@@ -759,6 +805,7 @@ function grid() {
   const spent = data.reduce((sum, { dir, answers }) => sum + answers.reduce((all, row) => all + weighted(row.usage), 0)
     + loadFrom(dir, tagged('warm.json'), []).reduce((all, row) => all + weighted(row.usage), 0)
     + Object.values(loadFrom(dir, tagged('chains.json'), {})).flatMap((state) => state.compactions).reduce((all, item) => all + (weighted(item.usage) || (item.context + 5 * item.summaryChars / 4) / 1e6), 0)
+    + (MODEL === 'haiku' ? Object.values(loadFrom(dir, 'ledger.json', {})).flat().reduce((all, item) => all + weighted(item.usage), 0) : 0)
     + (MODEL === 'haiku' ? lines(dir, 'probe-gen.jsonl').reduce((all, row) => all + weighted(row.usage), 0) : 0), 0);
   console.log(`spent (tokens at the Haiku weights: input 1, write 1.25, read 0.1, output 5 per million): $${spent.toFixed(2)}`);
   for (const condition of [...new Set(rows.filter((row) => row.condition).map((row) => row.condition))]) {
