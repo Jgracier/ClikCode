@@ -178,9 +178,9 @@ mkdirSync(dirname(clik.computerSettingsPath(clik.stateDirectory())), { recursive
 writeFileSync(clik.computerSettingsPath(clik.stateDirectory()), JSON.stringify({ enabled: false }));
 const TOOL_NAMES = ['hindsight', 'search_conversations', 'read_conversation', 'active_conversations'].map((name) => `mcp__clikcode__${name}`);
 /** Claude Code arguments that give the model ClikCode's MCP server, as a ClikCode chat has it. */
-function toolArgs(cell, log = saved(`tool-log${TAG}.jsonl`), text = false) {
+function toolArgs(cell, log = saved(`tool-log${TAG}.jsonl`), text = false, maxTurns = 8) {
   const config = { mcpServers: { clikcode: { type: 'stdio', command: process.execPath, args: [mcpBundle], env: { EVAL_CONV: conv, EVAL_TOOL_LOG: log, EVAL_CELL: cell, ...(text ? { EVAL_TOOL_TEXT: '1' } : {}) } } } };
-  return ['--mcp-config', JSON.stringify(config), '--allowedTools', TOOL_NAMES.join(','), '--max-turns', '8'];
+  return ['--mcp-config', JSON.stringify(config), '--allowedTools', TOOL_NAMES.join(','), '--max-turns', String(maxTurns)];
 }
 const version = spawnSync('claude', ['--version'], { encoding: 'utf8', env: vendorEnv }).stdout?.split('\n')[0]?.trim();
 
@@ -463,7 +463,7 @@ async function chain() {
       const variant = VARIANTS[condition];
       const lastAssistant = [...tail].reverse().find((turn) => typeof turn.assistant === 'string' && turn.assistant.trim())?.assistant;
       await askAll(id, condition, threshold, (probe) => variantPrompt(condition, threshold, probe, session, boundary, lastAssistant),
-        variant.tools ? toolArgs(`${condition}|${threshold}`) : []);
+        variant.tools ? toolArgs(`${condition}|${threshold}`, undefined, false, variant.maxTurns ?? 8) : []);
     }
   }
 }
@@ -480,9 +480,9 @@ const IDS = { CLIKCODE_EVAL_ID_LIST: '1' };
 const VARIANTS = {
   recall: { tools: false },
   hindsight: { tools: true },
-  'hs-record': { tools: true, record: true },
-  'hs-nudge': { tools: true, record: true, env: NUDGE },
-  'hs-ids': { tools: true, record: true, env: { ...NUDGE, ...IDS } },
+  'hs-record': { tools: true, record: true, maxTurns: 16 },
+  'hs-nudge': { tools: true, record: true, maxTurns: 16, env: NUDGE },
+  'hs-ids': { tools: true, record: true, maxTurns: 16, env: { ...NUDGE, ...IDS } },
   ...JSON.parse(process.env.EVAL_VARIANTS ?? '{}'),
 };
 const contentsCache = new Map();
@@ -507,7 +507,11 @@ async function variantPrompt(condition, threshold, probe, session, boundary, las
     const found = await clik.recall({ sessionId: conv, query: request, boundary, hasHindsight: tools, context: lastAssistant });
     const row = { key: `${threshold}|${probe.id}`, condition, model: MODEL, boundary, ms: Date.now() - started, hits: found.hits.map((hit) => `${hit.position}:${hit.by}:${hit.score}`), skipped: found.skipped, chars: found.note?.length ?? 0, noteChars: note.length };
     appendFileSync(saved('recall-log.jsonl'), `${JSON.stringify(row)}\n`);
-    return `${note ? `${clik.wrapResourceNote(note)}\n\n` : ''}${request}${found.note ? `\n\n${found.note}` : ''}`;
+    const prompt = `${note ? `${clik.wrapResourceNote(note)}\n\n` : ''}${request}${found.note ? `\n\n${found.note}` : ''}`;
+    // One prompt per cell kept beside the answers, to read what the model was given.
+    const sample = saved(`prompt-${condition}-${threshold}${TAG}.txt`);
+    if (!existsSync(sample)) writeFileSync(sample, prompt);
+    return prompt;
   });
 }
 
@@ -816,6 +820,44 @@ async function judge() {
 /** Where the message holding `keys` ranks by meaning for `query`, among the messages before
  * `boundary`, against the gate semanticMatches applies (MIN_SIMILARITY 0.62, median + LIFT 0.2). */
 let vectorRecords;
+/** Recall alone, no model: for each graded probe from before the boundary, whether what recall
+ * attaches has the key, under each knob set (EVAL_RECALL_SETS, {name: {env}}; "shipped" is {}).
+ * Each set is asked twice, the first pass warming the view and embedder; the second is reported.
+ * Writes retrieval.json (per set and threshold: probes, attached, key attached, chars, ms). */
+async function retrieval() {
+  const { turns, opens, messageEnd } = segment();
+  const sets = { shipped: {}, ...JSON.parse(process.env.EVAL_RECALL_SETS ?? '{}') };
+  const list = graded(load('probes.json')).filter((probe) => probe.kind !== 'continuity');
+  const words = (text) => plain(text).split(/[^a-z0-9.]+/).filter((word) => word.length > 2);
+  const nearly = (text, keys) => keys.every((key) => { const want = words(key); const have = new Set(words(text)); return want.length && want.filter((word) => have.has(word)).length / want.length >= 0.6; });
+  await storedSession(messageEnd);
+  const chains = load(tagged('chains.json'), {});
+  const results = load('retrieval.json', {});
+  for (const threshold of thresholds) {
+    const state = chains[threshold];
+    if (!state?.summary) continue;
+    const boundary = opens[state.from];
+    const lastAssistant = [...turns.slice(state.from)].reverse().find((turn) => typeof turn.assistant === 'string' && turn.assistant.trim())?.assistant;
+    const before = list.filter((probe) => opens[probe.stretch[1]] !== undefined ? opens[probe.stretch[1]] <= boundary : false);
+    for (const [name, env] of Object.entries(sets)) {
+      const rows = [];
+      for (const pass of [0, 1]) {
+        for (const probe of before) {
+          const request = `${TOOL_PROBE_PREFIX}${probe.question}`;
+          const started = Date.now();
+          const found = await withEnv(env, () => clik.recall({ sessionId: conv, query: request, boundary, hasHindsight: true, context: lastAssistant }));
+          if (pass) rows.push({ probe: probe.id, kind: probe.kind, ms: Date.now() - started, attached: found.hits.length, key: Boolean(found.note && (grade(found.note, probe.answer) || nearly(found.note, probe.answer))), chars: found.note?.length ?? 0, skipped: found.skipped });
+        }
+      }
+      const ms = rows.map((row) => row.ms).sort((left, right) => left - right);
+      const summary = { probes: rows.length, attached: rows.filter((row) => row.attached).length, key: rows.filter((row) => row.key).length, chars: Math.round(rows.reduce((sum, row) => sum + row.chars, 0) / Math.max(1, rows.length)), msMedian: ms[Math.floor(ms.length / 2)], msP95: ms[Math.floor(0.95 * ms.length)], timeouts: rows.filter((row) => row.skipped === 'timeout').length, rows };
+      (results[threshold] ??= {})[name] = summary;
+      save('retrieval.json', results);
+      console.log(`retrieval ${threshold / 1000}k ${name}: key in ${summary.key}/${summary.probes}, attached ${summary.attached}, chars ${summary.chars}, ms ${summary.msMedian}/${summary.msP95}, timeouts ${summary.timeouts}`);
+    }
+  }
+}
+
 async function meaningGate(query, keys, boundary) {
   const { turns, opens } = segment();
   vectorRecords ??= readFileSync(saved('vectors.jsonl'), 'utf8').split('\n').slice(1).filter(Boolean).map((line) => JSON.parse(line)).map((record) => {
@@ -964,6 +1006,7 @@ try {
   else if (phase === 'chain') await chain();
   else if (phase === 'analyze') await analyze();
   else if (phase === 'judge') await judge();
+  else if (phase === 'retrieval') await retrieval();
   else { console.error(`unknown phase ${phase}`); process.exitCode = 2; }
 } catch (error) {
   console.error(error);
