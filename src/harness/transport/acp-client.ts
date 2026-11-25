@@ -1432,10 +1432,12 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (target) this.deliver(target, update, totals);
     if (target && target === this.background) this.watchOrphanedTools();
     const run = this.background;
-    if (run && target === run && this.work.count() === 0) {
+    if (run && target === run && this.work.count() === 0 && !this.work.level && !this.heldAgents.size) {
       // The end of a background turn is the vendor's to say: the last tool it
       // was waiting for settled, or the agent's own end-of-turn bookkeeping
-      // arrived. Nothing else ends it but the process going or the user.
+      // arrived. Nothing else ends it but the process going or the user. Not
+      // while an agent is still held: the bookkeeping after one of a batch
+      // reports closes only the vendor's answer to it, not the work.
       const settledLastTool = update.sessionUpdate === 'tool_call_update' && toolSettled(update);
       if (settledLastTool || TURN_BOOKKEEPING_UPDATES.has(String(update.sessionUpdate))) this.finishBackground('completed');
     }
