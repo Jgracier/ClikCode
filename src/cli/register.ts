@@ -255,6 +255,13 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--model <model>', 'Model to use')
     .option('--permissions <mode>', 'ask, auto, or bypass for this chat (default: your global setting)')
     .action(send);
+  program.command('notify [message...]').description('Tell the person something from a background program, with no chat and no model turn: a desktop notification when a desktop session exists, and an entry on the handoff desk (clikcode computer desk, clikcode computer browsers, /browsers, the chat) that stays until it is dismissed or cleared. The same --key again while it is open updates the entry without a second popup. Plain text, about 300 characters at most; never put a secret in it')
+    .option('--key <key>', 'Dedupe key: one open notice per key (letters, digits, . _ : -), e.g. clikdeploy-unlock')
+    .option('--title <title>', 'Short title for the notification and the list')
+    .option('--url <address>', 'An http(s) address the person can open about it')
+    .option('--clear', 'Remove the notice with this --key (send when the condition ends)')
+    .addHelpText('after', '\nExamples:\n  clikcode notify --key clikdeploy-unlock --title "ClikDeploy writes held" --url https://example.com/unlock "Renew the authenticator unlock to let queued writes through."\n  clikcode notify --clear --key clikdeploy-unlock\n\nExit 0 once recorded, even with no desktop. --json prints {"delivered":"desktop"|"desk"|"deduped","key":...}; with --clear, {"cleared":true|false,"key":...}.')
+    .action(async (message: string[], options: { key?: string; title?: string; url?: string; clear?: boolean }) => (await import('../commands/notify.js')).notifyCommand(message ?? [], options));
   const acp = program.command('acp').description('Add an Agent Client Protocol harness the catalog does not ship');
   acp.command('list').description('List harnesses added on this machine').action(later(acpCommands, 'acpList'));
   acp.command('add <command> <binary> [argv...]')
