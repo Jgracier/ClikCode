@@ -4,10 +4,14 @@
  * shown as unrecorded. */
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import path from 'node:path';
+import { quiet } from '../../runtime/lifecycle-log.js';
+import { atomicWriteFile } from '../../session/store/files.js';
 import { pidIsAlive } from '../../session/store/locks.js';
 import { measureBrowser, type BrowserLoad } from './browser-janitor.js';
 import { computerHostFile, runningHostDisplay, type HostDisplay } from './browser-host.js';
 import { deskItemAddress, listDeskItems, readDeskInfo, deskAddress, type DeskInfo, type DeskItem } from './handoff-desk-store.js';
+import { listNotices, noticesText, type Notice } from './notices.js';
 import { allTabs, type TabView } from './tab-registry.js';
 
 export interface BrowserTabRow {
@@ -31,7 +35,7 @@ export interface BrowserTabRow {
   recorded: boolean;
   /** On the handoff desk, waiting on the person. */
   waiting?: { label: string; kind: string; note?: string; waitedMs: number; address?: string };
-  /** A live view of it is being served (show) at this address. */
+  /** A live view of it is being served (show, or `browsers watch`) at this address. */
   liveView?: string;
 }
 
@@ -44,6 +48,8 @@ export interface BrowsersOverview {
   bytes?: number;
   desk?: string;
   tabs: BrowserTabRow[];
+  /** What background programs told the person (`clikcode notify`), open until dismissed or cleared. */
+  notices: Notice[];
   totals: { tabs: number; waiting: number; longestWaitMs: number; unrecorded: number };
 }
 
@@ -57,6 +63,38 @@ export interface OverviewDeps {
   desk?: () => Promise<{ info: DeskInfo | undefined; items: DeskItem[] }>;
   chats?: () => Promise<Map<number, string>>;
   alive?: (pid: number) => boolean;
+  notices?: () => Promise<Notice[]>;
+  /** Live views served by a process outside the chats (`browsers watch`, `/browsers watch`), by tab id. */
+  watchViews?: () => Promise<Map<string, string>>;
+}
+
+// ── live views a command serves: the chat's own (show) are on the tab's record; a watch is served by a process that holds no tab ──
+
+interface WatchRecord { id: string; address: string; pid: number }
+const watchDir = (stateDir: string): string => path.join(stateDir, 'computer', 'watch-views');
+const watchFile = (stateDir: string, id: string): string => path.join(watchDir(stateDir), `${id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+
+/** Write down that this process serves a live view of tab `id` at `address`, so the list shows it as open. */
+export async function recordWatchView(stateDir: string, id: string, address: string): Promise<void> {
+  await fs.mkdir(watchDir(stateDir), { recursive: true, mode: 0o700 });
+  await atomicWriteFile(watchFile(stateDir, id), JSON.stringify({ id, address, pid: process.pid } satisfies WatchRecord), { mode: 0o600, durable: false });
+}
+export async function forgetWatchView(stateDir: string, id: string): Promise<void> {
+  await fs.unlink(watchFile(stateDir, id)).catch(quiet('agent/computer/browsers-overview'));
+}
+/** The watch views whose serving process still runs; a record left by one that ended is removed. */
+export async function watchViews(stateDir: string, alive: (pid: number) => boolean = pidIsAlive): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  for (const name of await fs.readdir(watchDir(stateDir)).catch(() => [] as string[])) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const record = JSON.parse(await fs.readFile(path.join(watchDir(stateDir), name), 'utf8')) as WatchRecord;
+      if (typeof record.id !== 'string' || typeof record.address !== 'string') continue;
+      if (Number.isSafeInteger(record.pid) && alive(record.pid)) found.set(record.id, record.address);
+      else await fs.unlink(path.join(watchDir(stateDir), name)).catch(quiet('agent/computer/browsers-overview'));
+    } catch { /* being written */ }
+  }
+  return found;
 }
 
 async function hostPidOf(stateDir: string): Promise<number | undefined> {
@@ -90,25 +128,28 @@ export function listedUrl(url: string): string {
 
 export async function browsersOverview(stateDir: string, deps: OverviewDeps = {}): Promise<BrowsersOverview> {
   const now = deps.now ?? Date.now();
-  const [views, hostPid, display, desk, chats] = await Promise.all([
+  const alive = deps.alive ?? pidIsAlive;
+  const [views, hostPid, display, desk, chats, notices, watching] = await Promise.all([
     (deps.tabs ?? (() => allTabs(stateDir, { now })))(),
     (deps.hostPid ?? (() => hostPidOf(stateDir)))(),
     (deps.display ?? (() => runningHostDisplay(stateDir)))(),
     (deps.desk ?? (async () => ({ info: await readDeskInfo(stateDir), items: await listDeskItems(stateDir) })))().catch(() => ({ info: undefined, items: [] as DeskItem[] })),
     (deps.chats ?? workerChats)().catch(() => new Map<number, string>()),
+    (deps.notices ?? (() => listNotices(stateDir)))().catch(() => [] as Notice[]),
+    (deps.watchViews ?? (() => watchViews(stateDir, alive)))().catch(() => new Map<string, string>()),
   ]);
-  const alive = deps.alive ?? pidIsAlive;
   const waitingOn = new Map(desk.items.filter(item => item.status === 'waiting').map(item => [item.targetId, item]));
   const tabs = (views ?? []).map((view, index): BrowserTabRow => {
     const item = waitingOn.get(view.id);
     const chat = view.ownerPid ? chats.get(view.ownerPid) : undefined;
+    const liveView = view.liveView ?? watching.get(view.id);
     return {
       n: index + 1, id: view.id, ...(view.tab ? { name: view.tab } : {}), owner: view.owner, ownerPid: view.ownerPid, ...(chat ? { chat } : {}),
       ownerAlive: view.ownerPid > 0 && alive(view.ownerPid), url: listedUrl(view.url ?? ''), ...(view.title ? { title: view.title } : {}),
       ageMs: Math.max(0, now - view.openedAt), idleMs: Math.max(0, now - view.lastUsedAt), parked: view.parked === true,
       ...(view.egress ? { egress: view.egress } : {}), recorded: view.recorded,
       ...(item ? { waiting: { label: item.label, kind: item.kind, ...(item.note ? { note: item.note } : {}), waitedMs: Math.max(0, now - item.createdAt), ...(desk.info ? { address: deskItemAddress(desk.info, item.id) } : {}) } } : {}),
-      ...(view.liveView ? { liveView: view.liveView } : {}),
+      ...(liveView ? { liveView } : {}),
     };
   });
   const load = hostPid ? (deps.measure ?? (pid => measureBrowser(pid)))(hostPid) : undefined;
@@ -122,6 +163,7 @@ export async function browsersOverview(stateDir: string, deps: OverviewDeps = {}
     ...(load ? { renderers: load.renderers, bytes: load.bytes } : {}),
     ...(desk.info ? { desk: deskAddress(desk.info) } : {}),
     tabs,
+    notices,
     totals: { tabs: tabs.length, waiting: waits.length, longestWaitMs: waits.length ? Math.max(...waits) : 0, unrecorded: tabs.filter(tab => !tab.recorded).length },
   };
 }
@@ -147,8 +189,9 @@ function ownerText(tab: BrowserTabRow): string {
 }
 
 /** The list as a person reads it. `how` is the line that says how to act on a tab (the CLI and the slash command say it differently). */
-export function browsersText(overview: BrowsersOverview, how: string): string {
-  if (!overview.running) return 'ClikCode\'s browser is not running: no tabs are open. It starts by itself with the first browser_use call.';
+export function browsersText(overview: BrowsersOverview, how: string, options: { now?: number; dismiss?: string } = {}): string {
+  const notices = noticesText(overview.notices, options.now ?? Date.now(), options.dismiss ?? 'Dismiss one: clikcode notify --clear --key <key>');
+  if (!overview.running) return [...notices, ...(notices.length ? [''] : []), 'ClikCode\'s browser is not running: no tabs are open. It starts by itself with the first browser_use call.'].join('\n');
   const gb = overview.bytes !== undefined ? `${(overview.bytes / 2 ** 30).toFixed(1)} GB` : undefined;
   const browser = [
     overview.display ? `window ${overview.display === 'hidden' ? 'hidden (virtual display)' : overview.display === 'visible' ? 'on the desktop' : 'headless'}` : undefined,
@@ -165,7 +208,7 @@ export function browsersText(overview: BrowsersOverview, how: string): string {
     const flags = [
       tab.waiting ? `WAITING ON YOU ${duration(tab.waiting.waitedMs)}: ${tab.waiting.label} [${tab.waiting.kind}]${tab.waiting.note ? ` ${tab.waiting.note}` : ''}` : undefined,
       tab.parked ? 'parked' : undefined,
-      tab.liveView ? `live view ${tab.liveView}` : undefined,
+      tab.liveView ? `live view open ${tab.liveView}` : undefined,
       tab.egress ? `via ${tab.egress}` : undefined,
     ].filter(Boolean);
     lines.push(`${String(tab.n).padStart(2)}. ${tab.title ? `${tab.title.slice(0, 60)} · ` : ''}${shortUrl(tab.url)}`);
@@ -173,6 +216,7 @@ export function browsersText(overview: BrowsersOverview, how: string): string {
     if (tab.waiting?.address) lines.push(`    handoff: ${tab.waiting.address}`);
   }
   if (overview.desk && totals.waiting) lines.push('', `Everything waiting on you: ${overview.desk}`);
+  if (notices.length) lines.push('', ...notices);
   lines.push('', how);
   return lines.join('\n');
 }

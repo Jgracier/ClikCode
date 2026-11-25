@@ -86,7 +86,13 @@ export const settingsHandlers = {
     const action = words[0]?.toLowerCase();
     if (!action || action === 'list') {
       const overview = await browsersOverview(stateDirectory());
-      return emitHarnessOutput({ panel: 'browsers', browsers: overview, text: browsersText(overview, 'Act on one: /browsers watch <n> (a live view on your desktop: watch it, click and type in it) · /browsers front <n> · /browsers close <n>.') });
+      return emitHarnessOutput({ panel: 'browsers', browsers: overview, text: browsersText(overview, 'Act on one: /browsers watch <n> (a live view on your desktop: watch it, click and type in it) · /browsers front <n> · /browsers close <n>.', { dismiss: 'Dismiss one: /browsers dismiss <key>' }) });
+    }
+    if (action === 'dismiss') {
+      const { clearNotice } = await import('../../../agent/computer/notices.js');
+      const key = words[1];
+      if (!key) throw new Error('Name the notice: /browsers dismiss <key> (its key is in /browsers).');
+      return emitHarnessOutput({ panel: 'browsers', text: await clearNotice(stateDirectory(), key) ? `Dismissed the notice ${key}.` : `No notice ${key} is open.` });
     }
     const done = await browserTabAction(stateDirectory(), action, words[1]);
     return emitHarnessOutput({ panel: 'browsers', ...done, text: done.text });

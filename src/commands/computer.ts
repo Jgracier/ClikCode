@@ -124,7 +124,11 @@ export async function computerDesk(): Promise<void> {
   const desk = await import('../agent/computer/handoff-desk-store.js');
   const info = await desk.readDeskInfo(dir);
   const waiting = (await desk.listDeskItems(dir)).filter(item => item.status === 'waiting');
-  if (isJsonDefaultMode()) return emitResult({ computer: { desk: { serving: Boolean(info), ...(info ? { address: desk.deskAddress(info) } : {}), waiting: waiting.map(item => ({ id: item.id, label: item.label, kind: item.kind, ...(item.host ? { host: item.host } : {}), minutes: Math.round((Date.now() - item.createdAt) / 60_000) })) } } });
+  const { listNotices, noticesText } = await import('../agent/computer/notices.js');
+  const notices = await listNotices(dir);
+  if (isJsonDefaultMode()) return emitResult({ computer: { desk: { serving: Boolean(info), ...(info ? { address: desk.deskAddress(info) } : {}), waiting: waiting.map(item => ({ id: item.id, label: item.label, kind: item.kind, ...(item.host ? { host: item.host } : {}), minutes: Math.round((Date.now() - item.createdAt) / 60_000) })), notices } } });
+  const noticeLines = noticesText(notices, Date.now(), 'Dismiss one: clikcode notify --clear --key <key>');
+  if (noticeLines.length) process.stdout.write(`${noticeLines.join('\n')}\n\n`);
   if (!info) {
     process.stdout.write('The handoff desk is not being served. It starts with ClikCode\'s browser, on a computer that is on a Tailscale network: use the browser once (any browser_use call), then run this again.\n');
     return;
@@ -601,13 +605,17 @@ export async function browserTabAction(dir: string, action: string, which: strin
   const page = await computerPageById(dir, tab.id);
   if (!page) throw new Error(`${label} is no longer open.`);
   const server = await serveLiveView({ host: '127.0.0.1', watch: true, ownHostOnly: true, page: async () => page });
+  // The list shows it as open, as a chat's show is: written down under this process, which serves it, and taken back when it ends.
+  const { recordWatchView, forgetWatchView } = await import('../agent/computer/browsers-overview.js');
+  await recordWatchView(dir, tab.id, server.address).catch(quiet('commands/computer'));
+  page.once('close', () => { void forgetWatchView(dir, tab.id); });
   const session = remoteSession() ? undefined : desktopSession();
   const opened = session ? await openOnDesktop(server.address, session) : false;
   const text = `${opened ? 'Opened a live view of' : 'Serving a live view of'} ${label}${opened ? ' on your desktop' : ''}: ${server.address}\nIt answers only on this computer. You can click and type in it; the agent's work there goes on.${options.stay ? ' Ctrl-C ends the view (the tab stays open).' : ' It lasts while this ClikCode window is open.'}`;
   if (!options.stay) return { tab: tab.id, address: server.address, opened, text };
   const keep = setInterval(() => undefined, 60_000);
   const wait = new Promise<void>(resolve => {
-    const end = (): void => { clearInterval(keep); void server.stop().catch(quiet('commands/computer')).finally(resolve); };
+    const end = (): void => { clearInterval(keep); void forgetWatchView(dir, tab.id).then(() => server.stop()).catch(quiet('commands/computer')).finally(resolve); };
     process.once('SIGINT', end);
     page.once('close', end);
   });

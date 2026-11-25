@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { browsersOverview, browsersText, pickTab, processAgeMs } from './browsers-overview.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { browsersOverview, browsersText, forgetWatchView, pickTab, processAgeMs, recordWatchView, watchViews } from './browsers-overview.js';
 import type { TabView } from './tab-registry.js';
 
 const NOW = 10_000_000;
@@ -20,6 +23,8 @@ describe('the browsers list', () => {
     desk: async () => ({ info: { pid: 99, host: '100.1.2.3', port: 4000, token: 'tok' }, items: [{ id: 'd1', label: 'AWS', kind: 'captcha' as const, targetId: 'BBBB2222', createdAt: NOW - 300_000, status: 'waiting' as const }] }),
     chats: async () => new Map([[41, '9d0c4a35-1abf']]),
     alive: (pid: number) => pid === 41,
+    notices: async () => [],
+    watchViews: async () => new Map([['CCCC3333', 'http://127.0.0.1:6000/w/']]),
   };
 
   it('joins the records, the browser\'s pages and the desk, with totals', async () => {
@@ -38,6 +43,22 @@ describe('the browsers list', () => {
     expect(text.trim().endsWith('how')).toBe(true);
   });
 
+  it('shows a watch view as open, like a show view', async () => {
+    const overview = await browsersOverview('/nowhere', deps);
+    expect(overview.tabs[2]!.liveView).toBe('http://127.0.0.1:6000/w/');
+    expect(browsersText(overview, 'how')).toContain('live view open http://127.0.0.1:6000/w/');
+  });
+
+  it('lists open notices under their own heading, with or without a browser', async () => {
+    const notice = { key: 'clikdeploy-unlock', title: 'Writes held', message: 'Renew the unlock.', createdAt: NOW - 120_000, updatedAt: NOW, count: 3 };
+    const overview = await browsersOverview('/nowhere', { ...deps, notices: async () => [notice] });
+    expect(overview.notices).toEqual([notice]);
+    const text = browsersText(overview, 'how', { now: NOW, dismiss: 'Dismiss one: /browsers dismiss <key>' });
+    expect(text).toContain('Notices (1):\n  Writes held: Renew the unlock. (2 min, said 3 times; key clikdeploy-unlock)\n  Dismiss one: /browsers dismiss <key>');
+    const stopped = await browsersOverview('/nowhere', { ...deps, tabs: async () => undefined, notices: async () => [notice] });
+    expect(browsersText(stopped, 'how', { now: NOW })).toMatch(/^Notices \(1\):[\s\S]*not running/);
+  });
+
   it('names a tab by number, name or id', async () => {
     const overview = await browsersOverview('/nowhere', deps);
     expect(pickTab(overview, '2').id).toBe('BBBB2222');
@@ -50,6 +71,19 @@ describe('the browsers list', () => {
     const overview = await browsersOverview('/nowhere', { ...deps, tabs: async () => undefined, hostPid: async () => undefined });
     expect(overview.running).toBe(false);
     expect(browsersText(overview, 'how')).toMatch(/not running/);
+  });
+
+  it('keeps a watch view while its process runs, and drops one whose process ended', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'watch-'));
+    try {
+      await recordWatchView(dir, 'TAB1', 'http://127.0.0.1:7000/x/');
+      expect(await watchViews(dir, () => true)).toEqual(new Map([['TAB1', 'http://127.0.0.1:7000/x/']]));
+      expect(await watchViews(dir, () => false)).toEqual(new Map());
+      expect(await watchViews(dir, () => true)).toEqual(new Map());
+      await recordWatchView(dir, 'TAB2', 'http://127.0.0.1:7001/y/');
+      await forgetWatchView(dir, 'TAB2');
+      expect(await watchViews(dir)).toEqual(new Map());
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it('reads a process age from /proc', () => {

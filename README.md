@@ -424,7 +424,7 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 50 commands. Twelve are pinned
+Pressing `/` opens a searchable list of ClikCode's 51 commands. Twelve are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
 tool, an account on it, then its model, a private model, the machine it runs on,
 start over, change what needs your approval, then settings, sessions, status and
@@ -506,6 +506,7 @@ not reversed.
 | `/permissions [ask\|bypass\|auto]` (also `/permission`) | approval behavior |
 | `/sandbox [on\|off]` | ClikCode's own agent: its shell commands write only the workspace, temp and caches (on by default) |
 | `/computer [on\|off\|inspect\|logins\|login [url] [--new]]` | let the agent use this computer's browser and desktop. `login` signs in privately: the one saved account is used, several show a picker, new logins are saved only once sign-in completes, and one-time codes are asked for each time and never kept. `logins` reviews and removes saved logins (shown only to you); `inspect` shows the sign-in fields without their values |
+| `/browsers [watch\|front\|close <n> \| dismiss <key>]` | every tab ClikCode's browser has open: who holds it, its page, what waits on you, its live view; `watch` opens a live view of one on your desktop, `front` and `close` act on it. Notices from background programs (`clikcode notify`) are listed too; `dismiss` removes one |
 | `/send [steer\|queue]` | messages typed mid-turn: steer them into the running turn at its next pause (where the agent takes steering; elsewhere they queue, and say so), or queue them for after it. Global; bare `/send` shows the two |
 | `/options` | provider-specific modes and controls |
 | `/capabilities` | what the selected provider supports |
