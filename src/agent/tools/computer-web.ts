@@ -461,6 +461,7 @@ export const computerWebTool = defineTool<WebArgs>({
     const profileAlias = (args as { profile?: unknown }).profile;
     if (typeof profileAlias === 'string' && profileAlias && !args.label) args.label = profileAlias;
     if (args.action === 'handoff') return handoffAction(args, hostCtx).catch((error: unknown) => ({ output: error instanceof Error ? error.message : String(error), isError: true }));
+    if (args.action === 'show') return showAction(args, hostCtx).catch((error: unknown) => ({ output: error instanceof Error ? error.message : String(error), isError: true }));
     return runInOrder(args, hostCtx);
   },
 });
@@ -1841,12 +1842,17 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
       return { output: lines.join('\n'), ...(sent.some(delivery => !delivery.ok) ? { isError: true } : {}) };
     }
     case 'handoff': return handoffAction(args, ctx);
-    case 'show': {
-      const { showTab } = await import('../computer/handoff-show.js');
-      return { output: await showTab({ stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}), ...(args.clear === true ? { clear: true } : {}) }) };
-    }
     default: throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
   }
+}
+
+/** show runs OUTSIDE the chat's call queue too, and is bounded (handoff-show.ts, SHOW_LIMIT_MS): it only looks at the tab, and the user
+ * asked to watch now. Queued, it waited behind whatever the chat (or a sub-agent sharing its tab) was doing, a sign-in waiting on an emailed
+ * code for minutes, and the agent sat with no answer (2026-11-25). Closing the view needs no tab at all. */
+export async function showAction(args: Pick<WebArgs, 'tab' | 'clear'>, ctx: Pick<ToolContext, 'stateDir'>, show?: typeof import('../computer/handoff-show.js').showTab): Promise<ToolRunResult> {
+  if (args.clear !== true && !(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
+  const showTab = show ?? (await import('../computer/handoff-show.js')).showTab;
+  return { output: await showTab({ stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}), ...(args.clear === true ? { clear: true } : {}) }) };
 }
 
 /**

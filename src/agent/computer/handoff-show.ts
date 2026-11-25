@@ -25,6 +25,27 @@ const TEND_EVERY_MS = 2_000;
 interface ShowView { server: LiveServer; timer: NodeJS.Timeout; noTabSince?: number }
 const views = sharedState('show-views', () => new Map<string, ShowView>());
 
+/** The most a show takes. It answers with the view's address or the reason there is none, never with a wait: a tab whose page is
+ * busy, a browser being restarted or a desktop that does not answer leaves the agent (and the user waiting on it) with nothing. */
+export const SHOW_LIMIT_MS = 6_000;
+
+class ShowTimeout extends Error { constructor(readonly step: string) { super(step); } }
+
+/** `work`, or a ShowTimeout naming `step` once the show's deadline passes. */
+function by<T>(deadline: number, step: string, work: Promise<T>, now: () => number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new ShowTimeout(step)), Math.max(0, deadline - now())); });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
+const STEP_TEXT: Record<string, string> = {
+  page: 'the browser did not hand over this chat\'s tab in time (it is busy, or being restarted)',
+  display: 'the browser did not say where its window is in time',
+  front: 'the tab did not come to the front in time (its page is busy)',
+  serve: 'the live view could not be started in time',
+  open: 'the desktop\'s browser opener did not answer in time',
+};
+
 /** How long an opener gets to say it failed. One that is still running after this is showing the page (a browser started in its place). */
 const OPENER_SETTLE_MS = 2_500;
 
@@ -103,22 +124,38 @@ export async function tendShow(key: string, deps: Pick<ShowDeps, 'current' | 'no
 }
 
 /** The show action. Returns what to tell the agent; throws when the chat has no tab to show. */
-export async function showTab(input: { stateDir: string; tab?: string; clear?: boolean }, overrides: Partial<ShowDeps> = {}): Promise<string> {
+export async function showTab(input: { stateDir: string; tab?: string; clear?: boolean; limitMs?: number }, overrides: Partial<ShowDeps> = {}): Promise<string> {
   const key = input.tab ? `${input.stateDir}#${input.tab}` : input.stateDir;
   const deps: ShowDeps = { ...realDeps(input.stateDir, input.tab), ...overrides };
   if (input.clear === true) return await endShow(key, 'cleared') ? 'The live view is closed. The tab is unchanged.' : 'No live view is open on this tab.';
-  const page = await deps.page();
+  const deadline = Date.now() + (input.limitMs ?? SHOW_LIMIT_MS);
+  try {
+    return await showWithin(key, deps, (step, work) => by(deadline, step, work, Date.now));
+  } catch (error) {
+    if (!(error instanceof ShowTimeout)) throw error;
+    lifecycle('browser.show.open', { opened: false, why: 'timeout', step: error.step });
+    const view = views.get(key);
+    const served = view ? ` The live view is being served at ${view.server.address} (this computer only): the user can open that address in their browser.` : '';
+    return `NOT OPENED: ${STEP_TEXT[error.step] ?? error.step} (gave up after ${Math.round((input.limitMs ?? SHOW_LIMIT_MS) / 1000)} s).${served} Carry on with the task; call show again in a moment.`;
+  }
+}
+
+async function showWithin(key: string, deps: ShowDeps, step: <T>(name: string, work: Promise<T>) => Promise<T>): Promise<string> {
+  const page = await step('page', deps.page());
   const remote = deps.remote();
   // The browser's own window is in front of the person already: put this tab in front of it. (A cloud tab is in no local window.)
-  if (!remote && !deps.inCloud() && await deps.hostDisplay() === 'visible') {
+  if (!remote && !deps.inCloud() && await step('display', deps.hostDisplay()) === 'visible') {
     await endShow(key, 'browser-visible');
-    await page.bringToFront();
+    await step('front', page.bringToFront());
+    lifecycle('browser.show.open', { opened: false, why: 'browser-visible' });
     return 'ClikCode\'s browser window is on this computer\'s desktop, and this tab is now in front in it: the user can watch there. Keep working as usual. Nothing else was opened.';
   }
   let view = views.get(key);
   const reused = view !== undefined;
   if (!view) {
-    const server = await deps.serve({ host: '127.0.0.1', watch: true, ownHostOnly: true, page: deps.page });
+    const serving = deps.serve({ host: '127.0.0.1', watch: true, ownHostOnly: true, page: deps.page });
+    // A server that comes up after the deadline is stopped, not left listening with nobody holding it.
+    const server = await step('serve', serving).catch((error: unknown) => { void serving.then(late => late.stop()).catch(quiet('agent/computer/handoff-show')); throw error; });
     const timer = setInterval(() => { void tendShow(key, deps).catch(quiet('agent/computer/handoff-show')); }, TEND_EVERY_MS);
     // The view is a courtesy: it never keeps a finished process alive.
     timer.unref();
@@ -138,7 +175,7 @@ export async function showTab(input: { stateDir: string; tab?: string; clear?: b
       : 'No desktop session was found from here (no DISPLAY or WAYLAND_DISPLAY: a server, a container)';
     return `NOT OPENED. ${why}. The live view is being served at ${address}, which answers only on this computer itself (127.0.0.1): give the user that address to open in a browser on this computer. For a user on another device, use handoff (a link on their Tailscale network). ${carryOn}`;
   }
-  const opened = await deps.open(address, session);
+  const opened = await step('open', deps.open(address, session));
   lifecycle('browser.show.open', { reused, opened });
   if (!opened) return `NOT OPENED. The desktop's browser opener could not be started or reported a failure. The live view is being served at ${address} (this computer only): give the user that address to open in their browser. ${carryOn}`;
   return `${reused ? 'Opened the live view again, at the same address' : 'Opened a live view of this tab in the user\'s default browser on their desktop'}: ${address}\nTell the user it is open (the address answers only on this computer). ${carryOn} ${SETTING_HINT}`;

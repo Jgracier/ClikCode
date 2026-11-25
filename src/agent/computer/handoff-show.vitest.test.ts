@@ -34,7 +34,7 @@ let dirs = 0;
 const chat = (): string => `/tmp/clikcode-show-test-${process.pid}-${dirs++}`;
 const open: Array<{ stateDir: string; tab?: string }> = [];
 afterEach(async () => { for (const input of open.splice(0)) await showTab({ ...input, clear: true }); });
-const show = (input: { stateDir: string; tab?: string; clear?: boolean }, deps: Partial<ShowDeps>): Promise<string> => { open.push({ stateDir: input.stateDir, ...(input.tab ? { tab: input.tab } : {}) }); return showTab(input, deps); };
+const show = (input: { stateDir: string; tab?: string; clear?: boolean; limitMs?: number }, deps: Partial<ShowDeps>): Promise<string> => { open.push({ stateDir: input.stateDir, ...(input.tab ? { tab: input.tab } : {}) }); return showTab(input, deps); };
 
 describe('show', () => {
   it('serves a watching view on this computer only and opens it in the user\'s browser', async () => {
@@ -193,3 +193,36 @@ describe('opening the user\'s browser', () => {
     expect(await openOnDesktop(url, {}, { platform: 'linux', env: {}, start: fake(() => undefined).start, settleMs: 30 })).toBe(true);
   });
 });
+
+describe('show never hangs', () => {
+  const never = <T>(): Promise<T> => new Promise<T>(() => undefined);
+  for (const [step, change, says] of [
+    ['page', { page: never }, 'did not hand over this chat\'s tab in time'],
+    ['serve', { serve: never }, 'live view could not be started in time'],
+    ['open', { open: never }, 'opener did not answer in time'],
+  ] as const) {
+    it(`answers within its limit when ${step} never does`, async () => {
+      const w = world(change as Partial<ShowDeps>);
+      const started = Date.now();
+      const text = await show({ stateDir: chat(), limitMs: 200 }, w.deps);
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(text).toMatch(/^NOT OPENED: /);
+      expect(text).toContain(says);
+      if (step === 'open') expect(text).toContain('http://127.0.0.1:51000/token-1/');
+    });
+  }
+
+  it('stops a server that comes up after the limit', async () => {
+    let up!: (server: LiveServer) => void;
+    let stopped = 0;
+    const w = world({ serve: () => new Promise<LiveServer>(resolve => { up = resolve; }) });
+    const stateDir = chat();
+    expect(await show({ stateDir, limitMs: 50 }, w.deps)).toMatch(/^NOT OPENED: /);
+    up({ address: 'http://127.0.0.1:1/late/', viewing: () => undefined, reconnect: () => undefined, end: () => undefined, stop: async () => { stopped++; } });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(stopped).toBe(1);
+    // Nothing half-made was kept: the next show serves anew.
+    expect(await showTab({ stateDir, clear: true }, w.deps)).toBe('No live view is open on this tab.');
+  });
+});
+

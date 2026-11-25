@@ -468,3 +468,24 @@ describe('steps sent as a JSON string', () => {
     expect(await tool.describe({ action: 'steps', steps })).toContain('sends /home/user/secret.pdf');
   });
 });
+
+describe('show while the chat is busy', () => {
+  // 2026-11-25: show sat in the chat's call queue behind a sign-in waiting on an emailed code, and the agent got no answer for minutes.
+  it('answers at once, outside the queue, and closing the view needs no tab', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-web-show-'));
+    let release!: () => void;
+    const busy = inOrder(stateDir, () => new Promise<void>(resolve => { release = resolve; }));
+    try {
+      const started = Date.now();
+      const cleared = await computerWebTool.run({ action: 'show', clear: true } as never, { stateDir } as never);
+      expect(cleared).toEqual({ output: 'No live view is open on this tab.' });
+      const shown = await computerWebTool.run({ action: 'show' } as never, { stateDir } as never);
+      expect(shown.isError).toBe(true);
+      expect(shown.output).toContain('browser is closed');
+      expect(Date.now() - started).toBeLessThan(3_000);
+    } finally { release(); await busy; await rm(stateDir, { recursive: true, force: true }); }
+  });
+});
