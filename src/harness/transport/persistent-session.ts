@@ -8,6 +8,7 @@ import { markTurn } from '../../runtime/turn-latency.js';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
 import { spawnPortable } from './spawn.js';
+import { vendorProcessEnvironment } from '../../turn/compaction.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from './jsonrpc-peer.js';
 import type { BackgroundTurnChannel, BackgroundTurnEnd, OutOfTurnRelay, VendorBackgroundTurnHandler } from './background-turn.js';
 import { commandLine, commandRoots, outputFile, processAlive, processGroup, processGroupMembers, readProcessGroup, toolCallWork } from './process-group.js';
@@ -667,7 +668,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (this.live) this.dropLive(new Error(restarted));
     const detached = process.platform !== 'win32';
     const child = this.spawn(launch.binary, launch.argv, {
-      cwd: launch.cwd, env: { ...process.env, ...launch.environment }, stdio: ['pipe', 'pipe', 'pipe'], detached,
+      cwd: launch.cwd, env: vendorProcessEnvironment(launch.environment), stdio: ['pipe', 'pipe', 'pipe'], detached,
     });
     this.leftRunning.clear();
     lifecycle('vendor.child.spawn', { transport: this.label, child: child.pid });

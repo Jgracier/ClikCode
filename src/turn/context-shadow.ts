@@ -22,7 +22,11 @@ export interface ContextShadow {
 }
 
 /** One turn's sums over its model calls. */
-export interface ContextTally { calls: number; contextSum: number; shadowSum: number }
+export interface ContextTally {
+  calls: number; contextSum: number; shadowSum: number;
+  /** The vendor compacted during the turn below where its default would have (noteVendorCompaction). */
+  compactedEarly?: true;
+}
 
 /** Claude Code's room for its summary: min(output limit, 20k) + a 13k buffer (compaction.ts). */
 const CLAUDE_SUMMARY_ROOM = 33_000;
@@ -72,8 +76,16 @@ export function addToTally(tally: ContextTally, used: number, shadow: number): v
   tally.shadowSum += shadow;
 }
 
+/** The vendor compacted, its latest reading before it the shadow's `last`. Below the vendor's default trigger
+ * that was ClikCode's threshold, and the turn is cut -- even where the shadow cannot tell: tool
+ * results read since `last` put the compacted context above it, so the first reading after the
+ * boundary can rise over `last` and the shadow then counts nothing removed. */
+export function noteVendorCompaction(tally: ContextTally, shadow: ContextShadow | undefined, trigger: number | undefined): void {
+  if (trigger !== undefined && shadow?.last !== undefined && shadow.last + shadow.removed < trigger) tally.compactedEarly = true;
+}
+
 /** Some call of the turn read less than it would have without ClikCode's threshold. */
-export const turnWasCut = (tally: ContextTally): boolean => tally.shadowSum > tally.contextSum;
+export const turnWasCut = (tally: ContextTally): boolean => Boolean(tally.compactedEarly) || tally.shadowSum > tally.contextSum;
 
 /** A turn's tokens without ClikCode's threshold: its own, plus what the shadow read beyond it. */
 export function tokensWithoutTune(tokens: number, record: { contextSum?: number; shadowSum?: number }): number {

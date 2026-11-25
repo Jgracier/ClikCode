@@ -11,6 +11,7 @@ import { ensureNativeHarness } from './inspect.js';
 import { failureText } from '../../protocol/stderr-line.js';
 import { LineBuffer } from '../../protocol/json-lines.js';
 import { interactiveLoginPrompt } from '../../../turn/failover.js';
+import { vendorProcessEnvironment } from '../../../turn/compaction.js';
 
 interface NativeHarnessTurnOutput {
   stdout: string;
@@ -159,7 +160,7 @@ export async function captureNativeHarnessTurn(
   return new Promise((resolve, reject) => {
     const child = spawn(spec.binary, [...args], {
       stdio: [options.stdinText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...envOverrides },
+      env: vendorProcessEnvironment(envOverrides),
       detached: process.platform !== 'win32',
       ...(options.cwd ? { cwd: options.cwd } : {}),
     });

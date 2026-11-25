@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addToTally, emptyTally, noteShadowReading, tokensWithoutTune, turnWasCut, vendorDefaultTrigger, type ContextShadow } from './context-shadow.js';
+import { addToTally, emptyTally, noteShadowReading, noteVendorCompaction, tokensWithoutTune, turnWasCut, vendorDefaultTrigger, type ContextShadow } from './context-shadow.js';
 
 describe('context shadow', () => {
   it('places the vendor default near the top of the window', () => {
@@ -64,5 +64,25 @@ describe('context shadow', () => {
     expect(shadow.removed).toBe(0);
     expect(turnWasCut(tally)).toBe(true);
     expect(turnWasCut({ calls: 1, contextSum: 5, shadowSum: 5 })).toBe(false);
+  });
+
+  it('counts a mid-turn compaction below the default as cut, though the next reading rose past the last', () => {
+    // Sonnet, audit run 2026-11-24: 43.9k, three Reads, the boundary at 81.6k, then 100.5k.
+    const shadow: ContextShadow = { removed: 0 };
+    const tally = emptyTally();
+    const trigger = 167_000;
+    addToTally(tally, 43_900, noteShadowReading(shadow, 43_900, undefined, trigger));
+    noteVendorCompaction(tally, shadow, trigger);
+    addToTally(tally, 100_500, noteShadowReading(shadow, 100_500, 'c1', trigger));
+    expect(tally.shadowSum).toBe(tally.contextSum);
+    expect(turnWasCut(tally)).toBe(true);
+  });
+
+  it('does not count a compaction at the vendor default as cut', () => {
+    const shadow: ContextShadow = { removed: 0, last: 172_700 };
+    const tally = emptyTally();
+    noteVendorCompaction(tally, shadow, 167_000);
+    addToTally(tally, 30_000, noteShadowReading(shadow, 30_000, 'c1', 167_000));
+    expect(turnWasCut(tally)).toBe(false);
   });
 });

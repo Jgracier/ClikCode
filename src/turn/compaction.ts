@@ -231,6 +231,17 @@ export function vendorTrigger(setting: VendorThresholdSetting | undefined, thres
   const trigger = floor + compactionHeadroom(step);
   return Math.max(threshold, known.floor !== undefined ? trigger : Math.max(trigger, CLAUDE_MIN_TRIGGER));
 }
+/** Claude Code's threshold variables (claudeCompactWindow). */
+const CLAUDE_THRESHOLD_VARIABLES = ['CLAUDE_CODE_AUTO_COMPACT_WINDOW', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE'];
+/** The environment a vendor's process starts with: ClikCode's own, less any compaction threshold it
+ * inherited -- ClikCode run from inside a Claude Code session has that session's window, and with
+ * the setting off (or a window that needs no percent) the child would compact at the parent's. Only
+ * what the launch sets (`environment`) decides where the vendor compacts. */
+export function vendorProcessEnvironment(environment: Readonly<Record<string, string>> = {}, inherited: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const merged: NodeJS.ProcessEnv = { ...inherited };
+  for (const name of CLAUDE_THRESHOLD_VARIABLES) delete merged[name];
+  return { ...merged, ...environment };
+}
 export function claudeCompactWindow(threshold: number): Record<string, string> {
   const window = threshold + CLAUDE_OUTPUT_ROOM + CLAUDE_BUFFER;
   if (window >= CLAUDE_MIN_WINDOW) return { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(window) };

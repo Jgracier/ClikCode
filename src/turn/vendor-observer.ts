@@ -3,7 +3,7 @@
 import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { COMPACTED, contextTokens, nextCompactionRecord, noteContextStep, noteVendorFloor } from './compaction.js';
 import { knownVendorMeasures, rememberVendorMeasure } from './vendor-floors.js';
-import { addToTally, emptyTally, noteShadowReading, vendorDefaultTrigger, type ContextTally } from './context-shadow.js';
+import { addToTally, emptyTally, noteShadowReading, noteVendorCompaction, vendorDefaultTrigger, type ContextTally } from './context-shadow.js';
 import { catalogContextWindow } from '../harness/accounts/model-catalog.js';
 import { markTurn } from '../runtime/turn-latency.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
@@ -53,10 +53,10 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   // The same readings as the vendor's default compaction would have left them (context-shadow.ts).
   let tally: ContextTally = emptyTally();
   const claudeWindow = harness.compactThreshold?.unit === 'claude-window';
+  const defaultTrigger = (): number | undefined => vendorDefaultTrigger(turnUsage?.contextWindow || catalogWindow || knownVendorMeasures(harness.command, ctx.model).window, claudeWindow);
   const noteShadow = (used: number): void => {
-    const window = turnUsage?.contextWindow || catalogWindow || knownVendorMeasures(harness.command, ctx.model).window;
     const shadow = session.contextShadow ??= { removed: 0 };
-    addToTally(tally, used, noteShadowReading(shadow, used, session.compaction?.at, vendorDefaultTrigger(window, claudeWindow)));
+    addToTally(tally, used, noteShadowReading(shadow, used, session.compaction?.at, defaultTrigger()));
   };
   const noteContext = (used: number): void => {
     noteShadow(used);
@@ -170,6 +170,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
       // conversation keeps it as it keeps one ClikCode ran -- the next turn is told where the whole
       // conversation is, and recall (search/recall.ts) searches what came before it.
       if (message === COMPACTED && !compacting) {
+        noteVendorCompaction(tally, session.contextShadow, defaultTrigger());
         session.compaction = nextCompactionRecord(session.compaction, session.messages?.length ?? 0, { noteRecord: true });
         floorPending = true;
         lifecycle('turn.vendor-compacted', { harness: harness.command, through: session.compaction.through, context: session.lastUsage?.contextUsed });
