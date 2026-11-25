@@ -661,6 +661,8 @@ const CHILD_SESSION_UPDATES: ReadonlySet<string> = new Set(['tool_call', 'tool_c
  * turn-completed notification outside session/prompt, so for a background
  * turn with no tool left running this is the end marker. */
 const TURN_BOOKKEEPING_UPDATES: ReadonlySet<string> = new Set(['usage_update', 'session_info_update']);
+/** Updates that are the vendor answering: the start of a follow-up turn's content. */
+const FOLLOW_UP_CONTENT_UPDATES: ReadonlySet<string> = new Set(['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan']);
 
 const toolRunning = (update: Json): boolean => update.status === 'pending' || update.status === 'in_progress' || update.status === undefined;
 const toolSettled = (update: Json): boolean => update.status === 'completed' || update.status === 'failed';
@@ -760,7 +762,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         if (owed) {
           const run = this.openBackground('background-work');
           if (run) {
-            if (answerOwed && !this.heldAgents.backgrounded) this.awaitingFollowUp = true;
+            if (answerOwed && !this.heldAgents.backgrounded) this.awaitFollowUp();
             // What runs now is the background turn's indicator from its first frame.
             if (this.work.level) run.observer.onBackgroundWork?.(this.work.fullLevel());
             this.watchOrphanedTools();
@@ -829,6 +831,13 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   /** The last held agent ended in a background run: the vendor answers its notification in a turn of its own, closed
    * by that turn's `result` (vendorTurnEnded) -- or, should none come, by the same quiet orphanedToolMs. */
   private awaitingFollowUp = false;
+  /** The vendor's answer that awaitingFollowUp waits for has begun (a message, thought or tool of its own). Until it
+   * has, a `result`, an `idle` or end-of-turn bookkeeping is the prompt's that just resolved, trailing it: the four
+   * of ten Opus audits cut early (2026-11-24) closed on one 1-800ms before the vendor wrote its answer. */
+  private followUpBegan = false;
+  private awaitFollowUp(): void { this.awaitingFollowUp = true; this.followUpBegan = false; }
+  /** A follow-up answer is owed and none of it has come yet: nothing but the quiet orphanedToolMs ends the run. */
+  private answerStillOwed(): boolean { return this.awaitingFollowUp && !this.followUpBegan; }
   /** The CLI's last `session_state_changed` (running, idle, requires_action); undefined until one is seen. */
   private vendorState: string | undefined;
   /** A held agent ended while the user's prompt was running. */
@@ -904,6 +913,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   protected override finishBackground(ended: BackgroundTurnEnd): void {
     if (this.orphanWatch) { clearTimeout(this.orphanWatch); this.orphanWatch = undefined; }
     this.awaitingFollowUp = false;
+    this.followUpBegan = false;
     if (ended === 'completed') this.background?.observer.onBackgroundWork?.(this.work.fullLevel());
     super.finishBackground(ended);
   }
@@ -1442,9 +1452,12 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!target && !this.turn) this.relayOutOfTurn(update);
     this.trackTool(target, update);
     if (target) this.deliver(target, update, totals);
-    if (target && target === this.background) this.watchOrphanedTools();
+    if (target && target === this.background) {
+      if (this.awaitingFollowUp && FOLLOW_UP_CONTENT_UPDATES.has(String(update.sessionUpdate))) this.followUpBegan = true;
+      this.watchOrphanedTools();
+    }
     const run = this.background;
-    if (run && target === run && this.work.count() === 0 && !this.work.level && !this.heldAgents.size) {
+    if (run && target === run && this.work.count() === 0 && !this.work.level && !this.heldAgents.size && !this.answerStillOwed()) {
       // The end of a background turn is the vendor's to say: the last tool it
       // was waiting for settled, or the agent's own end-of-turn bookkeeping
       // arrived. Nothing else ends it but the process going or the user. Not
@@ -1742,7 +1755,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     if (message?.type === 'system' && message.subtype === 'session_state_changed' && typeof message.state === 'string') {
       this.vendorState = message.state;
-      if (message.state === 'idle') this.vendorTurnEnded(params);
+      // The CLI holds `idle` until every follow-up is answered: it ends an owed answer too.
+      if (message.state === 'idle') { this.followUpBegan = true; this.vendorTurnEnded(params); }
       return;
     }
     if (message?.type === 'result') return this.vendorTurnEnded(params);
@@ -1788,7 +1802,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   private vendorTurnEnded(params: Json): void {
     const run = this.background;
     if (!run || run.channel.done || this.turn || this.liveTarget(params) !== run) return;
-    if (this.work.level || this.heldAgents.size) return;
+    if (this.work.level || this.heldAgents.size || this.answerStillOwed()) return;
     for (const item of this.work.endAll('tool')) run.observer.onActivity?.({ kind: 'tool-done', label: item.label, id: item.id });
     this.finishBackground('completed');
   }
@@ -1814,7 +1828,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     this.watchOrphanedTools();
     const run = this.background;
     if (!run || run.channel.done) return;
-    if (!this.work.level && target === run && this.work.count() === 0 && !this.heldAgents.size) this.finishBackground('completed');
+    if (!this.work.level && target === run && this.work.count() === 0 && !this.heldAgents.size && !this.answerStillOwed()) this.finishBackground('completed');
   }
 
   /** Tasks whose terminal `task_updated` patch arrived and whose `task_notification` has not yet,
@@ -1875,7 +1889,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const run = this.background;
     if (event.kind !== 'tool-start' && run && target === run && !this.work.level && this.work.count() === 0 && !this.heldAgents.size) {
       // Its answer to the agent's report is still to come.
-      this.awaitingFollowUp = true;
+      this.awaitFollowUp();
       this.watchOrphanedTools();
     }
   }
