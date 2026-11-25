@@ -31,6 +31,18 @@ import { turnCancelledError } from '../agent/cancellation.js';
 import { sleep } from '../runtime/sleep.js';
 import { COMPACTED, COMPACTING, isCompactRequest } from '../turn/compaction.js';
 
+/** How long after its turn ends a send waits for the vendor's background turn
+ * that answers it (an agent's report the turn left owed): the worker starts
+ * that turn in the same tick it ends this one (worker-turn.ts userTurnEnded). */
+export const BACKGROUND_FOLLOW_MS = 300;
+
+/** The turn's answer: every assistant message after the last user message --
+ * the turn's own, then what background turns that followed it said. */
+export function answerSinceLastPrompt(messages: readonly { role: 'user' | 'assistant'; content: string }[]): string {
+  const lastUser = messages.map((message) => message.role).lastIndexOf('user');
+  return messages.slice(lastUser + 1).filter((message) => message.role === 'assistant' && message.content.trim()).map((message) => message.content).join('\n\n');
+}
+
 export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: string, signal?: AbortSignal): Promise<void> {
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
@@ -76,11 +88,16 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
   let queuedTurnId: string | undefined;
   let failure: Error | undefined;
   let stopping = false;
+  /** Ours ended: a vendor background turn starting now is its answer, followed to its end. */
+  let following: ReturnType<typeof setTimeout> | undefined;
+  /** Our turn has run: nothing sends it again. */
+  let answered = false;
   return new Promise<boolean>((resolveTurn, rejectTurn) => {
     let settled = false;
     const finish = (settle: () => void): void => {
       if (settled) return;
       settled = true;
+      if (following) clearTimeout(following);
       client.off('event', onEvent);
       client.off('close', onGone);
       signal?.removeEventListener('abort', onAbort);
@@ -96,7 +113,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
      * queue and nothing is running -- which a window also does, and the
      * worker runs it once whoever asks first. */
     const sendWhenDue = async (): Promise<void> => {
-      if (!queuedTurnId || running || ours) return;
+      if (!queuedTurnId || running || ours || answered) return;
       const session = (await readState({ transcripts: [sessionId] })).sessions.find((item) => item.id === sessionId);
       const queue = session?.queuedTurns ?? [];
       if (!queue.some((item) => item.id === queuedTurnId)) {
@@ -110,10 +127,10 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
       if (stopping) { finish(() => rejectTurn(turnCancelledError())); return; }
       const state = await readState({ transcripts: [sessionId] });
       const session = state.sessions.find((item) => item.id === sessionId);
-      const answer = session ? textTranscript(sessionTranscriptMessages(session)).at(-1) : undefined;
+      const answer = session ? answerSinceLastPrompt(textTranscript(sessionTranscriptMessages(session))) : '';
       const invocation = state.invocations.filter((item) => item.sessionId === sessionId && item.at >= startedAt).at(-1);
       emitHarnessOutput({
-        session, text: compacting ? COMPACTED : answer?.role === 'assistant' ? answer.content : '',
+        session, text: compacting ? COMPACTED : answer,
         ...(invocation ? { invocation } : {}), ...(session?.lastUsage ? { usage: session.lastUsage } : {}),
       });
       finish(() => resolveTurn(true));
@@ -125,6 +142,14 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
           return;
         case 'waiting-start':
           running = true;
+          if (following) {
+            clearTimeout(following);
+            following = undefined;
+            // The vendor answering what our turn left owed; anything else ends ours here.
+            if (event.vendorWork) { ours = true; return; }
+            void done().catch((error: unknown) => finish(() => rejectTurn(error)));
+            return;
+          }
           // A compaction is not named to the windows (worker-turn.ts): its line is.
           if (event.prompt?.trim() === text || (compacting && event.message === COMPACTING)) ours = true;
           return;
@@ -140,8 +165,15 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
           return;
         case 'waiting-stop':
           running = false;
-          if (ours) void done().catch((error: unknown) => finish(() => rejectTurn(error)));
-          else void sendWhenDue().catch((error: unknown) => finish(() => rejectTurn(error)));
+          if (ours) {
+            if (failure || stopping) { void done().catch((error: unknown) => finish(() => rejectTurn(error))); return; }
+            ours = false;
+            answered = true;
+            following = setTimeout(() => {
+              following = undefined;
+              void done().catch((error: unknown) => finish(() => rejectTurn(error)));
+            }, BACKGROUND_FOLLOW_MS);
+          } else void sendWhenDue().catch((error: unknown) => finish(() => rejectTurn(error)));
           return;
         case 'queue-changed':
           void sendWhenDue().catch(quiet('worker/scripted-send'));
@@ -177,6 +209,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
       }
     };
     const onGone = (reason?: string): void => {
+      if (answered && !ours) { void done().catch((error: unknown) => finish(() => rejectTurn(error))); return; }
       if (ours) { finish(() => rejectTurn(new Error(`session worker exited mid-turn${reason ? `: ${reason}` : ': its connection closed with no reason given (see "clikcode logs")'}`))); return; }
       // Not started: taken back out of the queue, and sent again wherever it
       // can run now.

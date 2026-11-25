@@ -17,7 +17,8 @@ import type { HarnessSession } from '../session/model.js';
 import { WorkerClient } from './client.js';
 import { readWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
-import { sendScriptedTurn } from './scripted-send.js';
+import { EventEmitter } from 'node:events';
+import { answerSinceLastPrompt, sendScriptedTurn } from './scripted-send.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const distEntry = join(repoRoot, 'dist', 'index.js');
@@ -180,4 +181,57 @@ describe('a scripted send', () => {
     // nothing about it, on stderr or anywhere else (the lifecycle log has it).
     expect(warned.join('')).not.toMatch(/MCP server/);
   }, 60_000);
+
+  it('follows the vendor background turn that answers it, and prints both answers', async () => {
+    const session = await gatewaySession();
+    const fake = Object.assign(new EventEmitter(), {
+      initialEvent: undefined, sent: [] as unknown[],
+      send(message: unknown) { this.sent.push(message); }, close() {},
+    });
+    vi.spyOn(WorkerClient, 'attachExisting').mockResolvedValue(fake as unknown as WorkerClient);
+    const printed: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { printed.push(String(chunk)); return true; });
+    let ended = false;
+    const scripted = sendScriptedTurn(config(), session.id, 'run the agents').then(() => { ended = true; });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    fake.emit('event', { type: 'waiting-start', message: 'working', prompt: 'run the agents' });
+    const saved = await readState();
+    saved.sessions.find((item) => item.id === session.id)!.messages = [
+      { role: 'user', content: 'run the agents' }, { role: 'assistant', content: 'six agents launched' },
+    ];
+    await writeState(saved);
+    fake.emit('event', { type: 'waiting-stop' });
+    // The worker starts the background turn in the same tick it ends this one.
+    fake.emit('event', { type: 'waiting-start', message: 'background', vendorWork: true });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 600));
+    expect(ended, 'still following the background turn').toBe(false);
+    const later = await readState();
+    const held = later.sessions.find((item) => item.id === session.id)!;
+    held.messages = [...(held.messages ?? []), { role: 'assistant', content: 'COLLECTED 24' }];
+    await writeState(later);
+    fake.emit('event', { type: 'waiting-stop' });
+    await scripted;
+    expect(printed.join('')).toContain('six agents launched');
+    expect(printed.join('')).toContain('COLLECTED 24');
+  }, 30_000);
+
+  it('ends when no background turn follows', async () => {
+    const session = await gatewaySession();
+    const fake = Object.assign(new EventEmitter(), { initialEvent: undefined, send() {}, close() {} });
+    vi.spyOn(WorkerClient, 'attachExisting').mockResolvedValue(fake as unknown as WorkerClient);
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const scripted = sendScriptedTurn(config(), session.id, 'hello');
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    fake.emit('event', { type: 'waiting-start', message: 'working', prompt: 'hello' });
+    fake.emit('event', { type: 'waiting-stop' });
+    await scripted;
+  }, 30_000);
+
+  it('answers with every assistant message after the last prompt', () => {
+    expect(answerSinceLastPrompt([
+      { role: 'user', content: 'a' }, { role: 'assistant', content: 'old' }, { role: 'user', content: 'b' },
+      { role: 'assistant', content: 'one' }, { role: 'assistant', content: ' ' }, { role: 'assistant', content: 'two' },
+    ])).toBe('one\n\ntwo');
+    expect(answerSinceLastPrompt([{ role: 'user', content: 'b' }])).toBe('');
+  });
 });
