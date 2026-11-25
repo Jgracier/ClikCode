@@ -567,10 +567,11 @@ export async function computerBrowsers(action: string | undefined, which: string
   const done = await browserTabAction(dir, action, which, { stay: true });
   if (isJsonDefaultMode()) return emitResult({ computer: { browsers: done } });
   process.stdout.write(`${done.text}\n`);
-  if (done.wait) await done.wait;
+  // The command's connection to the browser would keep it running after the view ends; Chrome and its tabs stay as they are.
+  if (done.wait) { await done.wait; await releaseComputerBrowser(dir); }
 }
 
-export const BROWSERS_HOW = 'Act on one: clikcode computer browsers watch <n> (a live view on your desktop: watch it, click and type in it) · front <n> · close <n>. --json for all of it.';
+export const BROWSERS_HOW = 'Act on one by its number, tab name or id (numbers move as tabs open and close): clikcode computer browsers watch <n> (a live view on your desktop: watch it, click and type in it) · front <n> · close <n>. --json for all of it.';
 
 /** One action on one tab, for the CLI and `/browsers`. `stay`: the live view is served by this process for as long as it runs, so a
  * command waits (until Ctrl-C or the tab closes); the TUI, which keeps running, returns at once. */
