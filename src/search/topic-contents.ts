@@ -27,8 +27,9 @@ export function topicContentsText(messages: readonly HindsightMessage[], hasHind
   const total = fixed + lines.reduce((sum, line) => sum + line.length + 1, 0);
   if (total <= maxChars) return [header, ...lines, ...nudge].join('\n');
   if (process.env.CLIKCODE_EVAL_TOPIC_PERIODS === '0') return newestOnly(header, lines, nudge, maxChars);
-  // Too many to list: the newest topics one per line, the older ones grouped into periods that
-  // widen going back, so the whole conversation stays on the map within the same budget.
+  // Too many to list: the newest topics one per line, the older ones grouped into periods of equal
+  // size, so the whole conversation stays on the map within the same budget. (Periods that widened
+  // going back found fewer early topics in the eval: the oldest became too wide to read.)
   const room = maxChars - fixed;
   let recentChars = 0;
   let recent = 0;
@@ -54,37 +55,24 @@ function newestOnly(header: string, lines: readonly string[], nudge: readonly st
 }
 
 /** Of the list's room, what the newest topics may take; the periods get the rest. */
-const RECENT_SHARE = 0.5;
+const RECENT_SHARE = 0.3;
 const MIN_RECENT_TOPICS = 6;
 /** The fewest topics a period holds, so the newest ones are not one or two topics each. */
 const MIN_PERIOD_TOPICS = 3;
 /** About what one period line takes: its range, its count and a handful of keywords. */
 const PERIOD_LINE_CHARS = 140;
-/** Each period back is this much wider than the one after it. */
-const PERIOD_GROWTH = 1.5;
 const PERIOD_HEADER = 'Earlier, by period (the words that set each apart):';
 const RECENT_HEADER = 'Most recent:';
 
 type Topic = PresentedTopic;
 
-/** `topics` (oldest first) as at most `count` period lines within `maxChars`, oldest first: the
- * newest period narrowest, each one back PERIOD_GROWTH wider. A period is named by the words of
- * its requests that are frequent in it and rare in the others (tf-idf across periods). */
+/** `topics` (oldest first) as at most `count` period lines of about equal size within `maxChars`,
+ * oldest first, each at least MIN_PERIOD_TOPICS. A period is named by the words of its requests
+ * that more of its topics use and the other periods use less (tf-idf across periods). */
 function periodLines(topics: readonly Topic[], count: number, maxChars: number): string[] {
   const periods = Math.max(1, Math.min(count, Math.floor(topics.length / MIN_PERIOD_TOPICS)));
-  // Every period gets MIN_PERIOD_TOPICS; the rest is shared out geometrically, the oldest most.
-  const weights = Array.from({ length: periods }, (_, back) => PERIOD_GROWTH ** back).reverse();
-  const sum = weights.reduce((total, weight) => total + weight, 0);
-  const spare = topics.length - periods * MIN_PERIOD_TOPICS;
   const groups: Topic[][] = [];
-  let start = 0;
-  let cumulative = 0;
-  for (const weight of weights) {
-    cumulative += weight;
-    const end = groups.length === periods - 1 ? topics.length : (groups.length + 1) * MIN_PERIOD_TOPICS + Math.round(spare * cumulative / sum);
-    groups.push(topics.slice(start, end));
-    start = end;
-  }
+  for (let at = 0; at < periods; at += 1) groups.push(topics.slice(Math.round(topics.length * at / periods), Math.round(topics.length * (at + 1) / periods)));
   // Per period, each word's number of topics that use it; a word only one topic in the whole
   // conversation uses (a typo, a file name) is never shown, and one this period uses again leads.
   const words = groups.map((group) => {
@@ -92,10 +80,13 @@ function periodLines(topics: readonly Topic[], count: number, maxChars: number):
     for (const topic of group) {
       const seen = new Set<string>();
       for (const text of [...topic.requests.map((request) => request.text), ...topic.decisions.map((decision) => decision.text)]) {
-        for (const match of text.matchAll(/[A-Za-z][A-Za-z0-9.-]*[A-Za-z0-9]/g)) {
+        // A notice in the user's place (an agent's result, an image's size) names nothing they asked.
+        if (/^\s*[[<]/.test(text)) continue;
+        // Plain words only: not a file name, a path's part, an escaped newline's tail or a shout.
+        for (const match of text.matchAll(/(?<![\\/.\w-])[A-Za-z][a-z]*(?:-[a-z]+)*(?![\w./-])|(?<![\\/.\w-])[A-Z]{2,5}(?![\w./-])/g)) {
           const shown = match[0];
           const key = shown.toLowerCase();
-          if (key.length < 4 || key.length > 24 || /\d/.test(key) || STOPWORDS.has(key) || seen.has(key)) continue;
+          if (key.length < 4 || key.length > 24 || STOPWORDS.has(key) || seen.has(key)) continue;
           seen.add(key);
           const prior = counts.get(key);
           if (prior) prior.topics += 1; else counts.set(key, { topics: 1, shown });
