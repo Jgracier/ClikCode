@@ -5,7 +5,7 @@ import type { TranscriptMessage } from '../session/model.js';
 import { quiet } from '../runtime/lifecycle-log.js';
 import { conversationGroups, findConversation } from './conversations.js';
 import { conversationView } from './corpus.js';
-import { oneLine, presentTopics, rangeLabel, type HindsightMessage } from './hindsight.js';
+import { oneLine, presentTopics, rangeLabel, type HindsightMessage, type PresentedTopic } from './hindsight.js';
 
 /** About 1k tokens. */
 export const TOPIC_CONTENTS_MAX_CHARS = 4000;
@@ -23,6 +23,28 @@ export function topicContentsText(messages: readonly HindsightMessage[], hasHind
   });
   const header = `This conversation's topics, by message number${hasHindsight ? ' (hindsight from/to reads any of them whole)' : ''}:`;
   const nudge = hasHindsight && process.env.CLIKCODE_EVAL_SEARCH_NUDGE !== '0' ? [SEARCH_NUDGE] : [];
+  const fixed = header.length + 1 + nudge.reduce((sum, line) => sum + line.length + 1, 0);
+  const total = fixed + lines.reduce((sum, line) => sum + line.length + 1, 0);
+  if (total <= maxChars) return [header, ...lines, ...nudge].join('\n');
+  if (process.env.CLIKCODE_EVAL_TOPIC_PERIODS === '0') return newestOnly(header, lines, nudge, maxChars);
+  // Too many to list: the newest topics one per line, the older ones grouped into periods that
+  // widen going back, so the whole conversation stays on the map within the same budget.
+  const room = maxChars - fixed;
+  let recentChars = 0;
+  let recent = 0;
+  while (recent < lines.length && (recent < MIN_RECENT_TOPICS || recentChars + lines[lines.length - 1 - recent]!.length + 1 <= room * RECENT_SHARE)) {
+    recentChars += lines[lines.length - 1 - recent]!.length + 1;
+    recent += 1;
+  }
+  const older = topics.slice(0, topics.length - recent);
+  const periodRoom = room - recentChars - PERIOD_HEADER.length - 2;
+  const periods = older.length && periodRoom > PERIOD_LINE_CHARS ? periodLines(older, Math.floor(periodRoom / PERIOD_LINE_CHARS), periodRoom) : [];
+  if (!periods.length) return newestOnly(header, lines, nudge, maxChars);
+  return [header, PERIOD_HEADER, ...periods, RECENT_HEADER, ...lines.slice(lines.length - recent), ...nudge].join('\n');
+}
+
+/** The newest topics that fit, and a count of the rest (CLIKCODE_EVAL_TOPIC_PERIODS=0, and the fallback). */
+function newestOnly(header: string, lines: readonly string[], nudge: readonly string[], maxChars: number): string {
   let used = header.length + lines.reduce((sum, line) => sum + line.length + 1, 0) + nudge.reduce((sum, line) => sum + line.length + 1, 0);
   let dropped = 0;
   /** Room held back for the line that says how many were left out. */
@@ -30,6 +52,82 @@ export function topicContentsText(messages: readonly HindsightMessage[], hasHind
   while (used + omittedRoom() > maxChars && dropped < lines.length - 1) { used -= lines[dropped]!.length + 1; dropped += 1; }
   return [header, ...dropped ? [`(${dropped} earlier topic${dropped === 1 ? '' : 's'} not listed)`] : [], ...lines.slice(dropped), ...nudge].join('\n');
 }
+
+/** Of the list's room, what the newest topics may take; the periods get the rest. */
+const RECENT_SHARE = 0.5;
+const MIN_RECENT_TOPICS = 6;
+/** The fewest topics a period holds, so the newest ones are not one or two topics each. */
+const MIN_PERIOD_TOPICS = 3;
+/** About what one period line takes: its range, its count and a handful of keywords. */
+const PERIOD_LINE_CHARS = 140;
+/** Each period back is this much wider than the one after it. */
+const PERIOD_GROWTH = 1.5;
+const PERIOD_HEADER = 'Earlier, by period (the words that set each apart):';
+const RECENT_HEADER = 'Most recent:';
+
+type Topic = PresentedTopic;
+
+/** `topics` (oldest first) as at most `count` period lines within `maxChars`, oldest first: the
+ * newest period narrowest, each one back PERIOD_GROWTH wider. A period is named by the words of
+ * its requests that are frequent in it and rare in the others (tf-idf across periods). */
+function periodLines(topics: readonly Topic[], count: number, maxChars: number): string[] {
+  const periods = Math.max(1, Math.min(count, Math.floor(topics.length / MIN_PERIOD_TOPICS)));
+  // Every period gets MIN_PERIOD_TOPICS; the rest is shared out geometrically, the oldest most.
+  const weights = Array.from({ length: periods }, (_, back) => PERIOD_GROWTH ** back).reverse();
+  const sum = weights.reduce((total, weight) => total + weight, 0);
+  const spare = topics.length - periods * MIN_PERIOD_TOPICS;
+  const groups: Topic[][] = [];
+  let start = 0;
+  let cumulative = 0;
+  for (const weight of weights) {
+    cumulative += weight;
+    const end = groups.length === periods - 1 ? topics.length : (groups.length + 1) * MIN_PERIOD_TOPICS + Math.round(spare * cumulative / sum);
+    groups.push(topics.slice(start, end));
+    start = end;
+  }
+  // Per period, each word's number of topics that use it; a word only one topic in the whole
+  // conversation uses (a typo, a file name) is never shown, and one this period uses again leads.
+  const words = groups.map((group) => {
+    const counts = new Map<string, { topics: number; shown: string }>();
+    for (const topic of group) {
+      const seen = new Set<string>();
+      for (const text of [...topic.requests.map((request) => request.text), ...topic.decisions.map((decision) => decision.text)]) {
+        for (const match of text.matchAll(/[A-Za-z][A-Za-z0-9.-]*[A-Za-z0-9]/g)) {
+          const shown = match[0];
+          const key = shown.toLowerCase();
+          if (key.length < 4 || key.length > 24 || /\d/.test(key) || STOPWORDS.has(key) || seen.has(key)) continue;
+          seen.add(key);
+          const prior = counts.get(key);
+          if (prior) prior.topics += 1; else counts.set(key, { topics: 1, shown });
+        }
+      }
+    }
+    return counts;
+  });
+  const documentFrequency = new Map<string, number>();
+  for (const counts of words) for (const key of counts.keys()) documentFrequency.set(key, (documentFrequency.get(key) ?? 0) + 1);
+  const conversationTopics = new Map<string, number>();
+  for (const counts of words) for (const [key, { topics: used }] of counts) conversationTopics.set(key, (conversationTopics.get(key) ?? 0) + used);
+  const perLine = Math.floor(maxChars / groups.length);
+  return groups.map((group, at) => {
+    const first = group[0]!;
+    const last = group.at(-1)!;
+    const label = `${rangeLabel({ ...first, to: last.to ?? first.to })} (${group.length} topics)`;
+    const ranked = [...words[at]!.entries()]
+      .filter(([key]) => conversationTopics.get(key)! > 1)
+      .map(([key, { topics: used, shown }]) => ({ shown, used, score: used * Math.log(1 + groups.length / documentFrequency.get(key)!) }))
+      .sort((left, right) => Number(right.used > 1) - Number(left.used > 1) || right.score - left.score);
+    let line = `${label}:`;
+    for (const { shown } of ranked) {
+      const next = `${line}${line.endsWith(':') ? ' ' : ', '}${shown}`;
+      if (next.length > perLine - 1) break;
+      line = next;
+    }
+    return line;
+  });
+}
+
+const STOPWORDS = new Set(('also, about, after, again, all, and, any, are, back, been, before, being, both, but, can, could, does, doing, done, each, even, from, get, going, good, have, here, how, into, it\'s, just, keep, know, like, look, make, made, many, more, most, much, need, needs, now, only, other, over, really, right, same, should, some, still, sure, than, that, that\'s, the, their, them, then, there, these, they, thing, things, think, this, those, through, want, well, were, what, what\'s, when, where, which, while, will, with, would, yeah, you, your, okay, please, let\'s, it, its, we\'re, don\'t, isn\'t, doesn\'t, didn\'t, can\'t, won\'t, there\'s, because, very, every, everything, something, anything, nothing, actually, maybe, ensure, figure, check, test, tests, working, works, work, work., above, below, least, must, fully, complete, completed, used, using, first, next, having, possible, moment, already, instead, without, around, might, seems, seem, else, then., there., yes., else., give, take, tell, show, let, says, said, ones, able, kind, whole, lot, lots, one, two, way, why, who, today, now., new, old, well., top, run, runs, ran, see, use, put, try, got, did, does., has, had, was, our, out, off, not, yet, too, own, few, may, see., still., just., here., time, times, again., because., though, into., ones., part, parts, last, long, much., less, more., better, best, real, really., stuff, sure., fine, nice, great, cool').split(/,\s*/));
 
 /** With hindsight (the compaction eval's floor run; CLIKCODE_EVAL_SEARCH_NUDGE=0 leaves it out): the summary is not the conversation; look before saying it is not there. */
 const SEARCH_NUDGE = 'Your summary leaves out most of what these messages said. When a question is about anything before your summary (a value, a name, a commit, why something was decided), search with hindsight query=<its words> or read the messages above with from/to before answering; never answer that it is not recorded, or from memory, without searching first.';

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rm } from 'node:fs/promises';
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 import { readState } from '../session/state/read.js';
@@ -190,10 +190,25 @@ describe('topic contents after a compaction', () => {
     expect(topicContentsText([], true)).toBeUndefined();
   });
 
-  it('keeps the newest topics within about 1k tokens', () => {
-    const text = topicContentsText(asked(Array.from({ length: 200 }, (_, at) => `Request number ${at} about ${'something else entirely '.repeat(6)}`)), true)!;
+  it('keeps the newest topics within about 1k tokens, and the older ones as periods', () => {
+    const subjects = ['voice latency', 'mobile connectors', 'gateway models', 'compaction tokens'];
+    const requests = Array.from({ length: 200 }, (_, at) => `Request number ${at} about ${subjects[Math.floor(at / 50)]} ${'something else entirely '.repeat(6)}`);
+    const text = topicContentsText(asked(requests), true)!;
     expect(text.length).toBeLessThanOrEqual(TOPIC_CONTENTS_MAX_CHARS);
-    expect(text).toMatch(/\(\d+ earlier topics not listed\)/);
     expect(text).toContain('#398–#399: Request number 199');
+    expect(text).toContain('Earlier, by period');
+    // The whole conversation stays on the map: the first period starts at the first message.
+    expect(text).toMatch(/\n#0–#\d+ \(\d+ topics\): [^\n]*voice/);
+    expect(text).not.toContain('earlier topics not listed');
+  });
+
+  it('lists only the newest topics with CLIKCODE_EVAL_TOPIC_PERIODS=0', () => {
+    vi.stubEnv('CLIKCODE_EVAL_TOPIC_PERIODS', '0');
+    try {
+      const text = topicContentsText(asked(Array.from({ length: 200 }, (_, at) => `Request number ${at} about ${'something else entirely '.repeat(6)}`)), true)!;
+      expect(text.length).toBeLessThanOrEqual(TOPIC_CONTENTS_MAX_CHARS);
+      expect(text).toMatch(/\(\d+ earlier topics not listed\)/);
+      expect(text).toContain('#398–#399: Request number 199');
+    } finally { vi.unstubAllEnvs(); }
   });
 });
