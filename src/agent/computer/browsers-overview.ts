@@ -82,6 +82,12 @@ async function workerChats(): Promise<Map<number, string>> {
   return new Map((await listWorkerRecords().catch(() => [])).map(record => [record.pid, record.sessionId]));
 }
 
+/** A page's address without its query or fragment: a sign-in's carries state, codes and tokens, and this list is printed. */
+export function listedUrl(url: string): string {
+  try { const parsed = new URL(url); return /^https?:$/.test(parsed.protocol) ? `${parsed.origin}${parsed.pathname}${parsed.search || parsed.hash ? '?…' : ''}` : url; }
+  catch { return url.replace(/[?#].*$/, ''); }
+}
+
 export async function browsersOverview(stateDir: string, deps: OverviewDeps = {}): Promise<BrowsersOverview> {
   const now = deps.now ?? Date.now();
   const [views, hostPid, display, desk, chats] = await Promise.all([
@@ -98,7 +104,7 @@ export async function browsersOverview(stateDir: string, deps: OverviewDeps = {}
     const chat = view.ownerPid ? chats.get(view.ownerPid) : undefined;
     return {
       n: index + 1, id: view.id, ...(view.tab ? { name: view.tab } : {}), owner: view.owner, ownerPid: view.ownerPid, ...(chat ? { chat } : {}),
-      ownerAlive: view.ownerPid > 0 && alive(view.ownerPid), url: view.url ?? '', ...(view.title ? { title: view.title } : {}),
+      ownerAlive: view.ownerPid > 0 && alive(view.ownerPid), url: listedUrl(view.url ?? ''), ...(view.title ? { title: view.title } : {}),
       ageMs: Math.max(0, now - view.openedAt), idleMs: Math.max(0, now - view.lastUsedAt), parked: view.parked === true,
       ...(view.egress ? { egress: view.egress } : {}), recorded: view.recorded,
       ...(item ? { waiting: { label: item.label, kind: item.kind, ...(item.note ? { note: item.note } : {}), waitedMs: Math.max(0, now - item.createdAt), ...(desk.info ? { address: deskItemAddress(desk.info, item.id) } : {}) } } : {}),

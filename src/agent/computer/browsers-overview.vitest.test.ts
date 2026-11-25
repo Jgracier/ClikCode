@@ -9,7 +9,7 @@ describe('the browsers list', () => {
   const deps = {
     now: NOW,
     tabs: async () => [
-      view({ id: 'AAAA1111', tab: 'signup', ownerPid: 41, owner: 'worker 41 (session 9d0c4a35)', url: 'https://signin.aws.amazon.com/', title: 'Sign in', liveView: 'http://127.0.0.1:5000/t/' }),
+      view({ id: 'AAAA1111', tab: 'signup', ownerPid: 41, owner: 'worker 41 (session 9d0c4a35)', url: 'https://signin.aws.amazon.com/oauth?code=SECRET&state=x', title: 'Sign in', liveView: 'http://127.0.0.1:5000/t/' }),
       view({ id: 'BBBB2222', ownerPid: 0, owner: 'parked by worker 7', parked: true, egress: 'prod', url: 'https://dash.example.com/keys' }),
       view({ id: 'CCCC3333', owner: 'not recorded (opened before tracking)', recorded: false, url: 'about:blank' }),
     ],
@@ -26,6 +26,8 @@ describe('the browsers list', () => {
     const overview = await browsersOverview('/nowhere', deps);
     expect(overview.totals).toEqual({ tabs: 3, waiting: 1, longestWaitMs: 300_000, unrecorded: 1 });
     expect(overview).toMatchObject({ running: true, display: 'hidden', hostPid: 99, renderers: 7, ageMs: 7_200_000, desk: 'http://100.1.2.3:4000/tok/' });
+    expect(overview.tabs[0]!.url).toBe('https://signin.aws.amazon.com/oauth?…');
+    expect(JSON.stringify(overview)).not.toContain('SECRET');
     expect(overview.tabs[0]).toMatchObject({ n: 1, name: 'signup', chat: '9d0c4a35-1abf', ownerAlive: true, liveView: 'http://127.0.0.1:5000/t/', idleMs: 30_000 });
     expect(overview.tabs[1]).toMatchObject({ parked: true, egress: 'prod', waiting: { label: 'AWS', kind: 'captcha', waitedMs: 300_000, address: 'http://100.1.2.3:4000/tok/t/d1/' } });
     const text = browsersText(overview, 'how');
