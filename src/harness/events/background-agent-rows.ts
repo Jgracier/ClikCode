@@ -19,6 +19,8 @@ export class BackgroundAgentRows {
   private readonly calls = new Map<string, string>();
 
   get size(): number { return this.held.size; }
+  /** Rows the vendor backgrounded (a `task_started` named the task): they run on past the prompt that launched them. */
+  get backgrounded(): number { let n = 0; for (const row of this.held.values()) if (row.agentId) n++; return n; }
   running(): Array<{ id: string; label: string }> {
     return [...this.held].map(([id, row]) => ({ id, label: row.label ?? 'Background agent' }));
   }

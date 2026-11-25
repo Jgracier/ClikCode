@@ -746,8 +746,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // An unsettled tool call belongs to the still-live vendor, even
         // after its parent request ends. Route its later events into the
         // worker's background turn and keep the process alive until it ends.
-        if (!(this.live && (this.work.level || this.work.count()))) for (const event of this.heldAgents.settle('tool-done')) input.onActivity?.(event);
-        if (this.live && (this.work.count() || this.work.level)) {
+        // A held agent counts too: the level drops it a moment before its notification, and the vendor's answer
+        // once it reports comes after this prompt.
+        const owed = Boolean(this.live && (this.work.level || this.work.count() || this.heldAgents.backgrounded));
+        if (!owed) for (const event of this.heldAgents.settle('tool-done')) input.onActivity?.(event);
+        if (owed) {
           const run = this.openBackground('background-work');
           if (run) {
             // What runs now is the background turn's indicator from its first frame.
@@ -815,18 +818,21 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * allows. Its tool rows are settled, and the windows told it ended. Real background work -- a level,
    * a task, an agent -- never starts or keeps this timer. */
   private orphanWatch: NodeJS.Timeout | undefined;
+  /** The last held agent ended in a background run: the vendor answers its notification in a turn of its own, closed
+   * by that turn's `result` (vendorTurnEnded) -- or, should none come, by the same quiet orphanedToolMs. */
+  private awaitingFollowUp = false;
   private watchOrphanedTools(): void {
     if (this.orphanWatch) { clearTimeout(this.orphanWatch); this.orphanWatch = undefined; }
     const held = this.background;
     if (!held || held.channel.done || this.isClosed) return;
-    if (this.work.level || this.vendorTasks.running().length || this.heldAgents.size || !this.work.count()) return;
+    if (this.work.level || this.vendorTasks.running().length || this.heldAgents.size || !(this.work.count() || this.awaitingFollowUp)) return;
     this.orphanWatch = setTimeout(() => {
       this.orphanWatch = undefined;
       const run = this.background;
       if (!run || run.channel.done || this.isClosed) return;
       if (this.work.level || this.vendorTasks.running().length || this.heldAgents.size) return;
       const orphans = this.work.endAll('tool');
-      diagnostic('vendor.orphaned-tool', `${orphans.length} tool${orphans.length === 1 ? '' : 's'} never settled; no longer waiting for ${orphans.length === 1 ? 'it' : 'them'}`);
+      if (orphans.length) diagnostic('vendor.orphaned-tool', `${orphans.length} tool${orphans.length === 1 ? '' : 's'} never settled; no longer waiting for ${orphans.length === 1 ? 'it' : 'them'}`);
       for (const item of orphans) run.observer.onActivity?.({ kind: 'tool-done', label: item.label, id: item.id });
       this.finishBackground('completed');
     }, this.orphanedToolMs);
@@ -885,6 +891,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   protected override finishBackground(ended: BackgroundTurnEnd): void {
     if (this.orphanWatch) { clearTimeout(this.orphanWatch); this.orphanWatch = undefined; }
+    this.awaitingFollowUp = false;
     if (ended === 'completed') this.background?.observer.onBackgroundWork?.(this.work.fullLevel());
     super.finishBackground(ended);
   }
@@ -1846,7 +1853,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const target = this.liveTarget(params);
     target?.observer.onActivity?.(event);
     const run = this.background;
-    if (event.kind !== 'tool-start' && run && target === run && !this.work.level && this.work.count() === 0 && !this.heldAgents.size) this.finishBackground('completed');
+    if (event.kind !== 'tool-start' && run && target === run && !this.work.level && this.work.count() === 0 && !this.heldAgents.size) {
+      // Its answer to the agent's report is still to come.
+      this.awaitingFollowUp = true;
+      this.watchOrphanedTools();
+    }
   }
 
   /** claude-agent-acp pushes the identity it runs as (`_auth/status_update`
