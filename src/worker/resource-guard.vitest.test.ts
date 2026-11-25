@@ -41,11 +41,11 @@ describe('resource guard', () => {
       expect(stopNote(over, 2, action.unit)).toContain('do not rerun');
     }
     const sleepOnly = tableInventory(processes.filter((item) => ![102, 103, 104].includes(item.pid)));
-    expect(decideAction(over, sleepOnly)).toEqual({ kind: 'nudge', worker: 200 });
-    expect(nudgeNote(over, 2)).not.toContain('sleep');
-    expect(nudgeNote(over, 2, sleepOnly.units[0])).toContain('Continue the task with less memory');
+    // Nothing of its own worth naming: the agent is not told (it would have nothing to act on).
+    expect(decideAction(over, sleepOnly)).toEqual({ kind: 'none' });
+    expect(nudgeNote(over, 2, sleepOnly.units[0]!)).toContain('Continue the task with less memory');
     const agentOnly = tableInventory(processes.filter((item) => [100, 101, 200, 201].includes(item.pid)));
-    expect(decideAction(over, agentOnly)).toEqual({ kind: 'nudge', worker: 100 });
+    expect(decideAction(over, agentOnly)).toEqual({ kind: 'none' });
   });
 
   it('parses macOS and Windows process lists and only stops a freshly revalidated tree', async () => {

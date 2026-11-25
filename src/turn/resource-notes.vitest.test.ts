@@ -35,9 +35,9 @@ describe('resource notes', () => {
   });
 
   it('keeps the latest pending warning of each kind but preserves stop notices', async () => {
-    await holdResourceNote('coalesced', 'Disk I/O is stalling the machine (5% full stall time). ClikCode has not identified your command.');
+    await holdResourceNote('coalesced', 'Disk I/O is stalling the machine (5% full stall time). Your `npm test` is issuing about 40 MiB/s.');
     await holdResourceNote('coalesced', 'ClikCode stopped `npm test` for disk I/O pressure.');
-    await holdResourceNote('coalesced', 'Disk I/O is stalling the machine (20% full stall time). ClikCode has not identified your command.');
+    await holdResourceNote('coalesced', 'Disk I/O is stalling the machine (20% full stall time). Your `npm test` is issuing about 40 MiB/s.');
     await holdResourceNote('coalesced', 'Memory is getting tight: 20 GB used.');
     await holdResourceNote('coalesced', 'Memory is getting tight: 25 GB used.');
     await holdResourceNote('coalesced', 'Disk is getting tight: 20 GB free.');

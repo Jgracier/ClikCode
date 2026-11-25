@@ -20,7 +20,7 @@ function readNotes(sessionId: string): string[] {
  * Keep the latest pending reading of each kind; actual stop notices remain
  * separate because each tells the agent which command ended. */
 function warningKey(note: string): string | undefined {
-  if (note.includes('Disk I/O is stalling the machine')) return note.includes('Your `') ? 'io-owned' : 'io-global';
+  if (note.includes('Disk I/O is stalling the machine')) return 'io';
   if (note.includes('Memory is getting tight:')) return 'memory';
   if (note.includes('Disk is getting tight:') || note.includes('Disk is almost full:')) return 'disk-space';
   return undefined;

@@ -1,10 +1,14 @@
 /** React to sustained disk I/O stalls caused by a command this worker owns.
  * Linux cgroup I/O counters identify the issuer; pressure alone identifies
- * victims too, so it must never be used as the reason to kill a process. */
+ * victims too, so it must never be used as the reason to kill a process.
+ *
+ * The agent hears of a stall only when one of its own commands is the cause, once per stall episode
+ * (until the disk has been calm for REARM_AFTER_CLEAR_MS). A stall nobody here caused is not the agent's
+ * to fix: that note went out 301 times in a week (2026-11-25) and no agent could act on it. */
 import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lifecycle, swallowed } from '../runtime/lifecycle-log.js';
-import { safeRecordFileName, stateDirectory } from '../session/store/paths.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { COMMAND_GROUP } from './command-groups.js';
 
 const MIB = 2 ** 20;
@@ -21,8 +25,6 @@ const MIN_MACHINE_SHARE = 0.5;
 const STOP_AFTER_MS = 2 * 60_000;
 const STOP_COOLDOWN_MS = 60_000;
 const SETTLE_MS = 30_000;
-const GLOBAL_WARN_COOLDOWN_MS = 24 * 60 * 60_000;
-const OWNED_WARN_COOLDOWN_MS = 30 * 60_000;
 const REARM_AFTER_CLEAR_MS = 5 * 60_000;
 
 type IoCounters = Map<string, { bytes: number; operations: number }>;
@@ -152,9 +154,6 @@ const gbps = (bytesPerSecond: number): string => `${(bytesPerSecond / MIB).toFix
 export function ioNudge(candidate: Candidate, pressure: number): string {
   return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). Your \`${candidate.command.label}\` is issuing about ${gbps(candidate.bytesPerSecond)} on the busy device. Continue the task with less disk I/O: run only the needed targets, use fewer parallel jobs, or reuse existing build output. Choose a specific change for this command and keep working; this warning does not ask you to pause.`;
 }
-export function ioGlobalNudge(pressure: number): string {
-  return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). ClikCode has not identified a command in this conversation as the cause. Continue the task. If you started an external build or container, check that job and reduce its parallel jobs or stop only redundant work you own. For your next disk-heavy step, run narrower targets, reuse existing output, or use a smaller batch. If none applies, keep working and do not claim your work caused the stall. This warning does not ask you to pause.`;
-}
 export function ioStopNote(candidate: Candidate, pressure: number): string {
   return `ClikCode stopped \`${candidate.command.label}\` and its child processes after sustained disk I/O stalls (${pressure.toFixed(0)}% full stall time). It was issuing about ${gbps(candidate.bytesPerSecond)} and over half of the device's I/O. Continue the task with fewer parallel jobs, narrower targets, or reused build output; do not rerun the same command unchanged.`;
 }
@@ -172,18 +171,7 @@ interface IoGuardOptions {
 
 function lastStopPath(): string { return join(stateDirectory(), 'io-guard.last-stop'); }
 function ineffectivePath(): string { return join(stateDirectory(), 'io-guard.ineffective'); }
-function warningPath(sessionId: string, kind: 'global' | 'owned'): string {
-  return join(stateDirectory(), 'io-guard-warnings', `${safeRecordFileName(sessionId)}.${kind}`);
-}
 function fileTime(path: string): number { try { return Number(readFileSync(path, 'utf8')) || 0; } catch { return 0; } }
-function warningDue(sessionId: string, kind: 'global' | 'owned', at: number): boolean {
-  const path = warningPath(sessionId, kind);
-  const last = fileTime(path);
-  const cooldown = kind === 'global' ? GLOBAL_WARN_COOLDOWN_MS : OWNED_WARN_COOLDOWN_MS;
-  if (last > 0 && at >= last && at - last < cooldown) return false;
-  try { mkdirSync(join(stateDirectory(), 'io-guard-warnings'), { recursive: true, mode: 0o700 }); writeFileSync(path, String(at), { mode: 0o600 }); } catch (error) { swallowed('worker/io-guard', error); }
-  return true;
-}
 
 export function startIoGuard(options: IoGuardOptions): () => void {
   const now = options.now ?? Date.now;
@@ -195,6 +183,8 @@ export function startIoGuard(options: IoGuardOptions): () => void {
   let candidatePath: string | undefined;
   let clearSince: number | undefined;
   let pending: { pressure: number; at: number } | undefined;
+  /** Told of this stall episode already. */
+  let warned = false;
   const tick = (): void => {
     const current = read(now());
     if (!current) { previous = undefined; highSince = undefined; candidateSince = undefined; candidatePath = undefined; return; }
@@ -206,11 +196,7 @@ export function startIoGuard(options: IoGuardOptions): () => void {
     }
     if (current.pressure < CLEAR_PRESSURE) {
       clearSince ??= current.at;
-      if (current.at - clearSince >= REARM_AFTER_CLEAR_MS) {
-        for (const kind of ['global', 'owned'] as const) {
-          try { rmSync(warningPath(options.sessionId, kind), { force: true }); } catch (error) { swallowed('worker/io-guard', error); }
-        }
-      }
+      if (current.at - clearSince >= REARM_AFTER_CLEAR_MS) warned = false;
       highSince = undefined;
       try { rmSync(ineffectivePath(), { force: true }); } catch (error) { swallowed('worker/io-guard', error); }
     } else clearSince = undefined;
@@ -222,15 +208,12 @@ export function startIoGuard(options: IoGuardOptions): () => void {
     if (!hadBaseline) return;
     if (candidate && candidate.command.path === candidatePath) candidateSince ??= current.at;
     else { candidatePath = candidate?.command.path; candidateSince = candidate ? current.at : undefined; }
-    if (current.pressure < WARN_PRESSURE) return;
-    if (candidate && warningDue(options.sessionId, 'owned', current.at)) {
+    if (current.pressure < WARN_PRESSURE || !candidate) return;
+    if (!warned) {
+      warned = true;
       lifecycle('io.nudge', { session: options.sessionId, label: candidate.command.label, pressure: current.pressure, bytesPerSecond: candidate.bytesPerSecond });
       options.deliver(ioNudge(candidate, current.pressure));
-    } else if (!candidate && warningDue(options.sessionId, 'global', current.at)) {
-      lifecycle('io.nudge', { session: options.sessionId, pressure: current.pressure });
-      options.deliver(ioGlobalNudge(current.pressure));
     }
-    if (!candidate) return;
     const lastStop = fileTime(lastStopPath());
     if (highSince === undefined || current.at - highSince < STOP_AFTER_MS
       || candidateSince === undefined || current.at - candidateSince < STOP_AFTER_MS || pending
@@ -247,6 +230,7 @@ export function startIoGuard(options: IoGuardOptions): () => void {
     try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(lastStopPath(), String(current.at)); } catch (error) { swallowed('worker/io-guard', error); }
     pending = { pressure: current.pressure, at: current.at };
     lifecycle('io.stop', { session: options.sessionId, label: candidate.command.label, pressure: current.pressure, bytesPerSecond: candidate.bytesPerSecond, machineShare: candidate.machineShare });
+    warned = true;
     options.deliver(ioStopNote(candidate, current.pressure));
   };
   const timer = setInterval(() => { try { tick(); } catch (error) { lifecycle('io.error', { session: options.sessionId, message: error instanceof Error ? error.message : String(error) }); } }, options.intervalMs ?? TICK_MS);

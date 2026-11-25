@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ioCandidate, ioDelta, ioGlobalNudge, ioNudge, ioPressure, ioStopNote, parseDiskstats, parseIoStat, startIoGuard, type Reading } from './io-guard.js';
+import { ioCandidate, ioDelta, ioNudge, ioPressure, ioStopNote, parseDiskstats, parseIoStat, startIoGuard, type Reading } from './io-guard.js';
 
 const MIB = 2 ** 20;
 const counters = (bytes: number) => new Map([['259:0', { bytes, operations: bytes / 4096 }]]);
@@ -25,7 +25,7 @@ describe('disk I/O guard', () => {
       .toEqual({ bytes: 300 * 512, operations: 30 });
   });
 
-  it('warns without stopping when other work dominates the disk', () => {
+  it('says nothing, and stops nothing, when other work dominates the disk', () => {
     vi.useFakeTimers();
     const home = mkdtempSync(join(tmpdir(), 'clikcode-io-guard-'));
     const oldHome = process.env.CLIKCODE_HOME;
@@ -38,8 +38,7 @@ describe('disk I/O guard', () => {
       now: () => Date.now(), stop, deliver: (note) => notes.push(note) });
     try {
       vi.advanceTimersByTime(40_000);
-      expect(notes).toHaveLength(1);
-      expect(notes[0]).toContain('has not identified a command in this conversation as the cause');
+      expect(notes).toEqual([]);
       expect(stop).not.toHaveBeenCalled();
     } finally {
       close();
@@ -48,55 +47,22 @@ describe('disk I/O guard', () => {
     }
   });
 
-  it('keeps an informational warning quiet through pressure dips and worker restarts', () => {
+  it('warns of an owned stall once per episode: not on a dip, again after five calm minutes', () => {
     vi.useFakeTimers();
-    const home = mkdtempSync(join(tmpdir(), 'clikcode-io-guard-'));
-    const oldHome = process.env.CLIKCODE_HOME;
-    process.env.CLIKCODE_HOME = home;
     const notes: string[] = [];
-    const times = [1_000, 6_000, 11_000, 16_000, 21_000, 26_000, 31_000];
-    const pressures = [6, 6, 1, 6, 6, 1, 6];
+    const times = [1_000, 6_000, 11_000, 16_000, 21_000, 26_000, 326_000, 331_000, 336_000];
+    const pressures = [20, 20, 1, 20, 20, 1, 1, 20, 20];
     let index = 0;
-    const run = () => startIoGuard({ sessionId: 'bouncing', scopeDir: '/unused', labels: new Map(),
-      read: () => ({ ...sample(times[index]!, pressures[index]!, index++ * 100 * MIB, 0), commands: [] }),
-      deliver: (note) => notes.push(note) });
-    const first = run();
+    const close = startIoGuard({ sessionId: 'episodes', scopeDir: '/unused', labels: new Map(),
+      read: () => { const i = index++; return sample(times[i]!, pressures[i]!, i * 100 * MIB, i * 60 * MIB); },
+      stop: () => true, deliver: (note) => notes.push(note) });
     try {
       vi.advanceTimersByTime(25_000);
-      first();
-      const second = run();
-      try { vi.advanceTimersByTime(10_000); } finally { second(); }
       expect(notes).toHaveLength(1);
-      expect(notes[0]).toContain('Continue the task');
-      expect(notes[0]).toContain('reduce its parallel jobs');
-      expect(notes[0]).not.toContain('Avoid starting');
-    } finally {
-      first();
-      if (oldHome === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = oldHome;
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-
-  it('rearms a global warning only after disk pressure stays clear for five minutes', () => {
-    vi.useFakeTimers();
-    const home = mkdtempSync(join(tmpdir(), 'clikcode-io-guard-'));
-    const oldHome = process.env.CLIKCODE_HOME;
-    process.env.CLIKCODE_HOME = home;
-    const notes: string[] = [];
-    const times = [1_000, 6_000, 11_000, 311_000, 316_000, 321_000];
-    const pressures = [6, 6, 1, 1, 6, 6];
-    let index = 0;
-    const close = startIoGuard({ sessionId: 'recovered', scopeDir: '/unused', labels: new Map(),
-      read: () => ({ ...sample(times[index]!, pressures[index]!, index++ * 100 * MIB, 0), commands: [] }),
-      deliver: (note) => notes.push(note) });
-    try {
-      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(20_000);
       expect(notes).toHaveLength(2);
-    } finally {
-      close();
-      if (oldHome === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = oldHome;
-      rmSync(home, { recursive: true, force: true });
-    }
+      expect(notes.every((note) => note.includes('Your `npm test`'))).toBe(true);
+    } finally { close(); }
   });
 
   it('selects an owned issuer only when it dominates machine I/O', () => {
@@ -106,7 +72,6 @@ describe('disk I/O guard', () => {
     expect(owned?.machineShare).toBe(0.6);
     expect(ioNudge(owned!, 20)).toContain('npm test');
     expect(ioNudge(owned!, 20)).toContain('run only the needed targets');
-    expect(ioGlobalNudge(20)).toContain('Continue the task');
     expect(ioStopNote(owned!, 20)).toContain('do not rerun');
     expect(ioCandidate(first, sample(6_000, 20, 100 * MIB, 10 * MIB))).toBeUndefined();
     expect(ioCandidate(first, sample(6_000, 20, 100 * MIB, 60 * MIB, '1:3'))).toBeUndefined();

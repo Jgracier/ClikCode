@@ -33,9 +33,10 @@ export function agentBudget(sample: MemorySample): AgentBudget {
 function worthStopping(unit: Unit, budget: AgentBudget): boolean {
   return unit.freeable >= Math.max(GIB, budget.limit * 0.03);
 }
-type GuardAction = { kind: 'none' } | { kind: 'nudge'; worker: number; unit?: Unit } | { kind: 'stop'; worker: number; unit: Unit };
+type GuardAction = { kind: 'none' } | { kind: 'nudge'; worker: number; unit: Unit } | { kind: 'stop'; worker: number; unit: Unit };
 /** Only a measured unit large enough to relieve pressure is stopped, and only on evidence: agents' own memory
- * (a cgroup) or the machine saying it is critical. */
+ * (a cgroup) or the machine saying it is critical. An agent is told only of a command of its own large
+ * enough to matter: one with none has nothing to act on (the disk-stall note of that kind was noise). */
 export function decideAction(budget: AgentBudget, inventory: Inventory): GuardAction {
   if (budget.ratio < NUDGE_AT || !inventory.workers.length) return { kind: 'none' };
   const bySize = [...inventory.units].sort((a, b) => b.freeable - a.freeable);
@@ -46,22 +47,13 @@ export function decideAction(budget: AgentBudget, inventory: Inventory): GuardAc
     if (command) return { kind: 'stop', worker: command.owner ?? Math.min(...inventory.workers), unit: command };
   }
   const largest = owned[0];
-  if (!largest) return { kind: 'nudge', worker: Math.min(...inventory.workers) };
   // A command too small to stop is not named. Naming an 8 MB sleep sent the
   // agent after the wrong thing (2026-10-13).
-  return worthStopping(largest, budget)
-    ? { kind: 'nudge', worker: largest.owner!, unit: largest }
-    : { kind: 'nudge', worker: largest.owner! };
+  return largest && worthStopping(largest, budget) ? { kind: 'nudge', worker: largest.owner!, unit: largest } : { kind: 'none' };
 }
 const gb = (bytes: number): string => `${(bytes / GIB).toFixed(1)} GB`;
-export function nudgeNote(budget: AgentBudget, conversations: number, unit?: Unit): string {
-  return [
-    `Memory is getting tight: agents are using ${gb(budget.used)} of ${gb(budget.limit)} available to them across ${conversations} conversation${conversations === 1 ? '' : 's'}.`,
-    unit ? `Your \`${unit.label}\` holds about ${gb(unit.freeable)}.` : '',
-    unit
-      ? 'Continue the task with less memory: run targeted tests, use fewer parallel workers, or finish and close this command before starting another large one. Choose the smallest change that fits your work.'
-      : 'Continue the task. For your next heavy step, use targeted tests, fewer parallel workers, or a smaller batch. If none applies, keep working; no command in this conversation was identified as the cause.',
-  ].filter(Boolean).join(' ');
+export function nudgeNote(budget: AgentBudget, conversations: number, unit: Unit): string {
+  return `Memory is getting tight: agents are using ${gb(budget.used)} of ${gb(budget.limit)} available to them across ${conversations} conversation${conversations === 1 ? '' : 's'}. Your \`${unit.label}\` holds about ${gb(unit.freeable)}. Continue the task with less memory: run targeted tests, use fewer parallel workers, or finish and close this command before starting another large one. Choose the smallest change that fits your work.`;
 }
 export function stopNote(budget: AgentBudget, conversations: number, unit: Unit, platform: NodeJS.Platform = process.platform): string {
   const how = platform === 'win32' ? 'terminated by ClikCode (taskkill)' : 'killed by ClikCode (SIGKILL)';
@@ -130,7 +122,7 @@ export function startResourceGuard(options: ResourceGuardOptions): () => void {
       if (action.unit.owner !== undefined) deliver(stopNote(budget, conversations, action.unit) + ramTmpNote(), action.unit.owner);
     } else if (!nudged) {
       nudged = true;
-      lifecycle('resource.nudge', { session: sessionId, ...(action.unit ? { label: action.unit.label, held: action.unit.freeable } : {}), used: budget.used, limit: budget.limit });
+      lifecycle('resource.nudge', { session: sessionId, label: action.unit.label, held: action.unit.freeable, used: budget.used, limit: budget.limit });
       deliver(nudgeNote(budget, conversations, action.unit) + ramTmpNote(), action.worker);
     }
   };
