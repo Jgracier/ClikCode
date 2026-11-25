@@ -32,6 +32,15 @@ describe('human input', () => {
     for (let i = 0; i < 50; i++) { const ms = holdMs({ random }); expect(ms).toBeGreaterThanOrEqual(45); expect(ms).toBeLessThanOrEqual(130); }
   });
 
+  it('holds every typed key down like a person, not the 2-3 ms of a bare keyboard.type', async () => {
+    const holds: number[] = [];
+    const page = { keyboard: { type: async (_char: string, options?: { delay?: number }) => { holds.push(options?.delay ?? 0); } } };
+    await typeLikeAPerson(page as never, 'justin gracier', { random: seeded(9), sleep: async () => {} });
+    expect(holds).toHaveLength(14);
+    for (const ms of holds) { expect(ms).toBeGreaterThanOrEqual(50); expect(ms).toBeLessThanOrEqual(130); }
+    expect(new Set(holds).size).toBeGreaterThan(5);
+  });
+
   it('types key by key with uneven gaps', async () => {
     const typed: string[] = [], gaps: number[] = [];
     const page = { keyboard: { type: async (char: string) => { typed.push(char); } } };

@@ -3,6 +3,7 @@ import type { Frame } from 'playwright-core';
 import { spokenDigits } from './captcha-model.js';
 import { fetchAsTab } from './tab-fetch.js';
 import { frameShot, spot, toTarget, visitorClick, within, type Box, type Hands } from './human-check-hands.js';
+import { tapKey } from './human-input.js';
 
 /** The most candidates a carousel is stepped through (Arkose shows up to about a dozen). */
 const MAX_OPTIONS = 20;
@@ -126,7 +127,7 @@ export async function arkoseAudio(hands: Hands, frame: Frame, box: Box): Promise
   if (!digits) { trace?.('Arkose audio: no digits heard'); return false; }
   trace?.(`Arkose audio: typing ${digits.length} digits`);
   await visitorClick(page.mouse, inPage(state.field), random, sleep);
-  for (const digit of digits) { await page.keyboard.type(digit); await sleep(90 + random() * 160); }
+  for (const digit of digits) { await tapKey(page, digit, { random }); await sleep(90 + random() * 160); }
   const after = await read();
   if (after?.submit) await visitorClick(page.mouse, inPage(after.submit), random, sleep); else await page.keyboard.press('Enter');
   return true;

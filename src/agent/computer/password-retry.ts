@@ -5,6 +5,8 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Frame, Page } from 'playwright-core';
 import { holdSignup } from './signup-login.js';
+import { keyHoldMs } from './human-input.js';
+import { sleep } from '../../runtime/sleep.js';
 import { generatePassword, MAX_PASSWORD_ATTEMPTS, parsePolicy, relax, type PasswordPolicy, type PolicyHints } from './password-policy.js';
 import { registerSecret, scrubSecrets } from './secret-scrubber.js';
 import { sharedState } from './shared-state.js';
@@ -78,7 +80,11 @@ async function typePassword(page: Page | Frame, password: string): Promise<numbe
   for (let index = 0; index < count; index++) {
     const box = boxes.nth(index);
     await box.fill('', { timeout: 10_000 });
-    await box.pressSequentially(password, { timeout: 10_000 });
+    // One key at a time, each held like a person's (keyHoldMs): a bare pressSequentially releases every key 2-3 ms after pressing it.
+    for (const char of password) {
+      await box.pressSequentially(char, { delay: keyHoldMs(), timeout: 10_000 });
+      await sleep(35 + Math.random() * 105);
+    }
     await box.blur().catch(quiet('agent/computer/password-retry'));
   }
   return count;

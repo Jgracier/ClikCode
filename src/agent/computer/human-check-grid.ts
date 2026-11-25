@@ -5,6 +5,7 @@ import type { Frame, Page } from 'playwright-core';
 import { cleanTranscript } from './captcha-model.js';
 import { toTarget, visitorClick, type Asks, type Box, type Hands } from './human-check-hands.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
+import { tapKey } from './human-input.js';
 
 /** A challenge as the widget itself lays it out: the instruction, the target word, each square's place on the page
  * (frame offset added), a key per square that changes when the widget swaps its picture, and the confirm button. */
@@ -148,7 +149,7 @@ export async function solveRecaptchaAudio(page: Page, frame: Frame, box: Box, tr
   await visitorClick(page.mouse, inPage(state.field), random, sleep);
   // A field still holding the last clip's words would get these appended to them.
   await frame.evaluate(`(() => { const f = document.querySelector('#audio-response'); if (f && f.value) { f.select(); return true; } return false; })()`).then(async selected => { if (selected) await page.keyboard.press('Backspace'); }).catch(quiet('agent/computer/human-check-grid'));
-  for (const char of words) { await page.keyboard.type(char); await sleep(40 + random() * 110); }
+  for (const char of words) { await tapKey(page, char, { random }); await sleep(40 + random() * 110); }
   await sleep(300 + random() * 400);
   const after = await read();
   if (after?.verify) await visitorClick(page.mouse, inPage(after.verify), random, sleep);

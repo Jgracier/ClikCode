@@ -3,6 +3,7 @@
 import type { Page } from 'playwright-core';
 import { spot, toTarget, visitorClick, visitorDrag, within, type Box, type Hands } from './human-check-hands.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
+import { tapKey } from './human-input.js';
 
 /** Finds a press-and-hold button on the page (runs in the page). */
 export const HOLD_BUTTON = `(() => {
@@ -177,7 +178,7 @@ export async function solveTextCaptcha(page: Page, askText: (image: { mimeType: 
   const field = page.locator('[data-clikcode-captcha-field="1"]').first();
   await field.click({ timeout: 5_000 }).catch(quiet('agent/computer/human-check-inpage'));
   await field.fill('').catch(quiet('agent/computer/human-check-inpage'));
-  for (const char of text) { await page.keyboard.type(char); await sleep(60 + random() * 140); }
+  for (const char of text) { await tapKey(page, char, { random }); await sleep(60 + random() * 140); }
   const held = await field.inputValue({ timeout: 3_000 }).catch(quiet('agent/computer/human-check-inpage'));
   const same = (a: string): string => a.replace(/\s+/g, '').toLowerCase();
   return held !== undefined && same(held) === same(text) ? 'typed' : 'mismatch';

@@ -69,10 +69,20 @@ export async function approach(page: Page, target: Locator, position?: Point, ch
 /** How long a press holds the button down, in milliseconds. */
 export const holdMs = (chance: Pick<Chance, 'random'> = LIVE): number => Math.round(45 + chance.random() * 85);
 
+/** How long a typed key stays down, in milliseconds. A bare keyboard.type(char) releases the key 2-3 ms after pressing it, which
+ * keystroke-timing checks (Microsoft's sign-up records them) read as a script; people hold a key roughly 50-130 ms. */
+export const keyHoldMs = (chance: Pick<Chance, 'random'> = LIVE): number => Math.round(50 + chance.random() * 80);
+
+/** Presses one character the way a person does: key down, held for keyHoldMs, key up. Every place that types a character for
+ * a page to read goes through this. */
+export async function tapKey(page: Pick<Page, 'keyboard'>, char: string, chance: Pick<Chance, 'random'> = LIVE): Promise<void> {
+  await page.keyboard.type(char, { delay: keyHoldMs(chance) });
+}
+
 /** Types into whatever has focus, one key at a time with uneven gaps, and a longer pause now and then (between words). */
 export async function typeLikeAPerson(page: Page, text: string, chance: Chance = LIVE): Promise<void> {
   for (const char of text) {
-    await page.keyboard.type(char);
+    await tapKey(page, char, chance);
     const pause = char === ' ' || chance.random() < 0.06 ? 120 + chance.random() * 220 : 35 + chance.random() * 105;
     await chance.sleep(pause);
   }
