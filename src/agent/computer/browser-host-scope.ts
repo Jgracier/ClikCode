@@ -55,3 +55,11 @@ export function browserHostLaunch(hostArgv: readonly string[], context: HostLaun
     detachesAtOnce: !scope,
   };
 }
+
+/** The pids other than `self` still in the host's own unit, read from its cgroup (`/proc/self/cgroup` text, `cgroup.procs` reader).
+ * Empty when the host is not in a unit of its own: then nothing here is the host's alone to end. */
+export function scopeLeftovers(cgroup: string, readProcs: (dir: string) => string | undefined, self: number): number[] {
+  const dir = cgroup.split('\n').find(line => line.startsWith('0::'))?.slice(3).trim();
+  if (!dir || !new RegExp(`/${BROWSER_HOST_UNIT}\\.(?:scope|service)$`).test(dir)) return [];
+  return (readProcs(dir) ?? '').split('\n').map(Number).filter(pid => Number.isInteger(pid) && pid > 1 && pid !== self);
+}

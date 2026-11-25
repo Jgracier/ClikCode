@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { afterEach, expect, it } from 'vitest';
 import { chromeIsHostChild, chromeIsOrphan, parentPid } from './browser.js';
+import { processRunning, profileChromePid } from './browser-host.js';
 
 const dirs: string[] = [];
 const kids: Array<() => void> = [];
@@ -52,4 +53,14 @@ it('calls a Chrome whose parent is init or systemd an orphan, and one with a liv
   const owned = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
   kids.push(() => owned.kill());
   expect(await chromeIsOrphan(owned.pid!)).toBe(false);
+});
+
+it('finds the profile Chrome pid from its lock and counts only running processes', async () => {
+  const dir = await state();
+  expect(await profileChromePid(dir)).toBeUndefined();
+  await mkdir(join(dir, 'computer', 'chrome'), { recursive: true });
+  await symlink('host-SER8-4242', join(dir, 'computer', 'chrome', 'SingletonLock'));
+  expect(await profileChromePid(dir)).toBe(4242);
+  expect(await processRunning(process.pid)).toBe(true);
+  expect(await processRunning(2 ** 30)).toBe(false);
 });

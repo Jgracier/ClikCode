@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { browserHostLaunch, browserHostLimits } from './browser-host-scope.js';
+import { browserHostLaunch, browserHostLimits, scopeLeftovers } from './browser-host-scope.js';
 
 const inUserManager = '0::/user.slice/user-1000.slice/user@1000.service/app.slice/x.scope\n';
 const outside = '0::/user.slice/user-1000.slice/session-3.scope\n';
@@ -30,5 +30,16 @@ describe('browserHostLaunch', () => {
   it('reads limits from the environment and ignores nonsense', () => {
     expect(browserHostLimits({ CLIKCODE_BROWSER_MEMORY_HIGH: '4G', CLIKCODE_BROWSER_MEMORY_MAX: '$(rm -rf)', CLIKCODE_BROWSER_CPU_PERCENT: '200' }))
       .toEqual({ memoryHigh: '4G', memoryMax: '10G', tasksMax: '16384', cpuQuota: '200%' });
+  });
+});
+
+describe('scopeLeftovers', () => {
+  const procs = (text: string) => (dir: string) => (dir.endsWith('/clikcode-browser-host.scope') ? text : undefined);
+  it('names every other pid in the host unit', () => {
+    expect(scopeLeftovers('0::/user.slice/user-1000.slice/user@1000.service/app.slice/clikcode-browser-host.scope\n', procs('10\n98868\n11\n'), 10)).toEqual([98868, 11]);
+  });
+  it('names nothing outside the host unit', () => {
+    expect(scopeLeftovers('0::/user.slice/user-1000.slice/session-2.scope\n', () => '10\n11\n', 10)).toEqual([]);
+    expect(scopeLeftovers('', () => '11\n', 10)).toEqual([]);
   });
 });

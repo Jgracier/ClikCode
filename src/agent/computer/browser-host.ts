@@ -12,10 +12,40 @@ import { findTailnetAddress } from './tailnet-handoff.js';
 import { startEgressService } from './egress-host.js';
 import { egressServer, egressTimeZone, tunnelManager } from './egress.js';
 import { pidIsAlive } from '../../session/store/locks.js';
+import { readFileSync } from 'node:fs';
+import { scopeLeftovers } from './browser-host-scope.js';
 import { downloadsInbox } from './downloads.js';
 
 export function computerProfile(stateDir: string): string { return path.join(stateDir, 'computer', 'chrome'); }
 export function computerHostFile(stateDir: string): string { return path.join(stateDir, 'computer', 'host.json'); }
+
+/** Whether `pid` is a running process. A zombie is not: a Chrome that crashed under a host that never reaped it still answers
+ * kill(0), and counting it alive kept every worker waiting on a browser that was gone (2026-11-25, 9 hours). */
+export async function processRunning(pid: number): Promise<boolean> {
+  if (!pidIsAlive(pid)) return false;
+  const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8').catch(() => undefined);
+  // No /proc (macOS, Windows): kill(0) is all there is.
+  return stat === undefined || stat.replace(/^.*\)\s+/, '')[0] !== 'Z';
+}
+
+/** The main Chrome process holding ClikCode's profile, from its SingletonLock (`<host>-<pid>`); undefined when there is no lock. */
+export async function profileChromePid(stateDir: string): Promise<number | undefined> {
+  const lock = await fs.readlink(path.join(computerProfile(stateDir), 'SingletonLock')).catch(() => undefined);
+  const pid = Number(lock?.match(/-(\d+)$/)?.[1]);
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+/** Ends what Chrome left in the host's own unit (zygotes, renderers whose browser died): while any remain the unit stays, the next
+ * host cannot start in it and runs without its limits. Only this unit's own pids, each by pid. */
+function endScopeLeftovers(): void {
+  let cgroup = '';
+  try { cgroup = readFileSync('/proc/self/cgroup', 'utf8'); } catch { return; }
+  const procs = (dir: string): string | undefined => { try { return readFileSync(path.join('/sys/fs/cgroup', dir, 'cgroup.procs'), 'utf8'); } catch { return undefined; } };
+  for (const pid of scopeLeftovers(cgroup, procs, process.pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* fail-open-ok: already gone */ } }
+}
+
+/** How long the host's health probe waits for Chrome to answer CDP before calling it gone. */
+const CDP_PROBE_MS = 15_000;
 
 export { BROWSER_CHANNELS, launchFirst, VIRTUAL_DISPLAY_ENV } from './browser-launch.js';
 
@@ -213,7 +243,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     const stop = (): void => {
       void profiles.closeAll();
       void context.close().catch(quiet('agent/computer/browser-host'));
-      setTimeout(() => process.exit(0), 10_000).unref();
+      setTimeout(() => { endScopeLeftovers(); process.exit(0); }, 10_000).unref();
     };
     // Tabs a recycle saved come back, then the janitor closes tabs nobody holds and recycles an oversized browser.
     await restoreTabs(stateDir, await takeRecycle(stateDir), {
@@ -237,11 +267,17 @@ export async function runComputerHost(stateDir: string): Promise<void> {
       current: async () => {
         const named = JSON.parse(await fs.readFile(hostFile, 'utf8').catch(() => '{}')) as { pid?: number };
         if (named.pid !== process.pid) return false;
-        // A dead Chrome makes the next worker start a new host, which renames host.json: that is the signal. A live page that no
-        // longer answers CDP says the same sooner.
+        // Chrome's main process gone (or a zombie) is the plain signal: its 'close' event may never come while its leftover
+        // children hold the pipe open, and workers wait on this host for as long as it looks alive.
+        const chrome = await profileChromePid(stateDir);
+        if (chrome !== undefined && !await processRunning(chrome)) return false;
+        // A live page that no longer answers CDP says the same; the probe is bounded, since a dead pipe never answers at all.
         const page = context.pages()[0];
-        if (!page) return true;
-        return context.newCDPSession(page).then(async session => { await session.detach().catch(quiet('agent/computer/browser-host')); return true; }, () => false);
+        if (!page) return chrome !== undefined;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timedOut = new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), CDP_PROBE_MS); timer.unref(); });
+        const probe = context.newCDPSession(page).then(async session => { await session.detach().catch(quiet('agent/computer/browser-host')); return true; }, () => false);
+        return Promise.race([probe, timedOut]).finally(() => clearTimeout(timer));
       },
       retire: () => stop(),
     });
@@ -262,5 +298,6 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser-host'));
     await profiles.closeAll();
     await context.close().catch(quiet('agent/computer/browser-host'));
+    endScopeLeftovers();
   }
 }

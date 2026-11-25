@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
-import { computerHostFile, computerProfile, VIRTUAL_DISPLAY_ENV } from './browser-host.js';
+import { computerHostFile, computerProfile, processRunning, profileChromePid, VIRTUAL_DISPLAY_ENV } from './browser-host.js';
 import { desktopSession, hostStatusFile, installingMessage, liveHostStatus, readHostStatus } from './browser-launch.js';
 import { BROWSER_HOST_UNIT, browserHostLaunch } from './browser-host-scope.js';
 import { sharedState } from './shared-state.js';
@@ -59,12 +59,9 @@ export async function chromeIsHostChild(stateDir: string, chromePid: number): Pr
 const BROWSER_BUSY = 'ClikCode browser is busy and did not answer in time (the machine is stalled). Retry shortly; nothing is blocking it.';
 
 async function ownChromeAlive(stateDir: string): Promise<boolean> {
-  try {
-    const lock = await fs.readlink(path.join(computerProfile(stateDir), 'SingletonLock'));
-    const pid = Number(lock.match(/-(\d+)$/)?.[1]);
-    if (!pidIsAlive(pid)) return false;
-    return await chromeIsHostChild(stateDir, pid);
-  } catch { return false; }
+  const pid = await profileChromePid(stateDir);
+  if (pid === undefined || !await processRunning(pid)) return false;
+  return chromeIsHostChild(stateDir, pid);
 }
 
 /** Whether Chrome holding ClikCode's own profile was left behind by a host that died: its parent is init or the user's systemd manager, so no window or command still owns it. A Chrome a person opened has a live parent (their shell or ClikCode) and is never this. */
@@ -90,12 +87,9 @@ async function reclaimOrphanChrome(stateDir: string): Promise<boolean> {
 }
 
 async function externalChromeRunning(stateDir: string): Promise<boolean> {
-  try {
-    const lock = await fs.readlink(path.join(computerProfile(stateDir), 'SingletonLock'));
-    const pid = Number(lock.match(/-(\d+)$/)?.[1]);
-    if (!pidIsAlive(pid)) return false;
-    return !(await chromeIsHostChild(stateDir, pid));
-  } catch { return false; }
+  const pid = await profileChromePid(stateDir);
+  if (pid === undefined || !await processRunning(pid)) return false;
+  return !(await chromeIsHostChild(stateDir, pid));
 }
 
 async function startHost(stateDir: string): Promise<Connected> {
