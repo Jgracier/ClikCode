@@ -489,3 +489,16 @@ describe('show while the chat is busy', () => {
     } finally { release(); await busy; await rm(stateDir, { recursive: true, force: true }); }
   });
 });
+
+describe('a handoff on a computer the user may be at', () => {
+  it('opens the link on the desktop, and not over ssh or when turned off', async () => {
+    const { openHandoffHere } = await import('./computer-web.js');
+    const opened: string[] = [];
+    const open = async (url: string) => { opened.push(url); return true; };
+    expect(await openHandoffHere('http://100.1.2.3:4000/t/x/', { env: { DISPLAY: ':0' }, open })).toContain('also open on this computer\'s desktop');
+    expect(await openHandoffHere('http://a/', { env: { DISPLAY: ':0', SSH_CONNECTION: '1 2 3 4' }, open })).toBe('');
+    expect(await openHandoffHere('http://b/', { env: { DISPLAY: ':0', CLIKCODE_HANDOFF_DESKTOP: '0' }, open })).toBe('');
+    expect(await openHandoffHere('http://c/', { env: { DISPLAY: ':0' }, open: async () => false })).toBe('');
+    expect(opened).toEqual(['http://100.1.2.3:4000/t/x/']);
+  });
+});

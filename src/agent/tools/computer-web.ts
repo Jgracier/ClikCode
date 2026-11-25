@@ -1,7 +1,7 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
 import { approach, holdMs } from '../computer/human-input.js';
 import { pickLink, describeLink, type LinkPick } from '../computer/email-links.js';
-import { quiet } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -1888,7 +1888,7 @@ async function handoffAction(args: WebArgs, ctx: ToolContext): Promise<ToolRunRe
     const url = await waitAtMost(running.link, 45_000, ctx.signal).catch((error: unknown) => { stop.abort(); if (handoffs.get(handoffKey) === running) handoffs.delete(handoffKey); throw error; });
     if (url === TIMED_OUT) { stop.abort(); if (handoffs.get(handoffKey) === running) handoffs.delete(handoffKey); throw new Error('The handoff link did not come up.'); }
     running.url = url;
-    return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included; reusable until Done, ends after 10 idle minutes): ${url}\n${HANDOFF_NEXT}` };
+    return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included; reusable until Done, ends after 10 idle minutes): ${url}${await openHandoffHere(url)}\n${HANDOFF_NEXT}` };
   }
   const outcome = await waitAtMost(running.done, 90_000, ctx.signal).catch((error: unknown): typeof STOPPED => { if (error instanceof StoppedError) return STOPPED; throw error; });
   if (outcome === STOPPED) return { output: `Stopped waiting. The handoff is still open at ${running.url ?? 'its link'}; call handoff again to wait, or handoff with clear: true to take the tab back.` };
@@ -1937,7 +1937,7 @@ async function deskHandoff(args: WebArgs, ctx: ToolContext, handoffKey: string):
     const put = await putTabOnDesk(ctx.stateDir, args.tab, { label: label || 'Browser step', kind: 'other' });
     if (!put) return undefined;
     deskWaits.set(handoffKey, put.item.id);
-    return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included): ${put.address}\nIt stays valid until the user presses Done, reloads included, and the tab is kept open for them for up to twelve hours even if this chat ends. Everything waiting on them is listed at ${store.deskAddress(info)} (one address that never changes). ${HANDOFF_NEXT}` };
+    return { output: `Handoff link (a live view of this tab on the user's Tailscale network: it opens on their phone or any device on the tailnet, this computer included): ${put.address}${await openHandoffHere(put.address)}\nIt stays valid until the user presses Done, reloads included, and the tab is kept open for them for up to twelve hours even if this chat ends. Everything waiting on them is listed at ${store.deskAddress(info)} (one address that never changes). ${HANDOFF_NEXT}` };
   }
   const id = item.id;
   const polled = await waitForDeskItem(item, () => store.readDeskItem(ctx.stateDir, id), ctx.signal);
@@ -1947,6 +1947,21 @@ async function deskHandoff(args: WebArgs, ctx: ToolContext, handoffKey: string):
   deskWaits.delete(handoffKey);
   await store.removeDeskItem(ctx.stateDir, id);
   return item?.status === 'done' ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: 'The handoff ended without the user finishing (it waited too long, or the tab was closed). Observe the page, and hand off again if it is still needed.', isError: true };
+}
+
+/** A handoff waits on the person: when they may be at this computer (a desktop session, not ssh), its live view is opened on the
+ * desktop too, in their own browser, so the step is in front of them as well as a link away. Bounded by the opener's own settle time;
+ * CLIKCODE_HANDOFF_DESKTOP=0 turns it off. Returns the sentence to add for the agent, or nothing. */
+export async function openHandoffHere(url: string, deps: { env?: NodeJS.ProcessEnv; open?: (url: string, session: Record<string, string>) => Promise<boolean> } = {}): Promise<string> {
+  const env = deps.env ?? process.env;
+  if (env.CLIKCODE_HANDOFF_DESKTOP === '0') return '';
+  const { desktopSession, remoteSession } = await import('../computer/browser-launch.js');
+  const session = remoteSession(env) ? undefined : desktopSession({ env });
+  if (!session) return '';
+  const open = deps.open ?? (await import('../computer/handoff-show.js')).openOnDesktop;
+  const opened = await open(url, session).catch(() => false);
+  lifecycle('browser.handoff.desktop', { opened });
+  return opened ? '\nIt is also open on this computer\'s desktop now, in the user\'s own browser: they can do the step there.' : '';
 }
 
 /** Polls a desk item while the user has not finished, up to `ms`; STOPPED as soon as `signal` aborts. */

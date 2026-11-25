@@ -7,7 +7,8 @@ describe('clikcode computer display', () => {
   it('says hidden is the default and how to watch anyway', () => {
     const text = displayStatusText({ ...linux, display: 'hidden', running: undefined });
     expect(text).toMatch(/^Display is hidden \(the default\)/);
-    expect(text).toContain('`show` action');
+    expect(text).toContain('clikcode computer browsers watch <n>');
+    expect(text).toContain('EVERY tab including background agents');
     expect(text).toContain('clikcode computer display visible');
     expect(text).toContain('No browser is running: the setting applies when the next one starts.');
   });
