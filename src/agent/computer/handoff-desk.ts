@@ -11,6 +11,7 @@ import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { LiveView } from './handoff-live.js';
 import { handoffPage } from './handoff-page.js';
 import { clearDeskInfo, deskToken, finishDeskItem, listDeskItems, tidyDesk, writeDeskInfo, type DeskItem } from './handoff-desk-store.js';
+import { listNotices, type Notice } from './notices.js';
 import { acceptWebSocket, type LiteSocket } from './ws-lite.js';
 
 /** The port the desk asks for first, so the address survives a restart; the next ones are tried when it is taken. */
@@ -51,6 +52,11 @@ export function deskListing(items: readonly DeskItem[], now: number): Array<{ id
   }));
 }
 
+/** What the list page is told about each notice from a background program (`clikcode notify`). */
+export function deskNotices(notices: readonly Notice[], now: number): Array<{ title: string; message: string; url?: string; minutes: number }> {
+  return notices.map(notice => ({ title: notice.title, message: notice.message, ...(notice.url ? { url: notice.url } : {}), minutes: Math.max(0, Math.round((now - notice.createdAt) / 60_000)) }));
+}
+
 export function deskListPage(): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#161b22">
@@ -61,13 +67,14 @@ main{max-width:560px;margin:0 auto;padding:18px 14px 40px}
 h1{font-size:18px;margin:6px 0 2px}#sub{color:#8b949e;font-size:14px;margin-bottom:14px}
 a.item{display:block;text-decoration:none;color:inherit;background:#161b22;border:1px solid #30363d;border-radius:12px;padding:14px;margin:10px 0}
 a.item:active{background:#21262d}
+.notice{background:#161b22;border:1px solid #d29922;border-radius:12px;padding:14px;margin:10px 0}.notice a{color:#58a6ff;word-break:break-all}
 .top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
 .label{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kind{flex:none;font-size:12px;color:#0d1117;background:#d29922;border-radius:999px;padding:2px 9px}
 .note{color:#c9d1d9;font-size:14px;margin-top:6px}.meta{color:#8b949e;font-size:13px;margin-top:6px}
 #empty{color:#8b949e;padding:30px 0;text-align:center}
 </style>
-<main><h1>Waiting on you</h1><div id="sub">Checking…</div><div id="list"></div><div id="empty" hidden>Nothing is waiting. This page updates by itself.</div></main>
+<main><h1>Waiting on you</h1><div id="sub">Checking…</div><div id="notices"></div><div id="list"></div><div id="empty" hidden>Nothing is waiting. This page updates by itself.</div></main>
 <script>
 (() => {
 const base = location.pathname.replace(/\\/$/, '');
@@ -90,8 +97,27 @@ const draw = (items) => {
     list.append(a);
   }
 };
+let lastNotices = '';
+const drawNotices = (notices) => {
+  const key = JSON.stringify(notices);
+  if (key === lastNotices) return;
+  lastNotices = key;
+  const box = document.getElementById('notices');
+  box.textContent = '';
+  for (const notice of notices) {
+    const n = el('div', 'notice');
+    n.append(el('div', 'label', notice.title), el('div', 'note', notice.message));
+    if (notice.url && /^https?:/.test(notice.url)) { const a = el('a', '', notice.url); a.href = notice.url; a.rel = 'noreferrer'; n.append(a); }
+    n.append(el('div', 'meta', 'Notice · ' + (notice.minutes < 1 ? 'just now' : notice.minutes + ' min')));
+    box.append(n);
+  }
+};
 const load = async () => {
-  try { const r = await fetch(base + '/items', { cache: 'no-store' }); if (r.ok) draw(await r.json()); }
+  try {
+    const [r, n] = await Promise.all([fetch(base + '/items', { cache: 'no-store' }), fetch(base + '/notices', { cache: 'no-store' })]);
+    if (n.ok) drawNotices(await n.json());
+    if (r.ok) draw(await r.json());
+  }
   catch (error) { document.getElementById('sub').textContent = 'Cannot reach this computer. Retrying…'; }
 };
 load(); setInterval(load, 4000);
@@ -125,6 +151,7 @@ export async function startHandoffDesk(deps: DeskDeps): Promise<{ readonly addre
       const socketOrigin = /^[\w.:[\]-]{1,80}$/.test(host) ? ` ws://${host}` : '';
       const csp = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: data:; connect-src 'self'${socketOrigin}`;
       if (rest === '/') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': csp }).end(deskListPage()); return; }
+      if (rest === '/notices') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(deskNotices(await listNotices(stateDir), now()))); return; }
       if (rest === '/items') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(deskListing(await listDeskItems(stateDir), now()))); return; }
       const tab = /^\/t\/([A-Za-z0-9_-]{6,40})(\/ping|\/)?$/.exec(rest);
       if (tab) {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { addDeskItem, deskHeldTargets, deskToken, DESK_TOKEN_MAX_AGE_MS, DESK_WAIT_MS, finishDeskItem, listDeskItems, readDeskInfo, takeFinishedResumes, tidyDesk, writeDeskInfo } from './handoff-desk-store.js';
-import { deskListing, deskListPage } from './handoff-desk.js';
+import { deskListing, deskListPage, deskNotices } from './handoff-desk.js';
 import { planTabClosures, type TabRecord } from './tab-registry.js';
 
 let dir = '';
@@ -90,4 +90,10 @@ it('lists only what waits, without tab ids or full addresses', async () => {
   expect(listing).toEqual([{ id: a.id, label: 'acme', kind: 'Human check', note: 'press the box', host: 'acme.test', minutes: 5 }]);
   expect(JSON.stringify(listing)).not.toContain('T1');
   expect(deskListPage()).toContain('Waiting on you');
+});
+
+it('the desk page lists notices from background programs: title, message, address and age only', () => {
+  const notices = deskNotices([{ key: 'k', title: 'Writes held', message: 'Renew the unlock.', url: 'https://example.com/u', createdAt: 0, updatedAt: 0, count: 2, desktopAt: 0 }], 180_000);
+  expect(notices).toEqual([{ title: 'Writes held', message: 'Renew the unlock.', url: 'https://example.com/u', minutes: 3 }]);
+  expect(deskListPage()).toContain("fetch(base + '/notices'");
 });
