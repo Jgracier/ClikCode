@@ -20,6 +20,10 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+/** Set on ClikCode's own MCP server (harness/transport/acp-mcp-servers.ts) for a harness that re-reads its tool list:
+ * the computer tools are listed only once the model asks for them (commands/mcp-serve.ts). */
+export const DEFER_COMPUTER_TOOLS_ENV = 'CLIKCODE_MCP_DEFER_COMPUTER';
+
 export type McpServerSpec = (
   | { name: string; transport: 'stdio'; command: string; args: readonly string[]; env: Readonly<Record<string, string>> }
   | {

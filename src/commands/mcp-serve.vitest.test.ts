@@ -75,3 +75,25 @@ it('binds a conversation tool to the chat whose worker started the server', asyn
   expect(unbound.result.isError).toBe(true);
   expect(unbound.result.content[0]!.text).toBe('hindsight is this conversation, and this call has none.');
 });
+
+it('lists the computer tools behind one loader for a harness that re-reads tool lists, and tells the client once they load', async () => {
+  const { deferComputerTools, takeListChanged, LOAD_COMPUTER_TOOLS } = await import('./mcp-serve.js');
+  try {
+    await writeFile(file, copy(''));
+    deferComputerTools(true);
+    const before = await handleMcpRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) as unknown as ListResult & { result: { tools: { description: string }[] } };
+    const names = before.result.tools.map(tool => tool.name);
+    expect(names).toContain(LOAD_COMPUTER_TOOLS);
+    expect(names).not.toContain('browser_use');
+    expect(JSON.stringify(before.result.tools)).toContain('browser_use: new');
+    expect(takeListChanged()).toBe(false);
+    const loaded = await handleMcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: LOAD_COMPUTER_TOOLS, arguments: {} } }) as unknown as CallResult;
+    expect(loaded.result.isError).toBe(false);
+    expect(loaded.result.content[0]!.text).toContain('browser_use');
+    expect(takeListChanged()).toBe(true);
+    expect(takeListChanged()).toBe(false);
+    const after = await handleMcpRequest({ jsonrpc: '2.0', id: 3, method: 'tools/list' }) as unknown as ListResult;
+    expect(after.result.tools.map(tool => tool.name)).toContain('browser_use');
+    expect(after.result.tools.map(tool => tool.name)).not.toContain(LOAD_COMPUTER_TOOLS);
+  } finally { deferComputerTools(false); await rm(file, { force: true }); }
+});

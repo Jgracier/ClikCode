@@ -15,7 +15,7 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { homedir } from 'node:os';
-import { loadMcpServers, type McpServerSpec } from '../../agent/mcp/config.js';
+import { DEFER_COMPUTER_TOOLS_ENV, loadMcpServers, type McpServerSpec } from '../../agent/mcp/config.js';
 import { vendorMcpServerNames } from '../../agent/mcp/import.js';
 import { mcpOAuthProvider, mcpOAuthState } from '../../agent/mcp/oauth.js';
 import { stateDirectory } from '../../session/store/paths.js';
@@ -39,10 +39,15 @@ export function acpMcpServer(spec: McpServerSpec, capabilities: Json | undefined
  * is the clikcode that is running now, told which worker (so which chat) it
  * answers for. */
 export const BUILT_IN_MCP_NAME = 'clikcode';
-function builtInMcpServer(): McpServerSpec | undefined {
+/** Harnesses that re-read a server's tools on `notifications/tools/list_changed` (verified live):
+ * their sessions get the computer tools behind one small loader (commands/mcp-serve.ts), not
+ * about 7k tokens of schemas in every request of every session. */
+const REFRESHES_TOOL_LIST = new Set(['claude']);
+function builtInMcpServer(command?: string): McpServerSpec | undefined {
   const entry = process.env.CLIKCODE_MCP_ENTRY || process.argv[1];
   if (!entry) return undefined;
-  return { name: BUILT_IN_MCP_NAME, transport: 'stdio', command: process.execPath, args: [entry, 'mcp-serve'], env: { CLIKCODE_WORKER_PID: String(process.pid) } };
+  const defer: Record<string, string> = command && REFRESHES_TOOL_LIST.has(command) ? { [DEFER_COMPUTER_TOOLS_ENV]: '1' } : {};
+  return { name: BUILT_IN_MCP_NAME, transport: 'stdio', command: process.execPath, args: [entry, 'mcp-serve'], env: { CLIKCODE_WORKER_PID: String(process.pid), ...defer } };
 }
 
 /** Whether a turn on `transport` reaches ClikCode's own server, so its
@@ -102,7 +107,7 @@ export async function globalMcpServers(
     const { servers: recorded } = await loadMcpServers(stateDir);
     // A server the user recorded under its name wins; a built-in one steps aside. ClikDeploy's
     // tools come while this machine is signed in to ClikDeploy (agent/mcp/clikdeploy-session.ts).
-    const builtIns = [builtInMcpServer(), clikDeploySessionServer()].filter((server): server is McpServerSpec => server !== undefined);
+    const builtIns = [builtInMcpServer(command), clikDeploySessionServer()].filter((server): server is McpServerSpec => server !== undefined);
     const servers = [...builtIns.filter((builtIn) => !recorded.some((server) => server.name === builtIn.name)), ...recorded];
     if (!servers.length) return [];
     const { names } = await vendorMcpServerNames(command, home, profile, workspace);

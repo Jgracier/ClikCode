@@ -16,6 +16,7 @@ import type { callWorkerTool } from './computer-tool-client.js';
 import { currentToolName } from '../agent/computer/tool-names.js';
 import { untilInputEnds } from '../cli/stop-signal.js';
 import { quiet } from '../runtime/lifecycle-log.js';
+import { DEFER_COMPUTER_TOOLS_ENV } from '../agent/mcp/config.js';
 
 type Rpc = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: Record<string, any> };
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -32,11 +33,29 @@ async function computerTools(): Promise<readonly ToolDefinition[]> {
   return await computerEnabled(stateDirectory()) ? toolSet() : [];
 }
 
+/** The loader that stands in for the computer tools until the model asks for them. Their schemas are
+ * about 7k tokens, in every request of every session, and most turns never use them. */
+export const LOAD_COMPUTER_TOOLS = 'load_computer_tools';
+/** The computer tools are listed: the harness does not re-read tool lists, or the model loaded them. */
+let computerListed = process.env[DEFER_COMPUTER_TOOLS_ENV] !== '1';
+/** The tool list changed since the client last read it: it is told (mcpServe). */
+let listChanged = false;
+/** Lists the computer tools from now on, and has the client told. */
+function listComputerTools(): void { if (!computerListed) { computerListed = true; listChanged = true; } }
+export function takeListChanged(): boolean { const changed = listChanged; listChanged = false; return changed; }
+/** For tests: as a session of a harness that re-reads tool lists starts. */
+export function deferComputerTools(defer: boolean): void { computerListed = !defer; listChanged = false; }
+
+const firstSentence = (text: string): string => text.split(/\n|\. /)[0]!.slice(0, 90);
+
 async function tools(): Promise<unknown[]> {
-  return [
-    ...CONVERSATION_TOOLS.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })),
-    ...(await computerTools()).map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.parameters })),
-  ];
+  const computer = await computerTools();
+  const listed = computerListed || !computer.length ? computer.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.parameters })) : [{
+    name: LOAD_COMPUTER_TOOLS,
+    description: `Load the computer tools before using one; they are listed after this call. ${computer.map(tool => `${tool.name}: ${firstSentence(tool.description)}`).join('; ')}.`,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  }];
+  return [...CONVERSATION_TOOLS.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })), ...listed];
 }
 
 /** The worker connection, loaded with the first call: a session that never calls a tool does not pay for it. */
@@ -68,6 +87,12 @@ export async function handleMcpRequest(message: Rpc, call = callInWorker, chat =
     case 'tools/list': { listedStamp = await installedBuildStamp(); return reply({ tools: await tools() }); }
     case 'tools/call': {
       const name = currentToolName(String(message.params?.name ?? ''));
+      if (name === LOAD_COMPUTER_TOOLS) {
+        const computer = await computerTools();
+        if (!computer.length) return reply({ content: [{ type: 'text', text: 'Computer use is off (clikcode computer on turns it on).' }], isError: true });
+        listComputerTools();
+        return reply({ content: [{ type: 'text', text: `Loaded ${computer.map(tool => tool.name).join(', ')}: they are in your tool list now.` }], isError: false });
+      }
       const args = (message.params?.arguments ?? {}) as Record<string, unknown>;
       const conversationTool = CONVERSATION_TOOLS.find(tool => tool.name === name);
       if (conversationTool) {
@@ -81,6 +106,7 @@ export async function handleMcpRequest(message: Rpc, call = callInWorker, chat =
       }
       // A computer tool is known whether computer use is on or not: off, the worker refuses it in plain words.
       if (!(await toolSet()).some(tool => tool.name === name)) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
+      listComputerTools(); // called by name without loading: list it from now on
       try {
         const result = await call({ tool: name, args });
         // A rejected call after a rebuild is most likely the caller's cached tool list: say so, and say what to do.
@@ -107,8 +133,8 @@ export async function mcpServe(signal?: AbortSignal): Promise<void> {
     try { message = JSON.parse(line) as Rpc; } catch { return; }
     const work = handleMcpRequest(message).then(async response => {
       if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
-      // A newer installed build: tell the client to ask for the tool list again.
-      if (await buildChangedSinceListed()) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })}\n`);
+      // Computer tools just loaded, or a newer installed build: tell the client to ask for the tool list again.
+      if (takeListChanged() || await buildChangedSinceListed()) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })}\n`);
     });
     pending.add(work);
     void work.finally(() => pending.delete(work));
