@@ -10,10 +10,11 @@
  * 2. Failing that, `fetch` evaluated in the frame (the challenge frame for a captcha clip, else the page), with its credentials.
  *
  * Neither way working is an error: the request is never made from this process for an egress tab. A tab on home (and the cloud browser,
- * whose requests Playwright already sends through that browser) keeps the context's request client. */
+ * whose requests Playwright already sends through that browser) keeps the context's request client. A page in a separate profile's own
+ * Chrome always goes through that Chrome: its proxy is set on the process (--proxy-server), so the tab carries no egress here. */
 import type { Frame, Page } from 'playwright-core';
 import { quiet } from '../../runtime/lifecycle-log.js';
-import { egressOfPage } from './egress.js';
+import { egressOfPage, ownChromePages } from './egress.js';
 
 export interface TabFetchOptions {
   timeoutMs?: number;
@@ -83,7 +84,7 @@ async function viaFrame(frame: Frame, url: string, max: number): Promise<TabFetc
 export async function fetchAsTab(page: Page, url: string, options: TabFetchOptions = {}): Promise<TabFetch> {
   const ms = options.timeoutMs ?? 15_000;
   const max = options.maxBytes ?? DEFAULT_MAX;
-  if (!egressOfPage(page)) {
+  if (!egressOfPage(page) && !ownChromePages.has(page)) {
     const response = await page.context().request.get(url, { timeout: ms, maxRedirects: 5 });
     const headers = response.headers();
     if (Number(headers['content-length']) > max) throw new TooLarge(`The body is over ${max} bytes.`);

@@ -23,6 +23,10 @@ export const contextEgress = sharedState('browser-context-egress', () => new Wea
  * the default context, so the page itself carries its egress. */
 export const pageEgress = sharedState('browser-page-egress', () => new WeakMap<object, string>());
 
+/** Pages in a separate profile's own Chrome (browser.ts marks them): that Chrome's proxy and cookies are set on its process, which this
+ * worker does not track, so a request made "as the tab" is always made by that Chrome (tab-fetch.ts), never from this process. */
+export const ownChromePages = sharedState('browser-own-chrome-pages', () => new WeakSet<object>());
+
 /** The egress a page's traffic leaves through; undefined for home (and for the cloud browser). */
 export function egressOfPage(page: { context(): object }): string | undefined {
   const own = pageEgress.get(page);

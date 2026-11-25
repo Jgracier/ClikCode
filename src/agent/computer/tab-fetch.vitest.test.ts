@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Page } from 'playwright-core';
-import { pageEgress } from './egress.js';
+import { ownChromePages, pageEgress } from './egress.js';
 import { fetchAsTab } from './tab-fetch.js';
 import { documentView } from './document-text.js';
 
@@ -58,6 +58,15 @@ describe('fetchAsTab', () => {
     const neither = fakeTab({ egress: 'vps', cdp: 'fails', inPage: 'fails' });
     await expect(fetchAsTab(neither.page, 'https://example.test/a')).rejects.toThrow(/through its egress/);
     expect(neither.nodeRequest).not.toHaveBeenCalled();
+  });
+
+  it('loads through Chrome for a tab in a separate profile, whose proxy is on its process and not on the tab', async () => {
+    const { page, nodeRequest, sent } = fakeTab({ cdp: 'works' });
+    ownChromePages.add(page);
+    const got = await fetchAsTab(page, 'https://api.ipify.org/');
+    expect(got.body.toString()).toBe('through the egress');
+    expect(sent).toContain('Network.loadNetworkResource');
+    expect(nodeRequest).not.toHaveBeenCalled();
   });
 });
 

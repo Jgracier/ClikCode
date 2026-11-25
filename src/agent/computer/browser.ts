@@ -17,7 +17,7 @@ import { allTabs, closeTabsByLabel, closeTabsOfOwner, readTabRecords, sweepTabs,
 import { sleep } from '../../runtime/sleep.js';
 import { browserDisplay, browserProvider, type BrowserDisplay } from './settings.js';
 import { browserUseConnection, stopBrowserUse } from './browser-use-cloud.js';
-import { contextEgress, egressOfPage, egressServer, pageEgress } from './egress.js';
+import { contextEgress, egressOfPage, egressServer, ownChromePages, pageEgress } from './egress.js';
 import { EgressNotServed, requestHostedContext, requestSeparateProfile } from './egress-host.js';
 import { addDeskItem, deskHeldTargets, deskItemAddress, readDeskInfo, type DeskItem, type DeskKind } from './handoff-desk-store.js';
 
@@ -252,6 +252,8 @@ const cloudTimers = sharedState('browser-cloud-timers', () => new Map<string, Re
 // ── which of this process's tabs live in a separate persistent profile (and which one) ──
 const profileOwners = sharedState('browser-profile-owners', () => new Map<string, string>());
 const profilePages = sharedState('browser-profile-pages', () => new WeakMap<Page, string>());
+/** Record `page` as one of separate profile `name`'s: its requests are then made by that profile's Chrome (tab-fetch.ts). */
+function markProfilePage(page: Page, name: string): void { profilePages.set(page, name); ownChromePages.add(page); }
 
 /** The separate profile this chat's tab lives in, if any. */
 export function tabProfile(stateDir: string, tab?: string): string | undefined { return profileOwners.get(ownerKey(stateDir, tab)); }
@@ -392,7 +394,7 @@ export async function moveTabToProfile(stateDir: string, name: string, tab?: str
   const address = current && /^https?:/i.test(current.url()) ? current.url() : undefined;
   const connected = await browserFor(stateDir, true, false, name, egress);
   const page = await pageInHostedContext(connected);
-  profilePages.set(page, name);
+  markProfilePage(page, name);
   const before = owned.get(key) ?? [];
   owned.set(key, []);
   chosen.delete(key);
@@ -580,7 +582,7 @@ export function adoptPage(stateDir: string, page: Page, tab?: string): void {
   // And one opened by a separate-profile tab lives in that profile.
   if (!profilePages.has(page)) {
     const opener = (owned.get(ownerKey(stateDir, tab)) ?? []).find(other => profilePages.has(other) && other.context() === page.context());
-    if (opener) profilePages.set(page, profilePages.get(opener)!);
+    if (opener) markProfilePage(page, profilePages.get(opener)!);
   }
   // A page an egress-bound tab adopts (its popup, its restored or parked tab) is in that egress's context: Chrome opens a popup where its
   // opener is, and only same-egress restored tabs are claimed.
@@ -695,7 +697,7 @@ export async function openNewComputerPage(stateDir: string, tab?: string): Promi
   const connected = await browserFor(stateDir, true, cloud, profile);
   const page = profile ? await pageInHostedContext(connected) : await newTabPage(stateDir, connected, cloud ? undefined : egressOwners.get(ownerKey(stateDir, tab)), cloud);
   if (cloud) cloudPages.add(page);
-  if (profile) profilePages.set(page, profile);
+  if (profile) markProfilePage(page, profile);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);
   return page;
@@ -727,7 +729,7 @@ export async function openComputerPage(stateDir: string, tab?: string): Promise<
   if (existing) { touchTab(stateDir, existing); return existing; }
   const page = profile ? await pageInHostedContext(connected) : await newTabPage(stateDir, connected, egress, cloud);
   if (cloud) cloudPages.add(page);
-  if (profile) profilePages.set(page, profile);
+  if (profile) markProfilePage(page, profile);
   adoptPage(stateDir, page, tab);
   touchTab(stateDir, page);
   return page;
