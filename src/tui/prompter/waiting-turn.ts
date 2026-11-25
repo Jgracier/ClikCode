@@ -18,6 +18,7 @@ import { commandLineTypedDuringTurn } from '../waiting-slash.js';
 import { takeTerminalKeys } from '../input-decoder.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { WaitingTurn } from './state.js';
+import { announceOpenNotices } from './notices.js';
 
 /** A key typed into an answer the composer is taking while a turn runs (a question's text, "tell it instead", a sign-in's code):
  * plain text editing, a paste as it is -- no history, nothing held. */
@@ -189,6 +190,7 @@ export function startWaiting(
   const submittedPrompt = this.submittedPrompt;
   // The same turn, drawn early: it carries on, its clock with it. (The draft is the composer's, and simply stays.)
   const early = this.turn?.early ? { ...this.turn } : undefined;
+  if (!early) announceOpenNotices(this);
   this.keepVoiceReply = Boolean(early);
   this.stopWaiting(false);
   this.keepVoiceReply = false;

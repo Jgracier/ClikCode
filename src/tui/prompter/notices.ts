@@ -1,6 +1,23 @@
 /** Transient notices and the scrollable panel above the composer. */
 import { sanitizeTerminalText } from '../render/text.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
+import { quiet } from '../../runtime/lifecycle-log.js';
+import { stateDirectory } from '../../session/store/paths.js';
+
+/** How long the start of a turn shows the open notices on the notice row. */
+const OPEN_NOTICES_MS = 12_000;
+
+/** At the start of a turn, one line on the notice row naming what background programs told the person (`clikcode notify`), while any
+ * is open: the desk and /browsers have the whole list. Read from disk each time; a turn with none shows nothing. */
+export function announceOpenNotices(p: TerminalHarnessPrompter): void {
+  void (async () => {
+    const { listNotices, noticesLine } = await import('../../agent/computer/notices.js');
+    const line = noticesLine(await listNotices(stateDirectory()));
+    if (!line || p.transientNotice) return;
+    p.showTransientNotice(line, OPEN_NOTICES_MS);
+    p.paintCurrent();
+  })().catch(quiet('tui/prompter/notices'));
+}
 
 /** A notice on the notice row for `durationMs`; when it goes, the screen is drawn as it is then (paintCurrent). */
 export function showTransientNotice(this: TerminalHarnessPrompter, text: string, durationMs: number): void {
