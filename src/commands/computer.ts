@@ -106,8 +106,8 @@ export async function computerDisplay(setting: string | undefined): Promise<void
 /** What `clikcode computer display` prints: the setting, what it will do from here, and what the browser running now is doing. */
 export function displayStatusText(state: { display: 'visible' | 'hidden'; running: 'visible' | 'hidden' | 'headless' | undefined; desktop: boolean; headless: boolean; platform: NodeJS.Platform }): string {
   const lines = [state.display === 'visible'
-    ? 'Display is visible: ClikCode\'s browser opens its window on your desktop, so you can watch the agent work in it. Go back with `clikcode computer display hidden`.'
-    : 'Display is hidden (the default): ClikCode\'s browser runs out of sight on a virtual display, so it never takes your screen or keyboard. To watch one chat\'s tab, ask the agent to show it (the browser tool\'s `show` action opens a live view in your own browser). To put the browser window itself on your desktop: `clikcode computer display visible`.'];
+    ? 'Display is visible: ClikCode\'s browser opens its window on your desktop with EVERY tab in it, background agents\' and connector workers\' included, and any of them can come to the front while you type. Go back with `clikcode computer display hidden`. To watch one tab instead, use its live view (`clikcode computer browsers watch <n>`).'
+    : 'Display is hidden (the default): ClikCode\'s browser runs out of sight on a virtual display, so it never takes your screen or keyboard. To watch or act in one tab, open its live view: `clikcode computer browsers` lists every tab, `clikcode computer browsers watch <n>` opens one on your desktop (or ask the agent to show it). `clikcode computer display visible` puts the whole browser window, with EVERY tab including background agents\', on your desktop: the live view is the better way to watch.'];
   if (state.platform !== 'linux') lines.push('On macOS and Windows the browser window is always on the desktop; this setting only changes Linux.');
   else if (state.headless) lines.push('Headless is on (`clikcode computer headless`, CLIKCODE_BROWSER_HEADLESS, or no display at all), and it wins: the browser has no window anywhere.');
   else if (state.display === 'visible' && !state.desktop) lines.push('No desktop session can be seen from this terminal (no DISPLAY or WAYLAND_DISPLAY): a browser started from here stays hidden. One started from a chat on your desktop is visible.');
@@ -552,4 +552,63 @@ export async function computerEgress(action: 'list' | 'add' | 'remove' | 'check'
   if (isJsonDefaultMode()) return emitResult({ computer: { egress: list } });
   process.stdout.write(`Ways out, in the order a vendor stopped by a captcha is tried:\n${list.map((entry, index) => `  ${index + 1}. ${entry.name}: ${describe(entry)}`).join('\n')}\n`);
   if (list.length === 1) process.stdout.write('Only home is set up. Add one with: clikcode computer egress add <name> --ssh <host>\n');
+}
+
+/** `clikcode computer browsers [watch|show|close|front] [n]`: every tab ClikCode's browser has open, and the actions on one. */
+export async function computerBrowsers(action: string | undefined, which: string | undefined): Promise<void> {
+  const dir = stateDirectory();
+  const { browsersOverview, browsersText } = await import('../agent/computer/browsers-overview.js');
+  if (!action || action === 'list') {
+    const overview = await browsersOverview(dir);
+    if (isJsonDefaultMode()) return emitResult({ computer: { browsers: overview } });
+    process.stdout.write(`${browsersText(overview, BROWSERS_HOW)}\n`);
+    return;
+  }
+  const done = await browserTabAction(dir, action, which, { stay: true });
+  if (isJsonDefaultMode()) return emitResult({ computer: { browsers: done } });
+  process.stdout.write(`${done.text}\n`);
+  if (done.wait) await done.wait;
+}
+
+export const BROWSERS_HOW = 'Act on one: clikcode computer browsers watch <n> (a live view on your desktop: watch it, click and type in it) · front <n> · close <n>. --json for all of it.';
+
+/** One action on one tab, for the CLI and `/browsers`. `stay`: the live view is served by this process for as long as it runs, so a
+ * command waits (until Ctrl-C or the tab closes); the TUI, which keeps running, returns at once. */
+export async function browserTabAction(dir: string, action: string, which: string | undefined, options: { stay?: boolean } = {}): Promise<{ text: string; tab?: string; address?: string; opened?: boolean; wait?: Promise<void> }> {
+  const { browsersOverview, pickTab } = await import('../agent/computer/browsers-overview.js');
+  if (!['watch', 'show', 'close', 'front'].includes(action)) throw new Error('Say watch, close or front and a tab: clikcode computer browsers watch 2');
+  if (!which) throw new Error(`Name the tab: clikcode computer browsers ${action} <n> (its number in the list).`);
+  const tab = pickTab(await browsersOverview(dir), which);
+  const label = `tab ${tab.n} (${tab.name ? `"${tab.name}", ` : ''}${tab.url.slice(0, 80)})`;
+  if (action === 'close') {
+    const { closeTabById } = await import('../agent/computer/tab-registry.js');
+    if (tab.waiting) throw new Error(`${label} is waiting on you (${tab.waiting.label}); finish or close it on the handoff desk${tab.waiting.address ? `: ${tab.waiting.address}` : ''}.`);
+    return { tab: tab.id, text: await closeTabById(dir, tab.id) ? `Closed ${label}.` : `Could not close ${label}: the browser did not answer.` };
+  }
+  if (action === 'front') {
+    const { activateBrowserTarget } = await import('../agent/computer/tab-registry.js');
+    if (!await activateBrowserTarget(dir, tab.id)) throw new Error(`The browser did not bring ${label} to the front.`);
+    const { runningHostDisplay } = await import('../agent/computer/browser-host.js');
+    const where = await runningHostDisplay(dir) === 'visible' ? 'in the browser window on your desktop' : 'in the browser (its window is hidden: watch it with clikcode computer browsers watch)';
+    return { tab: tab.id, text: `${label} is in front ${where}.` };
+  }
+  if (tab.liveView) return { tab: tab.id, address: tab.liveView, text: `${label} already has a live view: ${tab.liveView} (open it in a browser on this computer).` };
+  const { computerPageById } = await import('../agent/computer/browser.js');
+  const { serveLiveView } = await import('../agent/computer/handoff-serve.js');
+  const { openOnDesktop } = await import('../agent/computer/handoff-show.js');
+  const { desktopSession, remoteSession } = await import('../agent/computer/browser-launch.js');
+  const page = await computerPageById(dir, tab.id);
+  if (!page) throw new Error(`${label} is no longer open.`);
+  const server = await serveLiveView({ host: '127.0.0.1', watch: true, ownHostOnly: true, page: async () => page });
+  const session = remoteSession() ? undefined : desktopSession();
+  const opened = session ? await openOnDesktop(server.address, session) : false;
+  const text = `${opened ? 'Opened a live view of' : 'Serving a live view of'} ${label}${opened ? ' on your desktop' : ''}: ${server.address}\nIt answers only on this computer. You can click and type in it; the agent's work there goes on.${options.stay ? ' Ctrl-C ends the view (the tab stays open).' : ' It lasts while this ClikCode window is open.'}`;
+  if (!options.stay) return { tab: tab.id, address: server.address, opened, text };
+  const keep = setInterval(() => undefined, 60_000);
+  const wait = new Promise<void>(resolve => {
+    const end = (): void => { clearInterval(keep); void server.stop().catch(quiet('commands/computer')).finally(resolve); };
+    process.once('SIGINT', end);
+    page.once('close', end);
+  });
+  return { tab: tab.id, address: server.address, opened, text, wait };
 }

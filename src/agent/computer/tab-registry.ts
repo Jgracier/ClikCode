@@ -34,6 +34,8 @@ export interface TabRecord {
   restoreFor?: string;
   /** The egress the page's traffic leaves through (egress.ts); absent for home. A recycle restores it into that egress's context. */
   egress?: string;
+  /** The address a live view of this tab is served at (show), while one is. */
+  liveView?: string;
 }
 
 export interface BrowserTarget { id: string; type: string; url: string; title?: string }
@@ -144,6 +146,14 @@ async function closeBrowserTarget(stateDir: string, id: string): Promise<boolean
   catch { return false; }
 }
 
+/** Bring a page to the front of the shared Chrome's window. */
+export async function activateBrowserTarget(stateDir: string, id: string): Promise<boolean> {
+  const base = await devToolsBase(stateDir);
+  if (!base) return false;
+  try { return (await fetch(`${base}/json/activate/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(5_000) })).ok; }
+  catch { return false; }
+}
+
 /** Pages first seen without a record, by target id: how long a tab no one recorded has been there, for this process. */
 const firstSeen = new Map<string, number>();
 
@@ -155,7 +165,7 @@ interface SweepDeps {
   close?: (id: string) => Promise<boolean>;
 }
 
-interface TabView extends TabRecord { title?: string; recorded: boolean }
+export interface TabView extends TabRecord { title?: string; recorded: boolean }
 
 /** Every page in the shared Chrome with its owner, joined from the records and the browser's own list. */
 export async function allTabs(stateDir: string, deps: Pick<SweepDeps, 'now' | 'list'> = {}): Promise<TabView[] | undefined> {
@@ -214,6 +224,12 @@ export async function sweepTabs(stateDir: string, deps: SweepDeps = {}): Promise
     if (await closeTabLogged(stateDir, view, entry.reason, { ...deps, now })) done.push({ view, reason: entry.reason });
   }
   return done;
+}
+
+/** Close one tab by the browser's id, whoever holds it (the user asked: `clikcode computer browsers close`). */
+export async function closeTabById(stateDir: string, id: string, deps: SweepDeps = {}): Promise<boolean> {
+  const view = ((await allTabs(stateDir, deps.list ? { list: deps.list } : {})) ?? []).find(item => item.id === id);
+  return view ? closeTabLogged(stateDir, view, 'asked to close', deps) : false;
 }
 
 /** Close every tab carrying this label, whoever holds it. Returns the tabs closed. */

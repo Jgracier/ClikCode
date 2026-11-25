@@ -601,13 +601,31 @@ export function adoptPage(stateDir: string, page: Page, tab?: string): void {
 
 // ── who holds each tab: written down so any chat can list it and the sweep can close what no one holds (tab-registry.ts) ──
 
-interface Held { id: Promise<string | undefined>; tab?: string; openedAt: number; lastUsedAt: number; written: number; parked: boolean }
+interface Held { id: Promise<string | undefined>; tab?: string; openedAt: number; lastUsedAt: number; written: number; parked: boolean; liveView?: string }
 const held = sharedState('browser-held', () => new WeakMap<Page, Held>());
 const WRITE_EVERY_MS = 5_000;
 const SWEEP_EVERY_MS = 60_000;
 const lastSweep = sharedState('browser-last-sweep', () => new Map<string, number>());
 
 const ownerLabel = (): string => `worker ${process.pid}${process.env.CLIKCODE_SESSION_ID ? ` (session ${process.env.CLIKCODE_SESSION_ID.slice(0, 8)})` : ''}`;
+
+/** Write down that a live view of `page` is being served at `address` (show), or that it no longer is: `clikcode computer browsers`
+ * lists it from the tab's record, whichever process asks. */
+export function markLiveView(stateDir: string, page: Page, address: string | undefined): void {
+  const entry = held.get(page);
+  if (!entry || entry.liveView === address) return;
+  if (address) entry.liveView = address; else delete entry.liveView;
+  void flushHeld(stateDir, page, entry, true).catch(quiet('agent/computer/browser'));
+}
+
+/** A page of the shared Chrome by the browser's own id, for a command outside any chat (`clikcode computer browsers watch`). */
+export async function computerPageById(stateDir: string, id: string): Promise<Page | undefined> {
+  const { browser } = await browserFor(stateDir, false);
+  for (const page of browser.contexts().flatMap(context => context.pages())) {
+    if (!page.isClosed() && await targetIdOf(page) === id) return page;
+  }
+  return undefined;
+}
 
 /** The browser's own id for a page, or undefined when it cannot say. */
 export function targetIdOf(page: Page): Promise<string | undefined> {
@@ -627,6 +645,7 @@ async function flushHeld(stateDir: string, page: Page, entry: Held, force: boole
   const record: TabRecord = {
     id, ...(entry.tab ? { tab: entry.tab } : {}), ownerPid: entry.parked ? 0 : process.pid, owner: entry.parked ? `parked by ${ownerLabel()}` : ownerLabel(),
     openedAt: entry.openedAt, lastUsedAt: entry.lastUsedAt, ...(page.isClosed() ? {} : { url: page.url() }), ...(entry.parked ? { parked: true } : {}), ...(egressOfPage(page) ? { egress: egressOfPage(page)! } : {}),
+    ...(entry.liveView ? { liveView: entry.liveView } : {}),
   };
   await writeTabRecord(stateDir, record);
 }

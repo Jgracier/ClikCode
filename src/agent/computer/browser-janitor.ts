@@ -22,7 +22,7 @@ export function recycleLimits(env: NodeJS.ProcessEnv = process.env): RecycleLimi
   return { renderers: Math.floor(number('CLIKCODE_BROWSER_MAX_RENDERERS', 40)), bytes: number('CLIKCODE_BROWSER_MAX_GB', 6) * GIB, ageMs: number('CLIKCODE_BROWSER_MAX_HOURS', 6) * 3_600_000 };
 }
 
-interface BrowserLoad { renderers: number; bytes: number; /** How long this browser has been up, when known. */ ageMs?: number }
+export interface BrowserLoad { renderers: number; bytes: number; /** How long this browser has been up, when known. */ ageMs?: number }
 
 /** Only tabs used within this long come back after a recycle. */
 const RESTORE_WITHIN_MS = 10 * 60_000;

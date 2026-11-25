@@ -79,6 +79,18 @@ export const settingsHandlers = {
       ? 'Computer use is on. The agent can open URLs and control the desktop when a task needs it.'
       : 'Computer use is off. New computer actions are refused.' });
   },
+  // The live view a watch opens is served by this process, so it lasts while this window is open (the CLI's waits instead).
+  browsers: async ({ words }) => {
+    const { browsersOverview, browsersText } = await import('../../../agent/computer/browsers-overview.js');
+    const { browserTabAction } = await import('../../../commands/computer.js');
+    const action = words[0]?.toLowerCase();
+    if (!action || action === 'list') {
+      const overview = await browsersOverview(stateDirectory());
+      return emitHarnessOutput({ panel: 'browsers', browsers: overview, text: browsersText(overview, 'Act on one: /browsers watch <n> (a live view on your desktop: watch it, click and type in it) · /browsers front <n> · /browsers close <n>.') });
+    }
+    const done = await browserTabAction(stateDirectory(), action, words[1]);
+    return emitHarnessOutput({ panel: 'browsers', ...done, text: done.text });
+  },
   // Global, not this chat's: how mid-turn messages go is the user's habit.
   // The worker reads it as each message arrives (session-worker.ts).
   send: async ({ state, words }) => {

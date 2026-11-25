@@ -25,6 +25,7 @@ function world(change: Partial<ShowDeps> = {}) {
     },
     open: async (url, session) => { opened.push({ url, session }); return true; },
     now: () => state.clock,
+    mark: () => undefined,
     ...change,
   };
   return { deps, made, opened, state, tab };

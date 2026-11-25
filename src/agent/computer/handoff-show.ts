@@ -12,7 +12,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { Page } from 'playwright-core';
 import { childEnvironment } from '../../runtime/electron-env.js';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
-import { computerPage, ownedPages, tabIsInCloud } from './browser.js';
+import { computerPage, markLiveView, ownedPages, tabIsInCloud } from './browser.js';
 import { runningHostDisplay, type HostDisplay } from './browser-host.js';
 import { desktopSession, remoteSession } from './browser-launch.js';
 import { serveLiveView, type LiveServer } from './handoff-serve.js';
@@ -22,7 +22,7 @@ import { sharedState } from './shared-state.js';
 export const SHOW_NO_TAB_MS = 10 * 60_000;
 const TEND_EVERY_MS = 2_000;
 
-interface ShowView { server: LiveServer; timer: NodeJS.Timeout; noTabSince?: number }
+interface ShowView { server: LiveServer; timer: NodeJS.Timeout; noTabSince?: number; marked?: Page; mark: ShowDeps['mark'] }
 const views = sharedState('show-views', () => new Map<string, ShowView>());
 
 /** The most a show takes. It answers with the view's address or the reason there is none, never with a wait: a tab whose page is
@@ -79,6 +79,8 @@ export interface ShowDeps {
   serve: typeof serveLiveView;
   open(url: string, session: Record<string, string>): Promise<boolean>;
   now(): number;
+  /** Write down (or, with undefined, take back) that `page` has a live view at `address`, for the browsers list. */
+  mark(page: Page, address: string | undefined): void;
 }
 
 function realDeps(stateDir: string, tab: string | undefined): ShowDeps {
@@ -92,19 +94,29 @@ function realDeps(stateDir: string, tab: string | undefined): ShowDeps {
     serve: serveLiveView,
     open: openOnDesktop,
     now: Date.now,
+    mark: (page, address) => markLiveView(stateDir, page, address),
   };
 }
 
-const SETTING_HINT = 'To have the browser window itself on the desktop instead, the user can run `clikcode computer display visible` (it applies the next time the browser starts).';
+const SETTING_HINT = '`clikcode computer browsers` lists every tab the browser has open. (`clikcode computer display visible` would put the whole browser window on the desktop instead, with EVERY tab in it, background agents\' included; this view is the better way to watch.)';
 
 async function endShow(key: string, why: string): Promise<boolean> {
   const view = views.get(key);
   if (!view) return false;
   views.delete(key);
   clearInterval(view.timer);
+  if (view.marked) view.mark(view.marked, undefined);
   lifecycle('browser.show.end', { why });
   await view.server.stop().catch(quiet('agent/computer/handoff-show'));
   return true;
+}
+
+/** The view's record follows the chat's tab: the one it shows now is marked, the one before is not. */
+function marked(view: ShowView, page: Page): void {
+  if (view.marked === page) return;
+  if (view.marked) view.mark(view.marked, undefined);
+  view.marked = page;
+  view.mark(page, view.server.address);
 }
 
 /** One look at an open view: a viewer is moved to the tab the chat is in now, and a chat with no tab for long enough ends the view.
@@ -119,6 +131,7 @@ export async function tendShow(key: string, deps: Pick<ShowDeps, 'current' | 'no
     return;
   }
   delete view.noTabSince;
+  marked(view, current);
   const viewing = view.server.viewing();
   if (viewing && viewing !== current) view.server.reconnect();
 }
@@ -159,9 +172,10 @@ async function showWithin(key: string, deps: ShowDeps, step: <T>(name: string, w
     const timer = setInterval(() => { void tendShow(key, deps).catch(quiet('agent/computer/handoff-show')); }, TEND_EVERY_MS);
     // The view is a courtesy: it never keeps a finished process alive.
     timer.unref();
-    view = { server, timer };
+    view = { server, timer, mark: deps.mark };
     views.set(key, view);
   }
+  marked(view, page);
   const address = view.server.address;
   const carryOn = 'It stays open while you work: keep acting on the tab as usual, and it follows this chat to another tab. The user can also click and type in it. show with clear: true closes it.';
   if (reused && view.server.viewing()) {
