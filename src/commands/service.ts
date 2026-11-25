@@ -50,6 +50,10 @@ export async function runService(config: Conf, signal: AbortSignal): Promise<voi
     server.listen(settings.port, settings.host, () => { server.off('error', reject); resolve(); });
   });
   const address = server.address() as AddressInfo;
+  if (/^(1|true|yes)$/i.test(process.env.CLIKCODE_SERVICE_PREINSTALL ?? '')) {
+    const { preinstallSignInTools } = await import('../service/backend.js');
+    void preinstallSignInTools(signal, (line) => process.stderr.write(`${new Date().toISOString()} ${line}\n`));
+  }
   lifecycle('service.start', { host: address.address, port: address.port });
   process.stderr.write(`clikcode service ${backend.version}${backend.commit ? ` (${backend.commit.slice(0, 12)})` : ''} listening on http://${address.address}:${address.port} · home ${stateDirectory()}\n`);
   await new Promise<void>((resolve) => {

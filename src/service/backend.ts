@@ -59,6 +59,25 @@ export const loginDriver: LoginDriver = {
   },
 };
 
+/** Installs every sign-in's CLI that is missing, one at a time, so Connect never waits on a download (the service's
+ * image sets CLIKCODE_SERVICE_PREINSTALL; a person's own machine installs on first use). A sign-in that starts while
+ * this runs joins the same install (install.ts runs one per command). A failure is logged and left to first use. */
+export async function preinstallSignInTools(signal: AbortSignal, log: (line: string) => void): Promise<void> {
+  for (const harness of builtInHarnesses()) {
+    if (signal.aborted) return;
+    if (!signInHarness(harness.command)) continue;
+    const before = await inspectNativeHarnessForPicker(harness).catch(() => ({ installed: false }));
+    if (before.installed) continue;
+    const started = Date.now();
+    try {
+      await ensureNativeHarness(harness);
+      log(`preinstall ${harness.command}: installed in ${Math.round((Date.now() - started) / 1000)}s`);
+    } catch (error) {
+      log(`preinstall ${harness.command}: failed, left to first use: ${error instanceof Error ? error.message : String(error)}`.slice(0, 600));
+    }
+  }
+}
+
 function vendorAccounts(state: HarnessState): AiHarnessAccount[] {
   return state.accounts.filter((account) => account.authKind === 'vendor-cli');
 }
