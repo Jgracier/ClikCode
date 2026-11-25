@@ -86,6 +86,8 @@ const ACP_SESSION_META = {
     // these say when it really ends (claude-agent-acp acp-agent.js, `task_*`).
     { type: 'system', subtype: 'task_started' }, { type: 'system', subtype: 'task_progress' }, { type: 'system', subtype: 'task_notification' },
     { type: 'system', subtype: 'task_updated' },
+    // The CLI's own running/idle: it holds `idle` until it has answered every agent that reported (vendorIdle).
+    { type: 'system', subtype: 'session_state_changed' },
     // The end of every vendor turn, one the user did not start included: what closes a background turn (vendorTurnEnded).
     { type: 'result' },
   ],
@@ -748,11 +750,17 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // worker's background turn and keep the process alive until it ends.
         // A held agent counts too: the level drops it a moment before its notification, and the vendor's answer
         // once it reports comes after this prompt.
-        const owed = Boolean(this.live && (this.work.level || this.work.count() || this.heldAgents.backgrounded));
+        // An agent that reported in this prompt may have done so as the vendor's last model call was already
+        // answering: the prompt resolves on that answer and the vendor answers the report in a turn of its own,
+        // a moment later. Until the CLI says it is idle, that answer is owed.
+        const answerOwed = this.agentReportedInTurn && this.vendorState !== undefined && this.vendorState !== 'idle';
+        this.agentReportedInTurn = false;
+        const owed = Boolean(this.live && (this.work.level || this.work.count() || this.heldAgents.backgrounded || answerOwed));
         if (!owed) for (const event of this.heldAgents.settle('tool-done')) input.onActivity?.(event);
         if (owed) {
           const run = this.openBackground('background-work');
           if (run) {
+            if (answerOwed && !this.heldAgents.backgrounded) this.awaitingFollowUp = true;
             // What runs now is the background turn's indicator from its first frame.
             if (this.work.level) run.observer.onBackgroundWork?.(this.work.fullLevel());
             this.watchOrphanedTools();
@@ -821,6 +829,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   /** The last held agent ended in a background run: the vendor answers its notification in a turn of its own, closed
    * by that turn's `result` (vendorTurnEnded) -- or, should none come, by the same quiet orphanedToolMs. */
   private awaitingFollowUp = false;
+  /** The CLI's last `session_state_changed` (running, idle, requires_action); undefined until one is seen. */
+  private vendorState: string | undefined;
+  /** A held agent ended while the user's prompt was running. */
+  private agentReportedInTurn = false;
   private watchOrphanedTools(): void {
     if (this.orphanWatch) { clearTimeout(this.orphanWatch); this.orphanWatch = undefined; }
     const held = this.background;
@@ -1728,6 +1740,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       // Some SDK versions send only a terminal task_updated patch, with no new full level.
       this.backgroundWorkChanged(params, backgroundWork({ type: 'system', subtype: 'background_tasks_changed', tasks: [...this.backgroundTasks.values()] })!);
     }
+    if (message?.type === 'system' && message.subtype === 'session_state_changed' && typeof message.state === 'string') {
+      this.vendorState = message.state;
+      if (message.state === 'idle') this.vendorTurnEnded(params);
+      return;
+    }
     if (message?.type === 'result') return this.vendorTurnEnded(params);
     const update = message ? backgroundWork(message) : undefined;
     if (update) return this.backgroundWorkChanged(params, update);
@@ -1852,6 +1869,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   private heldAgentFrame(params: Json, message: Json): void {
     const [event] = this.heldAgents.frame(message);
     if (!event) return;
+    if (event.agent && event.kind !== 'tool-start' && this.turn && !this.turn.done) this.agentReportedInTurn = true;
     const target = this.liveTarget(params);
     target?.observer.onActivity?.(event);
     const run = this.background;
