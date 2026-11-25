@@ -6,8 +6,14 @@
  * A match must stand out, or nothing is attached:
  * - by its words: an identifier, path or quoted phrase of the request that only a few messages before
  *   the boundary have, and none the context still holds;
- * - by meaning: the conversation search's own gate (vectors.ts semanticMatches: a floor, and a clear
- *   lift over the conversation's median message).
+ * - by meaning: the conversation search's own gate (vectors.ts semanticMatches: a floor), and then only
+ *   the best message, and only when it leads the next best by MEANING_STANDOUT. Three close scores are
+ *   three messages that share the request's vocabulary, not the place it means: on 2026-11-25 the last
+ *   three recalls of one chat scored 0.86/0.846/0.841, 0.964/0.948/0.935 and 0.713/0.703/0.67, and none
+ *   was about the request.
+ *
+ * What is attached is the whole message when it fits RECALL_MAX_CHARS: an excerpt sent the model to
+ * hindsight(at=) for the rest in 25 of 93 recalls (2026-11-18..25).
  *
  * Never fails or holds up a turn: the whole search runs within RECALL_BUDGET_MS, waits for the embedder
  * only for what is left of it, and is lexical alone (or nothing) without one. */
@@ -29,6 +35,8 @@ const MIN_QUERY_CHARS = 12;
 const MAX_WORD_HITS = 3;
 /** The embedder is waited for at most this long, within the budget. */
 const MAX_EMBED_WAIT_MS = 600;
+/** How far the best message by meaning must lead the next one (score: cosine + GATE_TERM_WEIGHT x idf share). */
+const MEANING_STANDOUT = 0.05;
 
 /** Knobs the compaction eval (scripts/compaction-eval.mjs) varies, read per call; unset, each is the
  * shipped value above. Never set outside the eval. */
@@ -100,15 +108,20 @@ function excerpt(message: MessageDoc, at: number, length: number | undefined, ro
  * matched lines, not the whole messages. Said here, beside the request, rather than only in the summary's note. */
 const RECALL_NUDGE = 'These are matched excerpts and may leave out what the request needs. When they do not settle it (a value, a commit, a reason), read the message with hindsight(at=<number>) or search hindsight query=<other words> before answering; do not answer from memory or say it is not recorded without that.';
 
-/** The note for `hits`: each message's number, who said it, and the part that matched. */
+const whole = (message: MessageDoc): string => message.text.replace(/\s+/g, ' ').trim();
+
+/** The note for `hits`: each message's number, who said it, and the message -- whole when all of them
+ * fit `maxChars`, else the part that matched. */
 export function recallNote(view: ConversationView, hits: readonly RecallHit[], hasHindsight: boolean, maxChars = RECALL_MAX_CHARS): string {
   const room = Math.floor(maxChars / Math.max(1, hits.length));
-  const lines = [...hits].sort((left, right) => left.position - right.position).map((hit) => {
+  const sorted = [...hits].sort((left, right) => left.position - right.position);
+  const fits = sorted.reduce((sum, hit) => sum + whole(view.entries[hit.position]!.message).length, 0) <= maxChars;
+  const lines = sorted.map((hit) => {
     const message = view.entries[hit.position]!.message;
     const where = hit.at >= message.contentLength ? `${message.role} (tool call)` : message.role;
-    return `#${hit.position} ${where}: ${excerpt(message, hit.at, hit.length, room)}`;
+    return `#${hit.position} ${where}: ${fits ? whole(message) : excerpt(message, hit.at, hit.length, room)}`;
   });
-  const reach = hasHindsight ? ' hindsight(at=<number>) reads one whole.' : '';
+  const reach = hasHindsight && !fits ? ' These are excerpts; hindsight(at=<number>) reads one whole.' : '';
   return wrapRecallNote([
     `From earlier in this conversation, before what your context now holds; matched to this request by ClikCode, not written by the user.${reach}`,
     ...lines,
@@ -166,11 +179,12 @@ async function search(sessionId: string, query: string, boundary: number, hasHin
       const termWeight = termsKnob !== undefined && termsKnob !== '' && Number.isFinite(Number(termsKnob)) ? Number(termsKnob) : GATE_TERM_WEIGHT;
       let matches = await semanticMatches(found.group, view, vector.vector, vector.embedderId, { limit: termWeight ? 400 : 20, ...(min ? { min } : {}), lift });
       if (termWeight) matches = termRanked(view, outside, matches, query, termWeight).slice(0, 20);
-      for (const match of matches) {
-        if (hits.length >= maxMessages) break;
-        if (!allowed.has(match.position) || taken.has(match.position)) continue;
-        hits.push({ position: match.position, score: Math.round(match.score * 1000) / 1000, by: 'meaning', at: match.offset, length: match.length });
-        taken.add(match.position);
+      // The best chunk of each message, best first: only the first may be taken, and only if it stands out.
+      const best = new Map<number, SemanticMatch>();
+      for (const match of matches) if (allowed.has(match.position) && !best.has(match.position)) best.set(match.position, match);
+      const [first, second] = [...best.values()];
+      if (first && !taken.has(first.position) && (!second || first.score - second.score >= evalKnob('STANDOUT', MEANING_STANDOUT))) {
+        hits.push({ position: first.position, score: Math.round(first.score * 1000) / 1000, by: 'meaning', at: first.offset, length: first.length });
       }
     }
   }

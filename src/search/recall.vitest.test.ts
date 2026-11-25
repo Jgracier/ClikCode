@@ -89,8 +89,9 @@ describe('automatic recall', () => {
     await store(longChat());
     const found = await recall({ sessionId: A, query: 'Rotate the ck_live_7f3a9 key now please', boundary: 30, hasHindsight: true });
     expect(found.hits.map((hit) => [hit.position, hit.by])).toEqual([[6, 'words']]);
-    expect(found.note).toContain('#6 user:');
-    expect(found.note).toContain('hindsight(at=<number>)');
+    // Whole, since it fits: nothing left for hindsight to read.
+    expect(found.note).toContain('#6 user: Use the deploy key ck_live_7f3a9 and never the old one.');
+    expect(found.note).not.toContain('hindsight(');
     // The same words after the boundary: already in context, so nothing.
     const held = await recall({ sessionId: A, query: 'Rotate the ck_live_7f3a9 key now please', boundary: 4, hasHindsight: true });
     expect(held.hits).toEqual([]);
@@ -104,11 +105,11 @@ describe('automatic recall', () => {
     const login = await recall({ sessionId: A, query: 'how did we authenticate credentials before?', boundary: 30, hasHindsight: false });
     expect(login.hits.map((hit) => [hit.position, hit.by])).toEqual([[17, 'meaning']]);
     expect(login.note).not.toContain('hindsight(');
-    // Near every message is near none in particular: no standout lift, so the nearest by meaning
-    // (re-ranked by the request's rare words) are still brought back.
-    const broad = (await recall({ sessionId: A, query: 'what about the sql schema work', boundary: 30, hasHindsight: true })).hits;
-    expect(broad.length).toBeGreaterThan(0);
-    expect(broad.every((hit) => hit.by === 'meaning' && hit.position < 30)).toBe(true);
+    expect(login.note).toContain('#17 assistant: Reset the oauth password for the login page');
+    // Near every message is near none in particular: none leads the rest, so nothing is attached.
+    const broad = await recall({ sessionId: A, query: 'what about the sql schema work', boundary: 30, hasHindsight: true });
+    expect(broad.hits).toEqual([]);
+    expect(broad.note).toBeUndefined();
     // Outside the boundary only: #17 is in the context when the boundary is before it.
     expect((await recall({ sessionId: A, query: 'how did we authenticate credentials before?', boundary: 10, hasHindsight: true })).hits).toEqual([]);
   });
@@ -148,6 +149,8 @@ describe('automatic recall', () => {
     const found = await recall({ sessionId: A, query: 'Compare build-id-2 build-id-4 build-id-8 build-id-10 outputs', boundary: 30, hasHindsight: true });
     expect(found.hits).toHaveLength(3);
     expect(found.note!.length).toBeLessThan(RECALL_MAX_CHARS + 400);
+    // Too long to go whole: excerpts, and the way to the rest.
+    expect(found.note).toContain('These are excerpts; hindsight(at=<number>) reads one whole.');
   });
 });
 
