@@ -186,7 +186,7 @@ describe('a scripted send', () => {
     const session = await gatewaySession();
     const fake = Object.assign(new EventEmitter(), {
       initialEvent: undefined, sent: [] as unknown[],
-      send(message: unknown) { this.sent.push(message); }, close() {},
+      send(message: unknown) { this.sent.push(message); }, close() { fake.emit('close'); },
     });
     vi.spyOn(WorkerClient, 'attachExisting').mockResolvedValue(fake as unknown as WorkerClient);
     const printed: string[] = [];
@@ -211,20 +211,25 @@ describe('a scripted send', () => {
     await writeState(later);
     fake.emit('event', { type: 'waiting-stop' });
     await scripted;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
     expect(printed.join('')).toContain('six agents launched');
     expect(printed.join('')).toContain('COLLECTED 24');
+    expect(printed.filter((line) => line.includes('"session"')), 'one answer printed').toHaveLength(1);
   }, 30_000);
 
   it('ends when no background turn follows', async () => {
     const session = await gatewaySession();
-    const fake = Object.assign(new EventEmitter(), { initialEvent: undefined, send() {}, close() {} });
+    const fake = Object.assign(new EventEmitter(), { initialEvent: undefined, send() {}, close() { fake.emit('close'); } });
     vi.spyOn(WorkerClient, 'attachExisting').mockResolvedValue(fake as unknown as WorkerClient);
-    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const printed: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { printed.push(String(chunk)); return true; });
     const scripted = sendScriptedTurn(config(), session.id, 'hello');
     await new Promise((resolveWait) => setTimeout(resolveWait, 20));
     fake.emit('event', { type: 'waiting-start', message: 'working', prompt: 'hello' });
     fake.emit('event', { type: 'waiting-stop' });
     await scripted;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    expect(printed.filter((line) => line.includes('"session"')), 'one answer printed').toHaveLength(1);
   }, 30_000);
 
   it('answers with every assistant message after the last prompt', () => {

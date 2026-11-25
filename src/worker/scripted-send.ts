@@ -99,7 +99,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
       settled = true;
       if (following) clearTimeout(following);
       client.off('event', onEvent);
-      client.off('close', onGone);
+      client.off('close', onClose);
       signal?.removeEventListener('abort', onAbort);
       settle();
     };
@@ -122,7 +122,11 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
       }
       if (queue[0]?.id === queuedTurnId && !running && !ours) client.send({ type: 'submit', text, echo: true, queuedTurnId });
     };
+    let ending = false;
     const done = async (): Promise<void> => {
+      // Once: the timer, a close and a waiting-stop can each end it.
+      if (ending || settled) return;
+      ending = true;
       if (failure) { finish(() => rejectTurn(failure)); return; }
       if (stopping) { finish(() => rejectTurn(turnCancelledError())); return; }
       const state = await readState({ transcripts: [sessionId] });
@@ -221,7 +225,8 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
       void dequeue().then(() => finish(() => rejectTurn(turnCancelledError())), (error: unknown) => finish(() => rejectTurn(error)));
     };
     client.on('event', onEvent);
-    client.on('close', () => onGone());
+    const onClose = (): void => onGone();
+    client.on('close', onClose);
     signal?.addEventListener('abort', onAbort, { once: true });
     client.send({ type: 'submit', text, echo: true });
   });
