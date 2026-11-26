@@ -56,6 +56,20 @@ export async function chromeIsHostChild(stateDir: string, chromePid: number): Pr
 }
 
 /** The message for a browser that is running and ours but did not answer in time: retry later, it is not blocked. */
+/** The longest one start may hold the start lease. A normal start takes seconds; the slowest legitimate path (a stalled
+ * machine, eight 5 second retries on a busy Chrome) stays well under it. */
+export const HOST_START_LIMIT_MS = 180_000;
+const HOST_START_LIMIT = `ClikCode browser start did not finish in ${HOST_START_LIMIT_MS / 60_000} minutes and was given up, so another start can run. Retry.`;
+
+/** `work`, or a rejection once `ms` passes without it settling. The timer never outlives the race. */
+export async function withinStartLimit<T>(work: Promise<T>, ms = HOST_START_LIMIT_MS): Promise<T> {
+  let limit: NodeJS.Timeout | undefined;
+  const gaveUp = new Promise<never>((_, reject) => {
+    limit = setTimeout(() => { lifecycle('browser.host.start_limit', { ms }); reject(new Error(HOST_START_LIMIT)); }, ms);
+  });
+  try { return await Promise.race([work, gaveUp]); } finally { clearTimeout(limit); }
+}
+
 const BROWSER_BUSY = 'ClikCode browser is busy and did not answer in time (the machine is stalled). Retry shortly; nothing is blocking it.';
 
 async function ownChromeAlive(stateDir: string): Promise<boolean> {
@@ -92,6 +106,73 @@ async function externalChromeRunning(stateDir: string): Promise<boolean> {
   return !(await chromeIsHostChild(stateDir, pid));
 }
 
+/** The start itself, run by the one worker holding the start lease. */
+async function startLeased(stateDir: string): Promise<Connected> {
+    const existing = await connect(stateDir);
+    if (existing) return existing;
+    // A host from an earlier call is still fetching Chromium: say how far it is instead of starting a second one.
+    const working = await liveHostStatus(stateDir);
+    if (working?.state === 'installing') throw new Error(installingMessage(working));
+    // A busy machine can miss the 8 second connect: while Chrome is alive, ask a few more times before calling it foreign.
+    for (let again = 0; again < 4 && await externalChromeRunning(stateDir); again++) {
+      await sleep(1_500);
+      const later = await connect(stateDir);
+      if (later) return later;
+    }
+    // A host that died leaves its Chrome behind on our profile, reparented to init or systemd: that is ours, not a person's window, so end it and start fresh.
+    if (await externalChromeRunning(stateDir) && !(await reclaimOrphanChrome(stateDir))) throw new Error('ClikCode Chrome is open outside ClikCode. Finish that browser step, close its window, and retry.');
+    // Our own host's Chrome is alive but slow to answer (a stalled disk): wait for it, never start a second host over its profile.
+    if (await ownChromeAlive(stateDir)) {
+      for (let again = 0; again < 8; again++) {
+        await sleep(5_000);
+        const later = await connect(stateDir);
+        if (later) return later;
+      }
+      throw new Error(BROWSER_BUSY);
+    }
+    const entry = process.env.CLIKCODE_BROWSER_HOST_ENTRY || process.argv[1];
+    if (!entry) throw new Error('ClikCode could not start its browser host.');
+    const hostArgs = [process.execPath, entry, 'computer-host', stateDir];
+    const plain = hiddenDisplayCommand(hostArgs, process.env, process.platform, undefined, {
+      display: await browserDisplay(stateDir),
+      onFallback: () => lifecycle('browser.host.display', { wanted: 'visible', used: 'hidden', why: 'no desktop session' }),
+    });
+    // In a systemd unit of its own, with limits: it belongs to no worker, so it outlives this one and the next adopts it.
+    const own = browserHostLaunch(plain, { platform: process.platform, env: process.env, cgroup: await fs.readFile('/proc/self/cgroup', 'utf8').catch(() => ''), uid: process.getuid?.() ?? 0, cwd: process.cwd(), busExists: existsSync });
+    await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser'));
+    const launch = (argv: readonly string[], env?: NodeJS.ProcessEnv): ChildProcess => {
+      const [command, ...rest] = argv;
+      const started = spawn(command!, rest, { detached: true, stdio: 'ignore', windowsHide: true, ...(env ? { env } : {}) });
+      started.once('error', error => { startupError = error; });
+      started.unref();
+      return started;
+    };
+    let startupError: Error | undefined;
+    let child = launch(own?.argv ?? plain, own?.env);
+    let scoped = own !== undefined;
+    lifecycle('browser.host.start', { scoped, unit: scoped ? BROWSER_HOST_UNIT : undefined });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const result = await connect(stateDir);
+      if (result) return result;
+      // The host says why it could not start (no browser installed and none could be fetched), or that it is fetching one.
+      const status = await readHostStatus(stateDir);
+      if (status?.state === 'installing') throw new Error(installingMessage(status));
+      if (status?.state === 'failed' && status.text) throw new Error(status.text);
+      // systemd-run could not make the unit (a name still in use, no user manager): start the host plainly, once.
+      const exited = child.exitCode !== null && (child.exitCode !== 0 || !own?.detachesAtOnce);
+      if (scoped && (startupError || exited) && !status) {
+        lifecycle('browser.host.unscoped', { code: child.exitCode ?? undefined });
+        scoped = false;
+        startupError = undefined;
+        child = launch(plain);
+      } else if (startupError || (child.exitCode !== null && !(scoped && own?.detachesAtOnce && child.exitCode === 0))) break;
+      await sleep(200);
+    }
+    const last = await readHostStatus(stateDir);
+    if (last?.state === 'failed' && last.text) throw new Error(last.text);
+    throw new Error('ClikCode could not start its browser. Check that Chrome or Edge is installed and the desktop is available.');
+}
+
 async function startHost(stateDir: string): Promise<Connected> {
   const dir = path.join(stateDir, 'computer');
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -99,71 +180,10 @@ async function startHost(stateDir: string): Promise<Connected> {
   // dies mid-start loses it at once, and a live one keeps it however long Chromium takes to fetch.
   const lease = await tryLease(path.join(dir, 'host-start.lock'));
   if (lease) {
-    try {
-      const existing = await connect(stateDir);
-      if (existing) return existing;
-      // A host from an earlier call is still fetching Chromium: say how far it is instead of starting a second one.
-      const working = await liveHostStatus(stateDir);
-      if (working?.state === 'installing') throw new Error(installingMessage(working));
-      // A busy machine can miss the 8 second connect: while Chrome is alive, ask a few more times before calling it foreign.
-      for (let again = 0; again < 4 && await externalChromeRunning(stateDir); again++) {
-        await sleep(1_500);
-        const later = await connect(stateDir);
-        if (later) return later;
-      }
-      // A host that died leaves its Chrome behind on our profile, reparented to init or systemd: that is ours, not a person's window, so end it and start fresh.
-      if (await externalChromeRunning(stateDir) && !(await reclaimOrphanChrome(stateDir))) throw new Error('ClikCode Chrome is open outside ClikCode. Finish that browser step, close its window, and retry.');
-      // Our own host's Chrome is alive but slow to answer (a stalled disk): wait for it, never start a second host over its profile.
-      if (await ownChromeAlive(stateDir)) {
-        for (let again = 0; again < 8; again++) {
-          await sleep(5_000);
-          const later = await connect(stateDir);
-          if (later) return later;
-        }
-        throw new Error(BROWSER_BUSY);
-      }
-      const entry = process.env.CLIKCODE_BROWSER_HOST_ENTRY || process.argv[1];
-      if (!entry) throw new Error('ClikCode could not start its browser host.');
-      const hostArgs = [process.execPath, entry, 'computer-host', stateDir];
-      const plain = hiddenDisplayCommand(hostArgs, process.env, process.platform, undefined, {
-        display: await browserDisplay(stateDir),
-        onFallback: () => lifecycle('browser.host.display', { wanted: 'visible', used: 'hidden', why: 'no desktop session' }),
-      });
-      // In a systemd unit of its own, with limits: it belongs to no worker, so it outlives this one and the next adopts it.
-      const own = browserHostLaunch(plain, { platform: process.platform, env: process.env, cgroup: await fs.readFile('/proc/self/cgroup', 'utf8').catch(() => ''), uid: process.getuid?.() ?? 0, cwd: process.cwd(), busExists: existsSync });
-      await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser'));
-      const launch = (argv: readonly string[], env?: NodeJS.ProcessEnv): ChildProcess => {
-        const [command, ...rest] = argv;
-        const started = spawn(command!, rest, { detached: true, stdio: 'ignore', windowsHide: true, ...(env ? { env } : {}) });
-        started.once('error', error => { startupError = error; });
-        started.unref();
-        return started;
-      };
-      let startupError: Error | undefined;
-      let child = launch(own?.argv ?? plain, own?.env);
-      let scoped = own !== undefined;
-      lifecycle('browser.host.start', { scoped, unit: scoped ? BROWSER_HOST_UNIT : undefined });
-      for (let attempt = 0; attempt < 100; attempt++) {
-        const result = await connect(stateDir);
-        if (result) return result;
-        // The host says why it could not start (no browser installed and none could be fetched), or that it is fetching one.
-        const status = await readHostStatus(stateDir);
-        if (status?.state === 'installing') throw new Error(installingMessage(status));
-        if (status?.state === 'failed' && status.text) throw new Error(status.text);
-        // systemd-run could not make the unit (a name still in use, no user manager): start the host plainly, once.
-        const exited = child.exitCode !== null && (child.exitCode !== 0 || !own?.detachesAtOnce);
-        if (scoped && (startupError || exited) && !status) {
-          lifecycle('browser.host.unscoped', { code: child.exitCode ?? undefined });
-          scoped = false;
-          startupError = undefined;
-          child = launch(plain);
-        } else if (startupError || (child.exitCode !== null && !(scoped && own?.detachesAtOnce && child.exitCode === 0))) break;
-        await sleep(200);
-      }
-      const last = await readHostStatus(stateDir);
-      if (last?.state === 'failed' && last.text) throw new Error(last.text);
-      throw new Error('ClikCode could not start its browser. Check that Chrome or Edge is installed and the desktop is available.');
-    } finally { await lease.release(); }
+    // The lease makes every other worker wait on this start, so the start itself is bounded: one step that never settles
+    // (seen: a start that hung silently for 44 minutes while the host was being replaced) must not hold the browser for all.
+    try { return await withinStartLimit(startLeased(stateDir)); }
+    finally { await lease.release(); }
   }
   for (let attempt = 0; attempt < 110; attempt++) {
     const result = await connect(stateDir);

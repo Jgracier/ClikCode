@@ -64,3 +64,10 @@ it('finds the profile Chrome pid from its lock and counts only running processes
   expect(await processRunning(process.pid)).toBe(true);
   expect(await processRunning(2 ** 30)).toBe(false);
 });
+
+it('gives up a browser start that never settles, so the start lease is released for the next worker', async () => {
+  const { withinStartLimit } = await import('./browser.js');
+  await expect(withinStartLimit(new Promise<never>(() => undefined), 30)).rejects.toThrow(/did not finish .* and was given up/);
+  await expect(withinStartLimit(Promise.resolve('connected'), 30)).resolves.toBe('connected');
+  await expect(withinStartLimit(Promise.reject(new Error('no chrome')), 30)).rejects.toThrow('no chrome');
+});
