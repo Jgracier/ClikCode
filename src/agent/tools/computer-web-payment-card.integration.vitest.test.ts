@@ -14,7 +14,7 @@ const enabled = process.env.CLIKCODE_COMPUTER_SMOKE === '1';
 const frame = (inner: string): string => `<iframe srcdoc='${inner}' style="width:320px;height:40px;border:0"></iframe>`;
 const FORM = `<h1>Checkout</h1><form>
   <label for=n>Name on card</label><input id=n name="cardholder" autocomplete="cc-name">
-  ${frame('<input aria-label="Card number" name="cardnumber" autocomplete="cc-number" placeholder="1234 1234 1234 1234">')}
+  ${frame('<span id="card-label">Card number</span><input id="accountToken" aria-labelledby="card-label card-error"><span id="card-error"></span>')}
   ${frame('<input aria-label="Expiration" name="exp-date" autocomplete="cc-exp" placeholder="MM / YY">')}
   ${frame('<input aria-label="Security code" name="cvc" autocomplete="cc-csc" type="password" placeholder="CVC">')}
   <label for=z>ZIP / Postal code</label><input id=z name="postal" autocomplete="postal-code">

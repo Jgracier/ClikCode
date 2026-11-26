@@ -40,7 +40,16 @@ export async function sensitiveValues(page: Page, readableOnly = false): Promise
         } finally { await element.dispose(); }
       }
       if (!frameVisible) continue;
-      values.push(...await frame.locator(SENSITIVE).evaluateAll((nodes, onlyReadable) => nodes.filter(node => {
+      values.push(...await frame.locator('input').evaluateAll((nodes, { selector, onlyReadable }) => nodes.filter(node => {
+        const field = node as unknown as {
+          matches(selector: string): boolean;
+          getAttribute(name: string): string | null;
+          labels?: ArrayLike<{ textContent: string | null }>;
+          ownerDocument: { getElementById(id: string): { textContent: string | null } | null };
+        };
+        const labelled = field.getAttribute('aria-labelledby')?.split(/\s+/).map(id => field.ownerDocument.getElementById(id)?.textContent ?? '').join(' ');
+        const label = labelled || field.getAttribute('aria-label') || Array.from(field.labels ?? []).map(label => label.textContent ?? '').join(' ');
+        if (!field.matches(selector) && !/\b(?:card\s*number|credit card|debit card|cvv|cvc|csc|card security code)\b/i.test(label ?? '')) return false;
         if (!onlyReadable) return true;
         const element = node as unknown as {
           type?: string;
@@ -55,7 +64,7 @@ export async function sensitiveValues(page: Page, readableOnly = false): Promise
         const rect = element.getBoundingClientRect();
         const view = element.ownerDocument.defaultView;
         return !!view && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
-      }).map(node => (node as unknown as { value?: string }).value ?? ''), readableOnly));
+      }).map(node => (node as unknown as { value?: string }).value ?? ''), { selector: SENSITIVE, onlyReadable: readableOnly }));
     } catch (error) {
       if (readableOnly) throw error; // A screenshot guard must distinguish unreadable from empty.
       // Text scrubbing can still use the other frames while this one navigates.

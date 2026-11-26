@@ -976,7 +976,9 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
 async function describeField(target: Locator): Promise<{ label: string; password: boolean; hint: FieldHint; placeholder: string; current: string; maxlength: number; readOnly: boolean; required: boolean }> {
   return target.evaluate(element => {
     const el = element as unknown as { type?: string; required?: boolean; value?: string; readOnly?: boolean; disabled?: boolean; labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
-    const label = (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim();
+    const doc = (globalThis as unknown as { document: { getElementById(id: string): { textContent?: string | null } | null } }).document;
+    const labelled = el.getAttribute('aria-labelledby')?.split(/\s+/).map(id => doc.getElementById(id)?.textContent?.trim()).filter(Boolean).join(' ');
+    const label = (labelled || el.getAttribute('aria-label') || el.labels?.[0]?.textContent || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim();
     const type = el.type ?? 'text';
     return { label, password: type === 'password', placeholder: el.getAttribute('placeholder') ?? '', current: type === 'password' ? '' : el.value ?? '', maxlength: Number(el.getAttribute('maxlength')) || 0,
       required: el.required === true || el.getAttribute('aria-required') === 'true',
