@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { windowMayShowBrowser } from './sensitive-fields.js';
+import { CredentialInspectionUnavailable, windowMayShowBrowser } from './sensitive-fields.js';
 
 describe('which desktop windows could show the ClikCode browser', () => {
   it('compares the window owner pid with the browser process ids, the same on every OS', () => {
@@ -20,7 +20,7 @@ describe('which desktop windows could show the ClikCode browser', () => {
 describe('whether a typed credential may be on screen', () => {
   it('refuses the picture when the browser\'s tabs cannot be listed, and allows it only when no browser is open', async () => {
     const { credentialOnScreen } = await import('./sensitive-fields.js');
-    expect(await credentialOnScreen('/tmp/none', undefined, { listPages: async () => { throw new Error('Target page, context or browser has been closed'); } })).toBe(true);
+    await expect(credentialOnScreen('/tmp/none', undefined, { listPages: async () => { throw new Error('Target page, context or browser has been closed'); } })).rejects.toBeInstanceOf(CredentialInspectionUnavailable);
     expect(await credentialOnScreen('/tmp/none', undefined, { listPages: async () => { throw new Error('ClikCode browser is closed. Open a URL with browser_use first.'); } })).toBe(false);
   });
 });

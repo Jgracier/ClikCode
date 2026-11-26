@@ -13,16 +13,53 @@ export const SENSITIVE = `input[type="password"], input[autocomplete="one-time-c
 const MIN_LENGTH = 3;
 
 /** What the sensitive fields on the page hold right now (including a password shown by a "show" toggle). */
-export async function sensitiveValues(page: Page): Promise<string[]> {
+export async function sensitiveValues(page: Page, readableOnly = false): Promise<string[]> {
   // Every frame: a payment provider's hosted card fields are one frame per box, and a card number typed there is shown back
   // regrouped ("4242 4242 4242 4242"), which no exact match of the value that was typed would catch.
   const values: string[] = [];
   let frames: ReturnType<Page['frames']> = [];
-  try { frames = page.frames(); } catch { return []; } // The page is closing.
+  try { frames = page.frames(); } catch (error) { if (readableOnly) throw error; return []; } // The page is closing.
   for (const frame of frames) {
     if (frame.isDetached()) continue;
-    try { values.push(...await frame.locator(SENSITIVE).evaluateAll(nodes => nodes.map(node => (node as unknown as { value?: string }).value ?? ''))); }
-    catch { /* fail-open-ok: the frame is navigating, or has no such field */ }
+    try {
+      // A visible child document can belong to an iframe hidden by its parent document.
+      let frameVisible = true;
+      if (readableOnly) for (let ancestor = frame; ancestor.parentFrame(); ancestor = ancestor.parentFrame()!) {
+        const element = await ancestor.frameElement();
+        try {
+          if (!await element.evaluate(node => {
+            const element = node as unknown as {
+              checkVisibility(options: { checkOpacity: boolean; checkVisibilityCSS: boolean }): boolean;
+              getBoundingClientRect(): { width: number; height: number; top: number; left: number; bottom: number; right: number };
+              ownerDocument: { defaultView: { innerWidth: number; innerHeight: number } | null };
+            };
+            const rect = element.getBoundingClientRect();
+            const view = element.ownerDocument.defaultView;
+            return element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && !!view && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
+          })) { frameVisible = false; break; }
+        } finally { await element.dispose(); }
+      }
+      if (!frameVisible) continue;
+      values.push(...await frame.locator(SENSITIVE).evaluateAll((nodes, onlyReadable) => nodes.filter(node => {
+        if (!onlyReadable) return true;
+        const element = node as unknown as {
+          type?: string;
+          checkVisibility(options: { checkOpacity: boolean; checkVisibilityCSS: boolean }): boolean;
+          getBoundingClientRect(): { width: number; height: number; top: number; left: number; bottom: number; right: number };
+          ownerDocument: { defaultView: { innerWidth: number; innerHeight: number } | null };
+        };
+        // Native password inputs paint masking glyphs, not their value. A revealed password
+        // becomes a text input (with its autocomplete/name still identifying the secret).
+        if (element.type === 'password') return false;
+        if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+        const rect = element.getBoundingClientRect();
+        const view = element.ownerDocument.defaultView;
+        return !!view && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
+      }).map(node => (node as unknown as { value?: string }).value ?? ''), readableOnly));
+    } catch (error) {
+      if (readableOnly) throw error; // A screenshot guard must distinguish unreadable from empty.
+      // Text scrubbing can still use the other frames while this one navigates.
+    }
   }
   return [...new Set(values.filter(value => value.length >= MIN_LENGTH))];
 }
@@ -181,7 +218,11 @@ export function windowMayShowBrowser(browserPids: readonly number[] | undefined,
   return browserPids.includes(windowPid);
 }
 
-/** What browser.ts says when no ClikCode browser (local or cloud) is open. */
+/** Inspection failed: refuse the screenshot without claiming that a credential was detected. */
+export class CredentialInspectionUnavailable extends Error {
+  constructor() { super('Could not inspect the browser for sensitive fields; no screenshot was taken. This is an inspection failure, not a detected credential. Retry when the browser is available.'); }
+}
+
 const BROWSER_CLOSED = /^(?:ClikCode browser|The managed cloud browser) is closed\b/;
 
 /** A typed or revealed credential is in a tab a screenshot could show: the front tab of a window that is not
@@ -193,17 +234,21 @@ export async function credentialOnScreen(stateDir: string, windowPid?: number, o
   catch (error) {
     // No ClikCode browser open: nothing of it can be on screen. Any other failure to list its tabs is not proof that none shows a
     // typed password, so the picture is refused (fail closed).
-    return !(error instanceof Error && BROWSER_CLOSED.test(error.message));
+    if (error instanceof Error && BROWSER_CLOSED.test(error.message)) return false;
+    throw new CredentialInspectionUnavailable();
   }
   if (windowPid !== undefined) {
     const pids = await computerBrowserPids(stateDir).catch(quiet('agent/computer/sensitive-fields'));
     if (!windowMayShowBrowser(pids, windowPid)) return false;
   }
   for (const page of pages) {
-    // A tab whose fields cannot be read may hold one: counted as showing it.
-    const values = await sensitiveValues(page).catch(quiet('agent/computer/sensitive-fields'));
-    if (values && !values.length) continue;
-    if (await page.evaluate(() => (globalThis as unknown as { document: { visibilityState: string } }).document.visibilityState !== 'hidden').catch(() => true)) return true;
+    try {
+      if (await page.evaluate(() => (globalThis as unknown as { document: { visibilityState: string } }).document.visibilityState === 'hidden')) continue;
+      if ((await sensitiveValues(page, true)).length) return true;
+    } catch {
+      if (page.isClosed()) continue;
+      throw new CredentialInspectionUnavailable();
+    }
   }
   return false;
 }
