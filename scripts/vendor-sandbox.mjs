@@ -21,7 +21,7 @@
  * signed out, or on a model that needs no sign-in (OpenCode's free models do). Git, npm, gh and the other tools a turn may use keep the
  * user's own configuration (HOME_REDIRECT_ENV_DEFAULTS). */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os, { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -102,9 +102,11 @@ for (const entry of auth) {
   const profile = account ? profileOf(command, account) : undefined;
   for (const { path } of files) link(path, profile && profilePath(harness, path, profile));
   // The account's model settings come with it (Pi's settings.json pins the model the account
-  // runs): a model the vendor would pick without them may be one the plan refuses.
+  // runs): a model the vendor would pick without them may be one the plan refuses. They are
+  // copied, not linked: a run that edits its settings (an env block, a base URL) must not
+  // write through into the real profile every other session of that account reads.
   const root = profile && profileRoot(harness, files);
-  for (const file of profile && root ? harness.modelCatalogFiles ?? [] : []) link(`${root}/${file}`, join(profile, file));
+  for (const file of profile && root ? harness.modelCatalogFiles ?? [] : []) copyIn(join(profile, file), expand(`${root}/${file}`, home));
   // An API-key account keeps its key in the profile (profile-key.ts), not in a vendor
   // sign-in file: it comes with the account as the variables the vendor reads.
   for (const [name, value] of Object.entries(profile ? storedKey(profile) : {})) env[name] = value;
@@ -160,6 +162,13 @@ function expandGlob(path) {
     });
   }
   return found;
+}
+
+/** Copy one settings file from the profile into the sandbox, once. */
+function copyIn(from, to) {
+  if (!existsSync(from) || existsSync(to)) return;
+  mkdirSync(dirname(to), { recursive: true });
+  copyFileSync(from, to);
 }
 
 /** Link one sign-in path; a catalog may list the same file twice (Cline). */
