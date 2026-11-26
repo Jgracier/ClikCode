@@ -15,7 +15,7 @@ export async function askPrivateLogin(
   if (!observer.askQuestions) return undefined;
   if (!fields.length) return undefined;
   const result = await observer.askQuestions({
-    title: new URL(site).hostname === 'profile.clikcode' ? 'Your autofill profile' : `${new URL(site).hostname.replace(/^www\./, '')} ${fields.every(field => field.key.startsWith('fill')) ? 'details' : 'sign in'}`,
+    title: new URL(site).hostname === 'card.clikcode' ? 'Add payment card' : new URL(site).hostname === 'profile.clikcode' ? 'Your autofill profile' : `${new URL(site).hostname.replace(/^www\./, '')} ${fields.every(field => field.key.startsWith('fill')) ? 'details' : 'sign in'}`,
     questions: fields.map(field => field.kind === 'choice'
       ? { id: field.key, prompt: field.label, options: (field.options ?? []).map(label => ({ label })), secret: true }
       : field.current
@@ -23,7 +23,7 @@ export async function askPrivateLogin(
         ? { id: field.key, prompt: field.label, options: [], initial: field.current, secret: true, maskInput: field.kind === 'password', ...(field.format ? { format: field.format } : {}) }
         : { id: field.key, prompt: askFor(field), options: [], secret: true, maskInput: field.kind === 'password', ...(field.format ? { format: field.format, maskInput: false } : {}), ...(field.required ? {} : { optional: true }) }),
   }, signal);
-  if (result.kind !== 'answered') return undefined;
+  if (result.kind !== 'answered') throw new LoginError(signal?.aborted ? 'Private input was interrupted because its request ended.' : 'Private input was cancelled before completion.');
   const values = Object.fromEntries(fields.map(field => [field.key, result.answers[field.key]?.[0] ?? '']));
   if (fields.some(field => field.required && !values[field.key])) throw new LoginError('Complete the visible login fields.');
   for (const field of fields) if (field.kind === 'choice' && !field.options?.includes(values[field.key]!)) throw new LoginError('Choose one of the listed options.');
@@ -39,7 +39,7 @@ export async function askPrivateChoice(
   const result = await observer.askQuestions({
     title, questions: [{ id: 'choice', prompt, options: options.map(label => ({ label })), secret: true }],
   }, signal);
-  if (result.kind !== 'answered') return undefined;
+  if (result.kind !== 'answered') throw new LoginError(signal?.aborted ? 'Private input was interrupted because its request ended.' : 'Private input was cancelled before completion.');
   const picked = result.answers.choice?.[0];
   return picked && options.includes(picked) ? picked : undefined;
 }
@@ -53,6 +53,6 @@ export async function askPrivateSecret(
     title: `${name}`,
     questions: [{ id: 'secret', prompt: hint, options: [], secret: true, maskInput: true }],
   }, signal);
-  if (result.kind !== 'answered') return undefined;
+  if (result.kind !== 'answered') throw new LoginError(signal?.aborted ? 'Private input was interrupted because its request ended.' : 'Private input was cancelled before completion.');
   return result.answers.secret?.[0]?.trim() || undefined;
 }

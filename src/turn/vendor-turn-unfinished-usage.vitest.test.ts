@@ -92,4 +92,32 @@ describe('a vendor turn that does not complete', () => {
     expect(recorded).toHaveLength(1);
     expect(recorded[0]).toMatchObject({ accountId: 'acct-1', inputTokens: 900, outputTokens: 25, stopReason: 'stopped' });
   });
+
+  it('does not commit the final answer while a shared private tool is pending', async () => {
+    attempt.run.mockResolvedValue({ text: 'The model has finished speaking.' });
+    const state = await readState({ transcripts: ['s1'] });
+    const session = state.sessions.find((item) => item.id === 's1')!;
+    let finishTool!: () => void;
+    let reachedWait!: () => void;
+    const waiting = new Promise<void>(resolve => { reachedWait = resolve; });
+    const tool = new Promise<void>(resolve => { finishTool = resolve; });
+    const prompter = new Proxy({
+      waitForComputerTools: () => { reachedWait(); return tool; },
+    }, { get: (target, key) => key in target ? target[key as keyof typeof target] : () => undefined });
+    let ended = false;
+    const completion = sendVendorTurn({
+      state, session, account: state.accounts.find((item) => item.id === 'acct-1')!, model: 'm1', text: 'go',
+      prepared: { images: [], textContext: '' } as never, turnText: 'go', startedAt: Date.now(),
+      run: { prompter: prompter as never },
+    }).then(() => { ended = true; });
+    await waiting;
+    expect(ended).toBe(false);
+    expect(session.pendingTurn).toBeDefined();
+    finishTool();
+    await completion;
+    expect(ended).toBe(true);
+    expect(session.pendingTurn).toBeUndefined();
+    expect(session.messages?.some(message => message.role === 'assistant' && message.content === 'The model has finished speaking.')).toBe(true);
+  });
+
 });

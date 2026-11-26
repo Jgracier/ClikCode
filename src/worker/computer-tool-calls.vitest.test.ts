@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { Socket } from 'node:net';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ToolCalls, type ToolCallResult } from './computer-tool-calls.js';
 
 const socket = (): Socket => Object.assign(new EventEmitter(), { destroyed: false }) as unknown as Socket;
@@ -34,4 +34,41 @@ describe('a computer tool call asked for twice', () => {
     b.emit('close');
     expect(signal.aborted).toBe(true);
   });
+});
+
+
+it('keeps completion pending through human input and saving the result', async () => {
+  vi.useFakeTimers();
+  try {
+    const calls = new ToolCalls(() => undefined);
+    let answer!: () => void;
+    let save!: () => void;
+    calls.take(socket(), 'private-card', async () => {
+      await new Promise<void>(resolve => { answer = resolve; });
+      await new Promise<void>(resolve => { save = resolve; });
+      return { ok: true, output: 'Saved card' };
+    });
+    let completed = false;
+    const completion = calls.settled().then(() => { completed = true; });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(completed).toBe(false);
+    answer();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).toBe(false);
+    save();
+    await completion;
+    expect(completed).toBe(true);
+    await calls.settled();
+  } finally { vi.useRealTimers(); }
+});
+
+it('allows Stop to end the wait even if a tool never answers', async () => {
+  const calls = new ToolCalls(() => undefined);
+  const caller = socket();
+  calls.take(caller, 'private-card', () => new Promise(() => undefined));
+  const stop = new AbortController();
+  const completion = calls.settled(stop.signal);
+  stop.abort();
+  await expect(completion).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+  caller.emit('close');
 });

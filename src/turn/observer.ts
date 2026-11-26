@@ -28,6 +28,8 @@ export interface TurnObserver {
   /** A vendor's question (options, several questions, free text). Absent where
    * the surface cannot ask: the turn then cancels the question with a notice. */
   askQuestions?(request: import('../harness/events/question.js').HarnessQuestionRequest, signal?: AbortSignal): Promise<import('../harness/events/question.js').HarnessQuestionResult>;
+  /** Shared computer tools can outlive the vendor's final response while awaiting the user. */
+  waitForComputerTools?(signal?: AbortSignal): Promise<void>;
   setPlan(entries: readonly PlanEntry[]): void;
   setTurnUsage(usage: TurnUsage): void;
   /** Background work the vendor says is still running, by kind, as the whole

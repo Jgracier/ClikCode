@@ -83,3 +83,15 @@ it('starts a known value in the text box to edit or leave alone, and lets an opt
   expect(request?.questions[0]).toMatchObject({ options: [], initial: '+17195550123' });
   expect(request?.questions[2]).toMatchObject({ optional: true });
 });
+
+
+it('reports interrupted input without claiming the user refused to enter details', async () => {
+  const controller = new AbortController();
+  const observer = { askQuestions: async () => {
+    controller.abort();
+    return { kind: 'cancelled' as const };
+  } } as unknown as TurnObserver;
+  await expect(askPrivateLogin(observer, 'https://card.clikcode', [
+    { index: 0, key: 'number', label: 'Card number', kind: 'password', required: true },
+  ], controller.signal)).rejects.toThrow('request ended');
+});

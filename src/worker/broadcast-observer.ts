@@ -14,6 +14,7 @@ import { normalizeActivityEvent } from '../harness/protocol/activity-normalize.j
 import { mergeBackgroundWork, type BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
 import { setUserWaiting } from '../turn/user-wait.js';
+import { ToolCalls } from './computer-tool-calls.js';
 import { randomUUID } from 'node:crypto';
 import type { Socket } from 'node:net';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -74,6 +75,12 @@ export function sendEvent(socket: Socket, event: WorkerEvent): void {
 type Place = { seq: number; responseOffset: number; label: string };
 
 export class BroadcastObserver implements TurnObserver {
+  readonly computerTools = new ToolCalls(sendEvent);
+
+  waitForComputerTools(signal?: AbortSignal): Promise<void> {
+    return this.computerTools.settled(signal);
+  }
+
   private readonly clients = new Set<Socket>();
   /** Mirrors exactly what a client would have painted, so `snapshot()` can
    * hand a late attacher the same thing an already-attached client already

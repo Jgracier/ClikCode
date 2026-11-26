@@ -81,6 +81,9 @@ export async function settleAttempt(ctx: VendorTurnContext, observer: VendorObse
 export async function completeVendorTurn(ctx: VendorTurnContext, observer: VendorObserver, record: AttemptRecord): Promise<void> {
   const { harness, session, prompter, state } = ctx;
   const { result, environment } = record;
+  // Do this before committing the transcript: a saved final snapshot closes the
+  // question surface. The tool owns its private prompt until its result is saved.
+  await prompter?.waitForComputerTools?.(ctx.signal);
   session.nativeStartedAt ??= new Date().toISOString();
   delete session.nativeSessionPreallocated;
   // The harness exited with a tool it never settled. Another model turn
