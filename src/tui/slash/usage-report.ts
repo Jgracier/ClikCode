@@ -317,8 +317,6 @@ export function contextTuneText(state: Pick<HarnessState, 'globalSettings'>): st
       `  ${harness} · ${model || 'default model'} · ${k(tune.level)}${tune.confirmed !== undefined ? ` (last held ${k(tune.confirmed)})` : ''}`,
       `    whole context: ${rate(tune.full)}`,
       `    cut context:   ${rate(tune.cut)}`,
-      ...(tune.evalWanted !== undefined ? [`    eval needed: ${k(tune.evalWanted)} waits on the graded eval (scripts/compaction-eval.mjs --record)`] : []),
-      ...(tune.evalLevel !== undefined ? [`    graded eval passed at ${k(tune.evalLevel)}${tune.evalAt ? ` (${tune.evalAt.slice(0, 10)})` : ''}`] : []),
       ...(last ? [`    last change ${last.at.slice(0, 16).replace('T', ' ')}: ${last.from === last.to ? k(last.to) : `${k(last.from)} -> ${k(last.to)}`} -- ${last.why}`] : []),
     ].join('\n');
   });

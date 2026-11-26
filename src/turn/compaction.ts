@@ -25,7 +25,12 @@
  * detail (Opus 46% against 88% at 100k); with hindsight, 100k answers about as well as nothing
  * compacted (Opus 86-88% against 88%, Sonnet 86% against 90%). 50k scored the same with hindsight but
  * compacts twice as often; 100k keeps more of the turn's own tool results in the context. */
-export const DEFAULT_COMPACT_AT_TOKENS = 100_000;
+export const DEFAULT_COMPACT_AT_TOKENS = 125_000;
+/** Where auto keeps a conversation's context (turn/context-tune.ts) and where a vendor's launch
+ * trigger stops growing with its headroom: below 100k agents lost track of the work they were on
+ * (2026-11-26, the user); past 150k a single conversation ran to 191k before compacting. */
+export const AUTO_COMPACT_MIN_TOKENS = 100_000;
+export const AUTO_COMPACT_MAX_TOKENS = 150_000;
 /** Below this a compaction costs more than it saves. */
 export const MIN_COMPACT_AT_TOKENS = 20_000;
 /** Turns after a compaction before another may run by itself. About one in ten sessions carries
@@ -229,7 +234,12 @@ export function vendorTrigger(setting: VendorThresholdSetting | undefined, thres
   const step = Math.max(record?.largestStep ?? 0, known.step ?? 0) || undefined;
   const floor = known.floor ?? CLAUDE_COMPACTION_FLOOR;
   const trigger = floor + compactionHeadroom(step);
-  return Math.max(threshold, known.floor !== undefined ? trigger : Math.max(trigger, CLAUDE_MIN_TRIGGER));
+  return Math.max(threshold, cappedTrigger(known.floor !== undefined ? trigger : Math.max(trigger, CLAUDE_MIN_TRIGGER), floor));
+}
+/** A floor-driven trigger stops at AUTO_COMPACT_MAX_TOKENS, except for the minimum headroom past a
+ * floor that is itself that high: one outlier call widens the headroom, not the context. */
+export function cappedTrigger(trigger: number, floor: number): number {
+  return Math.min(trigger, Math.max(AUTO_COMPACT_MAX_TOKENS, floor + COMPACTION_HEADROOM));
 }
 /** Claude Code's threshold variables (claudeCompactWindow). */
 const CLAUDE_THRESHOLD_VARIABLES = ['CLAUDE_CODE_AUTO_COMPACT_WINDOW', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE'];
@@ -324,7 +334,7 @@ export function turnsSinceCompaction(session: CompactableSession): number {
  * compact again every few calls. */
 export function effectiveThreshold(threshold: number, record: CompactionRecord | undefined): number {
   const floor = record?.vendorFloor ?? record?.after ?? record?.floor;
-  return floor !== undefined ? Math.max(threshold, floor + compactionHeadroom(record?.largestStep)) : threshold;
+  return floor !== undefined ? Math.max(threshold, cappedTrigger(floor + compactionHeadroom(record?.largestStep), floor)) : threshold;
 }
 
 /** The record of a compaction made now, carrying the previous one's floor forward. */

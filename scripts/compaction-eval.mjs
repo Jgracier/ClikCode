@@ -4,7 +4,6 @@
  *   node scripts/compaction-eval.mjs <phase> --conv <session id> --source <copy of a ClikCode home>
  *        --cred <a Claude account's .credentials.json> [--thresholds 150,100,80,60,40] [--samples 1]
  *   phases: prepare | probes | baseline | chain | report      (each resumes from what is saved)
- *   grid --convs <a,b> --record <harness> [--record-model <id>]: each threshold's verdict to context auto-tune
  *
  * Inside scripts/vendor-sandbox.mjs (never the user's own vendor history), on haiku through Claude Code:
  * - prepare: the conversation's first turns, as ClikCode writes a vendor thread from its record
@@ -85,29 +84,8 @@ const save = (name, value) => writeFileSync(saved(name), `${JSON.stringify(value
 
 if (phase === 'report') { report(); process.exit(0); }
 if (phase === 'grid') {
-  const rows = grid();
-  if (option('--record')) await recordTune(rows);
+  grid();
   process.exit(0);
-}
-
-/** `grid --record <harness> [--record-model <id>] [--record-condition hindsight]`: each threshold's
- * verdict goes to context auto-tune (turn/context-tune.ts recordTuneEval), so auto may step that
- * model below EVAL_BELOW only where the eval held. Written to the real ClikCode home's tune cache,
- * the one auto reads; nothing of the conversation goes there, only the level and the verdict. */
-async function recordTune(rows) {
-  const harnessName = option('--record');
-  const model = option('--record-model', MODEL);
-  const condition = option('--record-condition', 'hindsight');
-  const { build } = await import('esbuild');
-  const out = join(evalsRoot, 'tune-record.mjs');
-  await build({ entryPoints: [join(root, 'src', 'turn', 'context-tune.ts')], bundle: true, platform: 'node', format: 'esm', outfile: out, logLevel: 'error', define: { __CLIKCODE_VERSION__: '"eval"' }, banner: { js: "import { createRequire as __r } from 'node:module'; const require = __r(import.meta.url);" } });
-  const tune = await import(pathToFileURL(out).href);
-  const verdicts = rows.filter((row) => row.condition === condition && row.threshold).sort((left, right) => right.threshold - left.threshold);
-  if (!verdicts.length) { console.log(`--record: no ${condition} cells to record`); return; }
-  for (const row of verdicts) {
-    await tune.recordTuneEval(harnessName, model, row.threshold, row.holds);
-    console.log(`recorded for ${harnessName} · ${model}: ${row.threshold / 1000}k ${row.holds ? 'passed' : 'failed'}`);
-  }
 }
 
 if (!process.env.EVAL_INSIDE) {

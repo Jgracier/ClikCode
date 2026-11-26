@@ -25,16 +25,16 @@ afterEach(() => {
 });
 
 describe('contextGaugeLabel', () => {
-  it('auto with no tuning yet: the 100k starting level', () => {
+  it('auto with no tuning yet: the 125k starting level', () => {
     noteCompactAt({ compactAt: 'auto' });
-    expect(contextGaugeLabel(session())).toBe('41k/100k');
+    expect(contextGaugeLabel(session())).toBe('41k/125k');
   });
 
   it('auto follows the level the model was tuned to', () => {
     noteCompactAt({ compactAt: 'auto' });
     mkdirSync(join(home, 'cache'), { recursive: true });
-    writeFileSync(join(home, 'cache', 'context-tune.json'), JSON.stringify({ v: 1, models: { [tuneKey('claude', 'claude-haiku-5-5')]: { level: 60_000, full: {}, cut: {}, log: [] } } }));
-    expect(contextGaugeLabel(session())).toBe('41k/60k');
+    writeFileSync(join(home, 'cache', 'context-tune.json'), JSON.stringify({ v: 1, models: { [tuneKey('claude', 'claude-haiku-5-5')]: { level: 140_000, full: {}, cut: {}, log: [] } } }));
+    expect(contextGaugeLabel(session())).toBe('41k/140k');
   });
 
   it('a fixed setting is the denominator', () => {

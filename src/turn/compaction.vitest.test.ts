@@ -23,12 +23,12 @@ describe('the threshold', () => {
     expect(parseCompactAt('')).toBeUndefined();
   });
 
-  it('is the user\'s, kept in the global settings, or 50k', () => {
-    expect(DEFAULT_COMPACT_AT_TOKENS).toBe(100_000);
-    expect(compactAt(undefined)).toBe(100_000);
+  it('is the user\'s, kept in the global settings, or 125k', () => {
+    expect(DEFAULT_COMPACT_AT_TOKENS).toBe(125_000);
+    expect(compactAt(undefined)).toBe(125_000);
     expect(compactAt({ compactAt: 300_000 })).toBe(300_000);
-    expect(compactAt({ compactAt: 5 })).toBe(100_000);
-    expect(compactAt({ compactAt: 'big' })).toBe(100_000);
+    expect(compactAt({ compactAt: 5 })).toBe(125_000);
+    expect(compactAt({ compactAt: 'big' })).toBe(125_000);
   });
 
   it('is named in the /compact description', () => {
@@ -135,9 +135,9 @@ describe('a vendor\'s own threshold, in its own terms', () => {
   it('Claude Code: the auto-compact window its threshold is 33k under, with a percent below its 100k floor', () => {
     expect(plan('claude', 150_000)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '183000' } });
     // A threshold under what Claude Code's own compaction leaves plus headroom is launched at that
-    // (95k) so it does not compact again within a few calls; the default (100k) is above it.
+    // (95k) so it does not compact again within a few calls; the default (125k) is above it.
     expect(CLAUDE_MIN_TRIGGER).toBe(95_000);
-    expect(plan('claude', DEFAULT_COMPACT_AT_TOKENS)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '133000' } });
+    expect(plan('claude', DEFAULT_COMPACT_AT_TOKENS)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '158000' } });
     expect(plan('claude', 500_000, 200_000)).toEqual({ kind: 'env', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '533000' } });
     // 40k: the floor window (100k) leaves 80k after the output room; 50% of it is 40k.
     expect(claudeCompactWindow(40_000)).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000', CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '50' });
@@ -170,6 +170,9 @@ describe('a vendor\'s own threshold, in its own terms', () => {
     expect(compactionHeadroom(10_000)).toBe(35_000);
     expect(compactionHeadroom(27_000)).toBe(59_000);
     expect(compactionHeadroom(500_000)).toBe(120_000);
+    // One outlier call widens the headroom only up to 150k; a floor that high still gets the minimum.
+    expect(vendorTrigger(harness('claude').compactThreshold, 50_000, { at: at(5), through: 3, vendorFloor: 71_000, largestStep: 61_000 })).toBe(150_000);
+    expect(vendorTrigger(harness('claude').compactThreshold, 50_000, { at: at(5), through: 3, vendorFloor: 130_000 })).toBe(165_000);
     const record: CompactionRecord = { at: at(5), through: 3, vendorFloor: 52_000 };
     expect(noteContextStep(record, undefined, 60_000)).toBeUndefined();
     expect(noteContextStep(record, 60_000, 58_000)).toBeUndefined();
