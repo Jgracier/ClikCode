@@ -339,8 +339,14 @@ export async function fillTarget(page: Page, target: Locator, text: string, name
   if (text.length <= 200 && kind.tag !== 'TEXTAREA') {
     await approach(page, target);
     await target.fill('', { timeout: 10_000 });
-    await typeLikeAPerson(page, text);
-    await target.blur().catch(quiet('agent/computer/page-control'));
+    // Typing can change the accessible tree (formatted payment fields do this).
+    // Keep the actual node: resolving its old snapshot reference again can wait
+    // until the whole fill times out, even though the text was already entered.
+    const field = await target.elementHandle({ timeout: 2_000 });
+    try {
+      await typeLikeAPerson(page, text);
+      await field?.evaluate(node => (node as unknown as { blur(): void }).blur()).catch(quiet('agent/computer/page-control'));
+    } finally { await field?.dispose(); }
   } else await target.fill(text, { timeout: Math.min(60_000, 10_000 + text.length / 5) });
   return `Filled ${name}.`;
 }
