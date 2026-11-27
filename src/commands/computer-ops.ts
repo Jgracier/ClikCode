@@ -129,21 +129,31 @@ export async function oauthConnectOutcome(connector: string, options: { tab?: st
   const { oauthConnect, ConsentStop, pageExcerpt } = await import('../agent/computer/oauth-consent.js');
   const { scrubSecrets } = await import('../agent/computer/secret-scrubber.js');
   const browser = await import('../agent/computer/browser.js');
-  const { profileEmail } = await import('../agent/computer/profiles.js');
-  if (options.egress) await browser.bindTabEgress(dir, tab, options.egress);
-  let page = await browser.openNewComputerPage(dir, tab);
-  const reopen = async (old: typeof page): Promise<typeof page> => { await browser.closeOwnedPage(dir, old, tab).catch(quiet('commands/computer-ops')); page = await browser.openNewComputerPage(dir, tab); return page; };
+  let page: import('playwright-core').Page | undefined;
+  let openAttempted = false;
   try {
-    const done = await oauthConnect(connector, page, { email: await profileEmail(dir), stateDir: dir, reopen, ...(options.progress ? { progress: options.progress } : {}) });
+    const { profileEmail } = await import('../agent/computer/profiles.js');
+    if (options.egress) await browser.bindTabEgress(dir, tab, options.egress);
+    // Mark the attempt before awaiting: opening can create a tab and then fail while registering it.
+    openAttempted = true;
+    const firstPage = await browser.openNewComputerPage(dir, tab);
+    page = firstPage;
+    const reopen = async (old: import('playwright-core').Page): Promise<import('playwright-core').Page> => {
+      await browser.closeOwnedPage(dir, old, tab).catch(quiet('commands/computer-ops'));
+      const nextPage = await browser.openNewComputerPage(dir, tab);
+      page = nextPage;
+      return nextPage;
+    };
+    const done = await oauthConnect(connector, firstPage, { email: await profileEmail(dir), stateDir: dir, reopen, ...(options.progress ? { progress: options.progress } : {}) });
     return { ok: true, note: `consent finished: ${done.steps.length} presses, an active connection is shown` };
   } catch (error) {
     const message = scrubSecrets(error instanceof Error ? error.message : String(error)).slice(0, 300);
     if (!(error instanceof ConsentStop)) return { ok: false, stop: { kind: 'unknown', message, url: '', pageText: '', controls: [] } };
-    const looked = error.detail ? undefined : await look(page);
+    const looked = error.detail || !page ? undefined : await look(page);
     const seen: Pick<StopInfo, 'kind' | 'url' | 'pageText' | 'controls'> = error.detail ?? { kind: 'unknown', url: '', pageText: pageExcerpt(looked?.text ?? ''), controls: looked?.controls ?? [] };
     return { ok: false, stop: { ...seen, message } };
   } finally {
-    await browser.closeComputerPage(dir, tab).catch(quiet('commands/computer-ops'));
+    if (openAttempted) await browser.closeComputerPage(dir, tab).catch(quiet('commands/computer-ops'));
     await browser.releaseComputerBrowser(dir).catch(quiet('commands/computer-ops'));
   }
 }
