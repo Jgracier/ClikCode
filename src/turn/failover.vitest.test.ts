@@ -24,6 +24,7 @@ describe('ClikCode account failover', () => {
   });
 
   it('does not confuse temporary throttling with exhausted quota', () => {
+    expect(classifyAccountFailure(new Error('Internal error: Invalid credential'), { isResultError: true })).toBe('authentication-required');
     expect(classifyAccountFailure(Object.assign(new Error('too many requests'), { statusCode: 429 }))).toBe('temporarily-throttled');
     expect(classifyAccountFailure(new Error('weekly usage limit reached'))).toBe('quota-exhausted');
     expect(classifyAccountFailure(new Error("You've hit your limit · resets tomorrow"))).toBe('quota-exhausted');
