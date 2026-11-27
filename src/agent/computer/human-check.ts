@@ -11,7 +11,7 @@
 import type { Frame, Page } from 'playwright-core';
 import { awsWafState } from './human-check-awswaf.js';
 import { sleep as realSleep } from '../../runtime/sleep.js';
-import { newMeter, type AskOptions } from './captcha-model.js';
+import { askingStopped, newMeter, type AskOptions } from './captcha-model.js';
 import { arkoseAudio, playArkose } from './human-check-arkose.js';
 import { GEETEST_STATE, geetestStep } from './human-check-geetest.js';
 import { gridRound, readLayout, solveRecaptchaAudio } from './human-check-grid.js';
@@ -528,7 +528,7 @@ async function answerShownCheck(page: Page, deps: SolveDeps & { budget: Budget }
   const inPage: InPageMemo = { tries: 0, held: false, holds: 0, textTyped: false, acted: false };
   const viewport: ViewportMemo = {};
   try {
-    return await answerLoop(page, deps, hands, hcaptcha, inPage, viewport, () => widget, found => { widget ??= found; }, ended);
+    return await answerLoop(page, deps, hands, hcaptcha, inPage, viewport, () => widget, found => { widget ??= found; }, ended, () => askingStopped(asking.meter));
   } catch (error) {
     if (!isOutOfTime(error)) throw error;
     deps.trace?.('out of time');
@@ -539,13 +539,15 @@ async function answerShownCheck(page: Page, deps: SolveDeps & { budget: Budget }
 }
 
 async function answerLoop(page: Page, deps: SolveDeps & { budget: Budget }, hands: Hands, hcaptcha: HcaptchaMemo, inPage: InPageMemo, viewport: ViewportMemo,
-  current: () => HumanCheckWidget | undefined, saw: (widget: HumanCheckWidget | undefined) => void, ended: (outcome: HumanCheckResult['outcome']) => HumanCheckResult): Promise<HumanCheckResult> {
+  current: () => HumanCheckWidget | undefined, saw: (widget: HumanCheckWidget | undefined) => void, ended: (outcome: HumanCheckResult['outcome']) => HumanCheckResult,
+  /** Why no more pictures should be put to the voters (captcha-model askingStopped). */ stopped: () => string | undefined = () => undefined): Promise<HumanCheckResult> {
   const { budget } = deps;
   const { sleep, random } = hands;
   let repressed = 0, arkoseStuck = 0, unread = 0, verifyWaited = false;
   /** What the widget last said of itself after a press that did not clear (Turnstile's own words), for the result. */
   let widgetSaid = '';
   let pictureRounds = 0, audio: 'untried' | 'on' | 'refused' = deps.audio ?? 'untried';
+  const giveUp = (why: string): HumanCheckResult => { deps.trace?.(`stopping: ${why}`); return { ...ended('still-there'), seen: why }; };
   while (!budget.over()) {
     const found = await findPuzzle(page);
     if (!found) {
@@ -600,6 +602,8 @@ async function answerLoop(page: Page, deps: SolveDeps & { budget: Budget }, hand
     if (await fitPuzzle(page, found.box, viewport)) { await sleep(800); continue; }
     let confirm: { x: number; x2: number; y: number; y2: number };
     if (found.widget === 'arkose') {
+      const why = stopped();
+      if (why) return giveUp(why);
       // After two rounds the pictures could not be answered, the spoken challenge is tried instead.
       const played = arkoseStuck >= 2 && await arkoseAudio(hands, found.frame, found.box) ? 'played' : await playArkose(hands, found.frame, found.box);
       if (played === 'stuck') { if (++arkoseStuck >= 4) return ended('still-there'); await sleep(2_000); }
@@ -613,13 +617,16 @@ async function answerLoop(page: Page, deps: SolveDeps & { budget: Budget }, hand
     // reCAPTCHA offers the same check as a spoken clip, as a LAST resort: after RECAPTCHA_PICTURE_ROUNDS picture rounds that did not
     // clear, or once the pictures have used all but RECAPTCHA_AUDIO_RESERVE_MS of the run (recaptchaAudioTurn). Asking for audio is what
     // Google most often answers with "Try again later" (automated queries), which ends the widget for the session; measured 2026-11-19/20 audio rescued 7 of 47 runs while the pictures alone cleared 35, so the pictures get more rounds.
-    if (found.widget === 'recaptcha' && recaptchaAudioTurn(audio, pictureRounds, budget.left())) {
+    // With the pictures stopped (captcha-model askingStopped) the spoken clip, which asks no voter, is still tried.
+    const spent = stopped();
+    if (found.widget === 'recaptcha' && (recaptchaAudioTurn(audio, pictureRounds, budget.left()) || (spent !== undefined && audio !== 'refused'))) {
       const heard = await solveRecaptchaAudio(page, found.frame, found.box, hands.asks.transcribe, random, sleep, deps.trace);
       if (heard === 'refused') { audio = 'refused'; await sleep(1_000); continue; }
       audio = 'on';
       for (let waited = 0; waited < 8_000; waited += 500) { await sleep(500); if (await humanCheckAnswered(page)) return ended('cleared'); if (!await findPuzzle(page)) break; }
       continue;
     }
+    if (spent) return giveUp(spent);
     pictureRounds++;
     const grid = await gridRound(hands, found.frame, found.box);
     if (grid === 'reloaded') continue;

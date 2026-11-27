@@ -44,6 +44,22 @@ const VOTERS = 3;
  * this is treated as one that failed: benched, and its seat handed to the next model. */
 export const VOTE_MS = 40_000;
 const VISION_TTL_MS = 60_000;
+/** A grid square's yes/no starts with this many voters: two that agree decide it, exactly as two of three did, so the third is
+ * asked only when they differ, one fails, or they are slow (HEDGE_MS). Grids are nearly all of a run's asks. */
+const LEAD_VOTERS = 2;
+export const HEDGE_MS = 8_000;
+/** Providers captcha votes are never served by: their free daily allowance is for agents and chat, which one captcha run drained
+ * (OpenRouter's free-models-per-day was used up by votes on 2026-11-26). */
+const IGNORED_PROVIDERS = ['openrouter'] as const;
+/** The Gateway's refusal for a model only an ignored provider serves. It costs nothing and will not change soon. */
+const UNSERVED = /No provider for model|no_provider_matches/i;
+const UNSERVED_BENCH_MS = 24 * 60 * 60_000;
+/** The most asks one run may make. Of 193 cleared reCAPTCHA runs (2026-11-14 to 26, three voters a square) the largest took 409
+ * asks, about 300 with two; failed ones ran to 649. */
+export const MAX_ASKS = 300;
+/** This many questions in a row that fewer than two voters answered: voting is not working (no quota, no listed voter), and no
+ * further ask can produce an agreed answer. */
+export const DEAD_QUESTIONS = 8;
 
 /** The account's vision models, cached for a minute (the Gateway list itself is cached about as long). */
 let cachedVision: { ids: string[]; at: number } | undefined;
@@ -52,15 +68,23 @@ let cachedVision: { ids: string[]; at: number } | undefined;
  * answer that was given, and the hard questions themselves (for the tally and the stored answer set). */
 export interface AskMeter {
   asks: number;
+  /** Questions in a row that fewer than two voters answered (DEAD_QUESTIONS). */
+  dead: number;
   models: Record<string, number>;
   votes: Array<{ roster: Roster; model: string; withWinner: boolean }>;
   samples: Array<{ roster: Roster; text: string; images: ImageInput[]; answers: Record<string, string> }>;
 }
-export const newMeter = (): AskMeter => ({ asks: 0, models: {}, votes: [], samples: [] });
+export const newMeter = (): AskMeter => ({ asks: 0, dead: 0, models: {}, votes: [], samples: [] });
+/** Why a run should put no more questions to the voters, or undefined while it should go on. */
+export function askingStopped(meter: AskMeter | undefined): string | undefined {
+  if (!meter) return undefined;
+  if (meter.dead >= DEAD_QUESTIONS) return `the voting models are not answering (${meter.dead} questions in a row without two answers)`;
+  return meter.asks >= MAX_ASKS ? `the run reached its limit of ${MAX_ASKS} model asks` : undefined;
+}
 
 /** `order`: the roster's models in the order measured on this machine (captcha-log.ts voterOrder), when known.
  * `meter`: where to count the asks. The rest are seams for tests: fake voters, a fixed clock, a signal. */
-export interface AskOptions { signal?: AbortSignal; /** One voter's time limit per answer (VOTE_MS; a seam for tests). */ voteMs?: number; modelClientsOf?: () => Promise<ModelClient[]>; /** Named voters, best first, in place of the roster (a seam for tests of who sits in and who stands in). */ voters?: () => Promise<Voter[]>; now?: () => number; meter?: AskMeter; order?: Partial<Record<Roster, readonly string[]>>;
+export interface AskOptions { signal?: AbortSignal; /** How long the leading voters have before the third is asked too (HEDGE_MS; a seam for tests). */ hedgeMs?: number; /** One voter's time limit per answer (VOTE_MS; a seam for tests). */ voteMs?: number; modelClientsOf?: () => Promise<ModelClient[]>; /** Named voters, best first, in place of the roster (a seam for tests of who sits in and who stands in). */ voters?: () => Promise<Voter[]>; now?: () => number; meter?: AskMeter; order?: Partial<Record<Roster, readonly string[]>>;
   /** Seams for tests of how the seats are filled: the Gateway listing, a roster, a Gateway client, the subscription voter. */
   seats?: { listing?: () => Promise<GatewayListing>; roster?: (roster: Roster) => Promise<readonly string[]>; client?: (id: string) => Promise<ModelClient>; subscription?: () => Promise<Voter | undefined> } }
 
@@ -68,26 +92,34 @@ export interface AskOptions { signal?: AbortSignal; /** One voter's time limit p
 interface GatewayListing { models: Array<{ id: string; vision?: boolean; access?: string }>; speech?: Array<{ id: string; access?: string }> }
 const subsidized = (model: { access?: string }): boolean => model.access === 'subscription' || model.access === 'free';
 
+/** A grid square's yes/no is asked with reasoning off. Measured on 48 hand-labelled squares (2026-11-26, gemma-4-26b,
+ * nemotron-3.5-super-vl, hy4-flash): every square answered, 46 to 47 right, 2 output tokens and half the time. With reasoning on
+ * under the old 300-token cap, two of those models gave no answer to a quarter of them (30% of all votes in production ran to the cap). */
+const TILE_BODY = { reasoning_effort: 'none' } as const;
+/** Room for a model whose reasoning cannot be turned off to still reach its one word; unused otherwise. */
+const TILE_MAX_TOKENS = 1_500;
+
 /** The questions worth a subscription voter: one or two pictures, an answer that takes thought. */
 const HARD: ReadonlySet<Roster> = new Set<Roster>(['click', 'order']);
 
-/** One client per model, made once a minute at most (each read the saved connection from disk). */
+/** One client per model and kind of question (`quick`: reasoning off), made once a minute at most (each read the saved connection from disk). */
 const clients = new Map<string, { at: number; client: Promise<ModelClient> }>();
-function gatewayClient(model: string, now: number): Promise<ModelClient> {
-  const kept = clients.get(model);
+function gatewayClient(model: string, now: number, quick: boolean): Promise<ModelClient> {
+  const key = quick ? `${model} quick` : model;
+  const kept = clients.get(key);
   if (kept && now - kept.at <= VISION_TTL_MS) return kept.client;
-  const client = makeGatewayClient(model);
-  clients.set(model, { at: now, client });
-  client.catch(() => clients.delete(model));
+  const client = makeGatewayClient(model, quick);
+  clients.set(key, { at: now, client });
+  client.catch(() => clients.delete(key));
   return client;
 }
-async function makeGatewayClient(model: string): Promise<ModelClient> {
+async function makeGatewayClient(model: string, quick: boolean): Promise<ModelClient> {
   const { gatewayConnection, gatewayModelClient } = await import('../models/for-session.js');
   const Conf = (await import('conf')).default;
   const { baseUrl, apiKey } = gatewayConnection(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
   // Each voter is named explicitly: `auto` can land on a text-only provider that refuses the picture.
   // On the subscriptions lane: captcha votes are internal work and never spend paid (unsubsidized) Gateway usage.
-  return gatewayModelClient({ baseUrl, apiKey, vision: true, model, subscriptions: true });
+  return gatewayModelClient({ baseUrl, apiKey, vision: true, model, subscriptions: true, options: { provider: { ignore: [...IGNORED_PROVIDERS] }, ...(quick ? TILE_BODY : {}) } });
 }
 
 export interface Voter { name: string; client: ModelClient }
@@ -162,7 +194,7 @@ export async function votersFor(roster: Roster, options: AskOptions): Promise<Vo
   const preferred = seatOrder(roster, vision, options.order?.[roster] ?? [], listed);
   const fit = preferred.filter(model => !isBenched(model.name, now()));
   const ordered = [...fit, ...preferred.filter(model => !fit.includes(model))];
-  const clientOf = options.seats?.client ?? ((id: string) => gatewayClient(id, now()));
+  const clientOf = options.seats?.client ?? ((id: string) => gatewayClient(id, now(), roster === 'tile'));
   const gateway = (await Promise.all(ordered.map(async model => {
     try { return { name: model.name, client: await clientOf(model.id) }; }
     catch (error) { quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error)); return undefined; }
@@ -197,16 +229,18 @@ export async function untilAgreed<T>(asks: Array<Promise<T | undefined>>, agreed
 }
 
 interface Question<T> { roster: Roster; system: string; text: string; images: ImageInput[]; parse: (text: string) => T | undefined; maxOutputTokens?: number;
-  /** Enough answers are in: stop waiting for the rest. */ enough?: (answers: Array<T | undefined>) => boolean }
+  /** Enough answers are in: stop waiting for the rest. */ enough?: (answers: Array<T | undefined>) => boolean;
+  /** Voters asked at once; the others only when these do not settle it. Every voter at once when unset. */ lead?: number }
 interface Polled<T> { answers: Array<T | undefined>; voters: number; /** Who gave each answer. */ names: string[]; roster: Roster }
 
 /** Put one question to the roster's voters. Returns each voter's parsed answer (undefined for one that failed or
  * said nothing usable) and how many voters there were; `undefined` when no voter could be reached. Never throws. */
 async function poll<T>(question: Question<T>, options: AskOptions): Promise<Polled<T> | undefined> {
+  if (askingStopped(options.meter)) return undefined;
   let all: Voter[];
   try { all = await votersFor(question.roster, options); }
   catch (error) { quiet('agent/computer/captcha-model')(error instanceof Error ? error.message : String(error)); return undefined; }
-  if (!all.length) return undefined;
+  if (!all.length) { if (options.meter) options.meter.dead++; return undefined; }
   // Fakes handed in by a test all vote; otherwise three vote and the rest are spares.
   const voting = options.modelClientsOf ? all : all.slice(0, VOTERS);
   const spares = options.modelClientsOf ? [] : all.slice(VOTERS);
@@ -241,17 +275,35 @@ async function poll<T>(question: Question<T>, options: AskOptions): Promise<Poll
     } catch (error) {
       if (signal.aborted) return undefined;
       const message = error instanceof Error ? error.message : String(error);
+      const unserved = UNSERVED.test(message);
+      // Refused before any model ran: not an ask.
+      if (unserved && meter) { meter.asks--; meter.models[voter.name || 'test']!--; }
       if (await voteLogOn()) console.error(`vote ${question.roster} ${voter.name} failed: ${message.slice(0, 160)}`);
       quiet('agent/computer/captcha-model')(message);
       // A voter that cannot answer sits out for a while and the next model in the roster votes in its place.
-      if (voter.name) benched.set(voter.name, (options.now ?? Date.now)() + BENCH_MS);
+      if (voter.name) benched.set(voter.name, (options.now ?? Date.now)() + (unserved ? UNSERVED_BENCH_MS : BENCH_MS));
       const spare = spares.shift();
       return spare ? ask(spare, seat) : undefined;
     }
   };
   const enough = question.enough;
-  const answers = await untilAgreed(voting.map(ask), got => voting.length > 1 && !!enough && enough(got));
+  const done = (got: Array<T | undefined>): boolean => voting.length > 1 && !!enough && enough(got);
+  const lead = !options.modelClientsOf && question.lead ? question.lead : voting.length;
+  const asks = voting.slice(0, lead).map(ask);
+  if (lead < voting.length) {
+    // The reserve is released when the leaders have answered without settling it, when they are slow, or when the vote ends.
+    let release!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const hedge = setTimeout(release, options.hedgeMs ?? HEDGE_MS);
+    signal.addEventListener('abort', release, { once: true });
+    void Promise.all(asks).then(got => { if (!done(got)) release(); });
+    void released.then(() => clearTimeout(hedge));
+    asks.push(...voting.slice(lead).map((voter, index) => released.then(() => signal.aborted ? undefined : ask(voter, lead + index))));
+  }
+  const answers = await untilAgreed(asks, done);
   settled.abort();
+  // A vote cut short by the run's own end says nothing about the voters.
+  if (meter && !options.signal?.aborted) meter.dead = answers.filter(answer => answer !== undefined).length >= 2 ? 0 : meter.dead + 1;
   return { answers, voters: voting.length, names: [...names], roster: question.roster };
 }
 
@@ -364,7 +416,7 @@ export const yesNo = (text: string): boolean | undefined => {
  * a list of squares: the model sees the context and judges one place. */
 export async function askTileMatch(question: TileQuestion, options: AskOptions = {}): Promise<boolean | undefined> {
   const enough = question.lenient ? (got: Array<boolean | undefined>) => got.includes(true) : (got: Array<boolean | undefined>) => sharedBy(got, 2);
-  const polled = await poll({ roster: 'tile', system: 'You answer image-selection questions with one word: yes or no.', text: tileQuestionText(question), images: [question.image], parse: yesNo, maxOutputTokens: 300, enough }, options);
+  const polled = await poll({ roster: 'tile', system: 'You answer image-selection questions with one word: yes or no.', text: tileQuestionText(question), images: [question.image], parse: yesNo, maxOutputTokens: TILE_MAX_TOKENS, enough, ...(question.lenient ? {} : { lead: LEAD_VOTERS }) }, options);
   if (!polled) return undefined;
   const votes = polled.answers.filter((v): v is boolean => v !== undefined);
   if (!votes.length) return undefined;

@@ -433,3 +433,71 @@ describe('who sits in a vote', () => {
     expect(await askTileMatch(question, { voters: async () => [{ name: 'a', client: fake('yes') }, { name: 'b', client: fake('yes') }] })).toBe(true);
   });
 });
+
+describe('what a vote costs', () => {
+  const question = { image: { mimeType: 'image/jpeg', data: 'eA==' }, instruction: 'Select all squares with buses', target: 'buses', size: 3 };
+  const asked: string[] = [];
+  const voter = (name: string, answer: string | Error, afterMs = 0) => ({ name, client: { step: async () => {
+    asked.push(name);
+    if (afterMs) await new Promise(resolve => setTimeout(resolve, afterMs));
+    if (answer instanceof Error) throw answer;
+    return { text: answer };
+  } } as unknown as ModelClient });
+  beforeEach(async () => { asked.length = 0; (await import('./captcha-model.js')).resetCaptchaVoters(); });
+
+  it('asks only two voters for a grid square when they agree', async () => {
+    const { askTileMatch, newMeter } = await import('./captcha-model.js');
+    const meter = newMeter();
+    expect(await askTileMatch(question, { meter, voters: async () => [voter('a', 'yes'), voter('b', 'yes'), voter('c', 'no')] })).toBe(true);
+    expect(asked).toEqual(['a', 'b']);
+    expect(meter.asks).toBe(2);
+  });
+
+  it('asks the third when the two differ, or are slow', async () => {
+    const { askTileMatch } = await import('./captcha-model.js');
+    expect(await askTileMatch(question, { voters: async () => [voter('a', 'yes'), voter('b', 'no'), voter('c', 'no')] })).toBe(false);
+    expect(asked).toEqual(['a', 'b', 'c']);
+    asked.length = 0;
+    expect(await askTileMatch(question, { hedgeMs: 10, voters: async () => [voter('a', 'yes'), voter('slow', 'no', 500), voter('c', 'yes')] })).toBe(true);
+    expect(asked).toEqual(['a', 'slow', 'c']);
+  });
+
+  it('asks every voter at once when the widget says a matching square was left out', async () => {
+    const { askTileMatch } = await import('./captcha-model.js');
+    expect(await askTileMatch({ ...question, lenient: true }, { voters: async () => [voter('a', 'no'), voter('b', 'no'), voter('c', 'yes')] })).toBe(true);
+    expect(asked).toEqual(['a', 'b', 'c']);
+  });
+
+  it('benches a model only an ignored provider serves, without counting the refusal as an ask', async () => {
+    const { askTileMatch, newMeter, isBenched } = await import('./captcha-model.js');
+    const meter = newMeter();
+    const gone = voter('only-openrouter', new Error('No provider for model particle-1 is left after ignore=[openrouter]; it is served by [openrouter].'));
+    expect(await askTileMatch(question, { meter, voters: async () => [gone, voter('b', 'yes'), voter('c', 'no'), voter('spare', 'yes')] })).toBe(true);
+    // The spare takes its seat and agrees with b: two asks, and the third voter is never asked.
+    expect(meter.asks).toBe(2);
+    expect(asked).toEqual(['only-openrouter', 'b', 'spare']);
+    expect(isBenched('only-openrouter', Date.now() + 60 * 60_000)).toBe(true);
+  });
+
+  it('stops asking once question after question goes without two answers', async () => {
+    const { askTileMatch, askingStopped, newMeter, DEAD_QUESTIONS } = await import('./captcha-model.js');
+    const meter = newMeter();
+    const options = { meter, voters: async () => [voter('a', 'yes'), voter('b', new Error('429 rate limited'))] };
+    for (let i = 0; i < DEAD_QUESTIONS; i++) await askTileMatch(question, options);
+    expect(askingStopped(meter)).toMatch(/not answering/);
+    const before = meter.asks;
+    expect(await askTileMatch(question, options)).toBeUndefined();
+    expect(meter.asks).toBe(before);
+  });
+
+  it('starts the count again after an answered question, and stops at the run limit', async () => {
+    const { askTileMatch, askingStopped, newMeter, MAX_ASKS } = await import('./captcha-model.js');
+    const meter = newMeter();
+    meter.dead = 5;
+    await askTileMatch(question, { meter, voters: async () => [voter('a', 'yes'), voter('b', 'yes')] });
+    expect(meter.dead).toBe(0);
+    expect(askingStopped(meter)).toBeUndefined();
+    meter.asks = MAX_ASKS;
+    expect(askingStopped(meter)).toMatch(/limit/);
+  });
+});
