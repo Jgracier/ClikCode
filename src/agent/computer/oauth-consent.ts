@@ -7,11 +7,18 @@
  * Nothing is granted on a page that does not name the client being granted, and no authorization URL is opened unless it is
  * https (loopback excepted) and sends its answer back to the platform's own callback. */
 import { quiet } from '../../runtime/lifecycle-log.js';
-import { spawn } from 'node:child_process';
 import type { Page } from 'playwright-core';
 import { scrubSecrets } from './secret-scrubber.js';
 import { detectBlocker } from './signup-recipes.js';
-import { connectionState } from './secret-destinations.js';
+import type { ConsentPlatform } from './oauth-platform.js';
+export type { ConsentPlatform } from './oauth-platform.js';
+import { authorizationUrl as parseAuthorizationUrl } from './oauth-authorization.js';
+export { authorizationProblem, startFailure } from './oauth-authorization.js';
+import { authorizationProblem } from './oauth-authorization.js';
+import { CLIKDEPLOY_PLATFORM, ownsClikDeployCallback } from '../../integrations/clikdeploy/oauth.js';
+export { CLIKDEPLOY_PLATFORM, ownsClikDeployCallback } from '../../integrations/clikdeploy/oauth.js';
+/** Compatibility entry point; callers can supply their own callback owner. */
+export const authorizationUrl = (text: string, ownsCallback = ownsClikDeployCallback): string | undefined => parseAuthorizationUrl(text, ownsCallback);
 import { OPENS_ANOTHER_APP, PRESSABLE, readPageControls } from './page-controls.js';
 import { saveTask, type TaskReason } from './work-queue.js';
 
@@ -217,87 +224,6 @@ export function callbackState(url: string, redirectUri: string | undefined, page
 
 const CONNECTOR_ID = /^[A-Za-z0-9][\w.-]{0,60}$/;
 
-/** An error document's own addresses (`type`: https://errors.clikdeploy.com/VALIDATION_ERROR, `instance`) are never an authorization URL. */
-const ERROR_ADDRESS = /^https?:\/\/errors\.clikdeploy\.com(?:\/|$)/i;
-const URL_KEYS = ['authorizationUrl', 'authorization_url', 'authorizeUrl', 'url'];
-
-function jsonOf(text: string): unknown {
-  const start = text.indexOf('{');
-  if (start < 0) return undefined;
-  try { return JSON.parse(text.slice(start)); } catch { return undefined; }
-}
-
-/** Whether the CLI printed an error document (problem+json, or `success: false` / `status: error`), whose URLs are not an answer. */
-function isErrorDocument(value: unknown): boolean {
-  if (!value || typeof value !== 'object') return false;
-  const v = value as Record<string, unknown>;
-  return v.success === false || v.status === 'error' || (typeof v.type === 'string' && ERROR_ADDRESS.test(v.type)) || typeof v.error === 'string' || (typeof v.status === 'number' && v.status >= 400);
-}
-
-/** Why an authorization URL is not one to open, or undefined. It must be https (plain http only on this computer's loopback) and,
- * when it names a redirect_uri, send the answer to an origin the platform owns; a bare address from a line of CLI output must be
- * an OAuth request (client_id and redirect_uri) at all, so a docs or status link printed beside it is never taken for it. */
-export function authorizationProblem(raw: string, ownsCallback: (url: URL) => boolean, options: { strict?: boolean } = {}): string | undefined {
-  let url: URL;
-  try { url = new URL(raw); } catch { return 'it is not an address'; }
-  const loopback = /^(?:127\.\d+\.\d+\.\d+|localhost|\[::1\])$/i.test(url.hostname);
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) return `it is not https (${url.protocol}//${url.host})`;
-  const redirect = url.searchParams.get('redirect_uri');
-  if (options.strict && (!url.searchParams.get('client_id') || !redirect)) return `${url.host}${url.pathname} is not an OAuth authorization request (no client_id and redirect_uri)`;
-  if (redirect) {
-    let back: URL;
-    try { back = new URL(redirect); } catch { return 'its redirect_uri is not an address'; }
-    if (!ownsCallback(back)) return `it sends the authorization to ${back.host}, which is not the platform's callback`;
-  }
-  return undefined;
-}
-
-/** The authorization URL out of whatever `clikdeploy integrations connect --no-browser` prints (JSON or a plain line). An error document
- * has none. From plain text only an https OAuth request whose redirect_uri the platform owns is taken. */
-export function authorizationUrl(text: string, ownsCallback: (url: URL) => boolean = ownsClikDeployCallback): string | undefined {
-  const json = jsonOf(text);
-  if (json !== undefined) {
-    if (isErrorDocument(json)) return undefined;
-    const walk = (value: unknown): string | undefined => {
-      if (value && typeof value === 'object') {
-        const record = value as Record<string, unknown>;
-        for (const key of URL_KEYS) { const v = record[key]; if (typeof v === 'string' && /^https?:\/\//.test(v) && !ERROR_ADDRESS.test(v) && !authorizationProblem(v, ownsCallback)) return v; }
-        for (const v of Object.values(record)) { const found = walk(v); if (found) return found; }
-      }
-      return undefined;
-    };
-    const found = walk(json);
-    if (found) return found;
-  }
-  for (const m of text.matchAll(/https?:\/\/[^\s"'<>]+/g)) { const url = m[0].replace(/[.,;)]+$/, ''); if (!ERROR_ADDRESS.test(url) && !authorizationProblem(url, ownsCallback, { strict: true })) return url; }
-  return undefined;
-}
-
-/** Why ClikDeploy would not start the connection, in its own words: the error document's message (or detail), else the last lines printed. */
-export function startFailure(text: string): string {
-  const json = jsonOf(text) as Record<string, unknown> | undefined;
-  const pick = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.split('\n')[0]!.trim() : undefined);
-  const said = json && typeof json === 'object' ? pick(json.message) ?? pick(json.detail) ?? pick(json.error) ?? pick(json.title) : undefined;
-  return said ?? text.trim().split('\n').slice(-3).join(' ').slice(0, 200);
-}
-
-interface ConnectStart { url: string; stop: () => void }
-
-/** ClikDeploy's own callback: an https origin on clikdeploy.com. */
-export const ownsClikDeployCallback = (url: URL): boolean => url.protocol === 'https:' && /(^|\.)clikdeploy\.com$/i.test(url.hostname);
-
-/** The platform an OAuth connection is made for: what starts it, what confirms it, the names its consent screen shows, and
- * which callback addresses are its own. */
-export interface ConsentPlatform {
-  /** The client's names as a vendor's consent page shows them ("Authorize ClikDeploy"). */
-  appNames: readonly string[];
-  /** Whether a redirect_uri or a landing page is the platform's own callback. */
-  ownsCallback: (url: URL) => boolean;
-  /** values: per-account parts of the vendor's sign-in address ({shop} in {shop}.myshopify.com), by name. */
-  start: (connector: string, signal?: AbortSignal, values?: Record<string, string>) => Promise<ConnectStart>;
-  status: (connector: string, signal?: AbortSignal) => Promise<{ connected: boolean; reason?: string }>;
-}
-
 interface OAuthConsentOptions {
   /** The state directory: where a payment-class stop is recorded in the human work queue (absent: not recorded). */ stateDir?: string;
   email?: string; /** Closes the given (stale) tab and opens a fresh one the caller owns and closes later; with it, a Google re-verify or error page is retried once from the authorization URL in the fresh tab. */ reopen?: (old: Page) => Promise<Page>; /** Treat every page as this provider's host (a test stands a fake vendor in for accounts.google.com). */ providerHost?: string; timeoutMs?: number; signal?: AbortSignal; progress?: (line: string) => void;
@@ -309,40 +235,6 @@ interface OAuthConsentOptions {
   /** Per-account values the connector's sign-in address takes (Shopify: { shop: 'bobs-bikes' }); passed to start by name. */
   values?: Record<string, string>;
 }
-
-/** Runs the clikdeploy CLI (the saved admin key is its own sign-in) and waits for it to print the authorization URL. */
-function startViaCli(connector: string, signal?: AbortSignal, values: Record<string, string> = {}): Promise<ConnectStart> {
-  const bad = Object.entries(values).find(([name, value]) => !/^[A-Za-z_][\w-]{0,63}$/.test(name) || !value || /[\r\n]/.test(value));
-  if (bad) return Promise.reject(new Error(`oauth_connect values: "${bad[0]}" is not a usable name=value (a plain name and a one-line value).`));
-  const valueArgs = Object.entries(values).flatMap(([name, value]) => ['--value', `${name}=${value}`]);
-  return new Promise((resolve, reject) => {
-    const child = spawn('clikdeploy', ['integrations', 'connect', connector, '--no-browser', ...valueArgs], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-    let text = '';
-    let settled = false;
-    const stop = (): void => { child.kill(); };
-    const timer = setTimeout(() => { if (!settled) { settled = true; stop(); reject(new Error('ClikDeploy did not return an authorization URL within a minute.')); } }, 60_000);
-    const look = (final: boolean): void => {
-      if (settled) return;
-      const url = authorizationUrl(text);
-      if (url) { settled = true; clearTimeout(timer); resolve({ url, stop }); return; }
-      if (final) {
-        settled = true; clearTimeout(timer);
-        const said = startFailure(text);
-        reject(new Error(`ClikDeploy would not start the connection for ${connector}: ${scrubSecrets(said) || 'no answer'}`));
-      }
-    };
-    const feed = (chunk: unknown): void => { text = (text + String(chunk)).slice(-20_000); look(false); };
-    child.stdout!.on('data', feed); child.stderr!.on('data', feed);
-    child.once('error', error => { if (settled) return; settled = true; clearTimeout(timer); reject(new Error((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'The clikdeploy command is not installed on this computer.' : error.message)); });
-    child.once('close', () => look(true));
-    signal?.addEventListener('abort', stop, { once: true });
-  });
-}
-
-/** The default platform: ClikDeploy's CLI starts the connection and reads it back; its callback is on clikdeploy.com. */
-export const CLIKDEPLOY_PLATFORM: ConsentPlatform = {
-  appNames: ['ClikDeploy'], ownsCallback: ownsClikDeployCallback, start: startViaCli, status: (id, signal) => connectionState(id, signal),
-};
 
 export async function readControls(page: Page): Promise<Control[]> {
   return page.evaluate(readPageControls, { pressable: PRESSABLE, otherApp: OPENS_ANOTHER_APP.source, cap: 1500, identifiers: true });
