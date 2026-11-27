@@ -670,6 +670,12 @@ async function flushHeld(stateDir: string, page: Page, entry: Held, force: boole
   await writeTabRecord(stateDir, record);
 }
 
+/** Wait for this page's tab record to be on disk: a sweep in another process that cannot find it takes the page for no one's. */
+async function recordedNow(stateDir: string, page: Page): Promise<void> {
+  const entry = held.get(page);
+  if (entry) await flushHeld(stateDir, page, entry, true).catch(quiet('agent/computer/browser'));
+}
+
 function holdTab(stateDir: string, page: Page, tab?: string): void {
   const now = Date.now();
   const entry = held.get(page) ?? { id: targetIdOf(page), openedAt: now, lastUsedAt: now, written: 0, parked: false };
@@ -738,6 +744,7 @@ export async function openNewComputerPage(stateDir: string, tab?: string): Promi
   if (cloud) cloudPages.add(page);
   if (profile) markProfilePage(page, profile);
   adoptPage(stateDir, page, tab);
+  await recordedNow(stateDir, page);
   touchTab(stateDir, page);
   return page;
 }
@@ -770,6 +777,7 @@ export async function openComputerPage(stateDir: string, tab?: string): Promise<
   if (cloud) cloudPages.add(page);
   if (profile) markProfilePage(page, profile);
   adoptPage(stateDir, page, tab);
+  await recordedNow(stateDir, page);
   touchTab(stateDir, page);
   return page;
 }

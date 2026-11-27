@@ -7,8 +7,14 @@
  * Every worker writes one small file per tab it holds (`computer/tabs/<targetId>.json`): the owner process, the label, when it
  * was opened and last used. A sweep, run by the browser host, by any worker using the browser, and by `clikcode doctor`, reads
  * them next to the browser's own target list (the DevTools HTTP endpoint, no Playwright needed) and closes what no one holds:
- * a tab whose owner process has ended, a tab idle past a limit, and the least recently used tabs past a cap. Every close is
- * logged. A Chrome tab nobody recorded (opened before this existed) is treated as idle from the moment it was first seen. */
+ * a tab whose owner process has ended, a tab no one recorded, a tab idle past a limit, and past a cap the tabs no one is working in.
+ * Every close is logged.
+ *
+ * MEASURED 2026-11-27: one-shot `computer page read` commands left a tab behind per call, unrecorded (the record write raced the
+ * process exit). Each sweeping process kept "first seen" for those in its own memory, so to a short-lived sweeper they were always
+ * new: they outlived the cap while live agents' tabs, idle a dozen seconds between two clicks, were closed for it (5 closures of one
+ * checkout in 8 minutes). Now a tab no one recorded gets a stand-in record on disk, so every process sees its true age, and it goes
+ * after a short grace; the cap takes unrecorded and ownerless tabs first and never a running owner's working tab. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { lifecycle, quiet, swallowed } from '../../runtime/lifecycle-log.js';
@@ -36,6 +42,9 @@ export interface TabRecord {
   egress?: string;
   /** The address a live view of this tab is served at (show), while one is. */
   liveView?: string;
+  /** A stand-in written by a sweep for a page no worker recorded: `openedAt` is when a sweep first saw it. A worker's own record
+   * replaces it. */
+  unrecorded?: boolean;
 }
 
 export interface BrowserTarget { id: string; type: string; url: string; title?: string }
@@ -55,6 +64,8 @@ export function tabLimits(env: NodeJS.ProcessEnv = process.env): TabLimits {
 const PARKED_MS = 6 * 3_600_000;
 /** A tab used this recently is never evicted for the cap. */
 export const ACTIVE_MS = 10_000;
+/** A page no one has recorded for this long is no one's: a worker writes its record before its open returns. */
+export const UNRECORDED_GRACE_MS = 30_000;
 
 const tabsDirectory = (stateDir: string): string => path.join(stateDir, 'computer', 'tabs');
 const tabFile = (stateDir: string, id: string): string => path.join(tabsDirectory(stateDir), `${id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
@@ -63,6 +74,14 @@ export async function writeTabRecord(stateDir: string, record: TabRecord): Promi
   try {
     await atomicWriteFile(tabFile(stateDir, record.id), JSON.stringify(record), { durable: false });
   } catch (error) { quiet('agent/computer/tab-registry')(error); }
+}
+
+/** A stand-in for a page no worker recorded, written only when no record exists (a worker's own record always wins). */
+async function writeStandIn(stateDir: string, record: TabRecord): Promise<void> {
+  try {
+    await fs.mkdir(tabsDirectory(stateDir), { recursive: true });
+    await fs.writeFile(tabFile(stateDir, record.id), JSON.stringify(record), { flag: 'wx' });
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') quiet('agent/computer/tab-registry')(error); }
 }
 
 async function removeTabRecord(stateDir: string, id: string): Promise<void> {
@@ -82,7 +101,7 @@ export async function readTabRecords(stateDir: string): Promise<TabRecord[]> {
   return records;
 }
 
-type CloseReason = 'owner ended' | 'idle' | 'over the tab cap' | 'asked to close';
+type CloseReason = 'owner ended' | 'not recorded' | 'idle' | 'over the tab cap' | 'asked to close';
 interface Closure { id: string; reason: CloseReason }
 
 /** Which tabs to close, and which records to forget (their page is gone). Pure.
@@ -103,15 +122,28 @@ export function planTabClosures(input: {
     if (deskHeld.has(record.id)) kept.push(record);
     else if (record.parked) {
       if (idle >= PARKED_MS) close.push({ id: record.id, reason: 'idle' }); else kept.push(record);
+    } else if (record.unrecorded) {
+      if (now - record.openedAt >= UNRECORDED_GRACE_MS) close.push({ id: record.id, reason: 'not recorded' }); else kept.push(record);
     } else if (record.ownerPid > 0 && !alive(record.ownerPid)) close.push({ id: record.id, reason: 'owner ended' });
     else if (idle >= limits.idleMs) close.push({ id: record.id, reason: 'idle' });
     else kept.push(record);
   }
-  // Past the cap, the least recently used go first; a tab used in the last seconds is in use, not idle.
+  // Past the cap: tabs no one recorded first, then tabs no process holds, then live owners' spare tabs, least recently used first.
+  // A running owner's working tab (its most recently used one under each tab name) is never closed for the cap: an agent thinking
+  // between two clicks is not idle, and closing its page mid-flow loses the work. Over the cap with only working tabs is allowed.
+  const holder = (record: TabRecord): string => `${record.ownerPid}\u0000${record.tab ?? ''}`;
+  const working = new Map<string, TabRecord>();
+  for (const record of kept) {
+    if (record.ownerPid <= 0 || record.unrecorded) continue;
+    const current = working.get(holder(record));
+    if (!current || record.lastUsedAt > current.lastUsedAt) working.set(holder(record), record);
+  }
+  const rank = (record: TabRecord): number => record.unrecorded ? 0 : record.ownerPid <= 0 ? 1 : 2;
   let excess = kept.length - limits.maxTabs;
-  for (const record of [...kept].sort((a, b) => a.lastUsedAt - b.lastUsedAt)) {
+  for (const record of [...kept].sort((a, b) => rank(a) - rank(b) || a.lastUsedAt - b.lastUsedAt)) {
     if (excess <= 0) break;
     if (record.parked || deskHeld.has(record.id) || now - record.lastUsedAt < ACTIVE_MS) continue;
+    if (working.get(holder(record)) === record) continue;
     close.push({ id: record.id, reason: 'over the tab cap' });
     excess--;
   }
@@ -154,9 +186,6 @@ export async function activateBrowserTarget(stateDir: string, id: string): Promi
   catch { return false; }
 }
 
-/** Pages first seen without a record, by target id: how long a tab no one recorded has been there, for this process. */
-const firstSeen = new Map<string, number>();
-
 interface SweepDeps {
   now?: number;
   limits?: TabLimits;
@@ -167,6 +196,8 @@ interface SweepDeps {
 
 export interface TabView extends TabRecord { title?: string; recorded: boolean }
 
+const standIn = (target: Pick<BrowserTarget, 'id' | 'url'>, now: number): TabRecord => ({ id: target.id, ownerPid: 0, owner: 'not recorded', openedAt: now, lastUsedAt: now, url: target.url, unrecorded: true });
+
 /** Every page in the shared Chrome with its owner, joined from the records and the browser's own list. */
 export async function allTabs(stateDir: string, deps: Pick<SweepDeps, 'now' | 'list'> = {}): Promise<TabView[] | undefined> {
   const now = deps.now ?? Date.now();
@@ -176,9 +207,7 @@ export async function allTabs(stateDir: string, deps: Pick<SweepDeps, 'now' | 'l
   return targets.map((target): TabView => {
     const record = byId.get(target.id);
     if (record) return { ...record, url: target.url || record.url, ...(target.title ? { title: target.title } : {}), recorded: true };
-    if (!firstSeen.has(target.id)) firstSeen.set(target.id, now);
-    const since = firstSeen.get(target.id)!;
-    return { id: target.id, ownerPid: 0, owner: 'not recorded (opened before tracking)', openedAt: since, lastUsedAt: since, url: target.url, ...(target.title ? { title: target.title } : {}), recorded: false };
+    return { ...standIn(target, now), ...(target.title ? { title: target.title } : {}), recorded: false };
   });
 }
 
@@ -194,7 +223,6 @@ async function closeTabLogged(stateDir: string, view: TabRecord, reason: CloseRe
   const closed = await (deps.close ?? (id => closeBrowserTarget(stateDir, id)))(view.id);
   if (closed) {
     await removeTabRecord(stateDir, view.id);
-    firstSeen.delete(view.id);
     lifecycle('browser.tab.closed', { id: view.id, reason, ageMs: now - view.openedAt, idleMs: now - view.lastUsedAt, ...logName(view) });
   }
   return closed;
@@ -211,7 +239,8 @@ export async function sweepTabs(stateDir: string, deps: SweepDeps = {}): Promise
   const deskHeld = await deskHeldTargets(stateDir, now).catch(() => new Set<string>());
   const plan = planTabClosures({ records: views, liveIds: live, now, limits: deps.limits ?? tabLimits(), alive: deps.alive ?? pidIsAlive, deskHeld });
   for (const id of records.map(record => record.id)) if (!live.has(id)) await removeTabRecord(stateDir, id);
-  for (const id of firstSeen.keys()) if (!live.has(id)) firstSeen.delete(id);
+  // A page no one recorded gets its stand-in on disk, so the next sweep, in whatever process, sees how long it has been there.
+  for (const view of views) if (!view.recorded) await writeStandIn(stateDir, standIn({ id: view.id, url: view.url ?? '' }, now));
   // Chrome quits with its last window: leave the most recently used page.
   let closes = plan.close;
   if (closes.length >= views.length && views.length) {

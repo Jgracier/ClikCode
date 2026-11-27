@@ -23,6 +23,21 @@ describe('planTabClosures', () => {
     const records = [rec('a', { lastUsedAt: now - 5 * MIN }), rec('b', { lastUsedAt: now - 9 * MIN }), rec('c', { lastUsedAt: now - 2_000 }), rec('d', { lastUsedAt: now - 7 * MIN }), rec('e', { lastUsedAt: now - 3 * MIN })];
     expect(plan(records).close).toEqual([{ id: 'b', reason: 'over the tab cap' }, { id: 'd', reason: 'over the tab cap' }]);
   });
+  it('past the cap takes unrecorded and ownerless tabs before live owners\' tabs', () => {
+    const records = [rec('live-old', { ownerPid: 1, tab: 'a', lastUsedAt: now - 9 * MIN }), rec('live-spare', { ownerPid: 1, tab: 'a', lastUsedAt: now - 8 * MIN }),
+      rec('stray', { ownerPid: 0, unrecorded: true, openedAt: now - 15_000, lastUsedAt: now - 15_000 }), rec('restored', { ownerPid: 0, restoreFor: 'x', lastUsedAt: now - MIN }),
+      rec('other', { ownerPid: 2, tab: 'b', lastUsedAt: now - 7 * MIN })];
+    expect(plan(records, () => true, { ...limits, maxTabs: 2 }).close).toEqual([
+      { id: 'stray', reason: 'over the tab cap' }, { id: 'restored', reason: 'over the tab cap' }, { id: 'live-old', reason: 'over the tab cap' }]);
+  });
+  it('never closes a running owner\'s working tab for the cap, even far over it', () => {
+    const records = Array.from({ length: 6 }, (_, i) => rec(`w${i}`, { ownerPid: 10 + i, tab: 'grant', lastUsedAt: now - (i + 1) * 15_000 }));
+    expect(plan(records, () => true, { ...limits, maxTabs: 2 }).close).toEqual([]);
+  });
+  it('closes an unrecorded page once the grace has passed, whatever the cap', () => {
+    expect(plan([rec('s', { ownerPid: 0, unrecorded: true, openedAt: now - 31_000, lastUsedAt: now - 31_000 })]).close).toEqual([{ id: 's', reason: 'not recorded' }]);
+    expect(plan([rec('s', { ownerPid: 0, unrecorded: true, openedAt: now - 5_000, lastUsedAt: now - 5_000 })]).close).toEqual([]);
+  });
   it('forgets a record whose page is gone without closing anything', () => {
     const result = planTabClosures({ records: [rec('gone')], liveIds: new Set(), now, limits, alive: () => true });
     expect(result).toEqual({ close: [], forget: ['gone'] });
@@ -68,16 +83,31 @@ describe('sweeping a browser', () => {
     expect((await readTabRecords(stateDir)).map(r => r.id)).toEqual(['fresh']);
   });
 
-  it('treats a tab nobody recorded as idle from when it was first seen, and never closes the last page', async () => {
-    const fake = browser(['stray-1']);
+  it('gives a tab nobody recorded a stand-in on disk, so a later sweep in any process closes it after the grace', async () => {
+    const fake = browser(['stray-1', 'mine']);
+    await writeTabRecord(stateDir, rec('mine', { tab: 'main' }));
     expect(await sweepTabs(stateDir, { now, limits, list: fake.list, close: fake.close })).toEqual([]);
-    const later = await sweepTabs(stateDir, { now: now + 25 * MIN, limits, list: fake.list, close: fake.close });
-    expect(later).toEqual([]);
+    expect((await readTabRecords(stateDir)).find(r => r.id === 'stray-1')).toMatchObject({ unrecorded: true, openedAt: now });
+    expect(await sweepTabs(stateDir, { now: now + 10_000, limits, list: fake.list, close: fake.close })).toEqual([]);
+    const later = await sweepTabs(stateDir, { now: now + 31_000, limits, list: fake.list, close: fake.close });
+    expect(later.map(entry => [entry.view.id, entry.reason])).toEqual([['stray-1', 'not recorded']]);
+    expect(fake.closed).toEqual(['stray-1']);
+  });
+
+  it('never replaces a worker\'s own record with a stand-in', async () => {
+    await writeTabRecord(stateDir, rec('a', { tab: 'main', ownerPid: 555 }));
+    const fake = browser(['a', 'b']);
+    await sweepTabs(stateDir, { now, limits, list: fake.list, close: fake.close });
+    const records = await readTabRecords(stateDir);
+    expect(records.find(r => r.id === 'a')).toMatchObject({ ownerPid: 555, tab: 'main' });
+    expect(records.find(r => r.id === 'a')?.unrecorded).toBeUndefined();
+  });
+
+  it('never closes the last page', async () => {
+    const fake = browser(['stray-1']);
+    await sweepTabs(stateDir, { now, limits, list: fake.list, close: fake.close });
+    expect(await sweepTabs(stateDir, { now: now + 25 * MIN, limits, list: fake.list, close: fake.close })).toEqual([]);
     expect(fake.closed).toEqual([]);
-    const two = browser(['stray-1', 'stray-2']);
-    const done = await sweepTabs(stateDir, { now: now + 30 * MIN, limits, list: two.list, close: two.close });
-    expect(done).toHaveLength(1);
-    expect(two.closed).toHaveLength(1);
   });
 
   it('lists every tab with owner, age and idle time, not only the caller\'s', async () => {

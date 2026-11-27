@@ -151,6 +151,14 @@ export async function oauthConnectOutcome(connector: string, options: { tab?: st
 // ── clikcode computer page read|fetch ──
 
 export interface PageFlags { tab?: string; egress?: string; evalFile?: string; collect?: string; timeout?: string; humanCheck?: boolean; maxBytes?: string }
+/** A one-shot command is done with the browser: close the tabs this process opened (each run would otherwise leave one behind, as
+ * no later process can reach this one's pages) and let go of the connection. The shared Chrome and other processes' tabs stay. */
+async function closeOwnAndRelease(dir: string): Promise<void> {
+  const browser = await import('../agent/computer/browser.js');
+  await browser.closeAllOwnedPages(dir).catch(quiet('commands/computer-ops'));
+  await browser.releaseComputerBrowser(dir).catch(quiet('commands/computer-ops'));
+}
+
 export async function computerPageRead(url: string, flags: PageFlags): Promise<void> {
   const { readPage } = await import('../agent/computer/page-read.js');
   const dir = stateDirectory();
@@ -162,7 +170,7 @@ export async function computerPageRead(url: string, flags: PageFlags): Promise<v
       ...(whole(flags.maxBytes, 'max-bytes', 1000, 50_000_000) ? { maxFileBytes: whole(flags.maxBytes, 'max-bytes', 1000, 50_000_000)! } : {}),
       ...(flags.humanCheck ? { humanCheck: true } : {}),
     }));
-  } finally { await (await import('../agent/computer/browser.js')).releaseComputerBrowser(dir).catch(quiet('commands/computer-ops')); }
+  } finally { await closeOwnAndRelease(dir); }
 }
 
 export async function computerPageFetch(url: string, flags: PageFlags): Promise<void> {
@@ -170,7 +178,7 @@ export async function computerPageFetch(url: string, flags: PageFlags): Promise<
   const dir = stateDirectory();
   try {
     print(await fetchInBrowser(dir, url, { tab: tabOf(flags.tab, 'page'), ...(flags.egress ? { egress: flags.egress } : {}), ...(whole(flags.maxBytes, 'max-bytes', 1000, 50_000_000) ? { maxBytes: whole(flags.maxBytes, 'max-bytes', 1000, 50_000_000)! } : {}) }));
-  } finally { await (await import('../agent/computer/browser.js')).releaseComputerBrowser(dir).catch(quiet('commands/computer-ops')); }
+  } finally { await closeOwnAndRelease(dir); }
 }
 
 // ── clikcode computer tab list|close ──
