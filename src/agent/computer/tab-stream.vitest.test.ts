@@ -1,0 +1,30 @@
+import { PassThrough } from 'node:stream';
+import { expect, it } from 'vitest';
+import { stdioSocket, tabRecord, TabRecordReader, TAB_FRAME_JPEG, TAB_FRAME_JSON } from './tab-stream.js';
+
+it('carries the live view over pipes: frames and messages out as records, input lines in', async () => {
+  const input = new PassThrough(), output = new PassThrough();
+  const socket = stdioSocket(input, output);
+  const got: string[] = [];
+  socket.onMessage((data, binary) => { expect(binary).toBe(false); got.push(String(data)); });
+  input.write('{"t":"hello","w":800}\n{"t":"mo');
+  input.write('use","k":"m"}\n\n');
+  await new Promise(resolve => setImmediate(resolve));
+  expect(got).toEqual(['{"t":"hello","w":800}', '{"t":"mouse","k":"m"}']);
+  socket.send(Buffer.from([1, 0xff, 0xd8, 0xff]));
+  socket.send('{"t":"size","w":1440,"h":900}');
+  const chunks: Buffer[] = [];
+  for (let chunk = output.read() as Buffer | null; chunk; chunk = output.read() as Buffer | null) chunks.push(chunk);
+  const bytes = Buffer.concat(chunks);
+  const reader = new TabRecordReader();
+  const records = [...reader.push(bytes.subarray(0, 3)), ...reader.push(bytes.subarray(3))];
+  expect(records.map(r => r.type)).toEqual([TAB_FRAME_JPEG, TAB_FRAME_JSON]);
+  expect([...records[0]!.payload]).toEqual([0xff, 0xd8, 0xff]);
+  expect(JSON.parse(records[1]!.payload.toString())).toEqual({ t: 'size', w: 1440, h: 900 });
+  let closed = false;
+  socket.onClose(() => { closed = true; });
+  input.end();
+  await new Promise(resolve => setImmediate(resolve));
+  expect(closed && socket.closed).toBe(true);
+  expect(tabRecord(1, Buffer.alloc(0)).length).toBe(5);
+});

@@ -139,6 +139,25 @@ export async function computerDesk(): Promise<void> {
   for (const item of waiting) process.stdout.write(`  ${item.label} [${item.kind}]${item.host ? ` at ${item.host}` : ''}, ${Math.round((Date.now() - item.createdAt) / 60_000)} min: ${desk.deskItemAddress(info, item.id)}\n`);
 }
 
+/** `clikcode computer tab-stream <tab id>`: one agent tab's live view over stdin/stdout (tab-stream.ts), for the ClikDeploy agent's
+ * remote desktop. Runs until stdin closes or the tab does; the tab itself stays open. */
+export async function computerTabStream(id: string): Promise<void> {
+  const dir = stateDirectory();
+  const { computerPageById } = await import('../agent/computer/browser.js');
+  const page = /^[A-Fa-f0-9]{8,64}$/.test(id) ? await computerPageById(dir, id) : undefined;
+  if (!page) { await releaseComputerBrowser(dir); process.stderr.write(`No open agent tab has the id ${id}.\n`); process.exitCode = 2; return; }
+  const { stdioSocket } = await import('../agent/computer/tab-stream.js');
+  const { LiveView } = await import('../agent/computer/handoff-live.js');
+  const socket = stdioSocket(process.stdin, process.stdout);
+  const ended = new Promise<void>(resolve => { socket.onClose(resolve); });
+  const view = new LiveView(page, socket, () => undefined, () => undefined, { watch: true });
+  page.once('close', () => socket.close());
+  await view.start();
+  await ended;
+  await view.stop().catch(quiet('commands/computer'));
+  await releaseComputerBrowser(dir);
+}
+
 /** Browser Use Cloud is opt-in. `auto` keeps the local browser first and lets a tab move to the cloud when a page blocks it;
  * `on` runs every tab there; `off` stops the billed session and returns to local only. */
 export async function computerBrowserUse(setting: string | undefined): Promise<void> {
