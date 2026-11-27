@@ -33,7 +33,8 @@ export interface DeskItem {
   /** The caller has been told this one is done (`computer desk-finished --take`). */
   resumeSent?: boolean;
 }
-export interface DeskInfo { pid: number; host: string; port: number; token: string }
+/** `host` is the address to share (the tailnet one when there is one); `hosts` every address it listens on, all on `port`. */
+export interface DeskInfo { pid: number; host: string; port: number; token: string; hosts?: string[] }
 
 /** A waiting item keeps its tab open this long; then the desk closes the item and the tab sweep may take the tab. */
 export const DESK_WAIT_MS = 12 * 3_600_000;
@@ -87,6 +88,10 @@ export async function readDeskInfo(stateDir: string, alive: (pid: number) => boo
 }
 export const deskAddress = (info: DeskInfo): string => `http://${info.host}:${info.port}/${info.token}/`;
 export const deskItemAddress = (info: DeskInfo, id: string): string => `${deskAddress(info)}t/${id}/`;
+/** The desk as this computer's own browser reaches it: loopback when the desk listens there, else the shared address. */
+export const deskLocalAddress = (info: DeskInfo): string => (info.hosts?.includes('127.0.0.1') ? `http://127.0.0.1:${info.port}/${info.token}/` : deskAddress(info));
+/** One agent tab's live view on the desk (watching: the tab keeps its size, there is no Done). */
+export const deskTabAddress = (base: string, targetId: string): string => `${base}b/${encodeURIComponent(targetId)}/`;
 
 export async function listDeskItems(stateDir: string): Promise<DeskItem[]> {
   const names = await fs.readdir(itemsDir(stateDir)).catch(() => [] as string[]);

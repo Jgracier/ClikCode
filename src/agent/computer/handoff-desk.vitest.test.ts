@@ -97,3 +97,27 @@ it('the desk page lists notices from background programs: title, message, addres
   expect(notices).toEqual([{ title: 'Writes held', message: 'Renew the unlock.', url: 'https://example.com/u', minutes: 3 }]);
   expect(deskListPage()).toContain("fetch(base + '/notices'");
 });
+
+it('serves every agent tab at one address on this computer: waiting ones first, the anchor never, a closed one 410', async () => {
+  const { startHandoffDesk, deskTabs } = await import('./handoff-desk.js');
+  const { deskLocalAddress } = await import('./handoff-desk-store.js');
+  const tab = (id: string, extra: Record<string, unknown> = {}) => ({ id, ownerPid: 1, owner: 'w', openedAt: 0, lastUsedAt: 0, url: `https://x.test/${id}?code=secret`, title: `T ${id}`, recorded: true, ...extra });
+  const tabs = [tab('AAAA0001'), tab('BBBB0002'), tab('CCCC0003', { anchor: true, url: 'about:blank' })];
+  const item = await addDeskItem(dir, { targetId: 'BBBB0002', label: 'acme', kind: 'captcha' });
+  expect(deskTabs(tabs, [item]).map(t => [t.id, t.waiting])).toEqual([['BBBB0002', item.id], ['AAAA0001', undefined]]);
+  const context = { pages: () => [] } as unknown as Parameters<typeof startHandoffDesk>[0]['context'];
+  const desk = await startHandoffDesk({ stateDir: dir, hosts: ['127.0.0.1'], context, port: 0, tabs: async () => tabs });
+  try {
+    const info = (await readDeskInfo(dir))!;
+    expect(info.hosts).toEqual(['127.0.0.1']);
+    const base = deskLocalAddress(info);
+    expect(desk!.address).toBe(base);
+    const listed = await (await fetch(`${base}tabs`)).json() as Array<{ id: string; url: string }>;
+    expect(listed.map(t => t.id)).toEqual(['BBBB0002', 'AAAA0001']);
+    expect(JSON.stringify(listed)).not.toContain('secret');
+    expect((await fetch(`${base}b/AAAA0001/`)).status).toBe(200);
+    expect((await fetch(`${base}b/CCCC0003/`)).status).toBe(410);
+    expect((await fetch(`${base}b/DDDD0004/`)).status).toBe(410);
+    expect((await fetch(base.replace(info.token, 'x'.repeat(info.token.length)) + 'tabs')).status).toBe(404);
+  } finally { await desk?.stop(); }
+});

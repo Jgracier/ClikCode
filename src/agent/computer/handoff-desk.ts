@@ -1,5 +1,6 @@
-/** The handoff desk: one address on the user's Tailscale network, served by the browser host for as long as the browser runs.
- * It lists the tabs that wait on the user (a CAPTCHA, a code, a sign-in) and opens the live view of any of them. The address
+/** The handoff desk: one address for every tab of ClikCode's browser, served by the browser host for as long as the browser runs,
+ * on this computer (127.0.0.1) and on the user's Tailscale network when there is one. It lists the tabs that wait on the user
+ * (a CAPTCHA, a code, a sign-in) first, then every other agent tab, and opens the live view of any of them. The address
  * never changes, a link to one tab works until the user taps Done (reloads and reconnects included), and the tab itself is
  * held open meanwhile (handoff-desk-store.ts). Nothing here answers a challenge: it only brings the user to it quickly. */
 import { timingSafeEqual } from 'node:crypto';
@@ -11,6 +12,7 @@ import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { LiveView } from './handoff-live.js';
 import { handoffPage } from './handoff-page.js';
 import { clearDeskInfo, deskToken, finishDeskItem, listDeskItems, tidyDesk, writeDeskInfo, type DeskItem } from './handoff-desk-store.js';
+import { allTabs, listedUrl, type TabView } from './tab-registry.js';
 import { listNotices, type Notice } from './notices.js';
 import { acceptWebSocket, type LiteSocket } from './ws-lite.js';
 
@@ -52,6 +54,16 @@ export function deskListing(items: readonly DeskItem[], now: number): Array<{ id
   }));
 }
 
+/** What the list page is told about every agent tab: its id (the desk's links name it), title and address without query; the waiting item, if any. */
+export function deskTabs(tabs: readonly TabView[], items: readonly DeskItem[]): Array<{ id: string; title: string; url: string; name?: string; waiting?: string }> {
+  const waiting = new Map(items.filter(item => item.status === 'waiting').map(item => [item.targetId, item.id]));
+  return tabs.filter(tab => !tab.anchor).map(tab => {
+    const url = listedUrl(tab.url ?? '');
+    const item = waiting.get(tab.id);
+    return { id: tab.id, title: (tab.title || url || 'New tab').slice(0, 120), url: url.slice(0, 200), ...(tab.tab ? { name: tab.tab.slice(0, 60) } : {}), ...(item ? { waiting: item } : {}) };
+  }).sort((a, b) => Number(Boolean(b.waiting)) - Number(Boolean(a.waiting)));
+}
+
 /** What the list page is told about each notice from a background program (`clikcode notify`). */
 export function deskNotices(notices: readonly Notice[], now: number): Array<{ title: string; message: string; url?: string; minutes: number }> {
   return notices.map(notice => ({ title: notice.title, message: notice.message, ...(notice.url ? { url: notice.url } : {}), minutes: Math.max(0, Math.round((now - notice.createdAt) / 60_000)) }));
@@ -70,11 +82,12 @@ a.item:active{background:#21262d}
 .notice{background:#161b22;border:1px solid #d29922;border-radius:12px;padding:14px;margin:10px 0}.notice a{color:#58a6ff;word-break:break-all}
 .top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
 .label{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kind.watch{background:#3fb950}
 .kind{flex:none;font-size:12px;color:#0d1117;background:#d29922;border-radius:999px;padding:2px 9px}
 .note{color:#c9d1d9;font-size:14px;margin-top:6px}.meta{color:#8b949e;font-size:13px;margin-top:6px}
 #empty{color:#8b949e;padding:30px 0;text-align:center}
 </style>
-<main><h1>Waiting on you</h1><div id="sub">Checking…</div><div id="notices"></div><div id="list"></div><div id="empty" hidden>Nothing is waiting. This page updates by itself.</div></main>
+<main><h1>Waiting on you</h1><div id="sub">Checking…</div><div id="notices"></div><div id="list"></div><div id="empty" hidden>Nothing is waiting. This page updates by itself.</div><h1>Agent browsers</h1><div id="tabsub" class="meta">Tap a tab to watch it live; you can click and type in it too.</div><div id="tabs"></div></main>
 <script>
 (() => {
 const base = location.pathname.replace(/\\/$/, '');
@@ -112,11 +125,27 @@ const drawNotices = (notices) => {
     box.append(n);
   }
 };
+let lastTabs = '';
+const drawTabs = (tabs) => {
+  const key = JSON.stringify(tabs);
+  if (key === lastTabs) return;
+  lastTabs = key;
+  const box = document.getElementById('tabs');
+  box.textContent = '';
+  if (!tabs.length) box.append(el('div', 'meta', 'No agent tabs are open.'));
+  for (const tab of tabs) {
+    const a = el('a', 'item'); a.href = base + (tab.waiting ? '/t/' + encodeURIComponent(tab.waiting) : '/b/' + encodeURIComponent(tab.id)) + '/';
+    const top = el('div', 'top'); top.append(el('span', 'label', tab.title), el('span', tab.waiting ? 'kind' : 'kind watch', tab.waiting ? 'Waiting' : 'Watch')); a.append(top);
+    a.append(el('div', 'meta', (tab.name ? tab.name + ' · ' : '') + tab.url));
+    box.append(a);
+  }
+};
 const load = async () => {
   try {
-    const [r, n] = await Promise.all([fetch(base + '/items', { cache: 'no-store' }), fetch(base + '/notices', { cache: 'no-store' })]);
+    const [r, n, t] = await Promise.all([fetch(base + '/items', { cache: 'no-store' }), fetch(base + '/notices', { cache: 'no-store' }), fetch(base + '/tabs', { cache: 'no-store' })]);
     if (n.ok) drawNotices(await n.json());
     if (r.ok) draw(await r.json());
+    if (t.ok) drawTabs(await t.json());
   }
   catch (error) { document.getElementById('sub').textContent = 'Cannot reach this computer. Retrying…'; }
 };
@@ -126,7 +155,16 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) load
 </script></html>`;
 }
 
-interface DeskDeps { stateDir: string; host: string; context: BrowserContext; port?: number; now?: () => number }
+interface DeskDeps {
+  stateDir: string;
+  /** Every address to listen on, all on one port; the first is the one shared (the tailnet address when there is one). */
+  hosts: string[];
+  context: BrowserContext;
+  port?: number;
+  now?: () => number;
+  /** The agent tabs to list; the shared Chrome's own by default. */
+  tabs?: () => Promise<TabView[] | undefined>;
+}
 
 /** Serve the desk until `stop()`. Resolves once it listens; undefined when no port could be taken. */
 export async function startHandoffDesk(deps: DeskDeps): Promise<{ readonly address: string; stop(): Promise<void> } | undefined> {
@@ -135,6 +173,8 @@ export async function startHandoffDesk(deps: DeskDeps): Promise<{ readonly addre
   // Read on every request: the token is replaced once it is too old (DESK_TOKEN_MAX_AGE_MS), and the old link then stops working.
   let token = await deskToken(stateDir, { now: now() });
   const views = new Map<string, { socket: LiteSocket; view: LiveView }>();
+  const host = deps.hosts[0]!;
+  const listTabs = deps.tabs ?? (() => allTabs(stateDir, { now: now() }));
 
   const route = (request: IncomingMessage): { ok: boolean; rest: string } => {
     const [, first, rest] = /^\/([^/?]+)(\/[^?]*)?/.exec(request.url ?? '/') ?? [];
@@ -142,16 +182,26 @@ export async function startHandoffDesk(deps: DeskDeps): Promise<{ readonly addre
   };
   const waiting = async (id: string): Promise<DeskItem | undefined> => (await listDeskItems(stateDir)).find(item => item.id === id);
 
-  const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
+  const onRequest = (request: IncomingMessage, response: ServerResponse): void => {
     void (async () => {
       const { ok, rest } = route(request);
       if (!ok || request.method !== 'GET') { response.writeHead(404).end(); return; }
       response.setHeader('cache-control', 'no-store');
-      const host = request.headers.host ?? '';
-      const socketOrigin = /^[\w.:[\]-]{1,80}$/.test(host) ? ` ws://${host}` : '';
+      const asked = request.headers.host ?? '';
+      const socketOrigin = /^[\w.:[\]-]{1,80}$/.test(asked) ? ` ws://${asked}` : '';
       const csp = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: data:; connect-src 'self'${socketOrigin}`;
       if (rest === '/') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': csp }).end(deskListPage()); return; }
       if (rest === '/notices') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(deskNotices(await listNotices(stateDir), now()))); return; }
+      if (rest === '/tabs') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(deskTabs(await listTabs() ?? [], await listDeskItems(stateDir)))); return; }
+      const watched = /^\/b\/([A-Fa-f0-9]{8,64})(\/ping|\/)?$/.exec(rest);
+      if (watched) {
+        const known = (await listTabs() ?? []).some(tab => tab.id === watched[1] && !tab.anchor);
+        if (!known) { response.writeHead(410, { 'content-type': 'text/plain; charset=utf-8' }).end('This tab is closed.'); return; }
+        if (watched[2] === '/ping') { response.writeHead(204).end(); return; }
+        if (watched[2] === undefined) { response.writeHead(302, { location: `/${token}/b/${watched[1]}/` }).end(); return; }
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': csp }).end(handoffPage({ back: `/${token}/`, watch: true }));
+        return;
+      }
       if (rest === '/items') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(deskListing(await listDeskItems(stateDir), now()))); return; }
       const tab = /^\/t\/([A-Za-z0-9_-]{6,40})(\/ping|\/)?$/.exec(rest);
       if (tab) {
@@ -165,10 +215,37 @@ export async function startHandoffDesk(deps: DeskDeps): Promise<{ readonly addre
       }
       response.writeHead(404).end();
     })().catch(error => { quiet('agent/computer/handoff-desk')(error); if (!response.headersSent) response.writeHead(500); response.end(); });
-  });
+  };
 
-  server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+  /** One viewer per tab: a reload or a second device takes over from the one before. */
+  const takeOver = async (key: string): Promise<void> => {
+    const before = views.get(key);
+    views.delete(key);
+    before?.socket.close(1000);
+    await before?.view.stop();
+  };
+
+  const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
     const { ok, rest } = route(request);
+    const watched = /^\/b\/([A-Fa-f0-9]{8,64})\/live$/.exec(rest);
+    if (ok && watched) {
+      const targetId = watched[1]!;
+      void (async () => {
+        const page = (await pagesById(context)).get(targetId);
+        if (!page) { socket.end('HTTP/1.1 410 Gone\r\nConnection: close\r\n\r\n'); return; }
+        const accepted = acceptWebSocket(request, socket, head, { allowOrigin: origin => sameOrigin(origin, request.headers.host) });
+        if (!accepted) return;
+        const key = `b:${targetId}`;
+        await takeOver(key);
+        const view = new LiveView(page, accepted, () => undefined, () => undefined, { watch: true });
+        views.set(key, { socket: accepted, view });
+        accepted.onClose(() => { if (views.get(key)?.socket === accepted) views.delete(key); });
+        // A closed tab leaves a still picture: the viewer's page reads the close and goes back to the list.
+        page.once('close', () => accepted.close(1001));
+        await view.start();
+      })().catch(error => { quiet('agent/computer/handoff-desk')(error); socket.destroy(); });
+      return;
+    }
     const tab = /^\/t\/([A-Za-z0-9_-]{6,40})\/live$/.exec(rest);
     if (!ok || !tab) { socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'); return; }
     const id = tab[1]!;
@@ -179,11 +256,7 @@ export async function startHandoffDesk(deps: DeskDeps): Promise<{ readonly addre
       if (!page) { await finishDeskItem(stateDir, id, 'closed', now()); socket.end('HTTP/1.1 410 Gone\r\nConnection: close\r\n\r\n'); return; }
       const accepted = acceptWebSocket(request, socket, head, { allowOrigin: origin => sameOrigin(origin, request.headers.host) });
       if (!accepted) return;
-      // One phone per tab: a reload or a second device takes over from the one before.
-      const before = views.get(id);
-      views.delete(id);
-      before?.socket.close(1000);
-      await before?.view.stop();
+      await takeOver(id);
       const view = new LiveView(page, accepted, () => {
         void finishDeskItem(stateDir, id, 'done', now()).then(() => lifecycle('handoff.desk.done', { id, label: item.label, kind: item.kind, waitedMs: now() - item.createdAt })).catch(quiet('agent/computer/handoff-desk'));
         if (!accepted.closed) accepted.send(JSON.stringify({ t: 'done' }));
@@ -195,18 +268,33 @@ export async function startHandoffDesk(deps: DeskDeps): Promise<{ readonly addre
       accepted.onClose(() => { if (views.get(id)?.socket === accepted) views.delete(id); });
       await view.start();
     })().catch(error => { quiet('agent/computer/handoff-desk')(error); socket.destroy(); });
-  });
+  };
 
-  const listen = (port: number): Promise<boolean> => new Promise(resolve => {
+  const listenOn = (server: Server, port: number, address: string): Promise<boolean> => new Promise(resolve => {
     const failed = (): void => { resolve(false); };
     server.once('error', failed);
-    server.listen(port, deps.host, () => { server.off('error', failed); resolve(true); });
+    server.listen(port, address, () => { server.off('error', failed); resolve(true); });
   });
-  let up = false;
-  for (const port of deps.port !== undefined ? [deps.port] : [DESK_PORT, DESK_PORT + 1, DESK_PORT + 2, 0]) if (await listen(port)) { up = true; break; }
-  if (!up) return undefined;
-  const port = (server.address() as AddressInfo).port;
-  await writeDeskInfo(stateDir, { pid: process.pid, host: deps.host, port, token });
+  const close = (servers: readonly Server[]): void => { for (const server of servers) { server.close(); server.closeAllConnections(); } };
+  /** Every address on one port, so the addresses differ only by host; a port one of them cannot take is given up for all. */
+  const listenAll = async (want: number): Promise<{ servers: Server[]; port: number } | undefined> => {
+    const servers: Server[] = [];
+    let port = want;
+    for (const address of deps.hosts) {
+      const server = createServer(onRequest);
+      server.on('upgrade', onUpgrade);
+      if (!await listenOn(server, port, address)) { close(servers); return undefined; }
+      servers.push(server);
+      port = (server.address() as AddressInfo).port;
+    }
+    return { servers, port };
+  };
+  let bound: { servers: Server[]; port: number } | undefined;
+  for (const port of deps.port !== undefined ? [deps.port] : [DESK_PORT, DESK_PORT + 1, DESK_PORT + 2, 0]) if ((bound = await listenAll(port))) break;
+  if (!bound) return undefined;
+  const { servers, port } = bound;
+  const info = (): Parameters<typeof writeDeskInfo>[1] => ({ pid: process.pid, host, port, token, hosts: [...deps.hosts] });
+  await writeDeskInfo(stateDir, info());
   const rotate = async (): Promise<void> => {
     const fresh = await deskToken(stateDir, { now: now() });
     if (fresh === token) return;
@@ -214,22 +302,21 @@ export async function startHandoffDesk(deps: DeskDeps): Promise<{ readonly addre
     // The open live views were reached through the old address; they end with it.
     for (const { socket, view } of views.values()) { socket.close(1001); await view.stop().catch(quiet('agent/computer/handoff-desk')); }
     views.clear();
-    await writeDeskInfo(stateDir, { pid: process.pid, host: deps.host, port, token });
-    lifecycle('handoff.desk.token-rotated', { host: deps.host, port });
+    await writeDeskInfo(stateDir, info());
+    lifecycle('handoff.desk.token-rotated', { hosts: deps.hosts, port });
   };
   const tidy = async (): Promise<void> => { await rotate(); await tidyDesk(stateDir, new Set((await pagesById(context)).keys()), now()); };
   const timer = setInterval(() => { void tidy().catch(quiet('agent/computer/handoff-desk')); }, TIDY_EVERY_MS);
   timer.unref();
-  lifecycle('handoff.desk.up', { host: deps.host, port });
+  lifecycle('handoff.desk.up', { hosts: deps.hosts, port });
   return {
-    get address() { return `http://${deps.host}:${port}/${token}/`; },
+    get address() { return `http://${host}:${port}/${token}/`; },
     async stop() {
       clearInterval(timer);
       for (const { socket, view } of views.values()) { socket.close(1001); await view.stop().catch(quiet('agent/computer/handoff-desk')); }
       views.clear();
       await clearDeskInfo(stateDir, process.pid);
-      server.close();
-      server.closeAllConnections();
+      close(servers);
     },
   };
 }

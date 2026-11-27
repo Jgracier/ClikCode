@@ -198,6 +198,12 @@ interface SweepDeps {
   close?: (id: string) => Promise<boolean>;
 }
 
+/** A page's address without its query or fragment: a sign-in's carries state, codes and tokens, and this list is printed. */
+export function listedUrl(url: string): string {
+  try { const parsed = new URL(url); return /^https?:$/.test(parsed.protocol) ? `${parsed.origin}${parsed.pathname}${parsed.search || parsed.hash ? '?…' : ''}` : url; }
+  catch { return url.replace(/[?#].*$/, ''); }
+}
+
 export interface TabView extends TabRecord { title?: string; recorded: boolean }
 
 const standIn = (target: Pick<BrowserTarget, 'id' | 'url'>, now: number): TabRecord => ({ id: target.id, ownerPid: 0, owner: 'not recorded', openedAt: now, lastUsedAt: now, url: target.url, unrecorded: true });

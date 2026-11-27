@@ -86,7 +86,7 @@ export const settingsHandlers = {
     const action = words[0]?.toLowerCase();
     if (!action || action === 'list') {
       const overview = await browsersOverview(stateDirectory());
-      return emitHarnessOutput({ panel: 'browsers', browsers: overview, text: browsersText(overview, 'Act on one: /browsers watch <n> (a live view on your desktop: watch it, click and type in it) · /browsers front <n> · /browsers close <n>.', { dismiss: 'Dismiss one: /browsers dismiss <key>' }) });
+      return emitHarnessOutput({ panel: 'browsers', browsers: overview, text: browsersText(overview, 'Open them: /browsers open (every tab, in your browser) · /browsers open <n> (one tab live: click and type in it) · /browsers front <n> · /browsers close <n>.', { dismiss: 'Dismiss one: /browsers dismiss <key>' }) });
     }
     if (action === 'dismiss') {
       const { clearNotice } = await import('../../../agent/computer/notices.js');

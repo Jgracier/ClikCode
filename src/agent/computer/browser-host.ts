@@ -297,9 +297,10 @@ export async function runComputerHost(stateDir: string): Promise<void> {
       },
       retire: () => stop(),
     });
-    // The handoff desk lives here because this process outlives every worker: one address for what waits on the user.
+    // The handoff desk lives here because this process outlives every worker: one address for every agent tab and what waits
+    // on the user, on this computer always and on the tailnet (a phone) when there is one.
     const tailnet = await findTailnetAddress().catch(quiet('agent/computer/browser-host'));
-    const desk = tailnet ? await startHandoffDesk({ stateDir, host: tailnet, context }).catch(quiet('agent/computer/browser-host')) : undefined;
+    const desk = await startHandoffDesk({ stateDir, hosts: tailnet ? [tailnet, '127.0.0.1'] : ['127.0.0.1'], context }).catch(quiet('agent/computer/browser-host'));
     process.once('SIGTERM', stop);
     process.once('SIGINT', stop);
     await new Promise<void>(resolve => (context as unknown as { once(event: 'close', callback: () => void): void }).once('close', resolve));

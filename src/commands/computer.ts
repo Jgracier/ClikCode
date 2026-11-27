@@ -575,13 +575,29 @@ export async function computerBrowsers(action: string | undefined, which: string
   if (done.wait) { await done.wait; await releaseComputerBrowser(dir); }
 }
 
-export const BROWSERS_HOW = 'Act on one by its number, tab name or id (numbers move as tabs open and close): clikcode computer browsers watch <n> (a live view on your desktop: watch it, click and type in it) · front <n> · close <n>. --json for all of it.';
+export const BROWSERS_HOW = 'Open them: clikcode computer browsers open (every tab, in your browser) · open <n> (one tab live: watch it, click and type in it) · front <n> · close <n>. A tab is named by its number, tab name or id. --json for all of it.';
 
 /** One action on one tab, for the CLI and `/browsers`. `stay`: the live view is served by this process for as long as it runs, so a
  * command waits (until Ctrl-C or the tab closes); the TUI, which keeps running, returns at once. */
 export async function browserTabAction(dir: string, action: string, which: string | undefined, options: { stay?: boolean } = {}): Promise<{ text: string; tab?: string; address?: string; opened?: boolean; wait?: Promise<void> }> {
   const { browsersOverview, pickTab } = await import('../agent/computer/browsers-overview.js');
-  if (!['watch', 'show', 'close', 'front'].includes(action)) throw new Error('Say watch, close or front and a tab: clikcode computer browsers watch 2');
+  if (!['open', 'watch', 'show', 'close', 'front'].includes(action)) throw new Error('Say open, close or front and a tab: clikcode computer browsers open 2');
+  const { readDeskInfo, deskAddress, deskLocalAddress, deskTabAddress } = await import('../agent/computer/handoff-desk-store.js');
+  const info = await readDeskInfo(dir);
+  // The desk, served by the browser host, has every tab at one address: nothing to serve from here, and the link outlives this process.
+  const here = info?.hosts?.includes('127.0.0.1') ? deskLocalAddress(info) : undefined;
+  const openHere = async (address: string): Promise<boolean> => {
+    const { openOnDesktop } = await import('../agent/computer/handoff-show.js');
+    const { desktopSession, remoteSession } = await import('../agent/computer/browser-launch.js');
+    const session = remoteSession() ? undefined : desktopSession();
+    return session ? openOnDesktop(address, session) : false;
+  };
+  const elsewhere = info && here && info.host !== '127.0.0.1' ? `\nFrom your phone or another computer on your tailnet: ${deskAddress(info)}` : '';
+  if (action === 'open' && !which) {
+    if (!here) throw new Error('ClikCode\'s browser is not running (or started before this version): use the browser once, then run this again.');
+    const opened = await openHere(here);
+    return { address: here, opened, text: `${opened ? 'Opened every agent tab in your browser' : 'Every agent tab, live'}: ${here}${opened ? '' : '\nOpen it in a browser on this computer.'}${elsewhere}` };
+  }
   if (!which) throw new Error(`Name the tab: clikcode computer browsers ${action} <n> (its number in the list).`);
   const tab = pickTab(await browsersOverview(dir), which);
   const label = `tab ${tab.n} (${tab.name ? `"${tab.name}", ` : ''}${tab.url.slice(0, 80)})`;
@@ -597,7 +613,14 @@ export async function browserTabAction(dir: string, action: string, which: strin
     const where = await runningHostDisplay(dir) === 'visible' ? 'in the browser window on your desktop' : 'in the browser (its window is hidden: watch it with clikcode computer browsers watch)';
     return { tab: tab.id, text: `${label} is in front ${where}.` };
   }
+  if (here) {
+    // A tab waiting on the user opens with its Done button; any other as a watch.
+    const address = tab.waiting?.address && info && tab.waiting.address.startsWith(deskAddress(info)) ? here + tab.waiting.address.slice(deskAddress(info).length) : deskTabAddress(here, tab.id);
+    const opened = await openHere(address);
+    return { tab: tab.id, address, opened, text: `${opened ? 'Opened a live view of' : 'Live view of'} ${label}${opened ? ' in your browser' : ''}: ${address}\nYou can click and type in it; the agent's work there goes on. The link keeps working while the tab is open.${opened ? '' : ' Open it in a browser on this computer.'}` };
+  }
   if (tab.liveView) return { tab: tab.id, address: tab.liveView, text: `${label} already has a live view: ${tab.liveView} (open it in a browser on this computer).` };
+  // A browser host from before the desk listened on this computer: serve the view from here.
   const { computerPageById } = await import('../agent/computer/browser.js');
   const { serveLiveView } = await import('../agent/computer/handoff-serve.js');
   const { openOnDesktop } = await import('../agent/computer/handoff-show.js');

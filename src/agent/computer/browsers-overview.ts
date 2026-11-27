@@ -10,9 +10,9 @@ import { atomicWriteFile } from '../../session/store/files.js';
 import { pidIsAlive } from '../../session/store/locks.js';
 import { measureBrowser, type BrowserLoad } from './browser-janitor.js';
 import { computerHostFile, runningHostDisplay, type HostDisplay } from './browser-host.js';
-import { deskItemAddress, listDeskItems, readDeskInfo, deskAddress, type DeskInfo, type DeskItem } from './handoff-desk-store.js';
+import { deskItemAddress, deskLocalAddress, listDeskItems, readDeskInfo, deskAddress, type DeskInfo, type DeskItem } from './handoff-desk-store.js';
 import { listNotices, noticesText, type Notice } from './notices.js';
-import { allTabs, type TabView } from './tab-registry.js';
+import { allTabs, listedUrl, type TabView } from './tab-registry.js';
 
 export interface BrowserTabRow {
   /** 1, 2, 3...: how the actions name a tab. */
@@ -47,6 +47,8 @@ export interface BrowsersOverview {
   renderers?: number;
   bytes?: number;
   desk?: string;
+  /** The desk as a browser on this computer opens it (loopback), when it listens there. */
+  deskHere?: string;
   tabs: BrowserTabRow[];
   /** What background programs told the person (`clikcode notify`), open until dismissed or cleared. */
   notices: Notice[];
@@ -120,11 +122,7 @@ async function workerChats(): Promise<Map<number, string>> {
   return new Map((await listWorkerRecords().catch(() => [])).map(record => [record.pid, record.sessionId]));
 }
 
-/** A page's address without its query or fragment: a sign-in's carries state, codes and tokens, and this list is printed. */
-export function listedUrl(url: string): string {
-  try { const parsed = new URL(url); return /^https?:$/.test(parsed.protocol) ? `${parsed.origin}${parsed.pathname}${parsed.search || parsed.hash ? '?…' : ''}` : url; }
-  catch { return url.replace(/[?#].*$/, ''); }
-}
+export { listedUrl } from './tab-registry.js';
 
 export async function browsersOverview(stateDir: string, deps: OverviewDeps = {}): Promise<BrowsersOverview> {
   const now = deps.now ?? Date.now();
@@ -161,7 +159,7 @@ export async function browsersOverview(stateDir: string, deps: OverviewDeps = {}
     ...(hostPid ? { hostPid } : {}),
     ...(ageMs !== undefined ? { ageMs } : {}),
     ...(load ? { renderers: load.renderers, bytes: load.bytes } : {}),
-    ...(desk.info ? { desk: deskAddress(desk.info) } : {}),
+    ...(desk.info ? { desk: deskAddress(desk.info), deskHere: deskLocalAddress(desk.info) } : {}),
     tabs,
     notices,
     totals: { tabs: tabs.length, waiting: waits.length, longestWaitMs: waits.length ? Math.max(...waits) : 0, unrecorded: tabs.filter(tab => !tab.recorded).length },
@@ -215,7 +213,10 @@ export function browsersText(overview: BrowsersOverview, how: string, options: {
     lines.push(`    ${ownerText(tab)} · opened ${duration(tab.ageMs)} ago, used ${duration(tab.idleMs)} ago${flags.length ? ` · ${flags.join(' · ')}` : ''}`);
     if (tab.waiting?.address) lines.push(`    handoff: ${tab.waiting.address}`);
   }
-  if (overview.desk && totals.waiting) lines.push('', `Everything waiting on you: ${overview.desk}`);
+  if (overview.desk) {
+    const here = overview.deskHere ?? overview.desk;
+    lines.push('', `Watch any of them live (click and type too): ${here}${overview.desk !== here ? `  ·  from your phone or another computer on your tailnet: ${overview.desk}` : ''}`);
+  }
   if (notices.length) lines.push('', ...notices);
   lines.push('', how);
   return lines.join('\n');
