@@ -38,6 +38,12 @@ describe('planTabClosures', () => {
     expect(plan([rec('s', { ownerPid: 0, unrecorded: true, openedAt: now - 31_000, lastUsedAt: now - 31_000 })]).close).toEqual([{ id: 's', reason: 'not recorded' }]);
     expect(plan([rec('s', { ownerPid: 0, unrecorded: true, openedAt: now - 5_000, lastUsedAt: now - 5_000 })]).close).toEqual([]);
   });
+  it('never closes the host\'s anchor page while the host lives, and does not count it toward the cap', () => {
+    const anchor = rec('anchor', { ownerPid: 9, tab: 'browser-host', anchor: true, lastUsedAt: now - 5 * 3_600_000, url: 'about:blank' });
+    const records = [anchor, rec('a', { ownerPid: 1, tab: 'a' }), rec('b', { ownerPid: 2, tab: 'b' })];
+    expect(plan(records, () => true, { ...limits, maxTabs: 2 }).close).toEqual([]);
+    expect(plan([anchor], pid => pid !== 9).close).toEqual([{ id: 'anchor', reason: 'owner ended' }]);
+  });
   it('forgets a record whose page is gone without closing anything', () => {
     const result = planTabClosures({ records: [rec('gone')], liveIds: new Set(), now, limits, alive: () => true });
     expect(result).toEqual({ close: [], forget: ['gone'] });
@@ -134,5 +140,16 @@ describe('sweeping a browser', () => {
     expect((await closeTabsByLabel(stateDir, 'x', { now, list: fake.list, close: fake.close })).map(v => v.id)).toEqual(['a']);
     expect(await closeTabsOfOwner(stateDir, 666, { now, list: fake.list, close: fake.close })).toBe(2);
     expect(fake.closed).toEqual(['a', 'b', 'c']);
+  });
+  it('leaves the host\'s anchor page out of a close by name, by owner, and out of the listing', async () => {
+    await writeTabRecord(stateDir, rec('anchor', { tab: 'browser-host', ownerPid: 777, anchor: true, url: 'about:blank' }));
+    await writeTabRecord(stateDir, rec('a', { tab: 'x', ownerPid: 555 }));
+    const fake = browser(['anchor', 'a']);
+    expect(await closeTabsByLabel(stateDir, 'browser-host', { now, list: fake.list, close: fake.close })).toEqual([]);
+    expect(await closeTabsOfOwner(stateDir, 777, { now, list: fake.list, close: fake.close })).toBe(0);
+    const text = describeTabs((await allTabs(stateDir, { now, list: fake.list }))!, now, { limits });
+    expect(text).not.toContain('browser-host');
+    expect(text).toContain('(1;');
+    expect(fake.closed).toEqual([]);
   });
 });

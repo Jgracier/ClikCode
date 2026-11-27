@@ -45,6 +45,9 @@ export interface TabRecord {
   /** A stand-in written by a sweep for a page no worker recorded: `openedAt` is when a sweep first saw it. A worker's own record
    * replaces it. */
   unrecorded?: boolean;
+  /** The browser host's own blank page, kept so Chrome never quits for its last tab closing (browser-host.ts). Never closed by a
+   * sweep or a cap while the host lives, and not counted toward the cap. */
+  anchor?: boolean;
 }
 
 export interface BrowserTarget { id: string; type: string; url: string; title?: string }
@@ -119,6 +122,7 @@ export function planTabClosures(input: {
   const kept: TabRecord[] = [];
   for (const record of live) {
     const idle = now - record.lastUsedAt;
+    if (record.anchor && alive(record.ownerPid)) continue;
     if (deskHeld.has(record.id)) kept.push(record);
     else if (record.parked) {
       if (idle >= PARKED_MS) close.push({ id: record.id, reason: 'idle' }); else kept.push(record);
@@ -258,7 +262,7 @@ export async function sweepTabs(stateDir: string, deps: SweepDeps = {}): Promise
 /** Close one tab by the browser's id, whoever holds it (the user asked: `clikcode computer browsers close`). */
 export async function closeTabById(stateDir: string, id: string, deps: SweepDeps = {}): Promise<boolean> {
   const view = ((await allTabs(stateDir, deps.list ? { list: deps.list } : {})) ?? []).find(item => item.id === id);
-  return view ? closeTabLogged(stateDir, view, 'asked to close', deps) : false;
+  return view && !view.anchor ? closeTabLogged(stateDir, view, 'asked to close', deps) : false;
 }
 
 /** Close every tab carrying this label, whoever holds it. Returns the tabs closed. */
@@ -266,7 +270,7 @@ export async function closeTabsByLabel(stateDir: string, label: string, deps: Sw
   const views = (await allTabs(stateDir, deps.list ? { list: deps.list } : {})) ?? [];
   const closed: TabView[] = [];
   const deskHeld = await deskHeldTargets(stateDir).catch(() => new Set<string>());
-  for (const view of views.filter(item => item.tab === label && !deskHeld.has(item.id))) if (await closeTabLogged(stateDir, view, 'asked to close', deps)) closed.push(view);
+  for (const view of views.filter(item => item.tab === label && !item.anchor && !deskHeld.has(item.id))) if (await closeTabLogged(stateDir, view, 'asked to close', deps)) closed.push(view);
   return closed;
 }
 
@@ -275,7 +279,7 @@ export async function closeTabsOfOwner(stateDir: string, pid: number, deps: Swee
   const views = (await allTabs(stateDir, deps.list ? { list: deps.list } : {})) ?? [];
   let count = 0;
   const deskHeld = await deskHeldTargets(stateDir).catch(() => new Set<string>());
-  for (const view of views.filter(item => item.ownerPid === pid && !item.parked && !deskHeld.has(item.id))) if (await closeTabLogged(stateDir, view, 'owner ended', deps)) count++;
+  for (const view of views.filter(item => item.ownerPid === pid && !item.parked && !item.anchor && !deskHeld.has(item.id))) if (await closeTabLogged(stateDir, view, 'owner ended', deps)) count++;
   return count;
 }
 
@@ -291,13 +295,14 @@ function roughAge(ms: number): string {
 
 /** One line per tab of the shared Chrome, with owner, age and idle time. */
 export function describeTabs(views: readonly TabView[], now: number = Date.now(), options: { mine?: string | undefined; limits?: TabLimits } = {}): string {
-  if (!views.length) return 'No tab is open in the shared browser.';
+  const shown = views.filter(view => !view.anchor);
+  if (!shown.length) return 'No tab is open in the shared browser.';
   const limits = options.limits ?? tabLimits();
-  const lines = [...views].sort((a, b) => a.openedAt - b.openedAt).map(view => {
+  const lines = [...shown].sort((a, b) => a.openedAt - b.openedAt).map(view => {
     const name = view.tab ? `tab "${view.tab}"` : 'default tab';
     const state = view.parked ? ', parked' : view.restoreFor !== undefined && view.ownerPid === 0 ? ', restored, unclaimed' : '';
     const title = view.title ? `"${view.title.replace(/\s+/g, ' ').slice(0, 60)}" ` : '';
     return `- ${name} · ${view.owner}${state} · open ${roughAge(now - view.openedAt)}, idle ${roughAge(now - view.lastUsedAt)} · ${title}${(view.url ?? '').slice(0, 100)}`;
   });
-  return `All tabs in the shared browser (${views.length}; tabs idle ${roughAge(limits.idleMs)} or whose worker ended are closed, at most ${limits.maxTabs} are kept; close any with tab: "<name>"):\n${lines.join('\n')}`;
+  return `All tabs in the shared browser (${shown.length}; tabs idle ${roughAge(limits.idleMs)} or whose worker ended are closed, at most ${limits.maxTabs} are kept; close any with tab: "<name>"):\n${lines.join('\n')}`;
 }

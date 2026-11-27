@@ -14,6 +14,7 @@ import { egressServer, egressTimeZone, tunnelManager } from './egress.js';
 import { pidIsAlive } from '../../session/store/locks.js';
 import { readFileSync } from 'node:fs';
 import { scopeLeftovers } from './browser-host-scope.js';
+import { writeTabRecord } from './tab-registry.js';
 import { downloadsInbox } from './downloads.js';
 
 export function computerProfile(stateDir: string): string { return path.join(stateDir, 'computer', 'chrome'); }
@@ -61,6 +62,18 @@ export async function runningHostDisplay(stateDir: string, alive: (pid: number) 
     if (typeof record.pid !== 'number' || !alive(record.pid)) return undefined;
     return record.display === 'visible' || record.display === 'hidden' || record.display === 'headless' ? record.display : undefined;
   } catch { return undefined; }
+}
+
+/** Keep one page of the host's own open (the blank page Chrome starts with, else a new one) and record it as the anchor, so closing
+ * every worker's tab never leaves Chrome without a window. */
+async function holdAnchorPage(stateDir: string, context: BrowserContext): Promise<void> {
+  const page = context.pages().find(item => item.url() === 'about:blank') ?? await context.newPage();
+  const session = await context.newCDPSession(page);
+  try {
+    const id = ((await session.send('Target.getTargetInfo')) as { targetInfo: { targetId: string } }).targetInfo.targetId;
+    const now = Date.now();
+    await writeTabRecord(stateDir, { id, tab: 'browser-host', ownerPid: process.pid, owner: `browser host ${process.pid}`, openedAt: now, lastUsedAt: now, url: 'about:blank', anchor: true });
+  } finally { await session.detach().catch(quiet('agent/computer/browser-host')); }
 }
 
 /** Chrome's own arguments for the host. FedCm off: Google's sign-in button then uses its popup, not a browser-drawn dialog that no page tool
@@ -245,6 +258,9 @@ export async function runComputerHost(stateDir: string): Promise<void> {
       void context.close().catch(quiet('agent/computer/browser-host'));
       setTimeout(() => { endScopeLeftovers(); process.exit(0); }, 10_000).unref();
     };
+    // Chrome quits with its last window, and this process with it, taking every separate profile's tabs along: on 2026-11-27 a loop
+    // command closing its last parked tab ended a 4 h host mid-checkout. The host holds one blank page of its own that no sweep closes.
+    await holdAnchorPage(stateDir, context).catch(quiet('agent/computer/browser-host'));
     // Tabs a recycle saved come back, then the janitor closes tabs nobody holds and recycles an oversized browser.
     await restoreTabs(stateDir, await takeRecycle(stateDir), {
       async openPage(url, egressName) {
