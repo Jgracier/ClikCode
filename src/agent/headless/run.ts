@@ -39,7 +39,9 @@ export async function runHeadlessAgent(options: HeadlessAgentOptions): Promise<H
   const claudeModel = options.model ?? await computerTunable(options.stateDir, 'agentModel');
   const attempted = new Map<string, number>();
   for (;;) {
-    const route = agentRoute(await readState({ transcripts: [] }), { sessionId: options.sessionId, attempted, claudeModel });
+    const preferred = process.env.CLIKCODE_AGENT_PREFERRED_HARNESS;
+    const preferredHarness = preferred === 'claude' || preferred === 'codex' ? preferred : undefined;
+    const route = agentRoute(await readState({ transcripts: [] }), { sessionId: options.sessionId, attempted, claudeModel, ...(preferredHarness ? { preferredHarness } : {}) });
     if ('error' in route) return { text: '', calls: 0, timedOut: false, error: route.error };
     const { account, model } = route;
     attempted.set(account.id, Date.now());

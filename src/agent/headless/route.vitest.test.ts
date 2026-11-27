@@ -42,6 +42,15 @@ describe('the route a headless agent runs on', () => {
     const route = agentRoute({ accounts, sessions: [chat('2026-11-18T10:00:00Z', 'codex', 'codex-b'), chat('2026-11-18T12:00:00Z', 'claude', 'claude-a', 'opus')] }, { claudeModel: M });
     expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: 'claude-sonnet-5-5' });
   });
+  it('prefers the configured subscription harness for an unbound background agent', () => {
+    const route = agentRoute({ accounts, sessions: [chat('2026-11-18T12:00:00Z', 'codex', 'codex-b', 'gpt-test'), chat('2026-11-18T10:00:00Z', 'claude', 'claude-a', 'opus')] }, { claudeModel: M, preferredHarness: 'claude' });
+    expect(route).toMatchObject({ harness: 'claude', account: { id: 'claude-a' }, model: M });
+  });
+  it('automatically uses the next supported subscription harness when the preferred vendor has no usable quota', () => {
+    const spent = [account('claude-a', 'anthropic', 'CLAUDE_CONFIG_DIR', 'exhausted'), account('codex-b', 'openai', 'CODEX_HOME')];
+    const route = agentRoute({ accounts: spent, sessions: [chat('2026-11-18T12:00:00Z', 'codex', 'codex-b', 'gpt-test'), chat('2026-11-18T10:00:00Z', 'claude', 'claude-a')] }, { claudeModel: M, preferredHarness: 'claude' });
+    expect(route).toMatchObject({ harness: 'codex', account: { id: 'codex-b' }, model: 'gpt-test' });
+  });
   it('moves to another signed-in account of the same vendor when the chat\'s has no usage left, as a chat turn does', () => {
     const spent = [account('codex-a', 'openai', 'CODEX_HOME', 'exhausted'), account('claude-a', 'anthropic', 'CLAUDE_CONFIG_DIR'), account('codex-b', 'openai', 'CODEX_HOME')];
     const route = agentRoute({ accounts: spent, sessions: [chat('2026-11-18T12:00:00Z', 'codex', 'codex-a', 'gpt-test')] }, { claudeModel: M });
