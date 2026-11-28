@@ -23,10 +23,11 @@ const fake = async (name: string, script: string): Promise<void> => {
 
 it('ships a few destinations as plain data, each naming the slots the agent fills', async () => {
   const all = await loadDestinations(dir);
-  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'clikdeploy-usage-reader', 'clikdeploy-connection', 'clikdeploy-connection-basic', 'clikdeploy-connection-basic-key', 'clikdeploy-vendor-mfa', 'github-secret', 'clikcode-account']);
+  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'clikdeploy-usage-reader', 'clikdeploy-ai-account', 'clikdeploy-connection', 'clikdeploy-connection-basic', 'clikdeploy-connection-basic-key', 'clikdeploy-vendor-mfa', 'github-secret', 'clikcode-account']);
   expect(slotsOf(all['clikdeploy-secret']!)).toEqual(['key']);
   expect(slotsOf(all['clikdeploy-compute']!)).toEqual(['provider', 'field']);
   expect(slotsOf(all['clikdeploy-connector']!)).toEqual(['integration', 'client_id']);
+  expect(slotsOf(all['clikdeploy-ai-account']!)).toEqual(['provider']);
   expect(slotsOf(all['clikdeploy-connection']!)).toEqual(['integration']);
   expect(slotsOf(all['clikdeploy-connection-basic']!)).toEqual(['integration', 'username']);
   expect(slotsOf(all['github-secret']!)).toEqual(['key', 'repo']);
@@ -76,6 +77,20 @@ it('files a usage key under its provider: the key JSON-escaped in the tool argum
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
   expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'admin_ai_manage']);
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ action: 'add_usage_reader', provider: 'anthropic', secret, label: '' });
+});
+
+it('adds a provider API key to the Gateway account vault, not just the platform environment', async () => {
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{"status":"success","data":{"account":{"provider":"cartesia","label":"Cartesia 1"}}}'`);
+  const secret = 'cartesia-key-a"b\\c-0123456789';
+  const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-ai-account', with: { provider: 'cartesia' } }], secret);
+  expect(result).toMatchObject({ ok: true });
+  expect(result!.message).not.toContain(secret);
+  const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
+  expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'admin_ai_add_api_key']);
+  expect(argv).toContain('--confirm');
+  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
+  expect(argv.join(' ')).not.toContain(secret);
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ provider: 'cartesia', apiKey: secret });
 });
 
 it('registers a connector\'s OAuth app: the client id from the agent, the secret JSON-escaped, no code or password asked', async () => {

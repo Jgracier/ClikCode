@@ -50,6 +50,12 @@ const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   // before saving and refuses it with the vendor's reason. The admin's own API key is enough: no password.
   'clikdeploy-usage-reader': { about: 'file the usage key of an AI provider organization in ClikDeploy (provider, e.g. anthropic; label optional); ClikDeploy tests it with the vendor and saves nothing if the vendor refuses it', optionalSlots: ['label'],
     run: ['clikdeploy', 'tools', 'run', 'admin_ai_manage', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"action":"add_usage_reader","provider":"{{provider}}","secret":"{{secret|json}}","label":"{{label}}"') },
+  // Add a serving credential to the AI Gateway account vault (unlike clikdeploy-secret, which only
+  // writes a process secret). The server performs the provider's first credential check and creates
+  // the account's default resale allocation. API key and TOTP proof travel through the CLI's stdin/
+  // authenticated step-up path; neither is placed in argv or returned to the agent.
+  'clikdeploy-ai-account': { about: 'add an AI provider API key as a ClikDeploy AI Gateway account (provider, e.g. cartesia); tested by the provider and saved to the account vault',
+    run: ['clikdeploy', 'tools', 'run', 'admin_ai_add_api_key', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"provider":"{{provider}}","apiKey":"{{secret|json}}"') },
   'clikdeploy-connection': { about: 'connect an API key to a ClikDeploy connector (integration) for the signed-in account; the result is `connected` or `NOT connected: <reason>`, read back from ClikDeploy', verify: 'connection',
     run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","apiKey":"{{secret|json}}"') },
   // Some vendors expose a token id as the basic-auth username. It can be read from the vault at send time.
