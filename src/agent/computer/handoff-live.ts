@@ -278,7 +278,9 @@ export class LiveView {
       case 'mouse': {
         const x = Number(message.x), y = Number(message.y);
         if (!Number.isFinite(x) || !Number.isFinite(y) || x < -OUTSIDE || y < -OUTSIDE || x > 20_000 || y > 20_000) return;
-        const view = this.lastView = await this.view();
+        // A watched agent tab is never viewport-emulated: its input coordinates already match its own pixels. Reading
+        // visualViewport over CDP for every move added a full browser round trip before dispatch, and made pointer queues lag.
+        const view = this.watch ? SAME_VIEW : (this.lastView = await this.view());
         const at = toPage(view, x, y);
         const button = BUTTONS[Number(message.b)] ?? 'left';
         const mask = { left: 1, middle: 4, right: 2 }[button];
