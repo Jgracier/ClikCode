@@ -89,7 +89,7 @@ const AUTH_LOOSE_TEXT = /(?:has expired\b|\bsign (?:in|up) (?:to|or) |please (?:
  * - A limit counts only with the verb that says it was reached: "used 80% of your weekly limit",
  *   "the plan limit for file uploads is 10MB" and "exceeded the session limit of 200 tool calls"
  *   name a limit, not a spent account. */
-const QUOTA_TEXT = /(?:out of (?:\w+ )?(?:usage )?credits|\b(?:FREE|PRO)_USER_USAGE_LIMIT\b|\bUSAGE_PRICING_REQUIRED|\bPROMOTION_MODEL_LIMIT_REACHED\b|UsageLimitError\b|quota (?:has been |is )?(?:exceeded|exhausted|reached|used up)|quota\b[^.\n]{0,40}\bused up|quota to reset|(?:weekly|monthly|daily|\d+-?hour) (?:\w+ )?limit (?:has been )?reached|\bacu limit|usage (?:limit )?exceeded|usage (?:is )?(?:paused|frozen)|paused usage|insufficient[_ ](?:\w+ )?(?:balance|funds|credits?)|not enough credits|no credits|credits? (?:is |are )?(?:exhausted|depleted)|billing (?:issue|error)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend|request) limit (?:has been |was |is )?(?:reached|exceeded|hit)\b|\b(?:reached|hit|exceeded) (?:your|the|its) (?:[\w-]+ ){0,2}(?:usage|session|plan|weekly|monthly|daily|spend|request) limit\b(?! of \d)|usage is at (?:its|your|the) (?:\w+ )?limit\b|you(?:'ve| have) hit your limit|(?:free )?trial (?:has )?(?:expired|ended)|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit)|upgrade your (?:plan|account) to continue|add a payment method to continue)/i;
+const QUOTA_TEXT = /(?:provider_out_of_credit|out of (?:\w+ )?(?:usage )?credits|\b(?:FREE|PRO)_USER_USAGE_LIMIT\b|\bUSAGE_PRICING_REQUIRED|\bPROMOTION_MODEL_LIMIT_REACHED\b|UsageLimitError\b|quota (?:has been |is )?(?:exceeded|exhausted|reached|used up)|quota\b[^.\n]{0,40}\bused up|quota to reset|(?:weekly|monthly|daily|\d+-?hour) (?:\w+ )?limit (?:has been )?reached|\bacu limit|usage (?:limit )?exceeded|usage (?:is )?(?:paused|frozen)|paused usage|insufficient[_ ](?:\w+ )?(?:balance|funds|credits?)|not enough credits|no credits|credits? (?:is |are )?(?:exhausted|depleted)|billing (?:issue|error)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend|request) limit (?:has been |was |is )?(?:reached|exceeded|hit)\b|\b(?:reached|hit|exceeded) (?:your|the|its) (?:[\w-]+ ){0,2}(?:usage|session|plan|weekly|monthly|daily|spend|request) limit\b(?! of \d)|usage is at (?:its|your|the) (?:\w+ )?limit\b|you(?:'ve| have) hit your limit|(?:free )?trial (?:has )?(?:expired|ended)|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit)|upgrade your (?:plan|account) to continue|add a payment method to continue)/i;
 /** A request too big for the model's window: it says "exceeded" and "limit"
  *  as a refusal does, and no other account would take it either. */
 const CONTEXT_TEXT = /(?:context (?:window|length)|maximum context|prompt is too long)/i;
@@ -297,10 +297,16 @@ export function accountSwitchNotice(reason: AccountMoveReason, to: string): stri
 export function agentTurnFailureKind(result: { text: string; statusCode?: number; retryAfter?: number; errorKind?: string }): AccountFailureKind {
   const status = result.statusCode;
   if (result.errorKind === 'auth' || status === 401) return 'authentication-required';
-  if (status === 403) return 'other';
-  if (status === 402 || result.errorKind === 'quota') return refusesAccountOrModel(result.text) ? 'account-ineligible' : 'quota-exhausted';
-  if (status === 429) return 'temporarily-throttled';
-  return status === undefined ? 'other' : classifyAccountFailure(new Error(result.text), { statusCode: status });
+  // Gateway turns use the same classifier as native harnesses. A status is
+  // only the envelope: 429 can mean a spent plan, and 403 can mean billing or
+  // an account restriction. Preserve the Gateway's disabled/agreement 403s
+  // as `other` through the shared classifier instead of inventing a second
+  // status table here.
+  return classifyAccountFailure(new Error(result.text), {
+    ...(status !== undefined ? { statusCode: status } : {}),
+    ...(result.errorKind ? { errorKind: result.errorKind } : {}),
+    isResultError: true,
+  });
 }
 
 /** Classify only signals strong enough to justify changing credentials.

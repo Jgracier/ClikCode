@@ -190,6 +190,8 @@ describe('agentTurnFailureKind', () => {
     expect(agentTurnFailureKind({ text: 'HTTP 402', statusCode: 402 })).toBe('quota-exhausted');
     expect(agentTurnFailureKind({ text: 'HTTP 429', statusCode: 429 })).toBe('temporarily-throttled');
     expect(agentTurnFailureKind({ text: 'HTTP 429', statusCode: 429, retryAfter: 30 })).toBe('temporarily-throttled');
+    expect(agentTurnFailureKind({ text: 'HTTP 429: free usage limit reached', statusCode: 429 })).toBe('quota-exhausted');
+    expect(agentTurnFailureKind({ text: 'HTTP 403: provider_out_of_credit', statusCode: 403 })).toBe('quota-exhausted');
     expect(agentTurnFailureKind({ text: 'HTTP 401', statusCode: 401 })).toBe('authentication-required');
     expect(agentTurnFailureKind({ text: 'HTTP 403: ClikDeploy Gateway is turned off (gateway_disabled)', statusCode: 403 })).toBe('other');
     expect(agentTurnFailureKind({ text: 'Agreement required', statusCode: 403 })).toBe('other');
